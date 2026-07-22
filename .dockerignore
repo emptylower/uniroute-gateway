@@ -31,6 +31,11 @@ Thumbs.db
 dist/
 build/
 
+# The RMB deployment uses Dockerfile.prebuilt: its frontend bundle is built and
+# verified before the Linux image build, then embedded by the Go compiler.
+!backend/internal/web/dist/
+!backend/internal/web/dist/**
+
 # Node modules (will be installed in container)
 frontend/node_modules/
 node_modules/
