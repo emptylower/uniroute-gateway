@@ -300,9 +300,9 @@ export default {
       },
       platformQuota: {
         platform:    'Platform',
-        daily:       'Daily (USD)',
-        weekly:      'Weekly (USD)',
-        monthly:     'Monthly (USD, 30d rolling)',
+        daily:       'Daily (CNY)',
+        weekly:      'Weekly (CNY)',
+        monthly:     'Monthly (CNY, 30d rolling)',
         placeholder: 'Unlimited',
       },
       claudeCode: {
@@ -567,8 +567,8 @@ export default {
         maxAmount: 'Maximum Amount',
         dailyLimit: 'Daily Limit',
         balanceRechargeMultiplier: 'Balance Recharge Multiplier',
-        balanceRechargeMultiplierHint: 'How many USD balance the user receives for each 1 CNY paid',
-        balanceRechargePreview: 'Preview: 1 CNY = {usd} USD',
+        balanceRechargeMultiplierHint: 'How many CNY balance the user receives for each 1 CNY paid',
+        balanceRechargePreview: 'Preview: 1 CNY = {usd} CNY',
         subscriptionUsdToCnyRate: 'Subscription USD to CNY Rate',
         subscriptionUsdToCnyRateHint:
           'CNY charged per 1 USD of plan price on CNY channels (e.g. 7.15). 0 or empty = disabled, plan price is charged as-is. When enabled, all plan prices must be set in USD',
@@ -650,7 +650,7 @@ export default {
         field_currency: 'Payment currency',
         field_accountId: 'Airwallex Account ID',
         field_airwallexApiBaseHint: 'Must match the API key environment: use https://api-demo.airwallex.com/api/v1 for sandbox/demo keys, and https://api.airwallex.com/api/v1 for production keys. Mixed environments return credentials_invalid / Access Denied.',
-        field_paymentCurrencyHint: 'Default is CNY. Stripe and Airwallex can choose HKD, USD, or another listed currency supported by the account; WeChat Pay, Alipay, and EasyPay remain CNY.',
+        field_paymentCurrencyHint: 'Default is CNY. Stripe and Airwallex can choose HKD, CNY, or another listed currency supported by the account; WeChat Pay, Alipay, and EasyPay remain CNY.',
         field_accountIdHint: 'Leave this empty unless you use multiple accounts, an organization-level key, or connected-account payments. A single-account scoped API key uses the selected account by default.',
         field_cid: 'Channel ID',
         field_cidAlipay: 'Alipay Channel ID',

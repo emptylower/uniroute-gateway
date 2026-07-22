@@ -73,6 +73,7 @@ const columnLabels = computed(() => ({
   description: t('availableChannels.columns.description'),
   platform: t('availableChannels.columns.platform'),
   groups: t('availableChannels.columns.groups'),
+  officialSavings: t('availableChannels.columns.officialSavings'),
   supportedModels: t('availableChannels.columns.supportedModels'),
 }))
 

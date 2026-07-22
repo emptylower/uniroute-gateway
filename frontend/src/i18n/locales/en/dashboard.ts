@@ -211,8 +211,8 @@ export default {
     },
     // Quota and expiration
     quotaLimit: 'Quota Limit',
-    quotaAmount: 'Quota Amount (USD)',
-    quotaAmountPlaceholder: 'Enter quota limit in USD',
+    quotaAmount: 'Quota Amount (CNY)',
+    quotaAmountPlaceholder: 'Enter quota limit in CNY',
     quotaAmountHint: 'Set the maximum amount this key can spend. 0 = unlimited.',
     quotaUsed: 'Quota Used',
     reset: 'Reset',
@@ -224,9 +224,9 @@ export default {
     rateLimitColumn: 'Rate Limit',
     rateLimitSection: 'Rate Limit',
     resetUsage: 'Reset',
-    rateLimit5h: '5-Hour Limit (USD)',
-    rateLimit1d: 'Daily Limit (USD)',
-    rateLimit7d: '7-Day Limit (USD)',
+    rateLimit5h: '5-Hour Limit (CNY)',
+    rateLimit1d: 'Daily Limit (CNY)',
+    rateLimit7d: '7-Day Limit (CNY)',
     rateLimitHint: 'Set the maximum spending for this key within each time window. 0 = unlimited.',
     rateLimitUsage: 'Rate Limit Usage',
     resetRateLimitUsage: 'Reset Rate Limit Usage',
@@ -498,7 +498,16 @@ export default {
       description: 'Description',
       platform: 'Platform',
       groups: 'Your Accessible Groups',
+      officialSavings: 'vs. Official',
       supportedModels: 'Supported Models'
+    },
+    savings: {
+      lessThanOfficial: 'Less than official API',
+      upTo: 'Save up to',
+      comparedWithOfficial: 'vs. official API',
+      specialPricing: 'Special pricing',
+      tooltip: 'Official API USD pricing is converted at $1 = ¥{rate}; our price is the same numeric RMB amount × {multiplier}.',
+      ariaLabel: '{percent}% less than the official API, calculated at 1 USD to {rate} CNY'
     },
     pricing: {
       billingMode: 'Billing Mode',

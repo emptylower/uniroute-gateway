@@ -71,24 +71,28 @@
                 :value="model.pricing.input_price"
                 :unit="t(prefixKey('unitPerMillion'))"
                 :scale="perMillionScale"
+                :multiplier="priceMultiplier"
               />
               <PricingRow
                 :label="t(prefixKey('outputPrice'))"
                 :value="model.pricing.output_price"
                 :unit="t(prefixKey('unitPerMillion'))"
                 :scale="perMillionScale"
+                :multiplier="priceMultiplier"
               />
               <PricingRow
                 :label="t(prefixKey('cacheWritePrice'))"
                 :value="model.pricing.cache_write_price"
                 :unit="t(prefixKey('unitPerMillion'))"
                 :scale="perMillionScale"
+                :multiplier="priceMultiplier"
               />
               <PricingRow
                 :label="t(prefixKey('cacheReadPrice'))"
                 :value="model.pricing.cache_read_price"
                 :unit="t(prefixKey('unitPerMillion'))"
                 :scale="perMillionScale"
+                :multiplier="priceMultiplier"
               />
               <PricingRow
                 v-if="model.pricing.image_input_price != null && model.pricing.image_input_price > 0"
@@ -103,6 +107,7 @@
                 :value="model.pricing.image_output_price"
                 :unit="t(prefixKey('unitPerMillion'))"
                 :scale="perMillionScale"
+                :multiplier="priceMultiplier"
               />
             </template>
 
@@ -115,6 +120,7 @@
               :value="model.pricing.per_request_price"
               :unit="t(prefixKey('unitPerRequest'))"
               :scale="1"
+              :multiplier="priceMultiplier"
             />
 
             <PricingRow
@@ -126,6 +132,7 @@
               :value="model.pricing.image_output_price"
               :unit="t(prefixKey('unitPerRequest'))"
               :scale="1"
+              :multiplier="priceMultiplier"
             />
 
             <div
@@ -187,12 +194,15 @@ const props = withDefaults(
      * 仅用于视觉，不影响业务逻辑。
      */
     platformHint?: string
+    /** 分组最终计费倍率，用于展示用户实际人民币单价。 */
+    priceMultiplier?: number
   }>(),
   {
     pricingKeyPrefix: 'availableChannels.pricing',
     noPricingLabel: '',
     showPlatform: true,
-    platformHint: ''
+    platformHint: '',
+    priceMultiplier: 1
   }
 )
 
@@ -241,10 +251,10 @@ function formatRange(min: number, max: number | null): string {
 
 function formatInterval(iv: UserPricingInterval, mode: BillingMode): string {
   if (mode === BILLING_MODE_PER_REQUEST || mode === BILLING_MODE_IMAGE) {
-    return formatScaled(iv.per_request_price, 1)
+    return formatScaled(iv.per_request_price, 1, props.priceMultiplier)
   }
-  const input = formatScaled(iv.input_price, perMillionScale)
-  const output = formatScaled(iv.output_price, perMillionScale)
+  const input = formatScaled(iv.input_price, perMillionScale, props.priceMultiplier)
+  const output = formatScaled(iv.output_price, perMillionScale, props.priceMultiplier)
   return `${input} / ${output}`
 }
 

@@ -216,8 +216,8 @@ export default {
     },
     // 配额和有效期
     quotaLimit: '额度限制',
-    quotaAmount: '额度金额 (USD)',
-    quotaAmountPlaceholder: '输入 USD 额度限制',
+    quotaAmount: '额度金额 (CNY)',
+    quotaAmountPlaceholder: '输入 CNY 额度限制',
     quotaAmountHint: '设置此密钥可消费的最大金额。0 = 无限制。',
     quotaUsed: '已用额度',
     reset: '重置',
@@ -229,9 +229,9 @@ export default {
     rateLimitColumn: '速率限制',
     rateLimitSection: '速率限制',
     resetUsage: '重置',
-    rateLimit5h: '5小时限额 (USD)',
-    rateLimit1d: '日限额 (USD)',
-    rateLimit7d: '7天限额 (USD)',
+    rateLimit5h: '5小时限额 (CNY)',
+    rateLimit1d: '日限额 (CNY)',
+    rateLimit7d: '7天限额 (CNY)',
     rateLimitHint: '设置此密钥在指定时间窗口内的最大消费额。0 = 无限制。',
     rateLimitUsage: '速率限制用量',
     resetRateLimitUsage: '重置速率限制用量',
@@ -503,7 +503,16 @@ export default {
       description: '描述',
       platform: '平台',
       groups: '我可访问的分组',
+      officialSavings: '对比官方',
       supportedModels: '支持模型'
+    },
+    savings: {
+      lessThanOfficial: '比官方 API 省',
+      upTo: '最高比官方省',
+      comparedWithOfficial: '对比官方 API',
+      specialPricing: '特殊定价',
+      tooltip: '官方 API 美元价按 $1 = ¥{rate} 换算；本站按同数值人民币 × {multiplier} 倍率计费。',
+      ariaLabel: '比官方 API 节省 {percent}%，按 1 美元兑换 {rate} 人民币计算'
     },
     pricing: {
       billingMode: '计费模式',

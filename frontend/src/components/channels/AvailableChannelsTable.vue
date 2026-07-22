@@ -1,27 +1,28 @@
 <template>
   <!-- .table-wrapper 是 TablePageLayout 滚动链的挂载点：外层 .table-scroll-container
        负责卡片外观并 overflow-hidden，本层接收 overflow-y-auto 才能在内容超高时滚动。 -->
-  <div class="table-wrapper">
-    <table class="w-full table-fixed border-collapse text-sm">
+  <div class="table-wrapper overflow-x-auto">
+    <table class="w-full min-w-[1400px] table-fixed border-collapse text-sm">
       <thead>
         <tr class="border-b border-gray-100 bg-gray-50/50 text-xs font-medium uppercase tracking-wide text-gray-500 dark:border-dark-700 dark:bg-dark-800/50 dark:text-gray-400">
           <th class="w-[180px] px-4 py-3 text-center">{{ columns.name }}</th>
           <th class="w-[200px] px-4 py-3 text-left">{{ columns.description }}</th>
           <th class="w-[140px] px-4 py-3 text-left">{{ columns.platform }}</th>
-          <th class="px-4 py-3 text-left">{{ columns.groups }}</th>
+          <th class="w-[380px] px-4 py-3 text-left">{{ columns.groups }}</th>
+          <th class="w-[180px] px-4 py-3 text-center">{{ columns.officialSavings }}</th>
           <th class="px-4 py-3 text-left">{{ columns.supportedModels }}</th>
         </tr>
       </thead>
       <tbody v-if="loading">
         <tr>
-          <td colspan="5" class="py-10 text-center">
+          <td colspan="6" class="py-10 text-center">
             <Icon name="refresh" size="lg" class="inline-block animate-spin text-gray-400" />
           </td>
         </tr>
       </tbody>
       <tbody v-else-if="rows.length === 0">
         <tr>
-          <td colspan="5" class="py-12 text-center">
+          <td colspan="6" class="py-12 text-center">
             <Icon name="inbox" size="xl" class="mx-auto mb-3 h-12 w-12 text-gray-400" />
             <p class="text-sm text-gray-500 dark:text-gray-400">{{ emptyLabel }}</p>
           </td>
@@ -148,6 +149,31 @@
             </div>
           </td>
 
+          <!-- 对标官方 API：官方美元价先按 USD/CNY 汇率折算，再与本站人民币倍率价比较。 -->
+          <td class="px-4 py-3 text-center align-middle">
+            <div
+              v-if="officialSavingsPercent(section) !== null"
+              class="official-savings"
+              :class="{ 'official-savings--special': isSpecialPricing(section) }"
+              :title="officialSavingsTitle(section)"
+              :aria-label="officialSavingsAriaLabel(section)"
+            >
+              <span class="official-savings__label">
+                {{ savingsLabel(section) }}
+              </span>
+              <strong
+                v-if="!isSpecialPricing(section)"
+                class="official-savings__value"
+              >
+                {{ formattedOfficialSavings(section) }}%
+              </strong>
+              <strong v-else class="official-savings__special">
+                {{ t('availableChannels.savings.specialPricing') }}
+              </strong>
+            </div>
+            <span v-else class="text-xs text-gray-400">-</span>
+          </td>
+
           <!-- 支持模型 -->
           <td class="align-top px-4 py-3">
             <div class="flex flex-wrap gap-1">
@@ -159,6 +185,7 @@
                 :no-pricing-label="noPricingLabel"
                 :show-platform="false"
                 :platform-hint="section.platform"
+                :price-multiplier="effectivePriceMultiplier(section)"
               />
               <span v-if="section.supported_models.length === 0" class="text-xs text-gray-400">
                 {{ noModelsLabel }}
@@ -189,6 +216,7 @@ const props = defineProps<{
     description: string
     platform: string
     groups: string
+    officialSavings: string
     supportedModels: string
   }
   rows: UserAvailableChannel[]
@@ -207,12 +235,82 @@ void props.userGroupRates
 
 const { t } = useI18n()
 
+/**
+ * 官方 API 以美元计价，本站按“同数值人民币 × 分组倍率”计价。
+ * 例如官方 $1 = ¥6.8，0.2x 分组实收 ¥0.2，节省 1 - 0.2/6.8 ≈ 97.1%。
+ */
+const OFFICIAL_USD_CNY_RATE = 6.8
+
 function exclusiveGroups(section: UserChannelPlatformSection): UserAvailableGroup[] {
   return section.groups.filter((g) => g.is_exclusive)
 }
 
 function publicGroups(section: UserChannelPlatformSection): UserAvailableGroup[] {
   return section.groups.filter((g) => !g.is_exclusive)
+}
+
+/**
+ * 线上渠道按分组拆分，因此可直接展示该组最终实收价。
+ * 若将来人工把多个不同倍率分组合并到同一渠道，则保守回退基础价。
+ */
+function effectivePriceMultiplier(section: UserChannelPlatformSection): number {
+  if (section.groups.length !== 1) return 1
+  const group = section.groups[0]
+  return props.userGroupRates[group.id] ?? group.rate_multiplier ?? 1
+}
+
+function effectiveGroupRates(section: UserChannelPlatformSection): number[] {
+  return section.groups
+    .map((group) => props.userGroupRates[group.id] ?? group.rate_multiplier ?? 1)
+    .filter((rate) => Number.isFinite(rate) && rate >= 0)
+}
+
+/** 多分组渠道展示用户可获得的最大优惠；目前线上渠道均为一渠道一分组。 */
+function officialSavingsPercent(section: UserChannelPlatformSection): number | null {
+  const rates = effectiveGroupRates(section)
+  if (rates.length === 0) return null
+  const bestRate = Math.min(...rates)
+  return (1 - bestRate / OFFICIAL_USD_CNY_RATE) * 100
+}
+
+function formatSavingsPercent(value: number): string {
+  const rounded = Math.round(value * 10) / 10
+  return Number.isInteger(rounded) ? rounded.toFixed(0) : rounded.toFixed(1)
+}
+
+function isSpecialPricing(section: UserChannelPlatformSection): boolean {
+  const savings = officialSavingsPercent(section)
+  return savings !== null && savings < 0
+}
+
+function formattedOfficialSavings(section: UserChannelPlatformSection): string {
+  const savings = officialSavingsPercent(section)
+  return savings === null ? '-' : formatSavingsPercent(savings)
+}
+
+function savingsLabel(section: UserChannelPlatformSection): string {
+  if (isSpecialPricing(section)) return t('availableChannels.savings.comparedWithOfficial')
+  return section.groups.length > 1
+    ? t('availableChannels.savings.upTo')
+    : t('availableChannels.savings.lessThanOfficial')
+}
+
+function officialSavingsTitle(section: UserChannelPlatformSection): string {
+  const rates = effectiveGroupRates(section)
+  const bestRate = rates.length > 0 ? Math.min(...rates) : 1
+  return t('availableChannels.savings.tooltip', {
+    rate: OFFICIAL_USD_CNY_RATE,
+    multiplier: bestRate,
+  })
+}
+
+function officialSavingsAriaLabel(section: UserChannelPlatformSection): string {
+  const savings = officialSavingsPercent(section)
+  if (savings === null || savings < 0) return t('availableChannels.savings.specialPricing')
+  return t('availableChannels.savings.ariaLabel', {
+    percent: formatSavingsPercent(savings),
+    rate: OFFICIAL_USD_CNY_RATE,
+  })
 }
 
 const appStore = useAppStore()
@@ -229,3 +327,102 @@ function peakRateTitle(group: UserAvailableGroup): string {
   return t('common.peakRateTooltip', { window: peakRateLabel(group) }) + t('common.peakRateImageNote')
 }
 </script>
+
+<style scoped>
+.official-savings {
+  position: relative;
+  isolation: isolate;
+  display: inline-flex;
+  min-width: 142px;
+  flex-direction: column;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid rgb(244 114 182 / 22%);
+  border-radius: 0.75rem;
+  padding: 0.35rem 0.7rem 0.4rem;
+  background:
+    radial-gradient(circle at 12% 20%, rgb(251 146 60 / 14%), transparent 42%),
+    radial-gradient(circle at 88% 78%, rgb(34 211 238 / 12%), transparent 46%),
+    rgb(255 255 255 / 82%);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 75%), 0 3px 14px rgb(236 72 153 / 7%);
+}
+
+.official-savings::after {
+  position: absolute;
+  z-index: -1;
+  top: -80%;
+  left: -35%;
+  width: 30%;
+  height: 260%;
+  content: '';
+  transform: rotate(18deg);
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 72%), transparent);
+  animation: official-savings-sheen 5.5s ease-in-out infinite;
+}
+
+.official-savings__label {
+  color: rgb(107 114 128);
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.1em;
+  line-height: 1.1;
+  text-transform: uppercase;
+}
+
+.official-savings__value {
+  margin-top: 0.08rem;
+  background: linear-gradient(92deg, #f97316 2%, #ec4899 30%, #8b5cf6 56%, #06b6d4 80%, #10b981 98%);
+  background-size: 220% auto;
+  background-clip: text;
+  color: transparent;
+  font-size: 1.15rem;
+  font-weight: 850;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.03em;
+  line-height: 1.15;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: official-savings-gradient 4s linear infinite;
+}
+
+.official-savings--special {
+  border-color: rgb(245 158 11 / 24%);
+  background: rgb(255 251 235 / 82%);
+}
+
+.official-savings__special {
+  margin-top: 0.2rem;
+  color: rgb(180 83 9);
+  font-size: 0.75rem;
+}
+
+:global(.dark) .official-savings {
+  border-color: rgb(244 114 182 / 20%);
+  background:
+    radial-gradient(circle at 12% 20%, rgb(249 115 22 / 14%), transparent 42%),
+    radial-gradient(circle at 88% 78%, rgb(6 182 212 / 12%), transparent 46%),
+    rgb(17 24 39 / 72%);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 5%), 0 4px 16px rgb(0 0 0 / 12%);
+}
+
+:global(.dark) .official-savings__label {
+  color: rgb(156 163 175);
+}
+
+@keyframes official-savings-gradient {
+  to { background-position: 220% center; }
+}
+
+@keyframes official-savings-sheen {
+  0%, 64% { transform: translateX(-180%) rotate(18deg); opacity: 0; }
+  70% { opacity: 0.8; }
+  86%, 100% { transform: translateX(620%) rotate(18deg); opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .official-savings::after,
+  .official-savings__value {
+    animation: none;
+  }
+}
+</style>
