@@ -184,6 +184,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	}
 
 	agentTaskRecoveryTried := false
+	rejectedFieldRetryState := newOpenAIResponsesRejectedFieldRetryState(body)
 	var resp *http.Response
 	for {
 		upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
@@ -216,6 +217,17 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 			if recoveryErr := s.recoverAgentIdentityTask(ctx, account, expectedTaskID); recoveryErr != nil {
 				return nil, fmt.Errorf("agent identity task recovery failed: %w", recoveryErr)
 			}
+			continue
+		}
+
+		// 与普通转发路径一致：上游明确拒绝某字段（如 max_output_tokens）时，
+		// 删除该字段后自动重试，而不是把 400 直接透给下游。
+		if retryBody, reason, changed, retryErr := normalizeOpenAIResponsesRejectedFieldRetryBody(resp.StatusCode, body, probeBody); retryErr != nil {
+			return nil, fmt.Errorf("normalize rejected Responses field retry body: %w", retryErr)
+		} else if changed && rejectedFieldRetryState.Allow(retryBody) {
+			_ = resp.Body.Close()
+			body = retryBody
+			logger.LegacyPrintf("service.openai_gateway", "[OpenAI 自动透传] Retrying passthrough request after %s (account: %s)", reason, account.Name)
 			continue
 		}
 
