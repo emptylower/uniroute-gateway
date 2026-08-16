@@ -164,3 +164,12 @@ func TestSettingService_GetPublicSettings_FallsBackToConfigForWeChatOAuthCapabil
 	require.False(t, settings.WeChatOAuthMPEnabled)
 	require.False(t, settings.WeChatOAuthMobileEnabled)
 }
+
+func TestSettingService_GetAvailableChannelsRuntimeEnabledForDataPlane(t *testing.T) {
+	svc := NewSettingService(&settingPublicRepoStub{
+		values: map[string]string{SettingKeyAvailableChannelsEnabled: "false"},
+	}, &config.Config{Server: config.ServerConfig{DataPlaneOnly: true}})
+
+	runtime := svc.GetAvailableChannelsRuntime(context.Background())
+	require.True(t, runtime.Enabled)
+}
