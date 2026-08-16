@@ -29,15 +29,17 @@ func NewPromoHandler(promoService *service.PromoService) *PromoHandler {
 type CreatePromoCodeRequest struct {
 	Code        string  `json:"code"`                                  // 可选，为空则自动生成
 	BonusAmount float64 `json:"bonus_amount" binding:"required,min=0"` // 赠送余额
-	MaxUses     int     `json:"max_uses" binding:"min=0"`              // 最大使用次数，0=无限
-	ExpiresAt   *int64  `json:"expires_at"`                            // 过期时间戳（秒）
-	Notes       string  `json:"notes"`                                 // 备注
+	Currency    string  `json:"currency" binding:"omitempty,oneof=CNY USD cny usd"`
+	MaxUses     int     `json:"max_uses" binding:"min=0"` // 最大使用次数，0=无限
+	ExpiresAt   *int64  `json:"expires_at"`               // 过期时间戳（秒）
+	Notes       string  `json:"notes"`                    // 备注
 }
 
 // UpdatePromoCodeRequest represents update promo code request
 type UpdatePromoCodeRequest struct {
 	Code        *string  `json:"code"`
 	BonusAmount *float64 `json:"bonus_amount" binding:"omitempty,min=0"`
+	Currency    *string  `json:"currency" binding:"omitempty,oneof=CNY USD cny usd"`
 	MaxUses     *int     `json:"max_uses" binding:"omitempty,min=0"`
 	Status      *string  `json:"status" binding:"omitempty,oneof=active disabled"`
 	ExpiresAt   *int64   `json:"expires_at"`
@@ -104,6 +106,7 @@ func (h *PromoHandler) Create(c *gin.Context) {
 	input := &service.CreatePromoCodeInput{
 		Code:        req.Code,
 		BonusAmount: req.BonusAmount,
+		Currency:    req.Currency,
 		MaxUses:     req.MaxUses,
 		Notes:       req.Notes,
 	}
@@ -140,6 +143,7 @@ func (h *PromoHandler) Update(c *gin.Context) {
 	input := &service.UpdatePromoCodeInput{
 		Code:        req.Code,
 		BonusAmount: req.BonusAmount,
+		Currency:    req.Currency,
 		MaxUses:     req.MaxUses,
 		Status:      req.Status,
 		Notes:       req.Notes,

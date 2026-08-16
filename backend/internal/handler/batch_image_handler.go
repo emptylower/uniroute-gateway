@@ -284,6 +284,12 @@ func batchImageOwnerFromContext(c *gin.Context) (service.BatchImageOwner, bool) 
 		UserID:   apiKey.UserID,
 		APIKeyID: apiKey.ID,
 		GroupID:  apiKey.GroupID,
+		BillingCurrency: func() string {
+			if apiKey.User == nil {
+				return ""
+			}
+			return apiKey.User.BillingCurrency
+		}(),
 	}, true
 }
 

@@ -203,6 +203,45 @@ func TestFormatGatewayRefundAmountUsesOrderCurrency(t *testing.T) {
 	require.Equal(t, "12.345", formatGatewayRefundAmount(12.345, order))
 }
 
+func TestMutateRefundBalanceRejectsWalletCurrencyMismatch(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	user, err := client.User.Create().
+		SetEmail("refund-currency-mismatch@example.com").SetPasswordHash("hash").SetUsername("refund-currency-mismatch").
+		SetBillingCurrency(CurrencyUSD).SetBalance(50).Save(ctx)
+	require.NoError(t, err)
+	cny := CurrencyCNY
+	order := &dbent.PaymentOrder{ID: 99, UserID: user.ID, SettlementCurrency: &cny, OrderType: payment.OrderTypeBalance}
+	svc := &PaymentService{entClient: client}
+
+	err = svc.mutateRefundBalance(ctx, order, -20)
+	require.Equal(t, "REFUND_CURRENCY_MISMATCH", infraerrors.Reason(err))
+	reloaded, getErr := client.User.Get(ctx, user.ID)
+	require.NoError(t, getErr)
+	require.Equal(t, 50.0, reloaded.Balance)
+	require.Equal(t, CurrencyUSD, reloaded.BillingCurrency)
+}
+
+func TestPrepareRefundCannotForceWalletCurrencyMismatch(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	user, err := client.User.Create().
+		SetEmail("refund-force-currency@example.com").SetPasswordHash("hash").SetUsername("refund-force-currency").
+		SetBillingCurrency(CurrencyUSD).SetBalance(50).Save(ctx)
+	require.NoError(t, err)
+	cny := CurrencyCNY
+	order := &dbent.PaymentOrder{ID: 100, UserID: user.ID, SettlementCurrency: &cny, OrderType: payment.OrderTypeBalance}
+	plan := &RefundPlan{OrderID: order.ID, Order: order, RefundAmount: 20, Force: true, DeductionType: payment.DeductionTypeNone}
+	svc := &PaymentService{entClient: client}
+
+	result := svc.prepDeduct(ctx, order, plan, true)
+	require.NotNil(t, result)
+	require.False(t, result.Success)
+	require.False(t, result.RequireForce)
+	require.Contains(t, result.Warning, "currency")
+	require.Equal(t, payment.DeductionTypeNone, plan.DeductionType)
+}
+
 func TestValidateRefundProviderResponseAcceptsPending(t *testing.T) {
 	require.NoError(t, validateRefundProviderResponse(&payment.RefundResponse{Status: payment.ProviderStatusPending}))
 	require.NoError(t, validateRefundProviderResponse(&payment.RefundResponse{Status: payment.ProviderStatusSuccess}))
@@ -241,16 +280,8 @@ func TestFinishRefundPendingMarksOrderPendingAndRollsBackDeduction(t *testing.T)
 		Save(ctx)
 	require.NoError(t, err)
 
-	var rolledBack float64
-	userRepo := &mockUserRepo{}
-	userRepo.updateBalanceFn = func(ctx context.Context, id int64, amount float64) error {
-		require.Equal(t, user.ID, id)
-		rolledBack += amount
-		return nil
-	}
 	svc := &PaymentService{
 		entClient: client,
-		userRepo:  userRepo,
 	}
 	plan := &RefundPlan{
 		OrderID:         order.ID,
@@ -268,8 +299,10 @@ func TestFinishRefundPendingMarksOrderPendingAndRollsBackDeduction(t *testing.T)
 	require.NotNil(t, result)
 	require.False(t, result.Success)
 	require.Contains(t, result.Warning, "pending confirmation")
-	require.Equal(t, 40.0, rolledBack)
 	require.Zero(t, plan.BalanceToDeduct)
+	updatedUser, err := client.User.Get(ctx, user.ID)
+	require.NoError(t, err)
+	require.Equal(t, 40.0, updatedUser.Balance)
 
 	reloaded, err := client.PaymentOrder.Get(ctx, order.ID)
 	require.NoError(t, err)
@@ -376,14 +409,9 @@ func TestQueryAndFinalizeRefundFinalizesProviderStatuses(t *testing.T) {
 			client := newPaymentConfigServiceTestClient(t)
 			order := createPendingRefundOrderForTest(t, ctx, client, "query-finalize-"+tc.name)
 
-			var deducted float64
 			svc := &PaymentService{
 				entClient:    client,
 				loadBalancer: &captureLoadBalancer{},
-				userRepo: &mockUserRepo{deductBalanceFn: func(ctx context.Context, id int64, amount float64) error {
-					deducted += amount
-					return nil
-				}},
 			}
 			restore := replacePaymentProviderFactoryForTest(t, &refundQueryProviderTestDouble{
 				refundResponse: &payment.RefundResponse{RefundID: "rf_test", Status: tc.status},
@@ -394,7 +422,9 @@ func TestQueryAndFinalizeRefundFinalizesProviderStatuses(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, result)
 			require.Equal(t, tc.status == payment.ProviderStatusSuccess, result.Success)
-			require.Equal(t, tc.wantDeduct, deducted)
+			updatedUser, userErr := client.User.Get(ctx, order.UserID)
+			require.NoError(t, userErr)
+			require.Equal(t, -tc.wantDeduct, updatedUser.Balance)
 
 			reloaded, err := client.PaymentOrder.Get(ctx, order.ID)
 			require.NoError(t, err)

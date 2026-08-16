@@ -22,21 +22,26 @@ func TestUsageLogRepositoryCreateSyncRequestTypeAndLegacyFields(t *testing.T) {
 
 	createdAt := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
 	log := &service.UsageLog{
-		UserID:         1,
-		APIKeyID:       2,
-		AccountID:      3,
-		RequestID:      "req-1",
-		Model:          "gpt-5",
-		RequestedModel: "gpt-5",
-		InputTokens:    10,
-		OutputTokens:   20,
-		TotalCost:      1,
-		ActualCost:     1,
-		BillingType:    service.BillingTypeBalance,
-		RequestType:    service.RequestTypeWSV2,
-		Stream:         false,
-		OpenAIWSMode:   false,
-		CreatedAt:      createdAt,
+		UserID:             1,
+		APIKeyID:           2,
+		AccountID:          3,
+		RequestID:          "req-1",
+		Model:              "gpt-5",
+		RequestedModel:     "gpt-5",
+		InputTokens:        10,
+		OutputTokens:       20,
+		TotalCost:          1,
+		ActualCost:         1,
+		BillingType:        service.BillingTypeBalance,
+		SourceCurrency:     service.CurrencyUSD,
+		SettlementCurrency: service.CurrencyUSD,
+		ExchangeRate:       1,
+		ExchangeRateSource: "identity",
+		ExchangeRateAsOf:   &createdAt,
+		RequestType:        service.RequestTypeWSV2,
+		Stream:             false,
+		OpenAIWSMode:       false,
+		CreatedAt:          createdAt,
 	}
 
 	mock.ExpectQuery("INSERT INTO usage_logs").
@@ -97,6 +102,13 @@ func TestUsageLogRepositoryCreateSyncRequestTypeAndLegacyFields(t *testing.T) {
 			sqlmock.AnyArg(), // billing_mode
 			sqlmock.AnyArg(), // account_stats_cost
 			sqlmock.AnyArg(), // session_id
+			service.CurrencyUSD,
+			service.CurrencyUSD,
+			float64(1),
+			"identity",
+			sqlmock.AnyArg(), // exchange_rate_as_of
+			float64(0),
+			float64(0),
 			createdAt,
 		).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow(int64(99), createdAt))
@@ -119,14 +131,19 @@ func TestUsageLogRepositoryCreate_PersistsServiceTier(t *testing.T) {
 	createdAt := time.Date(2025, 1, 2, 12, 0, 0, 0, time.UTC)
 	serviceTier := "priority"
 	log := &service.UsageLog{
-		UserID:         1,
-		APIKeyID:       2,
-		AccountID:      3,
-		RequestID:      "req-service-tier",
-		Model:          "gpt-5.4",
-		RequestedModel: "gpt-5.4",
-		ServiceTier:    &serviceTier,
-		CreatedAt:      createdAt,
+		UserID:             1,
+		APIKeyID:           2,
+		AccountID:          3,
+		RequestID:          "req-service-tier",
+		Model:              "gpt-5.4",
+		RequestedModel:     "gpt-5.4",
+		ServiceTier:        &serviceTier,
+		SourceCurrency:     service.CurrencyUSD,
+		SettlementCurrency: service.CurrencyUSD,
+		ExchangeRate:       1,
+		ExchangeRateSource: "identity",
+		ExchangeRateAsOf:   &createdAt,
+		CreatedAt:          createdAt,
 	}
 
 	mock.ExpectQuery("INSERT INTO usage_logs").
@@ -187,6 +204,13 @@ func TestUsageLogRepositoryCreate_PersistsServiceTier(t *testing.T) {
 			sqlmock.AnyArg(), // billing_mode
 			sqlmock.AnyArg(), // account_stats_cost
 			sqlmock.AnyArg(), // session_id
+			service.CurrencyUSD,
+			service.CurrencyUSD,
+			float64(1),
+			"identity",
+			sqlmock.AnyArg(),
+			float64(0),
+			float64(0),
 			createdAt,
 		).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow(int64(100), createdAt))
@@ -846,6 +870,13 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			sql.NullString{},
 			sql.NullFloat64{},
 			sql.NullString{},
+			service.CurrencyUSD,
+			service.CurrencyUSD,
+			1.0,
+			"legacy",
+			sql.NullTime{},
+			0.0,
+			0.0,
 			now,
 		}})
 		require.NoError(t, err)
@@ -921,6 +952,13 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			sql.NullString{},  // billing_mode
 			sql.NullFloat64{}, // account_stats_cost
 			sql.NullString{},  // session_id
+			service.CurrencyUSD,
+			service.CurrencyUSD,
+			1.0,
+			"legacy",
+			sql.NullTime{},
+			0.0,
+			0.0,
 			now,
 		}})
 		require.NoError(t, err)
@@ -979,6 +1017,13 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			sql.NullString{},  // billing_mode
 			sql.NullFloat64{}, // account_stats_cost
 			sql.NullString{},  // session_id
+			service.CurrencyUSD,
+			service.CurrencyUSD,
+			1.0,
+			"legacy",
+			sql.NullTime{},
+			0.0,
+			0.0,
 			now,
 		}})
 		require.NoError(t, err)
@@ -1037,6 +1082,13 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			sql.NullString{},  // billing_mode
 			sql.NullFloat64{}, // account_stats_cost
 			sql.NullString{},  // session_id
+			service.CurrencyUSD,
+			service.CurrencyUSD,
+			1.0,
+			"legacy",
+			sql.NullTime{},
+			0.0,
+			0.0,
 			now,
 		}})
 		require.NoError(t, err)

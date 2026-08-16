@@ -2570,7 +2570,11 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 	apiKey := &service.APIKey{
 		ID:      1801,
 		GroupID: &groupID,
-		User:    &service.User{ID: 1701, Status: service.StatusActive},
+		User: &service.User{
+			ID:              1701,
+			Status:          service.StatusActive,
+			BillingCurrency: service.CurrencyUSD,
+		},
 	}
 	router := gin.New()
 	router.Use(func(c *gin.Context) {

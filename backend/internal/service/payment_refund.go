@@ -268,10 +268,13 @@ func (s *PaymentService) prepDeduct(ctx context.Context, o *dbent.PaymentOrder, 
 		}
 		return nil
 	}
-	u, err := s.userRepo.GetByID(ctx, o.UserID)
+	u, err := s.refundWallet(ctx, o)
 	if err != nil {
+		if infraerrors.Reason(err) == "REFUND_CURRENCY_MISMATCH" {
+			return &RefundResult{Success: false, Warning: "refund order currency does not match wallet currency"}
+		}
 		if !force {
-			return &RefundResult{Success: false, Warning: "cannot fetch user balance, use force", RequireForce: true}
+			return &RefundResult{Success: false, Warning: err.Error(), RequireForce: true}
 		}
 		return nil
 	}
@@ -292,7 +295,7 @@ func (s *PaymentService) ExecuteRefund(ctx context.Context, p *RefundPlan) (*Ref
 		// Skip balance deduction on retry if previous attempt already deducted
 		// but failed to roll back (REFUND_ROLLBACK_FAILED in audit log).
 		if !s.hasAuditLog(ctx, p.OrderID, "REFUND_ROLLBACK_FAILED") {
-			if err := s.userRepo.DeductBalance(ctx, p.Order.UserID, p.BalanceToDeduct); err != nil {
+			if err := s.mutateRefundBalance(ctx, p.Order, -p.BalanceToDeduct); err != nil {
 				s.restoreStatus(ctx, p)
 				return nil, fmt.Errorf("deduction: %w", err)
 			}
@@ -489,7 +492,7 @@ func (s *PaymentService) applyRefundFinalDeduction(ctx context.Context, p *Refun
 		return nil
 	}
 	if p.DeductionType == payment.DeductionTypeBalance && p.BalanceToDeduct > 0 {
-		if err := s.userRepo.DeductBalance(ctx, p.Order.UserID, p.BalanceToDeduct); err != nil {
+		if err := s.mutateRefundBalance(ctx, p.Order, -p.BalanceToDeduct); err != nil {
 			return fmt.Errorf("deduction: %w", err)
 		}
 	}
@@ -623,7 +626,7 @@ func refundResponseID(resp *payment.RefundResponse) string {
 
 func (s *PaymentService) RollbackRefund(ctx context.Context, p *RefundPlan, gErr error) bool {
 	if p.DeductionType == payment.DeductionTypeBalance && p.BalanceToDeduct > 0 {
-		if err := s.userRepo.UpdateBalance(ctx, p.Order.UserID, p.BalanceToDeduct); err != nil {
+		if err := s.mutateRefundBalance(ctx, p.Order, p.BalanceToDeduct); err != nil {
 			slog.Error("[CRITICAL] rollback failed", "orderID", p.OrderID, "amount", p.BalanceToDeduct, "error", err)
 			s.writeAuditLog(ctx, p.OrderID, "REFUND_ROLLBACK_FAILED", "admin", map[string]any{"gatewayError": psErrMsg(gErr), "rollbackError": psErrMsg(err), "balanceDeducted": p.BalanceToDeduct})
 			return false
@@ -637,6 +640,80 @@ func (s *PaymentService) RollbackRefund(ctx context.Context, p *RefundPlan, gErr
 		}
 	}
 	return true
+}
+
+func (s *PaymentService) refundWallet(ctx context.Context, order *dbent.PaymentOrder) (*User, error) {
+	if order == nil {
+		return nil, errors.New("refund order is required")
+	}
+	var wallet *User
+	if s != nil && s.entClient != nil {
+		stored, err := s.entClient.User.Get(ctx, order.UserID)
+		if err != nil {
+			return nil, err
+		}
+		wallet = &User{
+			ID:              stored.ID,
+			Balance:         stored.Balance,
+			BillingCurrency: stored.BillingCurrency,
+		}
+	} else if s != nil && s.userRepo != nil {
+		stored, err := s.userRepo.GetByID(ctx, order.UserID)
+		if err != nil {
+			return nil, err
+		}
+		wallet = stored
+	} else {
+		return nil, errors.New("refund wallet repository is unavailable")
+	}
+	if NormalizeUserBillingCurrency(wallet.BillingCurrency) != PaymentOrderCurrency(order) {
+		return nil, infraerrors.Conflict("REFUND_CURRENCY_MISMATCH", "refund order currency does not match wallet currency")
+	}
+	return wallet, nil
+}
+
+// mutateRefundBalance serializes balance refunds with billing-currency changes.
+// The order remains in a refund status while this runs, so the admin currency
+// guard and the wallet row lock close both sides of the race.
+func (s *PaymentService) mutateRefundBalance(ctx context.Context, order *dbent.PaymentOrder, delta float64) error {
+	if order == nil {
+		return errors.New("refund order is required")
+	}
+	if delta == 0 {
+		return nil
+	}
+	if s != nil && s.entClient != nil {
+		tx, err := s.entClient.Tx(ctx)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = tx.Rollback() }()
+		txCtx := dbent.NewTxContext(ctx, tx)
+		wallet, err := lockBillingWallet(txCtx, tx.Client(), order.UserID)
+		if err != nil {
+			return err
+		}
+		if NormalizeUserBillingCurrency(wallet.BillingCurrency) != PaymentOrderCurrency(order) {
+			return infraerrors.Conflict("REFUND_CURRENCY_MISMATCH", "refund order currency does not match wallet currency")
+		}
+		if _, err := tx.Client().User.UpdateOneID(order.UserID).AddBalance(delta).Save(txCtx); err != nil {
+			return err
+		}
+		return tx.Commit()
+	}
+
+	wallet, err := s.refundWallet(ctx, order)
+	if err != nil {
+		return err
+	}
+	_ = wallet
+	if s.userRepo == nil {
+		return errors.New("refund wallet repository is unavailable")
+	}
+	if delta < 0 {
+		return s.userRepo.DeductBalance(ctx, order.UserID, -delta)
+	}
+	return s.userRepo.UpdateBalance(ctx, order.UserID, delta)
 }
 
 func (s *PaymentService) restoreStatus(ctx context.Context, p *RefundPlan) {

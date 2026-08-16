@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
@@ -36,10 +37,23 @@ func TestFilterUserVisibleGroups_IntersectionOnly(t *testing.T) {
 	}
 	allowed := map[int64]struct{}{1: {}, 3: {}}
 
-	visible := filterUserVisibleGroups(groups, allowed)
+	visible := filterUserVisibleGroups(groups, allowed, nil, time.Now())
 	require.Len(t, visible, 2)
 	ids := []int64{visible[0].ID, visible[1].ID}
 	require.ElementsMatch(t, []int64{1, 3}, ids)
+}
+
+func TestFilterUserVisibleGroups_ComputesEffectiveMultiplier(t *testing.T) {
+	now := time.Date(2026, time.August, 8, 12, 0, 0, 0, time.Local)
+	groups := []service.AvailableGroupRef{{
+		ID: 1, SubscriptionType: service.SubscriptionTypeSubscription,
+		RateMultiplier: 0.5, PeakRateEnabled: true, PeakStart: "00:00", PeakEnd: "23:59", PeakRateMultiplier: 2,
+	}}
+
+	visible := filterUserVisibleGroups(groups, map[int64]struct{}{1: {}}, map[int64]float64{1: 0.4}, now)
+
+	require.Len(t, visible, 1)
+	require.InDelta(t, 0.8, visible[0].EffectiveMultiplier, 0.000001)
 }
 
 func TestToUserSupportedModels_FiltersByAllowedPlatforms(t *testing.T) {
@@ -65,8 +79,9 @@ func TestToUserSupportedModels_NilAllowedPlatformsKeepsAll(t *testing.T) {
 
 func TestUserAvailableChannel_FieldWhitelist(t *testing.T) {
 	// 通过序列化 userAvailableChannel 结构体验证响应形状：
-	// 只有 name / description / platforms；不含管理端字段。
+	// 只有稳定 id、name / description / platforms；不含管理端字段。
 	row := userAvailableChannel{
+		ID:          9,
 		Name:        "ch",
 		Description: "d",
 		Platforms: []userChannelPlatformSection{
@@ -82,11 +97,11 @@ func TestUserAvailableChannel_FieldWhitelist(t *testing.T) {
 	var decoded map[string]any
 	require.NoError(t, json.Unmarshal(raw, &decoded))
 
-	for _, key := range []string{"id", "status", "billing_model_source", "restrict_models"} {
+	for _, key := range []string{"status", "billing_model_source", "restrict_models"} {
 		_, exists := decoded[key]
 		require.Falsef(t, exists, "user DTO must not expose %q", key)
 	}
-	for _, key := range []string{"name", "description", "platforms"} {
+	for _, key := range []string{"id", "name", "description", "platforms"} {
 		_, exists := decoded[key]
 		require.Truef(t, exists, "user DTO must expose %q", key)
 	}
@@ -107,7 +122,7 @@ func TestUserAvailableChannel_FieldWhitelist(t *testing.T) {
 	require.NoError(t, err)
 	var groupDecoded map[string]any
 	require.NoError(t, json.Unmarshal(rawGroup, &groupDecoded))
-	for _, key := range []string{"id", "name", "platform", "subscription_type", "rate_multiplier", "peak_rate_enabled", "peak_start", "peak_end", "peak_rate_multiplier", "is_exclusive"} {
+	for _, key := range []string{"id", "name", "platform", "subscription_type", "rate_multiplier", "effective_multiplier", "peak_rate_enabled", "peak_start", "peak_end", "peak_rate_multiplier", "is_exclusive"} {
 		_, exists := groupDecoded[key]
 		require.Truef(t, exists, "group DTO must expose %q", key)
 	}

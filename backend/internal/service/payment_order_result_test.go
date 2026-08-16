@@ -277,6 +277,26 @@ func TestCalculateCreateOrderPayAmountForBalanceIgnoresSubscriptionRate(t *testi
 	}
 }
 
+func TestValidateBalanceSettlementCurrency(t *testing.T) {
+	if err := validateBalanceSettlementCurrency(
+		&User{BillingCurrency: CurrencyCNY}, payment.OrderTypeBalance, CurrencyCNY,
+	); err != nil {
+		t.Fatalf("same-currency balance recharge returned error: %v", err)
+	}
+	if err := validateBalanceSettlementCurrency(
+		&User{BillingCurrency: CurrencyUSD}, payment.OrderTypeSubscription, CurrencyCNY,
+	); err != nil {
+		t.Fatalf("subscription currency validation returned error: %v", err)
+	}
+
+	err := validateBalanceSettlementCurrency(
+		&User{BillingCurrency: CurrencyUSD}, payment.OrderTypeBalance, CurrencyCNY,
+	)
+	if err == nil || !strings.Contains(err.Error(), "USD balance cannot be recharged through a CNY payment channel") {
+		t.Fatalf("currency mismatch error = %v", err)
+	}
+}
+
 func TestCalculateCreditedBalanceStillUsesRechargeMultiplier(t *testing.T) {
 	t.Parallel()
 

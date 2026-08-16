@@ -482,7 +482,6 @@ func (s *UserService) updateProfile(ctx context.Context, userID int64, req Updat
 			user.BalanceNotifyThreshold = req.BalanceNotifyThreshold
 		}
 	}
-
 	if err := s.userRepo.Update(ctx, user); err != nil {
 		return nil, oldConcurrency, fmt.Errorf("update user: %w", err)
 	}

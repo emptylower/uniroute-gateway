@@ -128,6 +128,7 @@ type MethodLimits struct {
 	DailyLimit  float64 `json:"daily_limit"`
 	SingleMin   float64 `json:"single_min"`
 	SingleMax   float64 `json:"single_max"`
+	Available   bool    `json:"available"`
 }
 
 // MethodLimitsResponse is the full response for the user-facing /limits API.
@@ -136,6 +137,26 @@ type MethodLimitsResponse struct {
 	Methods   map[string]MethodLimits `json:"methods"`
 	GlobalMin float64                 `json:"global_min"` // 0 = no minimum
 	GlobalMax float64                 `json:"global_max"` // 0 = no maximum
+}
+
+func (c *PaymentConfig) IsPaymentTypeEnabled(paymentType string) bool {
+	if c == nil || !c.Enabled {
+		return false
+	}
+	requested := NormalizeVisibleMethod(paymentType)
+	if requested == "" {
+		requested = strings.TrimSpace(paymentType)
+	}
+	// Empty is the legacy "all configured providers" behavior.
+	if len(c.EnabledTypes) == 0 {
+		return true
+	}
+	for _, enabled := range c.EnabledTypes {
+		if NormalizeVisibleMethod(enabled) == requested {
+			return true
+		}
+	}
+	return false
 }
 
 type CreateProviderInstanceRequest struct {

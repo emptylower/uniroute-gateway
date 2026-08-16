@@ -80,6 +80,11 @@ func PasswordHash(v string) predicate.User {
 	return predicate.User(sql.FieldEQ(FieldPasswordHash, v))
 }
 
+// PlatformUserID applies equality check predicate on the "platform_user_id" field. It's identical to PlatformUserIDEQ.
+func PlatformUserID(v string) predicate.User {
+	return predicate.User(sql.FieldEQ(FieldPlatformUserID, v))
+}
+
 // Role applies equality check predicate on the "role" field. It's identical to RoleEQ.
 func Role(v string) predicate.User {
 	return predicate.User(sql.FieldEQ(FieldRole, v))
@@ -93,6 +98,11 @@ func Balance(v float64) predicate.User {
 // FrozenBalance applies equality check predicate on the "frozen_balance" field. It's identical to FrozenBalanceEQ.
 func FrozenBalance(v float64) predicate.User {
 	return predicate.User(sql.FieldEQ(FieldFrozenBalance, v))
+}
+
+// BillingCurrency applies equality check predicate on the "billing_currency" field. It's identical to BillingCurrencyEQ.
+func BillingCurrency(v string) predicate.User {
+	return predicate.User(sql.FieldEQ(FieldBillingCurrency, v))
 }
 
 // Concurrency applies equality check predicate on the "concurrency" field. It's identical to ConcurrencyEQ.
@@ -435,6 +445,81 @@ func PasswordHashContainsFold(v string) predicate.User {
 	return predicate.User(sql.FieldContainsFold(FieldPasswordHash, v))
 }
 
+// PlatformUserIDEQ applies the EQ predicate on the "platform_user_id" field.
+func PlatformUserIDEQ(v string) predicate.User {
+	return predicate.User(sql.FieldEQ(FieldPlatformUserID, v))
+}
+
+// PlatformUserIDNEQ applies the NEQ predicate on the "platform_user_id" field.
+func PlatformUserIDNEQ(v string) predicate.User {
+	return predicate.User(sql.FieldNEQ(FieldPlatformUserID, v))
+}
+
+// PlatformUserIDIn applies the In predicate on the "platform_user_id" field.
+func PlatformUserIDIn(vs ...string) predicate.User {
+	return predicate.User(sql.FieldIn(FieldPlatformUserID, vs...))
+}
+
+// PlatformUserIDNotIn applies the NotIn predicate on the "platform_user_id" field.
+func PlatformUserIDNotIn(vs ...string) predicate.User {
+	return predicate.User(sql.FieldNotIn(FieldPlatformUserID, vs...))
+}
+
+// PlatformUserIDGT applies the GT predicate on the "platform_user_id" field.
+func PlatformUserIDGT(v string) predicate.User {
+	return predicate.User(sql.FieldGT(FieldPlatformUserID, v))
+}
+
+// PlatformUserIDGTE applies the GTE predicate on the "platform_user_id" field.
+func PlatformUserIDGTE(v string) predicate.User {
+	return predicate.User(sql.FieldGTE(FieldPlatformUserID, v))
+}
+
+// PlatformUserIDLT applies the LT predicate on the "platform_user_id" field.
+func PlatformUserIDLT(v string) predicate.User {
+	return predicate.User(sql.FieldLT(FieldPlatformUserID, v))
+}
+
+// PlatformUserIDLTE applies the LTE predicate on the "platform_user_id" field.
+func PlatformUserIDLTE(v string) predicate.User {
+	return predicate.User(sql.FieldLTE(FieldPlatformUserID, v))
+}
+
+// PlatformUserIDContains applies the Contains predicate on the "platform_user_id" field.
+func PlatformUserIDContains(v string) predicate.User {
+	return predicate.User(sql.FieldContains(FieldPlatformUserID, v))
+}
+
+// PlatformUserIDHasPrefix applies the HasPrefix predicate on the "platform_user_id" field.
+func PlatformUserIDHasPrefix(v string) predicate.User {
+	return predicate.User(sql.FieldHasPrefix(FieldPlatformUserID, v))
+}
+
+// PlatformUserIDHasSuffix applies the HasSuffix predicate on the "platform_user_id" field.
+func PlatformUserIDHasSuffix(v string) predicate.User {
+	return predicate.User(sql.FieldHasSuffix(FieldPlatformUserID, v))
+}
+
+// PlatformUserIDIsNil applies the IsNil predicate on the "platform_user_id" field.
+func PlatformUserIDIsNil() predicate.User {
+	return predicate.User(sql.FieldIsNull(FieldPlatformUserID))
+}
+
+// PlatformUserIDNotNil applies the NotNil predicate on the "platform_user_id" field.
+func PlatformUserIDNotNil() predicate.User {
+	return predicate.User(sql.FieldNotNull(FieldPlatformUserID))
+}
+
+// PlatformUserIDEqualFold applies the EqualFold predicate on the "platform_user_id" field.
+func PlatformUserIDEqualFold(v string) predicate.User {
+	return predicate.User(sql.FieldEqualFold(FieldPlatformUserID, v))
+}
+
+// PlatformUserIDContainsFold applies the ContainsFold predicate on the "platform_user_id" field.
+func PlatformUserIDContainsFold(v string) predicate.User {
+	return predicate.User(sql.FieldContainsFold(FieldPlatformUserID, v))
+}
+
 // RoleEQ applies the EQ predicate on the "role" field.
 func RoleEQ(v string) predicate.User {
 	return predicate.User(sql.FieldEQ(FieldRole, v))
@@ -578,6 +663,71 @@ func FrozenBalanceLT(v float64) predicate.User {
 // FrozenBalanceLTE applies the LTE predicate on the "frozen_balance" field.
 func FrozenBalanceLTE(v float64) predicate.User {
 	return predicate.User(sql.FieldLTE(FieldFrozenBalance, v))
+}
+
+// BillingCurrencyEQ applies the EQ predicate on the "billing_currency" field.
+func BillingCurrencyEQ(v string) predicate.User {
+	return predicate.User(sql.FieldEQ(FieldBillingCurrency, v))
+}
+
+// BillingCurrencyNEQ applies the NEQ predicate on the "billing_currency" field.
+func BillingCurrencyNEQ(v string) predicate.User {
+	return predicate.User(sql.FieldNEQ(FieldBillingCurrency, v))
+}
+
+// BillingCurrencyIn applies the In predicate on the "billing_currency" field.
+func BillingCurrencyIn(vs ...string) predicate.User {
+	return predicate.User(sql.FieldIn(FieldBillingCurrency, vs...))
+}
+
+// BillingCurrencyNotIn applies the NotIn predicate on the "billing_currency" field.
+func BillingCurrencyNotIn(vs ...string) predicate.User {
+	return predicate.User(sql.FieldNotIn(FieldBillingCurrency, vs...))
+}
+
+// BillingCurrencyGT applies the GT predicate on the "billing_currency" field.
+func BillingCurrencyGT(v string) predicate.User {
+	return predicate.User(sql.FieldGT(FieldBillingCurrency, v))
+}
+
+// BillingCurrencyGTE applies the GTE predicate on the "billing_currency" field.
+func BillingCurrencyGTE(v string) predicate.User {
+	return predicate.User(sql.FieldGTE(FieldBillingCurrency, v))
+}
+
+// BillingCurrencyLT applies the LT predicate on the "billing_currency" field.
+func BillingCurrencyLT(v string) predicate.User {
+	return predicate.User(sql.FieldLT(FieldBillingCurrency, v))
+}
+
+// BillingCurrencyLTE applies the LTE predicate on the "billing_currency" field.
+func BillingCurrencyLTE(v string) predicate.User {
+	return predicate.User(sql.FieldLTE(FieldBillingCurrency, v))
+}
+
+// BillingCurrencyContains applies the Contains predicate on the "billing_currency" field.
+func BillingCurrencyContains(v string) predicate.User {
+	return predicate.User(sql.FieldContains(FieldBillingCurrency, v))
+}
+
+// BillingCurrencyHasPrefix applies the HasPrefix predicate on the "billing_currency" field.
+func BillingCurrencyHasPrefix(v string) predicate.User {
+	return predicate.User(sql.FieldHasPrefix(FieldBillingCurrency, v))
+}
+
+// BillingCurrencyHasSuffix applies the HasSuffix predicate on the "billing_currency" field.
+func BillingCurrencyHasSuffix(v string) predicate.User {
+	return predicate.User(sql.FieldHasSuffix(FieldBillingCurrency, v))
+}
+
+// BillingCurrencyEqualFold applies the EqualFold predicate on the "billing_currency" field.
+func BillingCurrencyEqualFold(v string) predicate.User {
+	return predicate.User(sql.FieldEqualFold(FieldBillingCurrency, v))
+}
+
+// BillingCurrencyContainsFold applies the ContainsFold predicate on the "billing_currency" field.
+func BillingCurrencyContainsFold(v string) predicate.User {
+	return predicate.User(sql.FieldContainsFold(FieldBillingCurrency, v))
 }
 
 // ConcurrencyEQ applies the EQ predicate on the "concurrency" field.

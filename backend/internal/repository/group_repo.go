@@ -61,6 +61,8 @@ func createGroupRecord(ctx context.Context, client *dbent.Client, groupIn *servi
 		SetDescription(groupIn.Description).
 		SetPlatform(groupIn.Platform).
 		SetRateMultiplier(groupIn.RateMultiplier).
+		SetNillableRateMultiplierCny(groupIn.RateMultiplierCNY).
+		SetNillableRateMultiplierUsd(groupIn.RateMultiplierUSD).
 		SetSortOrder(groupIn.SortOrder).
 		SetIsExclusive(groupIn.IsExclusive).
 		SetStatus(groupIn.Status).
@@ -231,6 +233,8 @@ func (r *groupRepository) Update(ctx context.Context, groupIn *service.Group) er
 		SetDescription(groupIn.Description).
 		SetPlatform(groupIn.Platform).
 		SetRateMultiplier(groupIn.RateMultiplier).
+		SetNillableRateMultiplierCny(groupIn.RateMultiplierCNY).
+		SetNillableRateMultiplierUsd(groupIn.RateMultiplierUSD).
 		SetIsExclusive(groupIn.IsExclusive).
 		SetStatus(groupIn.Status).
 		SetSubscriptionType(groupIn.SubscriptionType).
@@ -271,6 +275,12 @@ func (r *groupRepository) Update(ctx context.Context, groupIn *service.Group) er
 		SetPeakRateMultiplier(groupIn.PeakRateMultiplier)
 
 	// 显式处理可空字段：nil 需要 clear，非 nil 需要 set。
+	if groupIn.RateMultiplierCNY == nil {
+		builder = builder.ClearRateMultiplierCny()
+	}
+	if groupIn.RateMultiplierUSD == nil {
+		builder = builder.ClearRateMultiplierUsd()
+	}
 	if groupIn.DailyLimitUSD != nil {
 		builder = builder.SetDailyLimitUsd(*groupIn.DailyLimitUSD)
 	} else {

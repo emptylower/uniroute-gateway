@@ -102,7 +102,7 @@ func (r *usageLogRepository) GetUserUsageTrend(ctx context.Context, startTime, e
 			COUNT(*) as requests,
 			COALESCE(SUM(u.input_tokens + u.output_tokens + u.cache_creation_tokens + u.cache_read_tokens), 0) as tokens,
 			COALESCE(SUM(u.total_cost), 0) as cost,
-			COALESCE(SUM(u.actual_cost), 0) as actual_cost
+			COALESCE(SUM(CASE WHEN u.exchange_rate_source <> 'legacy' AND u.exchange_rate > 0 THEN u.actual_cost / u.exchange_rate ELSE u.actual_cost END), 0) as actual_cost
 		FROM usage_logs u
 		LEFT JOIN users us ON u.user_id = us.id
 		WHERE u.user_id IN (SELECT user_id FROM top_users)
@@ -150,7 +150,7 @@ func (r *usageLogRepository) GetUserSpendingRanking(ctx context.Context, startTi
 			SELECT
 				u.user_id,
 				COALESCE(us.email, '') as email,
-				COALESCE(SUM(u.actual_cost), 0) as actual_cost,
+				COALESCE(SUM(CASE WHEN u.exchange_rate_source <> 'legacy' AND u.exchange_rate > 0 THEN u.actual_cost / u.exchange_rate ELSE u.actual_cost END), 0) as actual_cost,
 				COUNT(*) as requests,
 				COALESCE(SUM(u.input_tokens + u.output_tokens + u.cache_creation_tokens + u.cache_read_tokens), 0) as tokens
 			FROM usage_logs u
@@ -271,10 +271,10 @@ func (r *usageLogRepository) GetUsageTrendWithFilters(ctx context.Context, start
 }
 
 func (r *usageLogRepository) GetUsageTrendWithUsageFilters(ctx context.Context, startTime, endTime time.Time, granularity string, filters UsageLogFilters) (results []TrendDataPoint, err error) {
-	return r.getUsageTrendWithFilters(ctx, startTime, endTime, granularity, filters.UserID, filters.APIKeyID, filters.AccountID, filters.GroupID, filters.Model, filters.ModelFilterSource, filters.RequestType, filters.Stream, filters.BillingType, filters.BillingMode)
+	return r.getUsageTrendWithFilters(ctx, startTime, endTime, granularity, filters.UserID, filters.APIKeyID, filters.AccountID, filters.GroupID, filters.Model, filters.ModelFilterSource, filters.RequestType, filters.Stream, filters.BillingType, filters.BillingMode, filters.DisplayCurrency)
 }
 
-func (r *usageLogRepository) getUsageTrendWithFilters(ctx context.Context, startTime, endTime time.Time, granularity string, userID, apiKeyID, accountID, groupID int64, model string, modelSource string, requestType *int16, stream *bool, billingType *int8, billingMode string) (results []TrendDataPoint, err error) {
+func (r *usageLogRepository) getUsageTrendWithFilters(ctx context.Context, startTime, endTime time.Time, granularity string, userID, apiKeyID, accountID, groupID int64, model string, modelSource string, requestType *int16, stream *bool, billingType *int8, billingMode string, displayCurrency ...string) (results []TrendDataPoint, err error) {
 	if shouldUsePreaggregatedTrend(granularity, userID, apiKeyID, accountID, groupID, model, requestType, stream, billingType, billingMode) {
 		aggregated, aggregatedErr := r.getUsageTrendFromAggregates(ctx, startTime, endTime, granularity)
 		if aggregatedErr == nil && len(aggregated) > 0 {
@@ -283,6 +283,19 @@ func (r *usageLogRepository) getUsageTrendWithFilters(ctx context.Context, start
 	}
 
 	dateFormat := safeDateFormat(granularity)
+	standardCostExpr := "COALESCE(SUM(total_cost), 0)"
+	actualCostExpr := "COALESCE(SUM(CASE WHEN exchange_rate_source <> 'legacy' AND exchange_rate > 0 THEN actual_cost / exchange_rate ELSE actual_cost END), 0)"
+	quoteCurrency := ""
+	if len(displayCurrency) > 0 {
+		quoteCurrency = displayCurrency[0]
+	}
+	if usageDisplayCurrency(quoteCurrency) != "" {
+		standardCostExpr = usageStandardCostDisplayExpr(quoteCurrency, "")
+		actualCostExpr = usageActualCostDisplayExpr(quoteCurrency, "")
+	} else if userID > 0 {
+		standardCostExpr = "COALESCE(SUM(CASE WHEN exchange_rate_source <> 'legacy' THEN base_cost ELSE total_cost END), 0)"
+		actualCostExpr = "COALESCE(SUM(actual_cost), 0)"
+	}
 
 	query := fmt.Sprintf(`
 		SELECT
@@ -293,11 +306,11 @@ func (r *usageLogRepository) getUsageTrendWithFilters(ctx context.Context, start
 			COALESCE(SUM(cache_creation_tokens), 0) as cache_creation_tokens,
 			COALESCE(SUM(cache_read_tokens), 0) as cache_read_tokens,
 			COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0) as total_tokens,
-			COALESCE(SUM(total_cost), 0) as cost,
-			COALESCE(SUM(actual_cost), 0) as actual_cost
+			%s as cost,
+			%s as actual_cost
 		FROM usage_logs
 		WHERE created_at >= $1 AND created_at < $2
-	`, dateFormat)
+	`, dateFormat, standardCostExpr, actualCostExpr)
 
 	args := []any{startTime, endTime}
 	if userID > 0 {
@@ -432,16 +445,31 @@ func (r *usageLogRepository) GetModelStatsWithFiltersBySource(ctx context.Contex
 }
 
 func (r *usageLogRepository) GetModelStatsWithUsageFiltersBySource(ctx context.Context, startTime, endTime time.Time, filters UsageLogFilters, source string) (results []ModelStat, err error) {
-	return r.getModelStatsWithFiltersBySource(ctx, startTime, endTime, filters.UserID, filters.APIKeyID, filters.AccountID, filters.GroupID, filters.Model, filters.RequestType, filters.Stream, filters.BillingType, source, filters.BillingMode)
+	return r.getModelStatsWithFiltersBySource(ctx, startTime, endTime, filters.UserID, filters.APIKeyID, filters.AccountID, filters.GroupID, filters.Model, filters.RequestType, filters.Stream, filters.BillingType, source, filters.BillingMode, filters.DisplayCurrency)
 }
 
-func (r *usageLogRepository) getModelStatsWithFiltersBySource(ctx context.Context, startTime, endTime time.Time, userID, apiKeyID, accountID, groupID int64, model string, requestType *int16, stream *bool, billingType *int8, source string, billingMode string) (results []ModelStat, err error) {
-	actualCostExpr := "COALESCE(SUM(actual_cost), 0) as actual_cost"
+func (r *usageLogRepository) getModelStatsWithFiltersBySource(ctx context.Context, startTime, endTime time.Time, userID, apiKeyID, accountID, groupID int64, model string, requestType *int16, stream *bool, billingType *int8, source string, billingMode string, displayCurrency ...string) (results []ModelStat, err error) {
+	actualCostExpr := "COALESCE(SUM(CASE WHEN exchange_rate_source <> 'legacy' AND exchange_rate > 0 THEN actual_cost / exchange_rate ELSE actual_cost END), 0) as actual_cost"
+	quoteCurrency := ""
+	if len(displayCurrency) > 0 {
+		quoteCurrency = displayCurrency[0]
+	}
+	if usageDisplayCurrency(quoteCurrency) != "" {
+		actualCostExpr = usageActualCostDisplayExpr(quoteCurrency, "") + " as actual_cost"
+	} else if userID > 0 {
+		actualCostExpr = "COALESCE(SUM(actual_cost), 0) as actual_cost"
+	}
 	// 当仅按 account_id 聚合时，实际费用使用账号倍率（total_cost * account_rate_multiplier）。
 	if accountID > 0 && userID == 0 && apiKeyID == 0 {
 		actualCostExpr = "COALESCE(SUM(COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)), 0) as actual_cost"
 	}
 	accountCostExpr := "COALESCE(SUM(COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)), 0) as account_cost"
+	standardCostExpr := "COALESCE(SUM(total_cost), 0)"
+	if usageDisplayCurrency(quoteCurrency) != "" {
+		standardCostExpr = usageStandardCostDisplayExpr(quoteCurrency, "")
+	} else if userID > 0 {
+		standardCostExpr = "COALESCE(SUM(CASE WHEN exchange_rate_source <> 'legacy' THEN base_cost ELSE total_cost END), 0)"
+	}
 	modelExpr := resolveModelDimensionExpression(source)
 
 	query := fmt.Sprintf(`
@@ -453,12 +481,12 @@ func (r *usageLogRepository) getModelStatsWithFiltersBySource(ctx context.Contex
 			COALESCE(SUM(cache_creation_tokens), 0) as cache_creation_tokens,
 			COALESCE(SUM(cache_read_tokens), 0) as cache_read_tokens,
 			COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0) as total_tokens,
-			COALESCE(SUM(total_cost), 0) as cost,
+			%s as cost,
 			%s,
 			%s
 		FROM usage_logs
 		WHERE created_at >= $1 AND created_at < $2
-	`, modelExpr, actualCostExpr, accountCostExpr)
+	`, modelExpr, standardCostExpr, actualCostExpr, accountCostExpr)
 
 	args := []any{startTime, endTime}
 	if userID > 0 {
@@ -519,19 +547,28 @@ func (r *usageLogRepository) GetGroupStatsWithUsageFilters(ctx context.Context, 
 }
 
 func (r *usageLogRepository) getGroupStatsWithFilters(ctx context.Context, startTime, endTime time.Time, userID, apiKeyID, accountID, groupID int64, model string, requestType *int16, stream *bool, billingType *int8, billingMode string) (results []usagestats.GroupStat, err error) {
-	query := `
+	standardCostExpr := "COALESCE(SUM(ul.total_cost), 0)"
+	actualCostExpr := "COALESCE(SUM(CASE WHEN ul.exchange_rate_source <> 'legacy' AND ul.exchange_rate > 0 THEN ul.actual_cost / ul.exchange_rate ELSE ul.actual_cost END), 0)"
+	if userID > 0 {
+		standardCostExpr = "COALESCE(SUM(CASE WHEN ul.exchange_rate_source <> 'legacy' THEN ul.base_cost ELSE ul.total_cost END), 0)"
+		actualCostExpr = "COALESCE(SUM(ul.actual_cost), 0)"
+	}
+	if accountID > 0 && userID == 0 && apiKeyID == 0 {
+		actualCostExpr = "COALESCE(SUM(COALESCE(ul.account_stats_cost, ul.total_cost) * COALESCE(ul.account_rate_multiplier, 1)), 0)"
+	}
+	query := fmt.Sprintf(`
 		SELECT
 			COALESCE(ul.group_id, 0) as group_id,
 			COALESCE(g.name, '') as group_name,
 			COUNT(*) as requests,
 			COALESCE(SUM(ul.input_tokens + ul.output_tokens + ul.cache_creation_tokens + ul.cache_read_tokens), 0) as total_tokens,
-			COALESCE(SUM(ul.total_cost), 0) as cost,
-			COALESCE(SUM(ul.actual_cost), 0) as actual_cost,
+			%s as cost,
+			%s as actual_cost,
 			COALESCE(SUM(COALESCE(ul.account_stats_cost, ul.total_cost) * COALESCE(ul.account_rate_multiplier, 1)), 0) as account_cost
 		FROM usage_logs ul
 		LEFT JOIN groups g ON g.id = ul.group_id
 		WHERE ul.created_at >= $1 AND ul.created_at < $2
-	`
+	`, standardCostExpr, actualCostExpr)
 
 	args := []any{startTime, endTime}
 	if userID > 0 {
@@ -608,7 +645,7 @@ func (r *usageLogRepository) GetUserBreakdownStats(ctx context.Context, startTim
 			COALESCE(SUM(ul.cache_creation_tokens + ul.cache_read_tokens), 0) as cache_tokens,
 			COALESCE(SUM(ul.input_tokens + ul.output_tokens + ul.cache_creation_tokens + ul.cache_read_tokens), 0) as total_tokens,
 			COALESCE(SUM(ul.total_cost), 0) as cost,
-			COALESCE(SUM(ul.actual_cost), 0) as actual_cost,
+			COALESCE(SUM(CASE WHEN ul.exchange_rate_source <> 'legacy' AND ul.exchange_rate > 0 THEN ul.actual_cost / ul.exchange_rate ELSE ul.actual_cost END), 0) as actual_cost,
 			COALESCE(SUM(COALESCE(ul.account_stats_cost, ul.total_cost) * COALESCE(ul.account_rate_multiplier, 1)), 0) as account_cost
 		FROM usage_logs ul
 		LEFT JOIN users u ON u.id = ul.user_id
@@ -711,8 +748,8 @@ func (r *usageLogRepository) GetAllGroupUsageSummary(ctx context.Context, todayS
 	query := `
 		SELECT
 			g.id AS group_id,
-			COALESCE(SUM(ul.actual_cost), 0) AS total_cost,
-			COALESCE(SUM(CASE WHEN ul.created_at >= $1 THEN ul.actual_cost ELSE 0 END), 0) AS today_cost
+			COALESCE(SUM(CASE WHEN ul.exchange_rate_source <> 'legacy' AND ul.exchange_rate > 0 THEN ul.actual_cost / ul.exchange_rate ELSE ul.actual_cost END), 0) AS total_cost,
+			COALESCE(SUM(CASE WHEN ul.created_at >= $1 THEN CASE WHEN ul.exchange_rate_source <> 'legacy' AND ul.exchange_rate > 0 THEN ul.actual_cost / ul.exchange_rate ELSE ul.actual_cost END ELSE 0 END), 0) AS today_cost
 		FROM groups g
 		LEFT JOIN usage_logs ul ON ul.group_id = g.id
 		GROUP BY g.id

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -80,6 +81,13 @@ var usageLogInsertArgTypes = [...]string{
 	"text",        // billing_mode
 	"numeric",     // account_stats_cost
 	"text",        // session_id
+	"text",        // source_currency
+	"text",        // settlement_currency
+	"numeric",     // exchange_rate
+	"text",        // exchange_rate_source
+	"timestamptz", // exchange_rate_as_of
+	"numeric",     // source_cost
+	"numeric",     // base_cost
 	"timestamptz", // created_at
 }
 
@@ -149,6 +157,9 @@ func (r *usageLogRepository) Create(ctx context.Context, log *service.UsageLog) 
 	if log == nil {
 		return false, nil
 	}
+	if err := validateUsageLogCurrencySnapshot(log); err != nil {
+		return false, err
+	}
 
 	if tx := dbent.TxFromContext(ctx); tx != nil {
 		return r.createSingle(ctx, tx.Client(), log)
@@ -164,6 +175,9 @@ func (r *usageLogRepository) Create(ctx context.Context, log *service.UsageLog) 
 func (r *usageLogRepository) CreateBestEffort(ctx context.Context, log *service.UsageLog) error {
 	if log == nil {
 		return nil
+	}
+	if err := validateUsageLogCurrencySnapshot(log); err != nil {
+		return err
 	}
 
 	if tx := dbent.TxFromContext(ctx); tx != nil {
@@ -207,6 +221,24 @@ func (r *usageLogRepository) CreateBestEffort(ctx context.Context, log *service.
 	case <-ctx.Done():
 		return service.MarkUsageLogCreateDropped(ctx.Err())
 	}
+}
+
+func validateUsageLogCurrencySnapshot(log *service.UsageLog) error {
+	if log == nil {
+		return nil
+	}
+	source := strings.TrimSpace(log.ExchangeRateSource)
+	if !service.IsSupportedBillingCurrency(strings.TrimSpace(log.SourceCurrency)) ||
+		!service.IsSupportedBillingCurrency(strings.TrimSpace(log.SettlementCurrency)) {
+		return fmt.Errorf("invalid usage-log currency snapshot")
+	}
+	if log.ExchangeRate <= 0 || math.IsNaN(log.ExchangeRate) || math.IsInf(log.ExchangeRate, 0) {
+		return fmt.Errorf("invalid usage-log exchange rate")
+	}
+	if source == "" || log.ExchangeRateAsOf == nil || log.ExchangeRateAsOf.IsZero() {
+		return fmt.Errorf("incomplete usage-log exchange-rate snapshot")
+	}
+	return nil
 }
 
 func (r *usageLogRepository) createSingle(ctx context.Context, sqlq sqlExecutor, log *service.UsageLog) (bool, error) {
@@ -276,6 +308,13 @@ func (r *usageLogRepository) createSingle(ctx context.Context, sqlq sqlExecutor,
 			billing_mode,
 			account_stats_cost,
 			session_id,
+			source_currency,
+			settlement_currency,
+			exchange_rate,
+			exchange_rate_source,
+			exchange_rate_as_of,
+			source_cost,
+			base_cost,
 			created_at
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7,
@@ -283,7 +322,7 @@ func (r *usageLogRepository) createSingle(ctx context.Context, sqlq sqlExecutor,
 			$10, $11, $12, $13,
 			$14, $15, $16, $17,
 			$18, $19, $20, $21, $22, $23,
-			$24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57
+			$24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61, $62, $63, $64
 		)
 		ON CONFLICT (request_id, api_key_id) DO NOTHING
 		RETURNING id, created_at
@@ -731,12 +770,19 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 			billing_mode,
 			account_stats_cost,
 			session_id,
+			source_currency,
+			settlement_currency,
+			exchange_rate,
+			exchange_rate_source,
+			exchange_rate_as_of,
+			source_cost,
+			base_cost,
 			created_at
 		) AS (VALUES `)
 
-	// Each batch row prepends the synthetic input_index before the 57
+	// Each batch row prepends the synthetic input_index before the usage-log values.
 	// usage-log column values.
-	args := make([]any, 0, len(keys)*58)
+	args := make([]any, 0, len(keys)*(len(usageLogInsertArgTypes)+1))
 	argPos := 1
 	for idx, key := range keys {
 		if idx > 0 {
@@ -821,6 +867,13 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 				billing_mode,
 				account_stats_cost,
 				session_id,
+				source_currency,
+				settlement_currency,
+				exchange_rate,
+				exchange_rate_source,
+				exchange_rate_as_of,
+				source_cost,
+				base_cost,
 				created_at
 			)
 			SELECT
@@ -880,6 +933,13 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 				billing_mode,
 				account_stats_cost,
 				session_id,
+				source_currency,
+				settlement_currency,
+				exchange_rate,
+				exchange_rate_source,
+				exchange_rate_as_of,
+				source_cost,
+				base_cost,
 				created_at
 			FROM input
 			ON CONFLICT (request_id, api_key_id) DO NOTHING
@@ -979,10 +1039,17 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			billing_mode,
 			account_stats_cost,
 			session_id,
+			source_currency,
+			settlement_currency,
+			exchange_rate,
+			exchange_rate_source,
+			exchange_rate_as_of,
+			source_cost,
+			base_cost,
 			created_at
 		) AS (VALUES `)
 
-	args := make([]any, 0, len(preparedList)*57)
+	args := make([]any, 0, len(preparedList)*len(usageLogInsertArgTypes))
 	argPos := 1
 	for idx, prepared := range preparedList {
 		if idx > 0 {
@@ -1064,6 +1131,13 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			billing_mode,
 			account_stats_cost,
 			session_id,
+			source_currency,
+			settlement_currency,
+			exchange_rate,
+			exchange_rate_source,
+			exchange_rate_as_of,
+			source_cost,
+			base_cost,
 			created_at
 		)
 		SELECT
@@ -1123,6 +1197,13 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			billing_mode,
 			account_stats_cost,
 			session_id,
+			source_currency,
+			settlement_currency,
+			exchange_rate,
+			exchange_rate_source,
+			exchange_rate_as_of,
+			source_cost,
+			base_cost,
 			created_at
 		FROM input
 		ON CONFLICT (request_id, api_key_id) DO NOTHING
@@ -1190,6 +1271,13 @@ func execUsageLogInsertNoResult(ctx context.Context, sqlq sqlExecutor, prepared 
 			billing_mode,
 			account_stats_cost,
 			session_id,
+			source_currency,
+			settlement_currency,
+			exchange_rate,
+			exchange_rate_source,
+			exchange_rate_as_of,
+			source_cost,
+			base_cost,
 			created_at
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7,
@@ -1197,7 +1285,7 @@ func execUsageLogInsertNoResult(ctx context.Context, sqlq sqlExecutor, prepared 
 			$10, $11, $12, $13,
 			$14, $15, $16, $17,
 			$18, $19, $20, $21, $22, $23,
-			$24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57
+			$24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59, $60, $61, $62, $63, $64
 		)
 		ON CONFLICT (request_id, api_key_id) DO NOTHING
 	`, prepared.args...)
@@ -1239,6 +1327,10 @@ func prepareUsageLogInsert(log *service.UsageLog) usageLogInsertPrepared {
 	billingTier := nullString(log.BillingTier)
 	billingMode := nullString(log.BillingMode)
 	sessionID := nullString(log.SessionID)
+	sourceCurrency := strings.TrimSpace(log.SourceCurrency)
+	settlementCurrency := strings.TrimSpace(log.SettlementCurrency)
+	exchangeRate := log.ExchangeRate
+	exchangeRateSource := strings.TrimSpace(log.ExchangeRateSource)
 	requestedModel := strings.TrimSpace(log.RequestedModel)
 	if requestedModel == "" {
 		requestedModel = strings.TrimSpace(log.Model)
@@ -1312,6 +1404,13 @@ func prepareUsageLogInsert(log *service.UsageLog) usageLogInsertPrepared {
 			billingMode,
 			log.AccountStatsCost, // account_stats_cost
 			sessionID,            // session_id
+			sourceCurrency,
+			settlementCurrency,
+			exchangeRate,
+			exchangeRateSource,
+			nullTime(log.ExchangeRateAsOf),
+			log.SourceCost,
+			log.BaseCost,
 			createdAt,
 		},
 	}
@@ -1319,6 +1418,13 @@ func prepareUsageLogInsert(log *service.UsageLog) usageLogInsertPrepared {
 
 func usageLogBatchKey(requestID string, apiKeyID int64) string {
 	return requestID + "\x1f" + strconv.FormatInt(apiKeyID, 10)
+}
+
+func nullTime(v *time.Time) sql.NullTime {
+	if v == nil {
+		return sql.NullTime{}
+	}
+	return sql.NullTime{Time: *v, Valid: true}
 }
 
 func sendUsageLogCreateResult(ch chan usageLogCreateResult, res usageLogCreateResult) {

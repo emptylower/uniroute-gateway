@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -113,6 +114,7 @@ type BillingCacheService struct {
 	cfg                   *config.Config
 	circuitBreaker        *billingCircuitBreaker
 	userPlatformQuotaRepo UserPlatformQuotaRepository
+	exchangeRates         *ExchangeRateService
 
 	cacheWriteChan     chan cacheWriteTask
 	cacheWriteWg       sync.WaitGroup
@@ -148,6 +150,7 @@ func NewBillingCacheService(
 		userGroupRateRepo:     userGroupRateRepo,
 		cfg:                   cfg,
 		userPlatformQuotaRepo: userPlatformQuotaRepo,
+		exchangeRates:         NewExchangeRateService(cfg),
 	}
 	svc.circuitBreaker = newBillingCircuitBreaker(cfg.Billing.CircuitBreaker)
 	svc.startCacheWriteWorkers()
@@ -758,6 +761,16 @@ func (s *BillingCacheService) CheckBillingEligibility(ctx context.Context, user 
 	if !isSubscriptionMode {
 		if err := s.checkUserPlatformQuotaEligibility(ctx, user.ID, platform); err != nil {
 			return err
+		}
+		// Persisted users always have an explicit currency. Empty is retained only
+		// for legacy unit-test fixtures created without the Billing V2 schema.
+		if user != nil && strings.TrimSpace(user.BillingCurrency) != "" {
+			currency := NormalizeUserBillingCurrency(user.BillingCurrency)
+			snapshot, err := s.exchangeRates.Snapshot(ctx, CurrencyUSD, currency)
+			if err != nil {
+				return ErrBillingServiceUnavailable.WithCause(err)
+			}
+			storeBillingSettlementSnapshot(ctx, snapshot)
 		}
 	}
 

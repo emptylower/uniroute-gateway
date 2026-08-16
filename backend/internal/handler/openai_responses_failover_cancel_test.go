@@ -77,6 +77,7 @@ func newOpenAIResponsesFailoverTestHandler(t *testing.T, upstream service.HTTPUp
 	}
 	accountRepo := openAIImagesFailoverAccountRepo{accounts: accounts}
 	cfg := &config.Config{RunMode: config.RunModeSimple}
+	pricing := service.NewBillingService(cfg, nil)
 	gatewayService := service.NewOpenAIGatewayService(
 		accountRepo,
 		nil,
@@ -88,7 +89,7 @@ func newOpenAIResponsesFailoverTestHandler(t *testing.T, upstream service.HTTPUp
 		cfg,
 		nil,
 		nil,
-		nil,
+		pricing,
 		nil,
 		nil,
 		upstream,

@@ -18,7 +18,12 @@ import (
 
 // APIKeyHandler handles API key-related requests
 type APIKeyHandler struct {
-	apiKeyService *service.APIKeyService
+	apiKeyService            *service.APIKeyService
+	channelPreferenceService *service.ChannelPreferenceService
+}
+
+func (h *APIKeyHandler) SetChannelPreferenceService(s *service.ChannelPreferenceService) {
+	h.channelPreferenceService = s
 }
 
 // NewAPIKeyHandler creates a new APIKeyHandler
@@ -31,7 +36,9 @@ func NewAPIKeyHandler(apiKeyService *service.APIKeyService) *APIKeyHandler {
 // CreateAPIKeyRequest represents the create API key request payload
 type CreateAPIKeyRequest struct {
 	Name          string   `json:"name" binding:"required"`
-	GroupID       *int64   `json:"group_id"`        // nullable
+	GroupID       *int64   `json:"group_id"` // nullable
+	RoutingMode   string   `json:"routing_mode" binding:"omitempty,oneof=legacy_group channels auto_channels"`
+	ChannelIDs    []int64  `json:"channel_ids"`
 	CustomKey     *string  `json:"custom_key"`      // 可选的自定义key
 	IPWhitelist   []string `json:"ip_whitelist"`    // IP 白名单
 	IPBlacklist   []string `json:"ip_blacklist"`    // IP 黑名单
@@ -100,6 +107,12 @@ func (h *APIKeyHandler) List(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
+	if h.channelPreferenceService != nil {
+		if err := h.channelPreferenceService.Attach(c.Request.Context(), subject.UserID, keys); err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+	}
 
 	out := make([]dto.APIKey, 0, len(keys))
 	for i := range keys {
@@ -134,6 +147,15 @@ func (h *APIKeyHandler) GetByID(c *gin.Context) {
 		response.NotFound(c, "API key not found")
 		return
 	}
+	if h.channelPreferenceService != nil {
+		if err := h.channelPreferenceService.Attach(c.Request.Context(), subject.UserID, []service.APIKey{*key}); err == nil {
+			prefs, prefErr := h.channelPreferenceService.GetAPIKey(c.Request.Context(), key.ID, subject.UserID)
+			if prefErr == nil {
+				key.RoutingMode = prefs.RoutingMode
+				key.ChannelIDs = prefs.ChannelIDs
+			}
+		}
+	}
 
 	response.Success(c, dto.APIKeyFromService(key))
 }
@@ -156,6 +178,8 @@ func (h *APIKeyHandler) Create(c *gin.Context) {
 	svcReq := service.CreateAPIKeyRequest{
 		Name:          req.Name,
 		GroupID:       req.GroupID,
+		RoutingMode:   req.RoutingMode,
+		ChannelIDs:    req.ChannelIDs,
 		CustomKey:     req.CustomKey,
 		IPWhitelist:   req.IPWhitelist,
 		IPBlacklist:   req.IPBlacklist,
@@ -175,12 +199,157 @@ func (h *APIKeyHandler) Create(c *gin.Context) {
 	}
 
 	executeUserIdempotentJSON(c, "user.api_keys.create", req, service.DefaultWriteIdempotencyTTL(), func(ctx context.Context) (any, error) {
-		key, err := h.apiKeyService.Create(ctx, subject.UserID, svcReq)
+		var key *service.APIKey
+		var err error
+		if h.channelPreferenceService != nil {
+			key, err = h.channelPreferenceService.CreateAPIKey(ctx, subject.UserID, svcReq)
+		} else {
+			key, err = h.apiKeyService.Create(ctx, subject.UserID, svcReq)
+		}
 		if err != nil {
 			return nil, err
 		}
 		return dto.APIKeyFromService(key), nil
 	})
+}
+
+type channelPreferencesRequest struct {
+	ChannelIDs []int64 `json:"channel_ids" binding:"required,min=1"`
+}
+
+type groupPreferencesRequest struct {
+	DisabledGroupIDs []int64 `json:"disabled_group_ids"`
+}
+
+// GetChannelPreferences returns the channels enabled for one API key.
+func (h *APIKeyHandler) GetChannelPreferences(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	if h.channelPreferenceService == nil {
+		response.NotFound(c, "Channel routing is unavailable")
+		return
+	}
+	keyID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid key ID")
+		return
+	}
+	prefs, err := h.channelPreferenceService.GetAPIKey(c.Request.Context(), keyID, subject.UserID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, prefs)
+}
+
+// PutChannelPreferences replaces the channels enabled for one API key.
+func (h *APIKeyHandler) PutChannelPreferences(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	if h.channelPreferenceService == nil {
+		response.NotFound(c, "Channel routing is unavailable")
+		return
+	}
+	keyID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid key ID")
+		return
+	}
+	var req channelPreferencesRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	prefs, err := h.channelPreferenceService.SetAPIKey(c.Request.Context(), keyID, subject.UserID, req.ChannelIDs)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, prefs)
+}
+
+// GetDefaultChannelPreferences returns defaults copied to new API keys.
+func (h *APIKeyHandler) GetDefaultChannelPreferences(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	ids, err := h.channelPreferenceService.GetDefaults(c.Request.Context(), subject.UserID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{"channel_ids": ids})
+}
+
+// PutDefaultChannelPreferences replaces defaults copied to new API keys.
+func (h *APIKeyHandler) PutDefaultChannelPreferences(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	var req channelPreferencesRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	ids, err := h.channelPreferenceService.SetDefaults(c.Request.Context(), subject.UserID, req.ChannelIDs)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{"channel_ids": ids})
+}
+
+// GetGroupPreferences returns routing groups explicitly disabled by the user.
+func (h *APIKeyHandler) GetGroupPreferences(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	if h.channelPreferenceService == nil {
+		response.NotFound(c, "Group routing preferences are unavailable")
+		return
+	}
+	ids, err := h.channelPreferenceService.GetUserDisabledGroupIDs(c.Request.Context(), subject.UserID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{"disabled_group_ids": ids})
+}
+
+// PutGroupPreferences replaces the user's disabled routing groups.
+func (h *APIKeyHandler) PutGroupPreferences(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	if h.channelPreferenceService == nil {
+		response.NotFound(c, "Group routing preferences are unavailable")
+		return
+	}
+	var req groupPreferencesRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	ids, err := h.channelPreferenceService.SetUserDisabledGroupIDs(c.Request.Context(), subject.UserID, req.DisabledGroupIDs)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{"disabled_group_ids": ids})
 }
 
 // Update handles updating an API key
@@ -284,10 +453,28 @@ func (h *APIKeyHandler) GetAvailableGroups(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
+	rates, err := h.apiKeyService.GetUserGroupRates(c.Request.Context(), subject.UserID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
 
-	out := make([]dto.Group, 0, len(groups))
+	type availableGroup struct {
+		dto.Group
+		EffectiveMultiplier float64 `json:"effective_multiplier"`
+	}
+	out := make([]availableGroup, 0, len(groups))
+	now := time.Now()
 	for i := range groups {
-		out = append(out, *dto.GroupFromService(&groups[i]))
+		group := groups[i]
+		rate := group.RateMultiplier
+		if override, ok := rates[group.ID]; ok {
+			rate = override
+		}
+		out = append(out, availableGroup{
+			Group:               *dto.GroupFromService(&group),
+			EffectiveMultiplier: rate * group.PeakMultiplierAt(now),
+		})
 	}
 	response.Success(c, out)
 }

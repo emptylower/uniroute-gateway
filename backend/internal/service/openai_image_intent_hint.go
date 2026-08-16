@@ -15,6 +15,16 @@ func SetOpenAIImageIntentHint(c *gin.Context, imageIntent bool) {
 	c.Set(openAIImageIntentHintContextKey, imageIntent)
 }
 
+// ResetOpenAIImageIntentHint clears the typed request hint between channel
+// candidates. A mapped model must be reclassified from its candidate-local
+// body instead of inheriting the previous candidate's decision.
+func ResetOpenAIImageIntentHint(c *gin.Context) {
+	if c == nil || GetOpenAIClientTransport(c) != OpenAIClientTransportHTTP {
+		return
+	}
+	c.Set(openAIImageIntentHintContextKey, struct{}{})
+}
+
 func getOpenAIImageIntentHint(c *gin.Context) (imageIntent bool, known bool) {
 	if c == nil || GetOpenAIClientTransport(c) != OpenAIClientTransportHTTP {
 		return false, false

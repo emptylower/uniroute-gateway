@@ -104,12 +104,20 @@ func ProvideGatewayHandler(
 	userMsgQueueService *service.UserMessageQueueService,
 	cfg *config.Config,
 	settingService *service.SettingService,
+	channelRoutingSelector *service.ChannelRoutingSelector,
 	coordinator *securityaudit.Coordinator,
 ) *GatewayHandler {
 	h := NewGatewayHandler(gatewayService, openAIGatewayService, geminiCompatService, antigravityGatewayService,
 		userService, concurrencyService, billingCacheService, usageService, apiKeyService, usageRecordWorkerPool,
 		errorPassthroughService, contentModerationService, userMsgQueueService, cfg, settingService)
 	h.securityAuditCoordinator = coordinator
+	h.SetChannelRoutingSelector(channelRoutingSelector)
+	return h
+}
+
+func ProvideAPIKeyHandler(apiKeyService *service.APIKeyService, preferences *service.ChannelPreferenceService) *APIKeyHandler {
+	h := NewAPIKeyHandler(apiKeyService)
+	h.SetChannelPreferenceService(preferences)
 	return h
 }
 
@@ -125,11 +133,13 @@ func ProvideOpenAIGatewayHandler(
 	grokQuotaService *service.GrokQuotaService,
 	cfg *config.Config,
 	coordinator *securityaudit.Coordinator,
+	channelRoutingSelector *service.ChannelRoutingSelector,
 ) *OpenAIGatewayHandler {
 	h := NewOpenAIGatewayHandler(gatewayService, concurrencyService, billingCacheService, apiKeyService,
 		usageRecordWorkerPool, errorPassthroughService, contentModerationService, opsService, cfg)
 	h.securityAuditCoordinator = coordinator
 	h.grokMediaEligibilityProber = grokQuotaService
+	h.SetChannelRoutingSelector(channelRoutingSelector)
 	return h
 }
 
@@ -182,8 +192,11 @@ func ProvideHandlers(
 	paymentHandler *PaymentHandler,
 	paymentWebhookHandler *PaymentWebhookHandler,
 	availableChannelHandler *AvailableChannelHandler,
+	modelCatalogHandler *ModelCatalogHandler,
 	asyncImageHandler *AsyncImageHandler,
 	batchImageHandler *BatchImageHandler,
+	platformIdentityHandler *PlatformIdentityHandler,
+	platformAPIKeyHandler *PlatformAPIKeyHandler,
 	_ *service.IdempotencyCoordinator,
 	_ *service.IdempotencyCleanupService,
 ) *Handlers {
@@ -204,8 +217,11 @@ func ProvideHandlers(
 		Payment:          paymentHandler,
 		PaymentWebhook:   paymentWebhookHandler,
 		AvailableChannel: availableChannelHandler,
+		ModelCatalog:     modelCatalogHandler,
 		AsyncImage:       asyncImageHandler,
 		BatchImage:       batchImageHandler,
+		PlatformIdentity: platformIdentityHandler,
+		PlatformAPIKey:   platformAPIKeyHandler,
 	}
 }
 
@@ -214,7 +230,7 @@ var ProviderSet = wire.NewSet(
 	// Top-level handlers
 	NewAuthHandler,
 	NewUserHandler,
-	NewAPIKeyHandler,
+	ProvideAPIKeyHandler,
 	NewUsageHandler,
 	NewRedeemHandler,
 	NewSubscriptionHandler,
@@ -227,8 +243,11 @@ var ProviderSet = wire.NewSet(
 	NewPaymentHandler,
 	NewPaymentWebhookHandler,
 	NewAvailableChannelHandler,
+	NewModelCatalogHandler,
 	NewAsyncImageHandler,
 	ProvideBatchImageHandler,
+	NewPlatformIdentityHandler,
+	NewPlatformAPIKeyHandler,
 
 	// Admin handlers
 	admin.NewDashboardHandler,

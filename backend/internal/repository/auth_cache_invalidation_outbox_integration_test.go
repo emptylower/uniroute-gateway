@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -121,4 +122,87 @@ func TestAuthCacheInvalidationTriggers_CoverSecurityMutationsOnly(t *testing.T) 
 		"SELECT cache_key FROM auth_cache_invalidation_outbox WHERE cache_key = $1 LIMIT 1", cacheKey).Scan(&stored))
 	require.Equal(t, cacheKey, stored)
 	require.NotContains(t, stored, keyValue)
+}
+
+func TestProjectedAPIKeyInvalidationQueuesVerifierHash(t *testing.T) {
+	ctx := context.Background()
+	suffix := time.Now().UnixNano()
+	group := mustCreateGroup(t, integrationEntClient, &service.Group{
+		Name: fmt.Sprintf("projected-outbox-group-%d", suffix), RateMultiplier: 1, IsExclusive: true,
+	})
+	user := mustCreateUser(t, integrationEntClient, &service.User{
+		Email: fmt.Sprintf("projected-outbox-%d@example.com", suffix), Concurrency: 5,
+	})
+	verifier := sha256.Sum256([]byte(fmt.Sprintf("projected-verifier-%d", suffix)))
+	cacheKey := hex.EncodeToString(verifier[:])
+	projection := &service.PlatformAPIKeyProjection{
+		GatewayUserID: user.ID,
+		PlatformKeyID: fmt.Sprintf("shipany-key-%d", suffix),
+		KeySHA256:     cacheKey,
+		KeyPrefix:     "sk-projected",
+		Status:        service.StatusActive,
+		Version:       1,
+		Name:          "projected outbox",
+	}
+	repo := NewPlatformAPIKeyRepository(integrationEntClient)
+	require.NoError(t, repo.CreateProjected(ctx, projection, "__projected__"+strings.Repeat("a", 64)))
+
+	var placeholder string
+	require.NoError(t, integrationDB.QueryRowContext(ctx,
+		"SELECT key FROM api_keys WHERE id = $1", projection.GatewayAPIKeyID).Scan(&placeholder))
+	placeholderSum := sha256.Sum256([]byte(placeholder))
+	placeholderCacheKey := hex.EncodeToString(placeholderSum[:])
+	clear := func() {
+		_, err := integrationDB.ExecContext(ctx,
+			"DELETE FROM auth_cache_invalidation_outbox WHERE cache_key IN ($1, $2)", cacheKey, placeholderCacheKey)
+		require.NoError(t, err)
+	}
+	count := func(key string) int {
+		var value int
+		require.NoError(t, integrationDB.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM auth_cache_invalidation_outbox WHERE cache_key = $1", key).Scan(&value))
+		return value
+	}
+	clear()
+	t.Cleanup(clear)
+	t.Cleanup(func() {
+		_, _ = integrationDB.ExecContext(ctx, "DELETE FROM user_allowed_groups WHERE user_id = $1 OR group_id = $2", user.ID, group.ID)
+		_, _ = integrationDB.ExecContext(ctx, "DELETE FROM api_keys WHERE id = $1", projection.GatewayAPIKeyID)
+		_, _ = integrationDB.ExecContext(ctx, "DELETE FROM users WHERE id = $1", user.ID)
+		_, _ = integrationDB.ExecContext(ctx, "DELETE FROM groups WHERE id = $1", group.ID)
+	})
+
+	_, err := integrationDB.ExecContext(ctx,
+		"UPDATE api_keys SET group_id = $1, status = 'disabled' WHERE id = $2", group.ID, projection.GatewayAPIKeyID)
+	require.NoError(t, err)
+	require.Positive(t, count(cacheKey), "projected key mutation must enqueue its verifier hash")
+	require.Zero(t, count(placeholderCacheKey), "projected placeholder hash must never be queued")
+	clear()
+	_, err = integrationDB.ExecContext(ctx, "UPDATE api_keys SET status = 'active' WHERE id = $1", projection.GatewayAPIKeyID)
+	require.NoError(t, err)
+	clear()
+
+	_, err = integrationDB.ExecContext(ctx, "UPDATE users SET status = 'disabled' WHERE id = $1", user.ID)
+	require.NoError(t, err)
+	require.Positive(t, count(cacheKey), "user disable must enqueue projected verifier hash")
+	require.Zero(t, count(placeholderCacheKey))
+	clear()
+	_, err = integrationDB.ExecContext(ctx, "UPDATE users SET status = 'active' WHERE id = $1", user.ID)
+	require.NoError(t, err)
+	clear()
+
+	_, err = integrationDB.ExecContext(ctx, "UPDATE groups SET status = 'disabled' WHERE id = $1", group.ID)
+	require.NoError(t, err)
+	require.Positive(t, count(cacheKey), "group disable must enqueue projected verifier hash")
+	require.Zero(t, count(placeholderCacheKey))
+	clear()
+	_, err = integrationDB.ExecContext(ctx, "UPDATE groups SET status = 'active' WHERE id = $1", group.ID)
+	require.NoError(t, err)
+	clear()
+
+	_, err = integrationDB.ExecContext(ctx,
+		"INSERT INTO user_allowed_groups (user_id, group_id) VALUES ($1, $2)", user.ID, group.ID)
+	require.NoError(t, err)
+	require.Positive(t, count(cacheKey), "exclusive-group grant must enqueue projected verifier hash")
+	require.Zero(t, count(placeholderCacheKey))
 }

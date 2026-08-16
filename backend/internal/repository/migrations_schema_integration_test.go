@@ -45,6 +45,9 @@ func TestMigrationsRunner_IsIdempotent_AndSchemaIsUpToDate(t *testing.T) {
 	// users: columns required by repository queries
 	requireColumn(t, tx, "users", "username", "character varying", 100, false)
 	requireColumn(t, tx, "users", "notes", "text", 0, false)
+	requireColumn(t, tx, "users", "billing_currency", "character varying", 3, false)
+	requireColumn(t, tx, "users", "platform_user_id", "character varying", 128, true)
+	requireIndex(t, tx, "users", "idx_users_platform_user_id")
 
 	// accounts: schedulable and rate-limit fields
 	requireColumn(t, tx, "accounts", "notes", "text", 0, true)
@@ -57,9 +60,28 @@ func TestMigrationsRunner_IsIdempotent_AndSchemaIsUpToDate(t *testing.T) {
 
 	// groups: OpenAI Live 默认关闭，管理员显式开启后才可访问。
 	requireColumn(t, tx, "groups", "allow_live", "boolean", 0, false)
+	requireColumn(t, tx, "groups", "rate_multiplier_cny", "numeric", 0, true)
+	requireColumn(t, tx, "groups", "rate_multiplier_usd", "numeric", 0, true)
 
 	// api_keys: key length should be 128
 	requireColumn(t, tx, "api_keys", "key", "character varying", 128, false)
+	requireColumn(t, tx, "api_keys", "routing_mode", "character varying", 20, false)
+	requireColumnDefaultContains(t, tx, "api_keys", "routing_mode", "legacy_group")
+	requireConstraintDefinitionContains(
+		t,
+		tx,
+		"api_keys",
+		"chk_api_keys_routing_mode",
+		"legacy_group",
+		"channels",
+		"auto_channels",
+	)
+	requireForeignKeyOnDelete(t, tx, "api_key_channels", "api_key_id", "api_keys", "CASCADE")
+	requireForeignKeyOnDelete(t, tx, "api_key_channels", "channel_id", "channels", "CASCADE")
+	requireForeignKeyOnDelete(t, tx, "user_default_channels", "user_id", "users", "CASCADE")
+	requireForeignKeyOnDelete(t, tx, "user_default_channels", "channel_id", "channels", "CASCADE")
+	requireForeignKeyOnDelete(t, tx, "user_disabled_routing_groups", "user_id", "users", "CASCADE")
+	requireForeignKeyOnDelete(t, tx, "user_disabled_routing_groups", "group_id", "groups", "CASCADE")
 
 	// redeem_codes: subscription fields
 	requireColumn(t, tx, "redeem_codes", "group_id", "bigint", 0, true)
@@ -76,6 +98,13 @@ func TestMigrationsRunner_IsIdempotent_AndSchemaIsUpToDate(t *testing.T) {
 	requireColumn(t, tx, "usage_logs", "video_count", "integer", 0, false)
 	requireColumn(t, tx, "usage_logs", "video_resolution", "character varying", 10, true)
 	requireColumn(t, tx, "usage_logs", "video_duration_seconds", "integer", 0, true)
+	requireColumn(t, tx, "usage_logs", "source_currency", "character varying", 3, false)
+	requireColumn(t, tx, "usage_logs", "settlement_currency", "character varying", 3, false)
+	requireColumn(t, tx, "usage_logs", "exchange_rate", "numeric", 0, false)
+	requireColumn(t, tx, "usage_logs", "exchange_rate_source", "character varying", 64, false)
+	requireColumn(t, tx, "usage_logs", "exchange_rate_as_of", "timestamp with time zone", 0, true)
+	requireColumn(t, tx, "usage_logs", "source_cost", "numeric", 0, false)
+	requireColumn(t, tx, "usage_logs", "base_cost", "numeric", 0, false)
 	requireConstraintDefinitionContains(
 		t,
 		tx,

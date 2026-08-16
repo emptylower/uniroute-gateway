@@ -10,19 +10,20 @@ import (
 )
 
 type User struct {
-	ID            int64      `json:"id"`
-	Email         string     `json:"email"`
-	Username      string     `json:"username"`
-	Role          string     `json:"role"`
-	Balance       float64    `json:"balance"`
-	FrozenBalance float64    `json:"frozen_balance"`
-	Concurrency   int        `json:"concurrency"`
-	Status        string     `json:"status"`
-	AllowedGroups []int64    `json:"allowed_groups"`
-	LastActiveAt  *time.Time `json:"last_active_at,omitempty"`
-	CreatedAt     time.Time  `json:"created_at"`
-	UpdatedAt     time.Time  `json:"updated_at"`
-	DeletedAt     *time.Time `json:"deleted_at,omitempty"`
+	ID              int64      `json:"id"`
+	Email           string     `json:"email"`
+	Username        string     `json:"username"`
+	Role            string     `json:"role"`
+	Balance         float64    `json:"balance"`
+	FrozenBalance   float64    `json:"frozen_balance"`
+	BillingCurrency string     `json:"billing_currency"`
+	Concurrency     int        `json:"concurrency"`
+	Status          string     `json:"status"`
+	AllowedGroups   []int64    `json:"allowed_groups"`
+	LastActiveAt    *time.Time `json:"last_active_at,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+	DeletedAt       *time.Time `json:"deleted_at,omitempty"`
 
 	// 余额不足通知
 	BalanceNotifyEnabled       bool               `json:"balance_notify_enabled"`
@@ -56,6 +57,8 @@ type APIKey struct {
 	Key         string     `json:"key"`
 	Name        string     `json:"name"`
 	GroupID     *int64     `json:"group_id"`
+	RoutingMode string     `json:"routing_mode"`
+	ChannelIDs  []int64    `json:"channel_ids"`
 	Status      string     `json:"status"`
 	IPWhitelist []string   `json:"ip_whitelist"`
 	IPBlacklist []string   `json:"ip_blacklist"`
@@ -88,13 +91,15 @@ type APIKey struct {
 }
 
 type Group struct {
-	ID             int64   `json:"id"`
-	Name           string  `json:"name"`
-	Description    string  `json:"description"`
-	Platform       string  `json:"platform"`
-	RateMultiplier float64 `json:"rate_multiplier"`
-	IsExclusive    bool    `json:"is_exclusive"`
-	Status         string  `json:"status"`
+	ID                int64    `json:"id"`
+	Name              string   `json:"name"`
+	Description       string   `json:"description"`
+	Platform          string   `json:"platform"`
+	RateMultiplier    float64  `json:"rate_multiplier"`
+	RateMultiplierCNY *float64 `json:"rate_multiplier_cny,omitempty"`
+	RateMultiplierUSD *float64 `json:"rate_multiplier_usd,omitempty"`
+	IsExclusive       bool     `json:"is_exclusive"`
+	Status            string   `json:"status"`
 
 	SubscriptionType string   `json:"subscription_type"`
 	DailyLimitUSD    *float64 `json:"daily_limit_usd"`
@@ -383,6 +388,7 @@ type RedeemCode struct {
 	Code      string     `json:"code"`
 	Type      string     `json:"type"`
 	Value     float64    `json:"value"`
+	Currency  string     `json:"currency"`
 	Status    string     `json:"status"`
 	UsedBy    *int64     `json:"used_by"`
 	UsedAt    *time.Time `json:"used_at"`
@@ -469,6 +475,8 @@ type UsageLog struct {
 	AccountID int64  `json:"account_id"`
 	RequestID string `json:"request_id"`
 	Model     string `json:"model"`
+	// ChannelID identifies the user-selected channel that served the request.
+	ChannelID *int64 `json:"channel_id,omitempty"`
 	// ServiceTier records the OpenAI service tier used for billing, e.g. "priority" / "flex".
 	ServiceTier *string `json:"service_tier,omitempty"`
 	// ReasoningEffort is the request's reasoning effort level.
@@ -490,14 +498,21 @@ type UsageLog struct {
 	CacheCreation5mTokens int `json:"cache_creation_5m_tokens"`
 	CacheCreation1hTokens int `json:"cache_creation_1h_tokens"`
 
-	InputCost                 float64 `json:"input_cost"`
-	OutputCost                float64 `json:"output_cost"`
-	CacheCreationCost         float64 `json:"cache_creation_cost"`
-	CacheReadCost             float64 `json:"cache_read_cost"`
-	TotalCost                 float64 `json:"total_cost"`
-	ActualCost                float64 `json:"actual_cost"`
-	RateMultiplier            float64 `json:"rate_multiplier"`
-	LongContextBillingApplied bool    `json:"long_context_billing_applied"`
+	InputCost                 float64    `json:"input_cost"`
+	OutputCost                float64    `json:"output_cost"`
+	CacheCreationCost         float64    `json:"cache_creation_cost"`
+	CacheReadCost             float64    `json:"cache_read_cost"`
+	TotalCost                 float64    `json:"total_cost"`
+	ActualCost                float64    `json:"actual_cost"`
+	SourceCurrency            string     `json:"source_currency"`
+	SettlementCurrency        string     `json:"settlement_currency"`
+	ExchangeRate              float64    `json:"exchange_rate"`
+	ExchangeRateSource        string     `json:"exchange_rate_source"`
+	ExchangeRateAsOf          *time.Time `json:"exchange_rate_as_of,omitempty"`
+	SourceCost                float64    `json:"source_cost"`
+	BaseCost                  float64    `json:"base_cost"`
+	RateMultiplier            float64    `json:"rate_multiplier"`
+	LongContextBillingApplied bool       `json:"long_context_billing_applied"`
 
 	BillingType  int8   `json:"billing_type"`
 	RequestType  string `json:"request_type"`
@@ -549,8 +564,6 @@ type AdminUsageLog struct {
 	// Omitted when no mapping was applied (requested model was used as-is).
 	UpstreamModel *string `json:"upstream_model,omitempty"`
 
-	// ChannelID 渠道 ID
-	ChannelID *int64 `json:"channel_id,omitempty"`
 	// ModelMappingChain 模型映射链，如 "a→b→c"
 	ModelMappingChain *string `json:"model_mapping_chain,omitempty"`
 	// BillingTier 计费层级标签（per_request/image 模式）
@@ -662,6 +675,7 @@ type PromoCode struct {
 	ID          int64      `json:"id"`
 	Code        string     `json:"code"`
 	BonusAmount float64    `json:"bonus_amount"`
+	Currency    string     `json:"currency"`
 	MaxUses     int        `json:"max_uses"`
 	UsedCount   int        `json:"used_count"`
 	Status      string     `json:"status"`

@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	"entgo.io/ent/dialect"
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/ent/promocode"
 	"github.com/Wei-Shaw/sub2api/ent/promocodeusage"
@@ -26,6 +27,7 @@ func (r *promoCodeRepository) Create(ctx context.Context, code *service.PromoCod
 	builder := client.PromoCode.Create().
 		SetCode(code.Code).
 		SetBonusAmount(code.BonusAmount).
+		SetCurrency(service.NormalizeUserBillingCurrency(code.Currency)).
 		SetMaxUses(code.MaxUses).
 		SetUsedCount(code.UsedCount).
 		SetStatus(code.Status).
@@ -74,10 +76,11 @@ func (r *promoCodeRepository) GetByCode(ctx context.Context, code string) (*serv
 
 func (r *promoCodeRepository) GetByCodeForUpdate(ctx context.Context, code string) (*service.PromoCode, error) {
 	client := clientFromContext(ctx, r.client)
-	m, err := client.PromoCode.Query().
-		Where(promocode.CodeEqualFold(code)).
-		ForUpdate().
-		Only(ctx)
+	query := client.PromoCode.Query().Where(promocode.CodeEqualFold(code))
+	if client.Driver().Dialect() != dialect.SQLite {
+		query = query.ForUpdate()
+	}
+	m, err := query.Only(ctx)
 	if err != nil {
 		if dbent.IsNotFound(err) {
 			return nil, service.ErrPromoCodeNotFound
@@ -92,6 +95,7 @@ func (r *promoCodeRepository) Update(ctx context.Context, code *service.PromoCod
 	builder := client.PromoCode.UpdateOneID(code.ID).
 		SetCode(code.Code).
 		SetBonusAmount(code.BonusAmount).
+		SetCurrency(service.NormalizeUserBillingCurrency(code.Currency)).
 		SetMaxUses(code.MaxUses).
 		SetUsedCount(code.UsedCount).
 		SetStatus(code.Status).
@@ -200,7 +204,8 @@ func (r *promoCodeRepository) CreateUsage(ctx context.Context, usage *service.Pr
 }
 
 func (r *promoCodeRepository) GetUsageByPromoCodeAndUser(ctx context.Context, promoCodeID, userID int64) (*service.PromoCodeUsage, error) {
-	m, err := r.client.PromoCodeUsage.Query().
+	client := clientFromContext(ctx, r.client)
+	m, err := client.PromoCodeUsage.Query().
 		Where(
 			promocodeusage.PromoCodeIDEQ(promoCodeID),
 			promocodeusage.UserIDEQ(userID),
@@ -257,6 +262,7 @@ func promoCodeEntityToService(m *dbent.PromoCode) *service.PromoCode {
 		ID:          m.ID,
 		Code:        m.Code,
 		BonusAmount: m.BonusAmount,
+		Currency:    m.Currency,
 		MaxUses:     m.MaxUses,
 		UsedCount:   m.UsedCount,
 		Status:      m.Status,

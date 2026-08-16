@@ -411,6 +411,8 @@ type OpenAIGatewayService struct {
 	balanceNotifyService  *BalanceNotifyService
 	settingService        *SettingService
 	userPlatformQuotaRepo UserPlatformQuotaRepository
+	exchangeRates         *ExchangeRateService
+	canonicalWallet       *CanonicalWalletBridge
 	liveAttestation       liveattestation.Provider
 	liveAttestationCipher SecretEncryptor
 
@@ -443,6 +445,8 @@ type OpenAIGatewayService struct {
 	codexModelsManifestCache            codexModelsManifestCache
 	openaiCompatSessionResponses        sync.Map
 	openaiCompatAnthropicDigestSessions sync.Map
+	liveUsageFallback                   sync.Map // key: call hash, value: *liveUsageFallbackBucket
+	liveFinalizeRetrying                sync.Map // key: call hash, value: struct{}
 }
 
 // NewOpenAIGatewayService creates a new OpenAIGatewayService
@@ -502,11 +506,17 @@ func NewOpenAIGatewayService(
 		balanceNotifyService:  balanceNotifyService,
 		settingService:        settingService,
 		userPlatformQuotaRepo: userPlatformQuotaRepo,
+		exchangeRates:         NewExchangeRateService(cfg),
 		liveAttestation:       liveattestation.NewProvider(),
 		liveAttestationCipher: newLiveAttestationCipher(cfg),
 		responseHeaderFilter:  compileResponseHeaderFilter(cfg),
 		codexSnapshotThrottle: newAccountWriteThrottle(openAICodexSnapshotPersistMinInterval),
 		openaiModelTransient:  newOpenAIAccountModelTransientState(openAIModelTransientDefaultMax),
+	}
+	if walletStore, ok := cache.(CanonicalWalletLeaseStore); ok {
+		svc.canonicalWallet = NewCanonicalWalletBridge(cfg, walletStore)
+	} else if cfg != nil && (cfg.CanonicalWallet.Mode == config.CanonicalWalletModeShadow || cfg.CanonicalWallet.Mode == config.CanonicalWalletModeEnforce) {
+		slog.Error("canonical wallet bridge configured without a Redis lease store; OpenAI shadow observations are disabled")
 	}
 	if rateLimitService != nil {
 		rateLimitService.SetAccountRuntimeBlocker(svc)
@@ -514,6 +524,7 @@ func NewOpenAIGatewayService(
 	if openAITokenProvider != nil {
 		openAITokenProvider.SetAccountRuntimeBlocker(svc)
 	}
+	go svc.runLiveFinalizationRecovery()
 	svc.logOpenAIWSModeBootstrap()
 	return svc
 }

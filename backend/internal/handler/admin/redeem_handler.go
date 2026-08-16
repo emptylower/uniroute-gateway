@@ -37,6 +37,7 @@ type GenerateRedeemCodesRequest struct {
 	Count         int        `json:"count" binding:"required,min=1,max=100"`
 	Type          string     `json:"type" binding:"required,oneof=balance concurrency subscription invitation"`
 	Value         float64    `json:"value"`
+	Currency      string     `json:"currency" binding:"omitempty,oneof=CNY USD cny usd"`
 	GroupID       *int64     `json:"group_id"`      // 订阅类型必填
 	ValidityDays  int        `json:"validity_days"` // 订阅类型使用，正数增加/负数退款扣减
 	ExpiresAt     *time.Time `json:"expires_at"`
@@ -49,6 +50,7 @@ type CreateAndRedeemCodeRequest struct {
 	Code          string     `json:"code" binding:"required,min=3,max=128"`
 	Type          string     `json:"type" binding:"omitempty,oneof=balance concurrency subscription invitation"` // 不传时默认 balance（向后兼容）
 	Value         float64    `json:"value" binding:"required"`
+	Currency      string     `json:"currency" binding:"omitempty,oneof=CNY USD cny usd"`
 	UserID        int64      `json:"user_id" binding:"required,gt=0"`
 	GroupID       *int64     `json:"group_id"`      // subscription 类型必填
 	ValidityDays  int        `json:"validity_days"` // subscription 类型：正数增加，负数退款扣减
@@ -147,6 +149,7 @@ func (h *RedeemHandler) Generate(c *gin.Context) {
 			Count:        req.Count,
 			Type:         req.Type,
 			Value:        req.Value,
+			Currency:     req.Currency,
 			GroupID:      req.GroupID,
 			ValidityDays: req.ValidityDays,
 			ExpiresAt:    expiresAt,
@@ -213,6 +216,7 @@ func (h *RedeemHandler) CreateAndRedeem(c *gin.Context) {
 			Code:         req.Code,
 			Type:         req.Type,
 			Value:        req.Value,
+			Currency:     service.NormalizeUserBillingCurrency(req.Currency),
 			Status:       service.StatusUnused,
 			Notes:        req.Notes,
 			GroupID:      req.GroupID,

@@ -79,6 +79,62 @@ func (_c *APIKeyCreate) SetKey(v string) *APIKeyCreate {
 	return _c
 }
 
+// SetPlatformKeyID sets the "platform_key_id" field.
+func (_c *APIKeyCreate) SetPlatformKeyID(v string) *APIKeyCreate {
+	_c.mutation.SetPlatformKeyID(v)
+	return _c
+}
+
+// SetNillablePlatformKeyID sets the "platform_key_id" field if the given value is not nil.
+func (_c *APIKeyCreate) SetNillablePlatformKeyID(v *string) *APIKeyCreate {
+	if v != nil {
+		_c.SetPlatformKeyID(*v)
+	}
+	return _c
+}
+
+// SetKeySha256 sets the "key_sha256" field.
+func (_c *APIKeyCreate) SetKeySha256(v string) *APIKeyCreate {
+	_c.mutation.SetKeySha256(v)
+	return _c
+}
+
+// SetNillableKeySha256 sets the "key_sha256" field if the given value is not nil.
+func (_c *APIKeyCreate) SetNillableKeySha256(v *string) *APIKeyCreate {
+	if v != nil {
+		_c.SetKeySha256(*v)
+	}
+	return _c
+}
+
+// SetKeyPrefix sets the "key_prefix" field.
+func (_c *APIKeyCreate) SetKeyPrefix(v string) *APIKeyCreate {
+	_c.mutation.SetKeyPrefix(v)
+	return _c
+}
+
+// SetNillableKeyPrefix sets the "key_prefix" field if the given value is not nil.
+func (_c *APIKeyCreate) SetNillableKeyPrefix(v *string) *APIKeyCreate {
+	if v != nil {
+		_c.SetKeyPrefix(*v)
+	}
+	return _c
+}
+
+// SetPlatformKeyVersion sets the "platform_key_version" field.
+func (_c *APIKeyCreate) SetPlatformKeyVersion(v int64) *APIKeyCreate {
+	_c.mutation.SetPlatformKeyVersion(v)
+	return _c
+}
+
+// SetNillablePlatformKeyVersion sets the "platform_key_version" field if the given value is not nil.
+func (_c *APIKeyCreate) SetNillablePlatformKeyVersion(v *int64) *APIKeyCreate {
+	if v != nil {
+		_c.SetPlatformKeyVersion(*v)
+	}
+	return _c
+}
+
 // SetName sets the "name" field.
 func (_c *APIKeyCreate) SetName(v string) *APIKeyCreate {
 	_c.mutation.SetName(v)
@@ -95,6 +151,20 @@ func (_c *APIKeyCreate) SetGroupID(v int64) *APIKeyCreate {
 func (_c *APIKeyCreate) SetNillableGroupID(v *int64) *APIKeyCreate {
 	if v != nil {
 		_c.SetGroupID(*v)
+	}
+	return _c
+}
+
+// SetRoutingMode sets the "routing_mode" field.
+func (_c *APIKeyCreate) SetRoutingMode(v string) *APIKeyCreate {
+	_c.mutation.SetRoutingMode(v)
+	return _c
+}
+
+// SetNillableRoutingMode sets the "routing_mode" field if the given value is not nil.
+func (_c *APIKeyCreate) SetNillableRoutingMode(v *string) *APIKeyCreate {
+	if v != nil {
+		_c.SetRoutingMode(*v)
 	}
 	return _c
 }
@@ -383,6 +453,10 @@ func (_c *APIKeyCreate) defaults() error {
 		v := apikey.DefaultUpdatedAt()
 		_c.mutation.SetUpdatedAt(v)
 	}
+	if _, ok := _c.mutation.RoutingMode(); !ok {
+		v := apikey.DefaultRoutingMode
+		_c.mutation.SetRoutingMode(v)
+	}
 	if _, ok := _c.mutation.Status(); !ok {
 		v := apikey.DefaultStatus
 		_c.mutation.SetStatus(v)
@@ -441,12 +515,35 @@ func (_c *APIKeyCreate) check() error {
 			return &ValidationError{Name: "key", err: fmt.Errorf(`ent: validator failed for field "APIKey.key": %w`, err)}
 		}
 	}
+	if v, ok := _c.mutation.PlatformKeyID(); ok {
+		if err := apikey.PlatformKeyIDValidator(v); err != nil {
+			return &ValidationError{Name: "platform_key_id", err: fmt.Errorf(`ent: validator failed for field "APIKey.platform_key_id": %w`, err)}
+		}
+	}
+	if v, ok := _c.mutation.KeySha256(); ok {
+		if err := apikey.KeySha256Validator(v); err != nil {
+			return &ValidationError{Name: "key_sha256", err: fmt.Errorf(`ent: validator failed for field "APIKey.key_sha256": %w`, err)}
+		}
+	}
+	if v, ok := _c.mutation.KeyPrefix(); ok {
+		if err := apikey.KeyPrefixValidator(v); err != nil {
+			return &ValidationError{Name: "key_prefix", err: fmt.Errorf(`ent: validator failed for field "APIKey.key_prefix": %w`, err)}
+		}
+	}
 	if _, ok := _c.mutation.Name(); !ok {
 		return &ValidationError{Name: "name", err: errors.New(`ent: missing required field "APIKey.name"`)}
 	}
 	if v, ok := _c.mutation.Name(); ok {
 		if err := apikey.NameValidator(v); err != nil {
 			return &ValidationError{Name: "name", err: fmt.Errorf(`ent: validator failed for field "APIKey.name": %w`, err)}
+		}
+	}
+	if _, ok := _c.mutation.RoutingMode(); !ok {
+		return &ValidationError{Name: "routing_mode", err: errors.New(`ent: missing required field "APIKey.routing_mode"`)}
+	}
+	if v, ok := _c.mutation.RoutingMode(); ok {
+		if err := apikey.RoutingModeValidator(v); err != nil {
+			return &ValidationError{Name: "routing_mode", err: fmt.Errorf(`ent: validator failed for field "APIKey.routing_mode": %w`, err)}
 		}
 	}
 	if _, ok := _c.mutation.Status(); !ok {
@@ -527,9 +624,29 @@ func (_c *APIKeyCreate) createSpec() (*APIKey, *sqlgraph.CreateSpec) {
 		_spec.SetField(apikey.FieldKey, field.TypeString, value)
 		_node.Key = value
 	}
+	if value, ok := _c.mutation.PlatformKeyID(); ok {
+		_spec.SetField(apikey.FieldPlatformKeyID, field.TypeString, value)
+		_node.PlatformKeyID = &value
+	}
+	if value, ok := _c.mutation.KeySha256(); ok {
+		_spec.SetField(apikey.FieldKeySha256, field.TypeString, value)
+		_node.KeySha256 = &value
+	}
+	if value, ok := _c.mutation.KeyPrefix(); ok {
+		_spec.SetField(apikey.FieldKeyPrefix, field.TypeString, value)
+		_node.KeyPrefix = &value
+	}
+	if value, ok := _c.mutation.PlatformKeyVersion(); ok {
+		_spec.SetField(apikey.FieldPlatformKeyVersion, field.TypeInt64, value)
+		_node.PlatformKeyVersion = &value
+	}
 	if value, ok := _c.mutation.Name(); ok {
 		_spec.SetField(apikey.FieldName, field.TypeString, value)
 		_node.Name = value
+	}
+	if value, ok := _c.mutation.RoutingMode(); ok {
+		_spec.SetField(apikey.FieldRoutingMode, field.TypeString, value)
+		_node.RoutingMode = value
 	}
 	if value, ok := _c.mutation.Status(); ok {
 		_spec.SetField(apikey.FieldStatus, field.TypeString, value)
@@ -751,6 +868,66 @@ func (u *APIKeyUpsert) UpdateKey() *APIKeyUpsert {
 	return u
 }
 
+// SetKeySha256 sets the "key_sha256" field.
+func (u *APIKeyUpsert) SetKeySha256(v string) *APIKeyUpsert {
+	u.Set(apikey.FieldKeySha256, v)
+	return u
+}
+
+// UpdateKeySha256 sets the "key_sha256" field to the value that was provided on create.
+func (u *APIKeyUpsert) UpdateKeySha256() *APIKeyUpsert {
+	u.SetExcluded(apikey.FieldKeySha256)
+	return u
+}
+
+// ClearKeySha256 clears the value of the "key_sha256" field.
+func (u *APIKeyUpsert) ClearKeySha256() *APIKeyUpsert {
+	u.SetNull(apikey.FieldKeySha256)
+	return u
+}
+
+// SetKeyPrefix sets the "key_prefix" field.
+func (u *APIKeyUpsert) SetKeyPrefix(v string) *APIKeyUpsert {
+	u.Set(apikey.FieldKeyPrefix, v)
+	return u
+}
+
+// UpdateKeyPrefix sets the "key_prefix" field to the value that was provided on create.
+func (u *APIKeyUpsert) UpdateKeyPrefix() *APIKeyUpsert {
+	u.SetExcluded(apikey.FieldKeyPrefix)
+	return u
+}
+
+// ClearKeyPrefix clears the value of the "key_prefix" field.
+func (u *APIKeyUpsert) ClearKeyPrefix() *APIKeyUpsert {
+	u.SetNull(apikey.FieldKeyPrefix)
+	return u
+}
+
+// SetPlatformKeyVersion sets the "platform_key_version" field.
+func (u *APIKeyUpsert) SetPlatformKeyVersion(v int64) *APIKeyUpsert {
+	u.Set(apikey.FieldPlatformKeyVersion, v)
+	return u
+}
+
+// UpdatePlatformKeyVersion sets the "platform_key_version" field to the value that was provided on create.
+func (u *APIKeyUpsert) UpdatePlatformKeyVersion() *APIKeyUpsert {
+	u.SetExcluded(apikey.FieldPlatformKeyVersion)
+	return u
+}
+
+// AddPlatformKeyVersion adds v to the "platform_key_version" field.
+func (u *APIKeyUpsert) AddPlatformKeyVersion(v int64) *APIKeyUpsert {
+	u.Add(apikey.FieldPlatformKeyVersion, v)
+	return u
+}
+
+// ClearPlatformKeyVersion clears the value of the "platform_key_version" field.
+func (u *APIKeyUpsert) ClearPlatformKeyVersion() *APIKeyUpsert {
+	u.SetNull(apikey.FieldPlatformKeyVersion)
+	return u
+}
+
 // SetName sets the "name" field.
 func (u *APIKeyUpsert) SetName(v string) *APIKeyUpsert {
 	u.Set(apikey.FieldName, v)
@@ -778,6 +955,18 @@ func (u *APIKeyUpsert) UpdateGroupID() *APIKeyUpsert {
 // ClearGroupID clears the value of the "group_id" field.
 func (u *APIKeyUpsert) ClearGroupID() *APIKeyUpsert {
 	u.SetNull(apikey.FieldGroupID)
+	return u
+}
+
+// SetRoutingMode sets the "routing_mode" field.
+func (u *APIKeyUpsert) SetRoutingMode(v string) *APIKeyUpsert {
+	u.Set(apikey.FieldRoutingMode, v)
+	return u
+}
+
+// UpdateRoutingMode sets the "routing_mode" field to the value that was provided on create.
+func (u *APIKeyUpsert) UpdateRoutingMode() *APIKeyUpsert {
+	u.SetExcluded(apikey.FieldRoutingMode)
 	return u
 }
 
@@ -1077,6 +1266,9 @@ func (u *APIKeyUpsertOne) UpdateNewValues() *APIKeyUpsertOne {
 		if _, exists := u.create.mutation.CreatedAt(); exists {
 			s.SetIgnore(apikey.FieldCreatedAt)
 		}
+		if _, exists := u.create.mutation.PlatformKeyID(); exists {
+			s.SetIgnore(apikey.FieldPlatformKeyID)
+		}
 	}))
 	return u
 }
@@ -1171,6 +1363,76 @@ func (u *APIKeyUpsertOne) UpdateKey() *APIKeyUpsertOne {
 	})
 }
 
+// SetKeySha256 sets the "key_sha256" field.
+func (u *APIKeyUpsertOne) SetKeySha256(v string) *APIKeyUpsertOne {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.SetKeySha256(v)
+	})
+}
+
+// UpdateKeySha256 sets the "key_sha256" field to the value that was provided on create.
+func (u *APIKeyUpsertOne) UpdateKeySha256() *APIKeyUpsertOne {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.UpdateKeySha256()
+	})
+}
+
+// ClearKeySha256 clears the value of the "key_sha256" field.
+func (u *APIKeyUpsertOne) ClearKeySha256() *APIKeyUpsertOne {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.ClearKeySha256()
+	})
+}
+
+// SetKeyPrefix sets the "key_prefix" field.
+func (u *APIKeyUpsertOne) SetKeyPrefix(v string) *APIKeyUpsertOne {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.SetKeyPrefix(v)
+	})
+}
+
+// UpdateKeyPrefix sets the "key_prefix" field to the value that was provided on create.
+func (u *APIKeyUpsertOne) UpdateKeyPrefix() *APIKeyUpsertOne {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.UpdateKeyPrefix()
+	})
+}
+
+// ClearKeyPrefix clears the value of the "key_prefix" field.
+func (u *APIKeyUpsertOne) ClearKeyPrefix() *APIKeyUpsertOne {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.ClearKeyPrefix()
+	})
+}
+
+// SetPlatformKeyVersion sets the "platform_key_version" field.
+func (u *APIKeyUpsertOne) SetPlatformKeyVersion(v int64) *APIKeyUpsertOne {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.SetPlatformKeyVersion(v)
+	})
+}
+
+// AddPlatformKeyVersion adds v to the "platform_key_version" field.
+func (u *APIKeyUpsertOne) AddPlatformKeyVersion(v int64) *APIKeyUpsertOne {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.AddPlatformKeyVersion(v)
+	})
+}
+
+// UpdatePlatformKeyVersion sets the "platform_key_version" field to the value that was provided on create.
+func (u *APIKeyUpsertOne) UpdatePlatformKeyVersion() *APIKeyUpsertOne {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.UpdatePlatformKeyVersion()
+	})
+}
+
+// ClearPlatformKeyVersion clears the value of the "platform_key_version" field.
+func (u *APIKeyUpsertOne) ClearPlatformKeyVersion() *APIKeyUpsertOne {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.ClearPlatformKeyVersion()
+	})
+}
+
 // SetName sets the "name" field.
 func (u *APIKeyUpsertOne) SetName(v string) *APIKeyUpsertOne {
 	return u.Update(func(s *APIKeyUpsert) {
@@ -1203,6 +1465,20 @@ func (u *APIKeyUpsertOne) UpdateGroupID() *APIKeyUpsertOne {
 func (u *APIKeyUpsertOne) ClearGroupID() *APIKeyUpsertOne {
 	return u.Update(func(s *APIKeyUpsert) {
 		s.ClearGroupID()
+	})
+}
+
+// SetRoutingMode sets the "routing_mode" field.
+func (u *APIKeyUpsertOne) SetRoutingMode(v string) *APIKeyUpsertOne {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.SetRoutingMode(v)
+	})
+}
+
+// UpdateRoutingMode sets the "routing_mode" field to the value that was provided on create.
+func (u *APIKeyUpsertOne) UpdateRoutingMode() *APIKeyUpsertOne {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.UpdateRoutingMode()
 	})
 }
 
@@ -1714,6 +1990,9 @@ func (u *APIKeyUpsertBulk) UpdateNewValues() *APIKeyUpsertBulk {
 			if _, exists := b.mutation.CreatedAt(); exists {
 				s.SetIgnore(apikey.FieldCreatedAt)
 			}
+			if _, exists := b.mutation.PlatformKeyID(); exists {
+				s.SetIgnore(apikey.FieldPlatformKeyID)
+			}
 		}
 	}))
 	return u
@@ -1809,6 +2088,76 @@ func (u *APIKeyUpsertBulk) UpdateKey() *APIKeyUpsertBulk {
 	})
 }
 
+// SetKeySha256 sets the "key_sha256" field.
+func (u *APIKeyUpsertBulk) SetKeySha256(v string) *APIKeyUpsertBulk {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.SetKeySha256(v)
+	})
+}
+
+// UpdateKeySha256 sets the "key_sha256" field to the value that was provided on create.
+func (u *APIKeyUpsertBulk) UpdateKeySha256() *APIKeyUpsertBulk {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.UpdateKeySha256()
+	})
+}
+
+// ClearKeySha256 clears the value of the "key_sha256" field.
+func (u *APIKeyUpsertBulk) ClearKeySha256() *APIKeyUpsertBulk {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.ClearKeySha256()
+	})
+}
+
+// SetKeyPrefix sets the "key_prefix" field.
+func (u *APIKeyUpsertBulk) SetKeyPrefix(v string) *APIKeyUpsertBulk {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.SetKeyPrefix(v)
+	})
+}
+
+// UpdateKeyPrefix sets the "key_prefix" field to the value that was provided on create.
+func (u *APIKeyUpsertBulk) UpdateKeyPrefix() *APIKeyUpsertBulk {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.UpdateKeyPrefix()
+	})
+}
+
+// ClearKeyPrefix clears the value of the "key_prefix" field.
+func (u *APIKeyUpsertBulk) ClearKeyPrefix() *APIKeyUpsertBulk {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.ClearKeyPrefix()
+	})
+}
+
+// SetPlatformKeyVersion sets the "platform_key_version" field.
+func (u *APIKeyUpsertBulk) SetPlatformKeyVersion(v int64) *APIKeyUpsertBulk {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.SetPlatformKeyVersion(v)
+	})
+}
+
+// AddPlatformKeyVersion adds v to the "platform_key_version" field.
+func (u *APIKeyUpsertBulk) AddPlatformKeyVersion(v int64) *APIKeyUpsertBulk {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.AddPlatformKeyVersion(v)
+	})
+}
+
+// UpdatePlatformKeyVersion sets the "platform_key_version" field to the value that was provided on create.
+func (u *APIKeyUpsertBulk) UpdatePlatformKeyVersion() *APIKeyUpsertBulk {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.UpdatePlatformKeyVersion()
+	})
+}
+
+// ClearPlatformKeyVersion clears the value of the "platform_key_version" field.
+func (u *APIKeyUpsertBulk) ClearPlatformKeyVersion() *APIKeyUpsertBulk {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.ClearPlatformKeyVersion()
+	})
+}
+
 // SetName sets the "name" field.
 func (u *APIKeyUpsertBulk) SetName(v string) *APIKeyUpsertBulk {
 	return u.Update(func(s *APIKeyUpsert) {
@@ -1841,6 +2190,20 @@ func (u *APIKeyUpsertBulk) UpdateGroupID() *APIKeyUpsertBulk {
 func (u *APIKeyUpsertBulk) ClearGroupID() *APIKeyUpsertBulk {
 	return u.Update(func(s *APIKeyUpsert) {
 		s.ClearGroupID()
+	})
+}
+
+// SetRoutingMode sets the "routing_mode" field.
+func (u *APIKeyUpsertBulk) SetRoutingMode(v string) *APIKeyUpsertBulk {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.SetRoutingMode(v)
+	})
+}
+
+// UpdateRoutingMode sets the "routing_mode" field to the value that was provided on create.
+func (u *APIKeyUpsertBulk) UpdateRoutingMode() *APIKeyUpsertBulk {
+	return u.Update(func(s *APIKeyUpsert) {
+		s.UpdateRoutingMode()
 	})
 }
 

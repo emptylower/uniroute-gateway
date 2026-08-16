@@ -48,6 +48,7 @@ func buildBatchImageHoldCommand(job *BatchImageJob, requestID string, actualAmou
 		RequestID:          requestID,
 		APIKeyID:           *job.APIKeyID,
 		UserID:             job.UserID,
+		SettlementCurrency: NormalizeUserBillingCurrency(job.Currency),
 		BatchID:            job.BatchID,
 		HoldAmount:         holdAmount,
 		ActualAmount:       actualAmount,

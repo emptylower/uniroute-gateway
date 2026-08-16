@@ -43,6 +43,14 @@ func (User) Fields() []ent.Field {
 		field.String("password_hash").
 			MaxLen(255).
 			NotEmpty(),
+		// Stable control-plane identity. Optional for legacy panel-created users;
+		// immutable and globally unique once assigned.
+		field.String("platform_user_id").
+			MaxLen(128).
+			Optional().
+			Nillable().
+			Immutable().
+			Unique(),
 		field.String("role").
 			MaxLen(20).
 			Default(domain.RoleUser),
@@ -52,6 +60,15 @@ func (User) Fields() []ent.Field {
 		field.Float("frozen_balance").
 			SchemaType(map[string]string{dialect.Postgres: "decimal(20,8)"}).
 			Default(0),
+		field.String("billing_currency").
+			MaxLen(3).
+			Default("CNY").
+			Validate(func(value string) error {
+				if value != "CNY" && value != "USD" {
+					return fmt.Errorf("billing_currency must be CNY or USD")
+				}
+				return nil
+			}),
 		field.Int("concurrency").
 			Default(5),
 		field.String("status").
@@ -80,10 +97,10 @@ func (User) Fields() []ent.Field {
 		field.String("signup_source").
 			Validate(func(value string) error {
 				switch value {
-				case "email", "linuxdo", "wechat", "oidc", "github", "google", "dingtalk":
+				case "email", "linuxdo", "wechat", "oidc", "github", "google", "dingtalk", "platform":
 					return nil
 				default:
-					return fmt.Errorf("must be one of email, linuxdo, wechat, oidc, github, google, dingtalk")
+					return fmt.Errorf("must be one of email, linuxdo, wechat, oidc, github, google, dingtalk, platform")
 				}
 			}).
 			Default("email"),

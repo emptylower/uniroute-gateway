@@ -16,6 +16,17 @@ type balanceUserRepoStub struct {
 	updated   []*User
 }
 
+func (s *balanceUserRepoStub) UpdateBalance(_ context.Context, _ int64, delta float64) error {
+	if s.updateErr != nil {
+		return s.updateErr
+	}
+	if s.userRepoStub == nil || s.userRepoStub.user == nil {
+		return ErrUserNotFound
+	}
+	s.userRepoStub.user.Balance += delta
+	return nil
+}
+
 func (s *balanceUserRepoStub) Update(ctx context.Context, user *User) error {
 	if s.updateErr != nil {
 		return s.updateErr

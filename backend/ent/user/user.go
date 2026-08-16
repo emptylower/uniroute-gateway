@@ -25,12 +25,16 @@ const (
 	FieldEmail = "email"
 	// FieldPasswordHash holds the string denoting the password_hash field in the database.
 	FieldPasswordHash = "password_hash"
+	// FieldPlatformUserID holds the string denoting the platform_user_id field in the database.
+	FieldPlatformUserID = "platform_user_id"
 	// FieldRole holds the string denoting the role field in the database.
 	FieldRole = "role"
 	// FieldBalance holds the string denoting the balance field in the database.
 	FieldBalance = "balance"
 	// FieldFrozenBalance holds the string denoting the frozen_balance field in the database.
 	FieldFrozenBalance = "frozen_balance"
+	// FieldBillingCurrency holds the string denoting the billing_currency field in the database.
+	FieldBillingCurrency = "billing_currency"
 	// FieldConcurrency holds the string denoting the concurrency field in the database.
 	FieldConcurrency = "concurrency"
 	// FieldStatus holds the string denoting the status field in the database.
@@ -199,9 +203,11 @@ var Columns = []string{
 	FieldDeletedAt,
 	FieldEmail,
 	FieldPasswordHash,
+	FieldPlatformUserID,
 	FieldRole,
 	FieldBalance,
 	FieldFrozenBalance,
+	FieldBillingCurrency,
 	FieldConcurrency,
 	FieldStatus,
 	FieldUsername,
@@ -254,6 +260,8 @@ var (
 	EmailValidator func(string) error
 	// PasswordHashValidator is a validator for the "password_hash" field. It is called by the builders before save.
 	PasswordHashValidator func(string) error
+	// PlatformUserIDValidator is a validator for the "platform_user_id" field. It is called by the builders before save.
+	PlatformUserIDValidator func(string) error
 	// DefaultRole holds the default value on creation for the "role" field.
 	DefaultRole string
 	// RoleValidator is a validator for the "role" field. It is called by the builders before save.
@@ -262,6 +270,10 @@ var (
 	DefaultBalance float64
 	// DefaultFrozenBalance holds the default value on creation for the "frozen_balance" field.
 	DefaultFrozenBalance float64
+	// DefaultBillingCurrency holds the default value on creation for the "billing_currency" field.
+	DefaultBillingCurrency string
+	// BillingCurrencyValidator is a validator for the "billing_currency" field. It is called by the builders before save.
+	BillingCurrencyValidator func(string) error
 	// DefaultConcurrency holds the default value on creation for the "concurrency" field.
 	DefaultConcurrency int
 	// DefaultStatus holds the default value on creation for the "status" field.
@@ -325,6 +337,11 @@ func ByPasswordHash(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldPasswordHash, opts...).ToFunc()
 }
 
+// ByPlatformUserID orders the results by the platform_user_id field.
+func ByPlatformUserID(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldPlatformUserID, opts...).ToFunc()
+}
+
 // ByRole orders the results by the role field.
 func ByRole(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldRole, opts...).ToFunc()
@@ -338,6 +355,11 @@ func ByBalance(opts ...sql.OrderTermOption) OrderOption {
 // ByFrozenBalance orders the results by the frozen_balance field.
 func ByFrozenBalance(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldFrozenBalance, opts...).ToFunc()
+}
+
+// ByBillingCurrency orders the results by the billing_currency field.
+func ByBillingCurrency(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldBillingCurrency, opts...).ToFunc()
 }
 
 // ByConcurrency orders the results by the concurrency field.

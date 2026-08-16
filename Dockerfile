@@ -14,6 +14,7 @@ ARG POSTGRES_IMAGE=postgres:18-alpine
 ARG GOPROXY=https://goproxy.cn,direct
 ARG GOSUMDB=sum.golang.google.cn
 ARG NPM_CONFIG_REGISTRY=
+ARG NODE_MAX_OLD_SPACE_SIZE=3072
 
 # -----------------------------------------------------------------------------
 # Stage 1: Frontend Builder
@@ -22,6 +23,7 @@ ARG NPM_CONFIG_REGISTRY=
 # it on the native host arch instead of under QEMU emulation for the target.
 FROM --platform=${BUILDPLATFORM} ${NODE_IMAGE} AS frontend-builder
 ARG NPM_CONFIG_REGISTRY
+ARG NODE_MAX_OLD_SPACE_SIZE
 
 WORKDIR /app/frontend
 
@@ -41,7 +43,7 @@ RUN --mount=type=cache,id=sub2api-pnpm-store,target=/root/.local/share/pnpm/stor
 # Copy only that subtree to keep the build dependency minimal.
 COPY frontend/ ./
 COPY docs/legal/ /app/docs/legal/
-RUN NODE_OPTIONS=--max-old-space-size=1536 pnpm run build
+RUN NODE_OPTIONS=--max-old-space-size=${NODE_MAX_OLD_SPACE_SIZE} pnpm run build
 
 # -----------------------------------------------------------------------------
 # Stage 2: Backend Builder

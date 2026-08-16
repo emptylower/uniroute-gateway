@@ -8,6 +8,8 @@ type APIKeyAuthSnapshot struct {
 	APIKeyID    int64                    `json:"api_key_id"`
 	UserID      int64                    `json:"user_id"`
 	GroupID     *int64                   `json:"group_id,omitempty"`
+	RoutingMode string                   `json:"routing_mode"`
+	ChannelIDs  []int64                  `json:"channel_ids,omitempty"`
 	Name        string                   `json:"name"`
 	Status      string                   `json:"status"`
 	IPWhitelist []string                 `json:"ip_whitelist,omitempty"`
@@ -30,12 +32,13 @@ type APIKeyAuthSnapshot struct {
 
 // APIKeyAuthUserSnapshot 用户快照
 type APIKeyAuthUserSnapshot struct {
-	ID            int64   `json:"id"`
-	Status        string  `json:"status"`
-	Role          string  `json:"role"`
-	Balance       float64 `json:"balance"`
-	Concurrency   int     `json:"concurrency"`
-	AllowedGroups []int64 `json:"allowed_groups,omitempty"`
+	ID              int64   `json:"id"`
+	Status          string  `json:"status"`
+	Role            string  `json:"role"`
+	Balance         float64 `json:"balance"`
+	BillingCurrency string  `json:"billing_currency"`
+	Concurrency     int     `json:"concurrency"`
+	AllowedGroups   []int64 `json:"allowed_groups,omitempty"`
 
 	// Balance notification fields (required for CheckBalanceAfterDeduction)
 	Email                      string             `json:"email"`
@@ -63,6 +66,8 @@ type APIKeyAuthGroupSnapshot struct {
 	Status                          string   `json:"status"`
 	SubscriptionType                string   `json:"subscription_type"`
 	RateMultiplier                  float64  `json:"rate_multiplier"`
+	RateMultiplierCNY               *float64 `json:"rate_multiplier_cny,omitempty"`
+	RateMultiplierUSD               *float64 `json:"rate_multiplier_usd,omitempty"`
 	DailyLimitUSD                   *float64 `json:"daily_limit_usd,omitempty"`
 	WeeklyLimitUSD                  *float64 `json:"weekly_limit_usd,omitempty"`
 	MonthlyLimitUSD                 *float64 `json:"monthly_limit_usd,omitempty"`

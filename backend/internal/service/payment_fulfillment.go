@@ -328,6 +328,28 @@ func resolveRedeemAction(existing *RedeemCode, lookupErr error) redeemAction {
 }
 
 func (s *PaymentService) doBalance(ctx context.Context, o *dbent.PaymentOrder, lease *paymentFulfillmentLease) error {
+	if s.redeemService == nil {
+		return errors.New("redeem service is unavailable")
+	}
+	var walletCurrency string
+	if s.userRepo != nil {
+		wallet, err := s.userRepo.GetByID(ctx, o.UserID)
+		if err != nil {
+			return fmt.Errorf("load wallet before balance fulfillment: %w", err)
+		}
+		walletCurrency = wallet.BillingCurrency
+	} else if s.entClient != nil {
+		wallet, err := s.entClient.User.Get(ctx, o.UserID)
+		if err != nil {
+			return fmt.Errorf("load wallet before balance fulfillment: %w", err)
+		}
+		walletCurrency = wallet.BillingCurrency
+	} else {
+		return errors.New("user repository is unavailable")
+	}
+	if NormalizeUserBillingCurrency(walletCurrency) != PaymentOrderCurrency(o) {
+		return infraerrors.Conflict("PAYMENT_CURRENCY_MISMATCH", "payment order currency no longer matches wallet currency")
+	}
 	// Idempotency: check if redeem code already exists (from a previous partial run)
 	existing, lookupErr := s.redeemService.GetByCode(ctx, o.RechargeCode)
 	action := resolveRedeemAction(existing, lookupErr)
@@ -340,7 +362,7 @@ func (s *PaymentService) doBalance(ctx context.Context, o *dbent.PaymentOrder, l
 		// Code already created and redeemed — just mark completed
 		return s.markCompleted(ctx, o, lease, "RECHARGE_SUCCESS")
 	case redeemActionCreate:
-		rc := &RedeemCode{Code: o.RechargeCode, Type: RedeemTypeBalance, Value: o.Amount, Status: StatusUnused}
+		rc := &RedeemCode{Code: o.RechargeCode, Type: RedeemTypeBalance, Value: o.Amount, Currency: PaymentOrderCurrency(o), Status: StatusUnused}
 		if err := s.redeemService.CreateCode(ctx, rc); err != nil {
 			return fmt.Errorf("create redeem code: %w", err)
 		}

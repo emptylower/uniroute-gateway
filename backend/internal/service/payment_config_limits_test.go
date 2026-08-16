@@ -335,6 +335,24 @@ func TestPcComputeGlobalRange(t *testing.T) {
 	})
 }
 
+func TestMethodLimitsApplyConfig(t *testing.T) {
+	methods := MethodLimitsResponse{Methods: map[string]MethodLimits{
+		payment.TypeAlipay: {PaymentType: payment.TypeAlipay, SingleMin: 1, SingleMax: 100, Available: true},
+		payment.TypeWxpay:  {PaymentType: payment.TypeWxpay, SingleMin: 2, SingleMax: 200, Available: true},
+	}}
+
+	methods.ApplyConfig(&PaymentConfig{Enabled: true, EnabledTypes: []string{payment.TypeAlipay}})
+	require.Contains(t, methods.Methods, payment.TypeAlipay)
+	require.NotContains(t, methods.Methods, payment.TypeWxpay)
+	require.Equal(t, 1.0, methods.GlobalMin)
+	require.Equal(t, 100.0, methods.GlobalMax)
+
+	methods.ApplyConfig(&PaymentConfig{Enabled: false})
+	require.Empty(t, methods.Methods)
+	require.Zero(t, methods.GlobalMin)
+	require.Zero(t, methods.GlobalMax)
+}
+
 func TestPcInstanceTypeLimits(t *testing.T) {
 	t.Parallel()
 

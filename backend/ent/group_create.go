@@ -105,6 +105,34 @@ func (_c *GroupCreate) SetNillableRateMultiplier(v *float64) *GroupCreate {
 	return _c
 }
 
+// SetRateMultiplierCny sets the "rate_multiplier_cny" field.
+func (_c *GroupCreate) SetRateMultiplierCny(v float64) *GroupCreate {
+	_c.mutation.SetRateMultiplierCny(v)
+	return _c
+}
+
+// SetNillableRateMultiplierCny sets the "rate_multiplier_cny" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableRateMultiplierCny(v *float64) *GroupCreate {
+	if v != nil {
+		_c.SetRateMultiplierCny(*v)
+	}
+	return _c
+}
+
+// SetRateMultiplierUsd sets the "rate_multiplier_usd" field.
+func (_c *GroupCreate) SetRateMultiplierUsd(v float64) *GroupCreate {
+	_c.mutation.SetRateMultiplierUsd(v)
+	return _c
+}
+
+// SetNillableRateMultiplierUsd sets the "rate_multiplier_usd" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableRateMultiplierUsd(v *float64) *GroupCreate {
+	if v != nil {
+		_c.SetRateMultiplierUsd(*v)
+	}
+	return _c
+}
+
 // SetPeakRateEnabled sets the "peak_rate_enabled" field.
 func (_c *GroupCreate) SetPeakRateEnabled(v bool) *GroupCreate {
 	_c.mutation.SetPeakRateEnabled(v)
@@ -1207,6 +1235,14 @@ func (_c *GroupCreate) createSpec() (*Group, *sqlgraph.CreateSpec) {
 		_spec.SetField(group.FieldRateMultiplier, field.TypeFloat64, value)
 		_node.RateMultiplier = value
 	}
+	if value, ok := _c.mutation.RateMultiplierCny(); ok {
+		_spec.SetField(group.FieldRateMultiplierCny, field.TypeFloat64, value)
+		_node.RateMultiplierCny = &value
+	}
+	if value, ok := _c.mutation.RateMultiplierUsd(); ok {
+		_spec.SetField(group.FieldRateMultiplierUsd, field.TypeFloat64, value)
+		_node.RateMultiplierUsd = &value
+	}
 	if value, ok := _c.mutation.PeakRateEnabled(); ok {
 		_spec.SetField(group.FieldPeakRateEnabled, field.TypeBool, value)
 		_node.PeakRateEnabled = value
@@ -1622,6 +1658,54 @@ func (u *GroupUpsert) UpdateRateMultiplier() *GroupUpsert {
 // AddRateMultiplier adds v to the "rate_multiplier" field.
 func (u *GroupUpsert) AddRateMultiplier(v float64) *GroupUpsert {
 	u.Add(group.FieldRateMultiplier, v)
+	return u
+}
+
+// SetRateMultiplierCny sets the "rate_multiplier_cny" field.
+func (u *GroupUpsert) SetRateMultiplierCny(v float64) *GroupUpsert {
+	u.Set(group.FieldRateMultiplierCny, v)
+	return u
+}
+
+// UpdateRateMultiplierCny sets the "rate_multiplier_cny" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateRateMultiplierCny() *GroupUpsert {
+	u.SetExcluded(group.FieldRateMultiplierCny)
+	return u
+}
+
+// AddRateMultiplierCny adds v to the "rate_multiplier_cny" field.
+func (u *GroupUpsert) AddRateMultiplierCny(v float64) *GroupUpsert {
+	u.Add(group.FieldRateMultiplierCny, v)
+	return u
+}
+
+// ClearRateMultiplierCny clears the value of the "rate_multiplier_cny" field.
+func (u *GroupUpsert) ClearRateMultiplierCny() *GroupUpsert {
+	u.SetNull(group.FieldRateMultiplierCny)
+	return u
+}
+
+// SetRateMultiplierUsd sets the "rate_multiplier_usd" field.
+func (u *GroupUpsert) SetRateMultiplierUsd(v float64) *GroupUpsert {
+	u.Set(group.FieldRateMultiplierUsd, v)
+	return u
+}
+
+// UpdateRateMultiplierUsd sets the "rate_multiplier_usd" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateRateMultiplierUsd() *GroupUpsert {
+	u.SetExcluded(group.FieldRateMultiplierUsd)
+	return u
+}
+
+// AddRateMultiplierUsd adds v to the "rate_multiplier_usd" field.
+func (u *GroupUpsert) AddRateMultiplierUsd(v float64) *GroupUpsert {
+	u.Add(group.FieldRateMultiplierUsd, v)
+	return u
+}
+
+// ClearRateMultiplierUsd clears the value of the "rate_multiplier_usd" field.
+func (u *GroupUpsert) ClearRateMultiplierUsd() *GroupUpsert {
+	u.SetNull(group.FieldRateMultiplierUsd)
 	return u
 }
 
@@ -2499,6 +2583,62 @@ func (u *GroupUpsertOne) AddRateMultiplier(v float64) *GroupUpsertOne {
 func (u *GroupUpsertOne) UpdateRateMultiplier() *GroupUpsertOne {
 	return u.Update(func(s *GroupUpsert) {
 		s.UpdateRateMultiplier()
+	})
+}
+
+// SetRateMultiplierCny sets the "rate_multiplier_cny" field.
+func (u *GroupUpsertOne) SetRateMultiplierCny(v float64) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetRateMultiplierCny(v)
+	})
+}
+
+// AddRateMultiplierCny adds v to the "rate_multiplier_cny" field.
+func (u *GroupUpsertOne) AddRateMultiplierCny(v float64) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddRateMultiplierCny(v)
+	})
+}
+
+// UpdateRateMultiplierCny sets the "rate_multiplier_cny" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateRateMultiplierCny() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateRateMultiplierCny()
+	})
+}
+
+// ClearRateMultiplierCny clears the value of the "rate_multiplier_cny" field.
+func (u *GroupUpsertOne) ClearRateMultiplierCny() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.ClearRateMultiplierCny()
+	})
+}
+
+// SetRateMultiplierUsd sets the "rate_multiplier_usd" field.
+func (u *GroupUpsertOne) SetRateMultiplierUsd(v float64) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetRateMultiplierUsd(v)
+	})
+}
+
+// AddRateMultiplierUsd adds v to the "rate_multiplier_usd" field.
+func (u *GroupUpsertOne) AddRateMultiplierUsd(v float64) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddRateMultiplierUsd(v)
+	})
+}
+
+// UpdateRateMultiplierUsd sets the "rate_multiplier_usd" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateRateMultiplierUsd() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateRateMultiplierUsd()
+	})
+}
+
+// ClearRateMultiplierUsd clears the value of the "rate_multiplier_usd" field.
+func (u *GroupUpsertOne) ClearRateMultiplierUsd() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.ClearRateMultiplierUsd()
 	})
 }
 
@@ -3665,6 +3805,62 @@ func (u *GroupUpsertBulk) AddRateMultiplier(v float64) *GroupUpsertBulk {
 func (u *GroupUpsertBulk) UpdateRateMultiplier() *GroupUpsertBulk {
 	return u.Update(func(s *GroupUpsert) {
 		s.UpdateRateMultiplier()
+	})
+}
+
+// SetRateMultiplierCny sets the "rate_multiplier_cny" field.
+func (u *GroupUpsertBulk) SetRateMultiplierCny(v float64) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetRateMultiplierCny(v)
+	})
+}
+
+// AddRateMultiplierCny adds v to the "rate_multiplier_cny" field.
+func (u *GroupUpsertBulk) AddRateMultiplierCny(v float64) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddRateMultiplierCny(v)
+	})
+}
+
+// UpdateRateMultiplierCny sets the "rate_multiplier_cny" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateRateMultiplierCny() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateRateMultiplierCny()
+	})
+}
+
+// ClearRateMultiplierCny clears the value of the "rate_multiplier_cny" field.
+func (u *GroupUpsertBulk) ClearRateMultiplierCny() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.ClearRateMultiplierCny()
+	})
+}
+
+// SetRateMultiplierUsd sets the "rate_multiplier_usd" field.
+func (u *GroupUpsertBulk) SetRateMultiplierUsd(v float64) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetRateMultiplierUsd(v)
+	})
+}
+
+// AddRateMultiplierUsd adds v to the "rate_multiplier_usd" field.
+func (u *GroupUpsertBulk) AddRateMultiplierUsd(v float64) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddRateMultiplierUsd(v)
+	})
+}
+
+// UpdateRateMultiplierUsd sets the "rate_multiplier_usd" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateRateMultiplierUsd() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateRateMultiplierUsd()
+	})
+}
+
+// ClearRateMultiplierUsd clears the value of the "rate_multiplier_usd" field.
+func (u *GroupUpsertBulk) ClearRateMultiplierUsd() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.ClearRateMultiplierUsd()
 	})
 }
 

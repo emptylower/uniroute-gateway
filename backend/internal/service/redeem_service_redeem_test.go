@@ -14,6 +14,19 @@ type redeemRejectRepo struct {
 	useCalled bool
 }
 
+type redeemCurrencyUserRepo struct {
+	UserRepository
+	user *User
+}
+
+func (r *redeemCurrencyUserRepo) GetByID(_ context.Context, id int64) (*User, error) {
+	if r.user == nil || r.user.ID != id {
+		return nil, ErrUserNotFound
+	}
+	clone := *r.user
+	return &clone, nil
+}
+
 func (r *redeemRejectRepo) Create(ctx context.Context, code *RedeemCode) error {
 	panic("unexpected Create call")
 }
@@ -99,4 +112,18 @@ func TestRedeemRejectsInvitationCodeBeforeTransaction(t *testing.T) {
 	require.False(t, redeemRepo.useCalled)
 	require.Equal(t, StatusUnused, redeemRepo.code.Status)
 	require.Nil(t, redeemRepo.code.UsedBy)
+}
+
+func TestRedeemRejectsBalanceCodeCurrencyMismatchBeforeTransaction(t *testing.T) {
+	redeemRepo := &redeemRejectRepo{code: RedeemCode{
+		ID: 1, Code: "USD-001", Type: RedeemTypeBalance, Currency: CurrencyUSD, Status: StatusUnused,
+	}}
+	userRepo := &redeemCurrencyUserRepo{user: &User{ID: 2, BillingCurrency: CurrencyCNY}}
+	redeemService := NewRedeemService(redeemRepo, userRepo, nil, nil, nil, nil, nil, nil)
+
+	got, err := redeemService.Redeem(context.Background(), 2, redeemRepo.code.Code)
+
+	require.Nil(t, got)
+	require.Equal(t, "REDEEM_CURRENCY_MISMATCH", infraerrors.Reason(err))
+	require.False(t, redeemRepo.useCalled)
 }

@@ -63,6 +63,41 @@ func TestCheckBillingEligibility_AllowsBalanceAtMinimumReserve(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestCheckBillingEligibilityRejectsBeforeUpstreamWhenFXUnavailable(t *testing.T) {
+	cache := &balanceEligibilityCacheStub{balance: 10}
+	cfg := &config.Config{}
+	svc := NewBillingCacheService(cache, nil, nil, nil, nil, nil, cfg, nil)
+	t.Cleanup(svc.Stop)
+	svc.exchangeRates = &ExchangeRateService{cache: make(map[string]ExchangeRateSnapshot)}
+
+	err := svc.CheckBillingEligibility(
+		WithBillingSettlementContext(context.Background()),
+		&User{ID: 1, BillingCurrency: CurrencyCNY}, nil, nil, nil, "anthropic",
+	)
+
+	require.ErrorIs(t, err, ErrBillingServiceUnavailable)
+}
+
+func TestCheckBillingEligibilityPinsFXSnapshotForAsyncBilling(t *testing.T) {
+	cache := &balanceEligibilityCacheStub{balance: 10}
+	cfg := &config.Config{}
+	svc := NewBillingCacheService(cache, nil, nil, nil, nil, nil, cfg, nil)
+	t.Cleanup(svc.Stop)
+	provider := &exchangeRateProviderFake{snapshot: ExchangeRateSnapshot{
+		Rate: 7.2, Source: "test_live", AsOf: time.Now().UTC(),
+	}}
+	svc.exchangeRates = &ExchangeRateService{provider: provider, ttl: time.Minute, staleTTL: time.Hour, cache: make(map[string]ExchangeRateSnapshot)}
+	ctx := WithBillingSettlementContext(context.Background())
+
+	require.NoError(t, svc.CheckBillingEligibility(ctx, &User{ID: 1, BillingCurrency: CurrencyCNY}, nil, nil, nil, "anthropic"))
+	workerCtx := InheritBillingSettlementContext(ctx, context.Background())
+	pinned, ok := pinnedBillingSettlementSnapshot(workerCtx, CurrencyUSD, CurrencyCNY)
+
+	require.True(t, ok)
+	require.InDelta(t, 7.2, pinned.Rate, 1e-12)
+	require.Equal(t, 1, provider.calls)
+}
+
 func TestSyncBalanceCacheAfterDeduction_InvalidatesExhaustedBalance(t *testing.T) {
 	cache := &balanceEligibilityCacheStub{
 		balance:                  0.50,

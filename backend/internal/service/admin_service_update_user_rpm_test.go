@@ -67,3 +67,36 @@ func TestAdminService_UpdateUser_NoInvalidateWhenRPMLimitUnchanged(t *testing.T)
 	require.NoError(t, err)
 	require.Empty(t, invalidator.userIDs, "只改 username 不应触发认证缓存失效")
 }
+
+func TestAdminService_UpdateUser_RejectsBillingCurrencyChangeWithBalance(t *testing.T) {
+	base := &userRepoStub{user: &User{
+		ID: 42, Email: "u@example.com", Balance: 10, BillingCurrency: CurrencyCNY,
+	}}
+	repo := &rpmUserRepoStub{userRepoStub: base}
+	svc := &adminServiceImpl{userRepo: repo, redeemCodeRepo: &redeemRepoStub{}}
+	currency := CurrencyUSD
+
+	_, err := svc.UpdateUser(context.Background(), 42, &UpdateUserInput{BillingCurrency: &currency})
+
+	require.Error(t, err)
+	require.ErrorContains(t, err, "balance and frozen balance are zero")
+	require.Nil(t, repo.lastUpdated)
+}
+
+func TestAdminService_UpdateUser_AllowsBillingCurrencyChangeWithEmptyBalance(t *testing.T) {
+	base := &userRepoStub{user: &User{
+		ID: 42, Email: "u@example.com", BillingCurrency: CurrencyCNY,
+	}}
+	repo := &rpmUserRepoStub{userRepoStub: base}
+	invalidator := &authCacheInvalidatorStub{}
+	svc := &adminServiceImpl{
+		userRepo: repo, redeemCodeRepo: &redeemRepoStub{}, authCacheInvalidator: invalidator,
+	}
+	currency := CurrencyUSD
+
+	updated, err := svc.UpdateUser(context.Background(), 42, &UpdateUserInput{BillingCurrency: &currency})
+
+	require.NoError(t, err)
+	require.Equal(t, CurrencyUSD, updated.BillingCurrency)
+	require.Equal(t, []int64{42}, invalidator.userIDs)
+}

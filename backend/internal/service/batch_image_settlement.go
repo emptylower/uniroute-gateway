@@ -258,6 +258,21 @@ func (s *BatchImageSettlementService) recordUsageLog(ctx context.Context, job *B
 	inboundEndpoint := "/v1/images/batches"
 	upstreamEndpoint := "vertex:batchPredictionJobs"
 	imageSize := "1K"
+	settlementCurrency := NormalizeUserBillingCurrency(job.Currency)
+	exchangeRate := job.ExchangeRate
+	if exchangeRate <= 0 {
+		exchangeRate = 1
+	}
+	sourceCost := job.BaseUnitPrice * float64(job.SuccessCount)
+	baseCost := sourceCost * exchangeRate
+	exchangeRateAsOf := job.ExchangeRateAsOf
+	if exchangeRateAsOf == nil {
+		exchangeRateAsOf = &job.CreatedAt
+	}
+	exchangeRateSource := strings.TrimSpace(job.ExchangeRateSource)
+	if exchangeRateSource == "" {
+		exchangeRateSource = "legacy_batch_image"
+	}
 	usageLog := &UsageLog{
 		UserID:                job.UserID,
 		APIKeyID:              *job.APIKeyID,
@@ -268,9 +283,16 @@ func (s *BatchImageSettlementService) recordUsageLog(ctx context.Context, job *B
 		InboundEndpoint:       &inboundEndpoint,
 		UpstreamEndpoint:      &upstreamEndpoint,
 		ImageCount:            job.SuccessCount,
-		ImageOutputCost:       actualCost,
-		TotalCost:             actualCost,
+		ImageOutputCost:       sourceCost,
+		TotalCost:             sourceCost,
 		ActualCost:            actualCost,
+		SourceCurrency:        CurrencyUSD,
+		SettlementCurrency:    settlementCurrency,
+		ExchangeRate:          exchangeRate,
+		ExchangeRateSource:    exchangeRateSource,
+		ExchangeRateAsOf:      exchangeRateAsOf,
+		SourceCost:            sourceCost,
+		BaseCost:              baseCost,
 		RateMultiplier:        job.GroupRateMultiplier * job.BatchDiscountMultiplier,
 		AccountRateMultiplier: &accountRateMultiplier,
 		BillingType:           BillingTypeBalance,

@@ -2,7 +2,9 @@ package repository
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -45,6 +47,7 @@ func (r *apiKeyRepository) Create(ctx context.Context, key *service.APIKey) erro
 		SetUserID(key.UserID).
 		SetKey(key.Key).
 		SetName(key.Name).
+		SetRoutingMode(key.RoutingMode).
 		SetStatus(key.Status).
 		SetNillableGroupID(key.GroupID).
 		SetNillableLastUsedAt(key.LastUsedAt).
@@ -84,7 +87,11 @@ func (r *apiKeyRepository) GetByID(ctx context.Context, id int64) (*service.APIK
 		}
 		return nil, err
 	}
-	return apiKeyEntityToService(m), nil
+	out := apiKeyEntityToService(m)
+	if out.RoutingMode == service.APIKeyRoutingModeChannels {
+		out.ChannelIDs, err = r.loadChannelIDs(ctx, out.ID)
+	}
+	return out, err
 }
 
 // GetKeyAndOwnerID 根据 API Key ID 获取其 key 与所有者（用户）ID。
@@ -95,13 +102,16 @@ func (r *apiKeyRepository) GetByID(ctx context.Context, id int64) (*service.APIK
 func (r *apiKeyRepository) GetKeyAndOwnerID(ctx context.Context, id int64) (string, int64, error) {
 	m, err := r.activeQuery().
 		Where(apikey.IDEQ(id)).
-		Select(apikey.FieldKey, apikey.FieldUserID).
+		Select(apikey.FieldKey, apikey.FieldUserID, apikey.FieldPlatformKeyID).
 		Only(ctx)
 	if err != nil {
 		if dbent.IsNotFound(err) {
 			return "", 0, service.ErrAPIKeyNotFound
 		}
 		return "", 0, err
+	}
+	if m.PlatformKeyID != nil {
+		return "", 0, service.ErrProjectedAPIKeyManagedExternally
 	}
 	return m.Key, m.UserID, nil
 }
@@ -122,16 +132,26 @@ func (r *apiKeyRepository) GetByKey(ctx context.Context, key string) (*service.A
 		}
 		return nil, err
 	}
-	return apiKeyEntityToService(m), nil
+	out := apiKeyEntityToService(m)
+	if out.RoutingMode == service.APIKeyRoutingModeChannels {
+		out.ChannelIDs, err = r.loadChannelIDs(ctx, out.ID)
+	}
+	return out, err
 }
 
 func (r *apiKeyRepository) GetByKeyForAuth(ctx context.Context, key string) (*service.APIKey, error) {
+	sum := sha256.Sum256([]byte(key))
+	keyHash := hex.EncodeToString(sum[:])
 	m, err := r.activeQuery().
-		Where(apikey.KeyEQ(key)).
+		Where(apikey.Or(
+			apikey.And(apikey.PlatformKeyIDIsNil(), apikey.KeyEQ(key)),
+			apikey.And(apikey.PlatformKeyIDNotNil(), apikey.KeySha256EQ(keyHash)),
+		)).
 		Select(
 			apikey.FieldID,
 			apikey.FieldUserID,
 			apikey.FieldGroupID,
+			apikey.FieldRoutingMode,
 			apikey.FieldName,
 			apikey.FieldStatus,
 			apikey.FieldIPWhitelist,
@@ -219,7 +239,11 @@ func (r *apiKeyRepository) GetByKeyForAuth(ctx context.Context, key string) (*se
 		}
 		return nil, err
 	}
-	return apiKeyEntityToService(m), nil
+	out := apiKeyEntityToService(m)
+	if out.RoutingMode == service.APIKeyRoutingModeChannels {
+		out.ChannelIDs, err = r.loadChannelIDs(ctx, out.ID)
+	}
+	return out, err
 }
 
 func (r *apiKeyRepository) Update(ctx context.Context, key *service.APIKey) error {
@@ -231,8 +255,9 @@ func (r *apiKeyRepository) Update(ctx context.Context, key *service.APIKey) erro
 	client := clientFromContext(ctx, r.client)
 	now := time.Now()
 	builder := client.APIKey.Update().
-		Where(apikey.IDEQ(key.ID), apikey.DeletedAtIsNil()).
+		Where(apikey.IDEQ(key.ID), apikey.DeletedAtIsNil(), apikey.PlatformKeyIDIsNil()).
 		SetName(key.Name).
+		SetRoutingMode(key.RoutingMode).
 		SetStatus(key.Status).
 		SetQuota(key.Quota).
 		SetQuotaUsed(key.QuotaUsed).
@@ -290,7 +315,15 @@ func (r *apiKeyRepository) Update(ctx context.Context, key *service.APIKey) erro
 		return err
 	}
 	if affected == 0 {
-		// 更新影响行数为 0，说明记录不存在或已被软删除。
+		projected, lookupErr := client.APIKey.Query().
+			Where(apikey.IDEQ(key.ID), apikey.PlatformKeyIDNotNil()).
+			Exist(mixins.SkipSoftDelete(ctx))
+		if lookupErr != nil {
+			return lookupErr
+		}
+		if projected {
+			return service.ErrProjectedAPIKeyManagedExternally
+		}
 		return service.ErrAPIKeyNotFound
 	}
 
@@ -304,7 +337,7 @@ func (r *apiKeyRepository) Delete(ctx context.Context, id int64) error {
 	tombstoneKey := fmt.Sprintf("__deleted__%d__%d", id, time.Now().UnixNano())
 	// 显式软删除：避免依赖 Hook 行为，确保 deleted_at 一定被设置。
 	affected, err := r.client.APIKey.Update().
-		Where(apikey.IDEQ(id), apikey.DeletedAtIsNil()).
+		Where(apikey.IDEQ(id), apikey.DeletedAtIsNil(), apikey.PlatformKeyIDIsNil()).
 		SetKey(tombstoneKey).
 		SetDeletedAt(time.Now()).
 		Save(ctx)
@@ -315,6 +348,15 @@ func (r *apiKeyRepository) Delete(ctx context.Context, id int64) error {
 		return err
 	}
 	if affected == 0 {
+		projected, lookupErr := r.client.APIKey.Query().
+			Where(apikey.IDEQ(id), apikey.PlatformKeyIDNotNil()).
+			Exist(mixins.SkipSoftDelete(ctx))
+		if lookupErr != nil {
+			return lookupErr
+		}
+		if projected {
+			return service.ErrProjectedAPIKeyManagedExternally
+		}
 		exists, err := r.client.APIKey.Query().
 			Where(apikey.IDEQ(id)).
 			Exist(mixins.SkipSoftDelete(ctx))
@@ -363,7 +405,7 @@ func (r *apiKeyRepository) deleteWithTombstone(ctx context.Context, exec *dbent.
 	res, err := exec.ExecContext(ctx, `
 		UPDATE api_keys
 		SET key = $1, deleted_at = NOW(), updated_at = NOW()
-		WHERE id = $2 AND deleted_at IS NULL`, tombstoneKey, id)
+		WHERE id = $2 AND deleted_at IS NULL AND platform_key_id IS NULL`, tombstoneKey, id)
 	if err != nil {
 		return err
 	}
@@ -372,6 +414,15 @@ func (r *apiKeyRepository) deleteWithTombstone(ctx context.Context, exec *dbent.
 		return err
 	}
 	if affected == 0 {
+		projected, lookupErr := exec.APIKey.Query().
+			Where(apikey.IDEQ(id), apikey.PlatformKeyIDNotNil()).
+			Exist(mixins.SkipSoftDelete(ctx))
+		if lookupErr != nil {
+			return lookupErr
+		}
+		if projected {
+			return service.ErrProjectedAPIKeyManagedExternally
+		}
 		// 并发/重复删除:记录已存在(已软删)则幂等返回 nil(defer 回滚空事务),否则 NotFound。
 		exists, existErr := r.client.APIKey.Query().
 			Where(apikey.IDEQ(id)).
@@ -570,7 +621,9 @@ func (r *apiKeyRepository) CountByUserID(ctx context.Context, userID int64) (int
 }
 
 func (r *apiKeyRepository) ExistsByKey(ctx context.Context, key string) (bool, error) {
-	count, err := r.activeQuery().Where(apikey.KeyEQ(key)).Count(ctx)
+	sum := sha256.Sum256([]byte(key))
+	keyHash := hex.EncodeToString(sum[:])
+	count, err := r.activeQuery().Where(apikey.Or(apikey.KeyEQ(key), apikey.KeySha256EQ(keyHash))).Count(ctx)
 	return count > 0, err
 }
 
@@ -665,7 +718,7 @@ func (r *apiKeyRepository) SearchAPIKeys(ctx context.Context, userID int64, keyw
 // ClearGroupIDByGroupID 将指定分组的所有 API Key 的 group_id 设为 nil
 func (r *apiKeyRepository) ClearGroupIDByGroupID(ctx context.Context, groupID int64) (int64, error) {
 	n, err := r.client.APIKey.Update().
-		Where(apikey.GroupIDEQ(groupID), apikey.DeletedAtIsNil()).
+		Where(apikey.GroupIDEQ(groupID), apikey.DeletedAtIsNil(), apikey.PlatformKeyIDIsNil()).
 		ClearGroupID().
 		Save(ctx)
 	return int64(n), err
@@ -675,7 +728,7 @@ func (r *apiKeyRepository) ClearGroupIDByGroupID(ctx context.Context, groupID in
 func (r *apiKeyRepository) UpdateGroupIDByUserAndGroup(ctx context.Context, userID, oldGroupID, newGroupID int64) (int64, error) {
 	client := clientFromContext(ctx, r.client)
 	n, err := client.APIKey.Update().
-		Where(apikey.UserIDEQ(userID), apikey.GroupIDEQ(oldGroupID), apikey.DeletedAtIsNil()).
+		Where(apikey.UserIDEQ(userID), apikey.GroupIDEQ(oldGroupID), apikey.DeletedAtIsNil(), apikey.PlatformKeyIDIsNil()).
 		SetGroupID(newGroupID).
 		Save(ctx)
 	return int64(n), err
@@ -688,25 +741,37 @@ func (r *apiKeyRepository) CountByGroupID(ctx context.Context, groupID int64) (i
 }
 
 func (r *apiKeyRepository) ListKeysByUserID(ctx context.Context, userID int64) ([]string, error) {
-	keys, err := r.activeQuery().
+	rows, err := r.activeQuery().
 		Where(apikey.UserIDEQ(userID)).
-		Select(apikey.FieldKey).
-		Strings(ctx)
+		Select(apikey.FieldKey, apikey.FieldPlatformKeyID, apikey.FieldKeySha256).
+		All(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return keys, nil
+	return authCacheIdentifiers(rows), nil
 }
 
 func (r *apiKeyRepository) ListKeysByGroupID(ctx context.Context, groupID int64) ([]string, error) {
-	keys, err := r.activeQuery().
+	rows, err := r.activeQuery().
 		Where(apikey.GroupIDEQ(groupID)).
-		Select(apikey.FieldKey).
-		Strings(ctx)
+		Select(apikey.FieldKey, apikey.FieldPlatformKeyID, apikey.FieldKeySha256).
+		All(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return keys, nil
+	return authCacheIdentifiers(rows), nil
+}
+
+func authCacheIdentifiers(rows []*dbent.APIKey) []string {
+	keys := make([]string, 0, len(rows))
+	for _, row := range rows {
+		if row.PlatformKeyID != nil && row.KeySha256 != nil {
+			keys = append(keys, "sha256:"+*row.KeySha256)
+			continue
+		}
+		keys = append(keys, row.Key)
+	}
+	return keys
 }
 
 // IncrementQuotaUsed 使用 Ent 原子递增 quota_used 字段并返回新值
@@ -828,29 +893,40 @@ func apiKeyEntityToService(m *dbent.APIKey) *service.APIKey {
 		return nil
 	}
 	out := &service.APIKey{
-		ID:            m.ID,
-		UserID:        m.UserID,
-		Key:           m.Key,
-		Name:          m.Name,
-		Status:        m.Status,
-		IPWhitelist:   m.IPWhitelist,
-		IPBlacklist:   m.IPBlacklist,
-		LastUsedAt:    m.LastUsedAt,
-		CreatedAt:     m.CreatedAt,
-		UpdatedAt:     m.UpdatedAt,
-		GroupID:       m.GroupID,
-		Quota:         m.Quota,
-		QuotaUsed:     m.QuotaUsed,
-		ExpiresAt:     m.ExpiresAt,
-		RateLimit5h:   m.RateLimit5h,
-		RateLimit1d:   m.RateLimit1d,
-		RateLimit7d:   m.RateLimit7d,
-		Usage5h:       m.Usage5h,
-		Usage1d:       m.Usage1d,
-		Usage7d:       m.Usage7d,
-		Window5hStart: m.Window5hStart,
-		Window1dStart: m.Window1dStart,
-		Window7dStart: m.Window7dStart,
+		ID:                 m.ID,
+		UserID:             m.UserID,
+		Key:                m.Key,
+		PlatformKeyID:      m.PlatformKeyID,
+		KeySHA256:          m.KeySha256,
+		KeyPrefix:          m.KeyPrefix,
+		PlatformKeyVersion: m.PlatformKeyVersion,
+		Name:               m.Name,
+		RoutingMode:        m.RoutingMode,
+		Status:             m.Status,
+		IPWhitelist:        m.IPWhitelist,
+		IPBlacklist:        m.IPBlacklist,
+		LastUsedAt:         m.LastUsedAt,
+		CreatedAt:          m.CreatedAt,
+		UpdatedAt:          m.UpdatedAt,
+		GroupID:            m.GroupID,
+		Quota:              m.Quota,
+		QuotaUsed:          m.QuotaUsed,
+		ExpiresAt:          m.ExpiresAt,
+		RateLimit5h:        m.RateLimit5h,
+		RateLimit1d:        m.RateLimit1d,
+		RateLimit7d:        m.RateLimit7d,
+		Usage5h:            m.Usage5h,
+		Usage1d:            m.Usage1d,
+		Usage7d:            m.Usage7d,
+		Window5hStart:      m.Window5hStart,
+		Window1dStart:      m.Window1dStart,
+		Window7dStart:      m.Window7dStart,
+	}
+	if out.PlatformKeyID != nil {
+		out.Key = ""
+	}
+	if out.RoutingMode == "" {
+		out.RoutingMode = service.APIKeyRoutingModeLegacyGroup
 	}
 	if m.Edges.User != nil {
 		out.User = userEntityToService(m.Edges.User)
@@ -869,12 +945,42 @@ func apiKeyEntityToService(m *dbent.APIKey) *service.APIKey {
 	return out
 }
 
+func (r *apiKeyRepository) loadChannelIDs(ctx context.Context, apiKeyID int64) (ids []int64, err error) {
+	if r == nil || r.sql == nil || apiKeyID <= 0 {
+		return []int64{}, nil
+	}
+	rows, err := r.sql.QueryContext(ctx,
+		`SELECT channel_id FROM api_key_channels WHERE api_key_id = $1 ORDER BY channel_id`,
+		apiKeyID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}()
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
 func userEntityToService(u *dbent.User) *service.User {
 	if u == nil {
 		return nil
 	}
 	out := &service.User{
 		ID:                         u.ID,
+		PlatformUserID:             derefString(u.PlatformUserID),
 		Email:                      u.Email,
 		Username:                   u.Username,
 		Notes:                      u.Notes,
@@ -882,6 +988,7 @@ func userEntityToService(u *dbent.User) *service.User {
 		Role:                       u.Role,
 		Balance:                    u.Balance,
 		FrozenBalance:              u.FrozenBalance,
+		BillingCurrency:            u.BillingCurrency,
 		Concurrency:                u.Concurrency,
 		Status:                     u.Status,
 		SignupSource:               u.SignupSource,
@@ -916,6 +1023,8 @@ func groupEntityToService(g *dbent.Group) *service.Group {
 		Description:                     derefString(g.Description),
 		Platform:                        g.Platform,
 		RateMultiplier:                  g.RateMultiplier,
+		RateMultiplierCNY:               g.RateMultiplierCny,
+		RateMultiplierUSD:               g.RateMultiplierUsd,
 		IsExclusive:                     g.IsExclusive,
 		Status:                          g.Status,
 		Hydrated:                        true,

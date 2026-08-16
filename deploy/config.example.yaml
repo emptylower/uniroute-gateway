@@ -20,6 +20,8 @@ server:
   # Mode: "debug" for development, "release" for production
   # 运行模式："debug" 用于开发，"release" 用于生产环境
   mode: "release"
+  # Omit the legacy panel/auth/user/payment surface when ShipAny owns it.
+  data_plane_only: false
   # Return Server-Timing for authenticated requests made by the Admin web UI
   # 为管理端 Web 页面发出的已认证请求返回 Server-Timing
   enable_server_timing: false
@@ -979,6 +981,43 @@ jwt:
   access_token_expire_minutes: 0
 
 # =============================================================================
+# ShipAny -> Gateway Internal Identity Bridge (Optional, disabled by default)
+# ShipAny -> 网关内部身份桥（可选，默认关闭）
+# =============================================================================
+platform_identity:
+  enabled: false
+  issuer: "shipany"
+  audience: "sub2api-gateway"
+  # Use a secret independent from jwt.secret. Generate with: openssl rand -hex 32
+  # 必须与面板 jwt.secret 分离。生成命令：openssl rand -hex 32
+  secret: ""
+  # JWT header kid must equal this version; change both during key rotation.
+  # JWT header 的 kid 必须等于此版本；轮换密钥时同步更新。
+  version: "v1"
+
+# =============================================================================
+# Gateway -> ShipAny Canonical Wallet Bridge (Optional, disabled by default)
+# 网关 -> ShipAny 权威钱包桥（可选，默认关闭）
+# =============================================================================
+canonical_wallet:
+  # disabled: no network/Redis work; shadow: observe only; enforce: reserved for
+  # a future admission cutover and additionally requires enforce_ready=true.
+  mode: "disabled"
+  control_plane_url: ""
+  issuer: "sub2api-gateway"
+  audience: "shipany-control-plane"
+  # Must be independent from jwt.secret and platform_identity.secret.
+  secret: ""
+  version: "v1"
+  lease_ttl_seconds: 300
+  # Exact unit: 1 CNY = 1,000,000 micros; 1 ShipAny credit = 10,000 micros.
+  lease_budget_micros: 5000000
+  request_timeout_ms: 300
+  settlement_queue_size: 2048
+  settlement_workers: 2
+  enforce_ready: false
+
+# =============================================================================
 # TOTP (2FA) Configuration
 # TOTP 双因素认证配置
 # =============================================================================
@@ -1125,6 +1164,25 @@ pricing:
 # 计费配置
 # =============================================================================
 billing:
+  # CurrencyAPI can update rates up to every minute depending on the subscribed plan.
+  # Last-good rates are cached. Cross-currency billing fails after stale_ttl_seconds
+  # instead of silently using a hard-coded or 1:1 exchange rate.
+  exchange_rate:
+    provider: "currencyapi"
+    provider_url: "https://api.currencyapi.com/v3/latest"
+    # Prefer BILLING_EXCHANGE_RATE_API_KEY in production rather than committing a secret.
+    api_key: ""
+    # Optional emergency bootstrap rate. Keep 0 in normal operation. When set,
+    # it is visibly marked bootstrap_config and is never described as live.
+    bootstrap_usd_to_cny: 0
+    # Reject malformed, stale, future-dated, or implausible provider snapshots.
+    min_usd_to_cny: 4
+    max_usd_to_cny: 12
+    max_age_seconds: 172800
+    max_future_seconds: 300
+    cache_ttl_seconds: 900
+    stale_ttl_seconds: 86400
+    timeout_seconds: 2
   circuit_breaker:
     # Enable circuit breaker for billing service
     # 启用计费服务熔断器

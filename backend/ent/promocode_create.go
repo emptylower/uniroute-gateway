@@ -43,6 +43,20 @@ func (_c *PromoCodeCreate) SetNillableBonusAmount(v *float64) *PromoCodeCreate {
 	return _c
 }
 
+// SetCurrency sets the "currency" field.
+func (_c *PromoCodeCreate) SetCurrency(v string) *PromoCodeCreate {
+	_c.mutation.SetCurrency(v)
+	return _c
+}
+
+// SetNillableCurrency sets the "currency" field if the given value is not nil.
+func (_c *PromoCodeCreate) SetNillableCurrency(v *string) *PromoCodeCreate {
+	if v != nil {
+		_c.SetCurrency(*v)
+	}
+	return _c
+}
+
 // SetMaxUses sets the "max_uses" field.
 func (_c *PromoCodeCreate) SetMaxUses(v int) *PromoCodeCreate {
 	_c.mutation.SetMaxUses(v)
@@ -195,6 +209,10 @@ func (_c *PromoCodeCreate) defaults() {
 		v := promocode.DefaultBonusAmount
 		_c.mutation.SetBonusAmount(v)
 	}
+	if _, ok := _c.mutation.Currency(); !ok {
+		v := promocode.DefaultCurrency
+		_c.mutation.SetCurrency(v)
+	}
 	if _, ok := _c.mutation.MaxUses(); !ok {
 		v := promocode.DefaultMaxUses
 		_c.mutation.SetMaxUses(v)
@@ -229,6 +247,14 @@ func (_c *PromoCodeCreate) check() error {
 	}
 	if _, ok := _c.mutation.BonusAmount(); !ok {
 		return &ValidationError{Name: "bonus_amount", err: errors.New(`ent: missing required field "PromoCode.bonus_amount"`)}
+	}
+	if _, ok := _c.mutation.Currency(); !ok {
+		return &ValidationError{Name: "currency", err: errors.New(`ent: missing required field "PromoCode.currency"`)}
+	}
+	if v, ok := _c.mutation.Currency(); ok {
+		if err := promocode.CurrencyValidator(v); err != nil {
+			return &ValidationError{Name: "currency", err: fmt.Errorf(`ent: validator failed for field "PromoCode.currency": %w`, err)}
+		}
 	}
 	if _, ok := _c.mutation.MaxUses(); !ok {
 		return &ValidationError{Name: "max_uses", err: errors.New(`ent: missing required field "PromoCode.max_uses"`)}
@@ -284,6 +310,10 @@ func (_c *PromoCodeCreate) createSpec() (*PromoCode, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.BonusAmount(); ok {
 		_spec.SetField(promocode.FieldBonusAmount, field.TypeFloat64, value)
 		_node.BonusAmount = value
+	}
+	if value, ok := _c.mutation.Currency(); ok {
+		_spec.SetField(promocode.FieldCurrency, field.TypeString, value)
+		_node.Currency = value
 	}
 	if value, ok := _c.mutation.MaxUses(); ok {
 		_spec.SetField(promocode.FieldMaxUses, field.TypeInt, value)
@@ -408,6 +438,18 @@ func (u *PromoCodeUpsert) UpdateBonusAmount() *PromoCodeUpsert {
 // AddBonusAmount adds v to the "bonus_amount" field.
 func (u *PromoCodeUpsert) AddBonusAmount(v float64) *PromoCodeUpsert {
 	u.Add(promocode.FieldBonusAmount, v)
+	return u
+}
+
+// SetCurrency sets the "currency" field.
+func (u *PromoCodeUpsert) SetCurrency(v string) *PromoCodeUpsert {
+	u.Set(promocode.FieldCurrency, v)
+	return u
+}
+
+// UpdateCurrency sets the "currency" field to the value that was provided on create.
+func (u *PromoCodeUpsert) UpdateCurrency() *PromoCodeUpsert {
+	u.SetExcluded(promocode.FieldCurrency)
 	return u
 }
 
@@ -584,6 +626,20 @@ func (u *PromoCodeUpsertOne) AddBonusAmount(v float64) *PromoCodeUpsertOne {
 func (u *PromoCodeUpsertOne) UpdateBonusAmount() *PromoCodeUpsertOne {
 	return u.Update(func(s *PromoCodeUpsert) {
 		s.UpdateBonusAmount()
+	})
+}
+
+// SetCurrency sets the "currency" field.
+func (u *PromoCodeUpsertOne) SetCurrency(v string) *PromoCodeUpsertOne {
+	return u.Update(func(s *PromoCodeUpsert) {
+		s.SetCurrency(v)
+	})
+}
+
+// UpdateCurrency sets the "currency" field to the value that was provided on create.
+func (u *PromoCodeUpsertOne) UpdateCurrency() *PromoCodeUpsertOne {
+	return u.Update(func(s *PromoCodeUpsert) {
+		s.UpdateCurrency()
 	})
 }
 
@@ -942,6 +998,20 @@ func (u *PromoCodeUpsertBulk) AddBonusAmount(v float64) *PromoCodeUpsertBulk {
 func (u *PromoCodeUpsertBulk) UpdateBonusAmount() *PromoCodeUpsertBulk {
 	return u.Update(func(s *PromoCodeUpsert) {
 		s.UpdateBonusAmount()
+	})
+}
+
+// SetCurrency sets the "currency" field.
+func (u *PromoCodeUpsertBulk) SetCurrency(v string) *PromoCodeUpsertBulk {
+	return u.Update(func(s *PromoCodeUpsert) {
+		s.SetCurrency(v)
+	})
+}
+
+// UpdateCurrency sets the "currency" field to the value that was provided on create.
+func (u *PromoCodeUpsertBulk) UpdateCurrency() *PromoCodeUpsertBulk {
+	return u.Update(func(s *PromoCodeUpsert) {
+		s.UpdateCurrency()
 	})
 }
 

@@ -15,11 +15,13 @@ type GroupModelsListConfig = domain.GroupModelsListConfig
 type ReasoningEffortMapping = domain.ReasoningEffortMapping
 
 type Group struct {
-	ID             int64
-	Name           string
-	Description    string
-	Platform       string
-	RateMultiplier float64
+	ID                int64
+	Name              string
+	Description       string
+	Platform          string
+	RateMultiplier    float64
+	RateMultiplierCNY *float64
+	RateMultiplierUSD *float64
 	// 高峰时段倍率：peak_rate_enabled 为 true 且当前时刻处于 [PeakStart, PeakEnd) 时，
 	// token 计费倍率额外乘以 PeakRateMultiplier。详见 PeakMultiplierAt。
 	PeakRateEnabled    bool
@@ -106,6 +108,23 @@ type Group struct {
 	AccountCount            int64
 	ActiveAccountCount      int64
 	RateLimitedAccountCount int64
+}
+
+func (g *Group) RateMultiplierForCurrency(currency string) float64 {
+	if g == nil {
+		return 1
+	}
+	switch normalizeBillingCurrencyOrDefault(currency) {
+	case CurrencyUSD:
+		if g.RateMultiplierUSD != nil {
+			return *g.RateMultiplierUSD
+		}
+	default:
+		if g.RateMultiplierCNY != nil {
+			return *g.RateMultiplierCNY
+		}
+	}
+	return g.RateMultiplier
 }
 
 func (g *Group) IsActive() bool {

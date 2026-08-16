@@ -180,6 +180,41 @@ func ActualCost(v float64) predicate.UsageLog {
 	return predicate.UsageLog(sql.FieldEQ(FieldActualCost, v))
 }
 
+// SourceCurrency applies equality check predicate on the "source_currency" field. It's identical to SourceCurrencyEQ.
+func SourceCurrency(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldSourceCurrency, v))
+}
+
+// SettlementCurrency applies equality check predicate on the "settlement_currency" field. It's identical to SettlementCurrencyEQ.
+func SettlementCurrency(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldSettlementCurrency, v))
+}
+
+// ExchangeRate applies equality check predicate on the "exchange_rate" field. It's identical to ExchangeRateEQ.
+func ExchangeRate(v float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldExchangeRate, v))
+}
+
+// ExchangeRateSource applies equality check predicate on the "exchange_rate_source" field. It's identical to ExchangeRateSourceEQ.
+func ExchangeRateSource(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldExchangeRateSource, v))
+}
+
+// ExchangeRateAsOf applies equality check predicate on the "exchange_rate_as_of" field. It's identical to ExchangeRateAsOfEQ.
+func ExchangeRateAsOf(v time.Time) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldExchangeRateAsOf, v))
+}
+
+// SourceCost applies equality check predicate on the "source_cost" field. It's identical to SourceCostEQ.
+func SourceCost(v float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldSourceCost, v))
+}
+
+// BaseCost applies equality check predicate on the "base_cost" field. It's identical to BaseCostEQ.
+func BaseCost(v float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldBaseCost, v))
+}
+
 // RateMultiplier applies equality check predicate on the "rate_multiplier" field. It's identical to RateMultiplierEQ.
 func RateMultiplier(v float64) predicate.UsageLog {
 	return predicate.UsageLog(sql.FieldEQ(FieldRateMultiplier, v))
@@ -1428,6 +1463,371 @@ func ActualCostLT(v float64) predicate.UsageLog {
 // ActualCostLTE applies the LTE predicate on the "actual_cost" field.
 func ActualCostLTE(v float64) predicate.UsageLog {
 	return predicate.UsageLog(sql.FieldLTE(FieldActualCost, v))
+}
+
+// SourceCurrencyEQ applies the EQ predicate on the "source_currency" field.
+func SourceCurrencyEQ(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldSourceCurrency, v))
+}
+
+// SourceCurrencyNEQ applies the NEQ predicate on the "source_currency" field.
+func SourceCurrencyNEQ(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNEQ(FieldSourceCurrency, v))
+}
+
+// SourceCurrencyIn applies the In predicate on the "source_currency" field.
+func SourceCurrencyIn(vs ...string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldIn(FieldSourceCurrency, vs...))
+}
+
+// SourceCurrencyNotIn applies the NotIn predicate on the "source_currency" field.
+func SourceCurrencyNotIn(vs ...string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNotIn(FieldSourceCurrency, vs...))
+}
+
+// SourceCurrencyGT applies the GT predicate on the "source_currency" field.
+func SourceCurrencyGT(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGT(FieldSourceCurrency, v))
+}
+
+// SourceCurrencyGTE applies the GTE predicate on the "source_currency" field.
+func SourceCurrencyGTE(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGTE(FieldSourceCurrency, v))
+}
+
+// SourceCurrencyLT applies the LT predicate on the "source_currency" field.
+func SourceCurrencyLT(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLT(FieldSourceCurrency, v))
+}
+
+// SourceCurrencyLTE applies the LTE predicate on the "source_currency" field.
+func SourceCurrencyLTE(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLTE(FieldSourceCurrency, v))
+}
+
+// SourceCurrencyContains applies the Contains predicate on the "source_currency" field.
+func SourceCurrencyContains(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldContains(FieldSourceCurrency, v))
+}
+
+// SourceCurrencyHasPrefix applies the HasPrefix predicate on the "source_currency" field.
+func SourceCurrencyHasPrefix(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldHasPrefix(FieldSourceCurrency, v))
+}
+
+// SourceCurrencyHasSuffix applies the HasSuffix predicate on the "source_currency" field.
+func SourceCurrencyHasSuffix(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldHasSuffix(FieldSourceCurrency, v))
+}
+
+// SourceCurrencyEqualFold applies the EqualFold predicate on the "source_currency" field.
+func SourceCurrencyEqualFold(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEqualFold(FieldSourceCurrency, v))
+}
+
+// SourceCurrencyContainsFold applies the ContainsFold predicate on the "source_currency" field.
+func SourceCurrencyContainsFold(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldContainsFold(FieldSourceCurrency, v))
+}
+
+// SettlementCurrencyEQ applies the EQ predicate on the "settlement_currency" field.
+func SettlementCurrencyEQ(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldSettlementCurrency, v))
+}
+
+// SettlementCurrencyNEQ applies the NEQ predicate on the "settlement_currency" field.
+func SettlementCurrencyNEQ(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNEQ(FieldSettlementCurrency, v))
+}
+
+// SettlementCurrencyIn applies the In predicate on the "settlement_currency" field.
+func SettlementCurrencyIn(vs ...string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldIn(FieldSettlementCurrency, vs...))
+}
+
+// SettlementCurrencyNotIn applies the NotIn predicate on the "settlement_currency" field.
+func SettlementCurrencyNotIn(vs ...string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNotIn(FieldSettlementCurrency, vs...))
+}
+
+// SettlementCurrencyGT applies the GT predicate on the "settlement_currency" field.
+func SettlementCurrencyGT(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGT(FieldSettlementCurrency, v))
+}
+
+// SettlementCurrencyGTE applies the GTE predicate on the "settlement_currency" field.
+func SettlementCurrencyGTE(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGTE(FieldSettlementCurrency, v))
+}
+
+// SettlementCurrencyLT applies the LT predicate on the "settlement_currency" field.
+func SettlementCurrencyLT(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLT(FieldSettlementCurrency, v))
+}
+
+// SettlementCurrencyLTE applies the LTE predicate on the "settlement_currency" field.
+func SettlementCurrencyLTE(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLTE(FieldSettlementCurrency, v))
+}
+
+// SettlementCurrencyContains applies the Contains predicate on the "settlement_currency" field.
+func SettlementCurrencyContains(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldContains(FieldSettlementCurrency, v))
+}
+
+// SettlementCurrencyHasPrefix applies the HasPrefix predicate on the "settlement_currency" field.
+func SettlementCurrencyHasPrefix(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldHasPrefix(FieldSettlementCurrency, v))
+}
+
+// SettlementCurrencyHasSuffix applies the HasSuffix predicate on the "settlement_currency" field.
+func SettlementCurrencyHasSuffix(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldHasSuffix(FieldSettlementCurrency, v))
+}
+
+// SettlementCurrencyEqualFold applies the EqualFold predicate on the "settlement_currency" field.
+func SettlementCurrencyEqualFold(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEqualFold(FieldSettlementCurrency, v))
+}
+
+// SettlementCurrencyContainsFold applies the ContainsFold predicate on the "settlement_currency" field.
+func SettlementCurrencyContainsFold(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldContainsFold(FieldSettlementCurrency, v))
+}
+
+// ExchangeRateEQ applies the EQ predicate on the "exchange_rate" field.
+func ExchangeRateEQ(v float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldExchangeRate, v))
+}
+
+// ExchangeRateNEQ applies the NEQ predicate on the "exchange_rate" field.
+func ExchangeRateNEQ(v float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNEQ(FieldExchangeRate, v))
+}
+
+// ExchangeRateIn applies the In predicate on the "exchange_rate" field.
+func ExchangeRateIn(vs ...float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldIn(FieldExchangeRate, vs...))
+}
+
+// ExchangeRateNotIn applies the NotIn predicate on the "exchange_rate" field.
+func ExchangeRateNotIn(vs ...float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNotIn(FieldExchangeRate, vs...))
+}
+
+// ExchangeRateGT applies the GT predicate on the "exchange_rate" field.
+func ExchangeRateGT(v float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGT(FieldExchangeRate, v))
+}
+
+// ExchangeRateGTE applies the GTE predicate on the "exchange_rate" field.
+func ExchangeRateGTE(v float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGTE(FieldExchangeRate, v))
+}
+
+// ExchangeRateLT applies the LT predicate on the "exchange_rate" field.
+func ExchangeRateLT(v float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLT(FieldExchangeRate, v))
+}
+
+// ExchangeRateLTE applies the LTE predicate on the "exchange_rate" field.
+func ExchangeRateLTE(v float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLTE(FieldExchangeRate, v))
+}
+
+// ExchangeRateSourceEQ applies the EQ predicate on the "exchange_rate_source" field.
+func ExchangeRateSourceEQ(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldExchangeRateSource, v))
+}
+
+// ExchangeRateSourceNEQ applies the NEQ predicate on the "exchange_rate_source" field.
+func ExchangeRateSourceNEQ(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNEQ(FieldExchangeRateSource, v))
+}
+
+// ExchangeRateSourceIn applies the In predicate on the "exchange_rate_source" field.
+func ExchangeRateSourceIn(vs ...string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldIn(FieldExchangeRateSource, vs...))
+}
+
+// ExchangeRateSourceNotIn applies the NotIn predicate on the "exchange_rate_source" field.
+func ExchangeRateSourceNotIn(vs ...string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNotIn(FieldExchangeRateSource, vs...))
+}
+
+// ExchangeRateSourceGT applies the GT predicate on the "exchange_rate_source" field.
+func ExchangeRateSourceGT(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGT(FieldExchangeRateSource, v))
+}
+
+// ExchangeRateSourceGTE applies the GTE predicate on the "exchange_rate_source" field.
+func ExchangeRateSourceGTE(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGTE(FieldExchangeRateSource, v))
+}
+
+// ExchangeRateSourceLT applies the LT predicate on the "exchange_rate_source" field.
+func ExchangeRateSourceLT(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLT(FieldExchangeRateSource, v))
+}
+
+// ExchangeRateSourceLTE applies the LTE predicate on the "exchange_rate_source" field.
+func ExchangeRateSourceLTE(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLTE(FieldExchangeRateSource, v))
+}
+
+// ExchangeRateSourceContains applies the Contains predicate on the "exchange_rate_source" field.
+func ExchangeRateSourceContains(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldContains(FieldExchangeRateSource, v))
+}
+
+// ExchangeRateSourceHasPrefix applies the HasPrefix predicate on the "exchange_rate_source" field.
+func ExchangeRateSourceHasPrefix(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldHasPrefix(FieldExchangeRateSource, v))
+}
+
+// ExchangeRateSourceHasSuffix applies the HasSuffix predicate on the "exchange_rate_source" field.
+func ExchangeRateSourceHasSuffix(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldHasSuffix(FieldExchangeRateSource, v))
+}
+
+// ExchangeRateSourceEqualFold applies the EqualFold predicate on the "exchange_rate_source" field.
+func ExchangeRateSourceEqualFold(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEqualFold(FieldExchangeRateSource, v))
+}
+
+// ExchangeRateSourceContainsFold applies the ContainsFold predicate on the "exchange_rate_source" field.
+func ExchangeRateSourceContainsFold(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldContainsFold(FieldExchangeRateSource, v))
+}
+
+// ExchangeRateAsOfEQ applies the EQ predicate on the "exchange_rate_as_of" field.
+func ExchangeRateAsOfEQ(v time.Time) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldExchangeRateAsOf, v))
+}
+
+// ExchangeRateAsOfNEQ applies the NEQ predicate on the "exchange_rate_as_of" field.
+func ExchangeRateAsOfNEQ(v time.Time) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNEQ(FieldExchangeRateAsOf, v))
+}
+
+// ExchangeRateAsOfIn applies the In predicate on the "exchange_rate_as_of" field.
+func ExchangeRateAsOfIn(vs ...time.Time) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldIn(FieldExchangeRateAsOf, vs...))
+}
+
+// ExchangeRateAsOfNotIn applies the NotIn predicate on the "exchange_rate_as_of" field.
+func ExchangeRateAsOfNotIn(vs ...time.Time) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNotIn(FieldExchangeRateAsOf, vs...))
+}
+
+// ExchangeRateAsOfGT applies the GT predicate on the "exchange_rate_as_of" field.
+func ExchangeRateAsOfGT(v time.Time) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGT(FieldExchangeRateAsOf, v))
+}
+
+// ExchangeRateAsOfGTE applies the GTE predicate on the "exchange_rate_as_of" field.
+func ExchangeRateAsOfGTE(v time.Time) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGTE(FieldExchangeRateAsOf, v))
+}
+
+// ExchangeRateAsOfLT applies the LT predicate on the "exchange_rate_as_of" field.
+func ExchangeRateAsOfLT(v time.Time) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLT(FieldExchangeRateAsOf, v))
+}
+
+// ExchangeRateAsOfLTE applies the LTE predicate on the "exchange_rate_as_of" field.
+func ExchangeRateAsOfLTE(v time.Time) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLTE(FieldExchangeRateAsOf, v))
+}
+
+// ExchangeRateAsOfIsNil applies the IsNil predicate on the "exchange_rate_as_of" field.
+func ExchangeRateAsOfIsNil() predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldIsNull(FieldExchangeRateAsOf))
+}
+
+// ExchangeRateAsOfNotNil applies the NotNil predicate on the "exchange_rate_as_of" field.
+func ExchangeRateAsOfNotNil() predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNotNull(FieldExchangeRateAsOf))
+}
+
+// SourceCostEQ applies the EQ predicate on the "source_cost" field.
+func SourceCostEQ(v float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldSourceCost, v))
+}
+
+// SourceCostNEQ applies the NEQ predicate on the "source_cost" field.
+func SourceCostNEQ(v float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNEQ(FieldSourceCost, v))
+}
+
+// SourceCostIn applies the In predicate on the "source_cost" field.
+func SourceCostIn(vs ...float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldIn(FieldSourceCost, vs...))
+}
+
+// SourceCostNotIn applies the NotIn predicate on the "source_cost" field.
+func SourceCostNotIn(vs ...float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNotIn(FieldSourceCost, vs...))
+}
+
+// SourceCostGT applies the GT predicate on the "source_cost" field.
+func SourceCostGT(v float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGT(FieldSourceCost, v))
+}
+
+// SourceCostGTE applies the GTE predicate on the "source_cost" field.
+func SourceCostGTE(v float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGTE(FieldSourceCost, v))
+}
+
+// SourceCostLT applies the LT predicate on the "source_cost" field.
+func SourceCostLT(v float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLT(FieldSourceCost, v))
+}
+
+// SourceCostLTE applies the LTE predicate on the "source_cost" field.
+func SourceCostLTE(v float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLTE(FieldSourceCost, v))
+}
+
+// BaseCostEQ applies the EQ predicate on the "base_cost" field.
+func BaseCostEQ(v float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldBaseCost, v))
+}
+
+// BaseCostNEQ applies the NEQ predicate on the "base_cost" field.
+func BaseCostNEQ(v float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNEQ(FieldBaseCost, v))
+}
+
+// BaseCostIn applies the In predicate on the "base_cost" field.
+func BaseCostIn(vs ...float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldIn(FieldBaseCost, vs...))
+}
+
+// BaseCostNotIn applies the NotIn predicate on the "base_cost" field.
+func BaseCostNotIn(vs ...float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNotIn(FieldBaseCost, vs...))
+}
+
+// BaseCostGT applies the GT predicate on the "base_cost" field.
+func BaseCostGT(v float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGT(FieldBaseCost, v))
+}
+
+// BaseCostGTE applies the GTE predicate on the "base_cost" field.
+func BaseCostGTE(v float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGTE(FieldBaseCost, v))
+}
+
+// BaseCostLT applies the LT predicate on the "base_cost" field.
+func BaseCostLT(v float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLT(FieldBaseCost, v))
+}
+
+// BaseCostLTE applies the LTE predicate on the "base_cost" field.
+func BaseCostLTE(v float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLTE(FieldBaseCost, v))
 }
 
 // RateMultiplierEQ applies the EQ predicate on the "rate_multiplier" field.

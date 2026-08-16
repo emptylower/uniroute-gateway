@@ -132,6 +132,9 @@ type BatchImageJob struct {
 	HoldUnitPrice           float64
 	PricingSnapshotVersion  int
 	Currency                string
+	ExchangeRate            float64
+	ExchangeRateSource      string
+	ExchangeRateAsOf        *time.Time
 	HoldID                  *string
 
 	IdempotencyKey *string
@@ -192,6 +195,9 @@ type CreateBatchImageJobParams struct {
 	HoldUnitPrice           float64
 	PricingSnapshotVersion  int
 	Currency                string
+	ExchangeRate            float64
+	ExchangeRateSource      string
+	ExchangeRateAsOf        time.Time
 	HoldID                  *string
 
 	IdempotencyKey *string

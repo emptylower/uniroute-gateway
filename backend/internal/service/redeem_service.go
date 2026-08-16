@@ -70,9 +70,10 @@ type RedeemCodeRepository interface {
 
 // GenerateCodesRequest 生成兑换码请求
 type GenerateCodesRequest struct {
-	Count int     `json:"count"`
-	Value float64 `json:"value"`
-	Type  string  `json:"type"`
+	Count    int     `json:"count"`
+	Value    float64 `json:"value"`
+	Type     string  `json:"type"`
+	Currency string  `json:"currency"`
 }
 
 // RedeemCodeResponse 兑换码响应
@@ -213,6 +214,10 @@ func (s *RedeemService) GenerateCodes(ctx context.Context, req GenerateCodesRequ
 
 	// 邀请码类型的 value 设为 0
 	value := req.Value
+	currency, err := NormalizeBillingCurrency(req.Currency)
+	if err != nil {
+		return nil, err
+	}
 	if codeType == RedeemTypeInvitation {
 		value = 0
 	}
@@ -225,10 +230,11 @@ func (s *RedeemService) GenerateCodes(ctx context.Context, req GenerateCodesRequ
 		}
 
 		codes = append(codes, RedeemCode{
-			Code:   code,
-			Type:   codeType,
-			Value:  value,
-			Status: StatusUnused,
+			Code:     code,
+			Type:     codeType,
+			Value:    value,
+			Currency: currency,
+			Status:   StatusUnused,
 		})
 	}
 
@@ -416,6 +422,17 @@ func (s *RedeemService) Redeem(ctx context.Context, userID int64, code string) (
 		s.incrementRedeemErrorCount(ctx, userID)
 		return nil, ErrRedeemCodeUsed
 	}
+	// Fast rejection only. The wallet is loaded and revalidated again under the
+	// transaction lock below, which is the authoritative race-safe check.
+	if redeemCode.Type == RedeemTypeBalance && s.userRepo != nil {
+		wallet, walletErr := s.userRepo.GetByID(ctx, userID)
+		if walletErr != nil {
+			return nil, walletErr
+		}
+		if NormalizeUserBillingCurrency(wallet.BillingCurrency) != NormalizeUserBillingCurrency(redeemCode.Currency) {
+			return nil, infraerrors.BadRequest("REDEEM_CURRENCY_MISMATCH", "redeem code currency does not match wallet currency")
+		}
+	}
 
 	// 验证兑换码类型的前置条件。邀请码属于注册流程，不能通过普通兑换接口使用。
 	switch redeemCode.Type {
@@ -428,12 +445,6 @@ func (s *RedeemService) Redeem(ctx context.Context, userID int64, code string) (
 		return nil, unsupportedRedeemTypeError(redeemCode.Type)
 	}
 
-	// 获取用户信息
-	_, err = s.userRepo.GetByID(ctx, userID)
-	if err != nil {
-		return nil, fmt.Errorf("get user: %w", err)
-	}
-
 	// 使用数据库事务保证兑换码标记与权益发放的原子性
 	tx, err := s.entClient.Tx(ctx)
 	if err != nil {
@@ -443,6 +454,15 @@ func (s *RedeemService) Redeem(ctx context.Context, userID int64, code string) (
 
 	// 将事务放入 context，使 repository 方法能够使用同一事务
 	txCtx := dbent.NewTxContext(ctx, tx)
+	if redeemCode.Type == RedeemTypeBalance {
+		wallet, lockErr := lockBillingWallet(txCtx, tx.Client(), userID)
+		if lockErr != nil {
+			return nil, fmt.Errorf("lock redeem wallet: %w", lockErr)
+		}
+		if NormalizeUserBillingCurrency(wallet.BillingCurrency) != NormalizeUserBillingCurrency(redeemCode.Currency) {
+			return nil, infraerrors.BadRequest("REDEEM_CURRENCY_MISMATCH", "redeem code currency does not match wallet currency")
+		}
+	}
 
 	// 【关键】先标记兑换码为已使用，确保并发安全
 	// 利用数据库乐观锁（WHERE status = 'unused'）保证原子性

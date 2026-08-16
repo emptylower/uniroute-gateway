@@ -25,10 +25,20 @@ const (
 	FieldUserID = "user_id"
 	// FieldKey holds the string denoting the key field in the database.
 	FieldKey = "key"
+	// FieldPlatformKeyID holds the string denoting the platform_key_id field in the database.
+	FieldPlatformKeyID = "platform_key_id"
+	// FieldKeySha256 holds the string denoting the key_sha256 field in the database.
+	FieldKeySha256 = "key_sha256"
+	// FieldKeyPrefix holds the string denoting the key_prefix field in the database.
+	FieldKeyPrefix = "key_prefix"
+	// FieldPlatformKeyVersion holds the string denoting the platform_key_version field in the database.
+	FieldPlatformKeyVersion = "platform_key_version"
 	// FieldName holds the string denoting the name field in the database.
 	FieldName = "name"
 	// FieldGroupID holds the string denoting the group_id field in the database.
 	FieldGroupID = "group_id"
+	// FieldRoutingMode holds the string denoting the routing_mode field in the database.
+	FieldRoutingMode = "routing_mode"
 	// FieldStatus holds the string denoting the status field in the database.
 	FieldStatus = "status"
 	// FieldLastUsedAt holds the string denoting the last_used_at field in the database.
@@ -100,8 +110,13 @@ var Columns = []string{
 	FieldDeletedAt,
 	FieldUserID,
 	FieldKey,
+	FieldPlatformKeyID,
+	FieldKeySha256,
+	FieldKeyPrefix,
+	FieldPlatformKeyVersion,
 	FieldName,
 	FieldGroupID,
+	FieldRoutingMode,
 	FieldStatus,
 	FieldLastUsedAt,
 	FieldIPWhitelist,
@@ -146,8 +161,18 @@ var (
 	UpdateDefaultUpdatedAt func() time.Time
 	// KeyValidator is a validator for the "key" field. It is called by the builders before save.
 	KeyValidator func(string) error
+	// PlatformKeyIDValidator is a validator for the "platform_key_id" field. It is called by the builders before save.
+	PlatformKeyIDValidator func(string) error
+	// KeySha256Validator is a validator for the "key_sha256" field. It is called by the builders before save.
+	KeySha256Validator func(string) error
+	// KeyPrefixValidator is a validator for the "key_prefix" field. It is called by the builders before save.
+	KeyPrefixValidator func(string) error
 	// NameValidator is a validator for the "name" field. It is called by the builders before save.
 	NameValidator func(string) error
+	// DefaultRoutingMode holds the default value on creation for the "routing_mode" field.
+	DefaultRoutingMode string
+	// RoutingModeValidator is a validator for the "routing_mode" field. It is called by the builders before save.
+	RoutingModeValidator func(string) error
 	// DefaultStatus holds the default value on creation for the "status" field.
 	DefaultStatus string
 	// StatusValidator is a validator for the "status" field. It is called by the builders before save.
@@ -203,6 +228,26 @@ func ByKey(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldKey, opts...).ToFunc()
 }
 
+// ByPlatformKeyID orders the results by the platform_key_id field.
+func ByPlatformKeyID(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldPlatformKeyID, opts...).ToFunc()
+}
+
+// ByKeySha256 orders the results by the key_sha256 field.
+func ByKeySha256(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldKeySha256, opts...).ToFunc()
+}
+
+// ByKeyPrefix orders the results by the key_prefix field.
+func ByKeyPrefix(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldKeyPrefix, opts...).ToFunc()
+}
+
+// ByPlatformKeyVersion orders the results by the platform_key_version field.
+func ByPlatformKeyVersion(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldPlatformKeyVersion, opts...).ToFunc()
+}
+
 // ByName orders the results by the name field.
 func ByName(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldName, opts...).ToFunc()
@@ -211,6 +256,11 @@ func ByName(opts ...sql.OrderTermOption) OrderOption {
 // ByGroupID orders the results by the group_id field.
 func ByGroupID(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldGroupID, opts...).ToFunc()
+}
+
+// ByRoutingMode orders the results by the routing_mode field.
+func ByRoutingMode(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldRoutingMode, opts...).ToFunc()
 }
 
 // ByStatus orders the results by the status field.

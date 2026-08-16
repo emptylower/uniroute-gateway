@@ -38,12 +38,38 @@ func (APIKey) Fields() []ent.Field {
 			MaxLen(128).
 			NotEmpty().
 			Unique(),
+		field.String("platform_key_id").
+			MaxLen(128).
+			Optional().
+			Nillable().
+			Immutable().
+			Unique().
+			Comment("Immutable identifier of a platform-owned API key projection"),
+		field.String("key_sha256").
+			MaxLen(64).
+			Optional().
+			Nillable().
+			Unique().
+			Comment("Lowercase SHA-256 verifier for a platform-owned API key; plaintext is never stored"),
+		field.String("key_prefix").
+			MaxLen(32).
+			Optional().
+			Nillable().
+			Comment("Non-secret display prefix supplied by the owning platform"),
+		field.Int64("platform_key_version").
+			Optional().
+			Nillable().
+			Comment("Monotonic version supplied by the owning platform"),
 		field.String("name").
 			MaxLen(100).
 			NotEmpty(),
 		field.Int64("group_id").
 			Optional().
 			Nillable(),
+		field.String("routing_mode").
+			MaxLen(20).
+			Default("legacy_group").
+			Comment("legacy_group uses group_id; channels expands api_key_channels"),
 		field.String("status").
 			MaxLen(20).
 			Default(domain.StatusActive),

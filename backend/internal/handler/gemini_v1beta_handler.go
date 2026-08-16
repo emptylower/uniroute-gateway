@@ -204,6 +204,10 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 	if channelMapping.Mapped {
 		modelName = channelMapping.MappedModel
 	}
+	if err := h.gatewayService.EnsureModelPricing(c.Request.Context(), apiKey, modelName); err != nil {
+		googleError(c, http.StatusServiceUnavailable, "Model pricing is not configured")
+		return
+	}
 
 	// Get subscription (may be nil)
 	subscription, _ := middleware.GetSubscriptionFromContext(c)
@@ -460,6 +464,20 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 		}
 		// 账号槽位/等待计数需要在超时或断开时安全回收
 		accountReleaseFunc = wrapReleaseOnDone(c.Request.Context(), accountReleaseFunc)
+
+		if err := h.gatewayService.EnsureModelPricing(c.Request.Context(), apiKey, account.GetMappedModel(modelName)); err != nil {
+			if accountReleaseFunc != nil {
+				accountReleaseFunc()
+			}
+			fs.FailedAccountIDs[account.ID] = struct{}{}
+			reqLog.Warn("gemini.model_pricing_unavailable", zap.Int64("account_id", account.ID), zap.Error(err))
+			if fs.SwitchCount >= fs.MaxSwitches {
+				googleError(c, http.StatusServiceUnavailable, "Model pricing is not configured")
+				return
+			}
+			fs.SwitchCount++
+			continue
+		}
 
 		// 5) forward (根据平台分流)
 		var result *service.ForwardResult

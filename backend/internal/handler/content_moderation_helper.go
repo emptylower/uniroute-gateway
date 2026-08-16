@@ -38,6 +38,14 @@ func clientRequestedUsageFields(c *gin.Context, mapping service.ChannelMappingRe
 	return mapping.ToUsageFields(clientRequestedModel(c, fallbackModel), upstreamModel)
 }
 
+func routedChannelUsageFields(c *gin.Context, mapping service.ChannelMappingResult, fallbackModel, upstreamModel string, channelID int64) service.ChannelUsageFields {
+	fields := clientRequestedUsageFields(c, mapping, fallbackModel, upstreamModel)
+	if channelID > 0 {
+		fields.ChannelID = channelID
+	}
+	return fields
+}
+
 func runContentModeration(c *gin.Context, reqLog *zap.Logger, svc *service.ContentModerationService, apiKey *service.APIKey, subject middleware2.AuthSubject, protocol string, model string, body []byte) *service.ContentModerationDecision {
 	if svc == nil || c == nil || c.Request == nil {
 		return nil

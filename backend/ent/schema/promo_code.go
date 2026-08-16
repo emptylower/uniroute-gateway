@@ -41,6 +41,10 @@ func (PromoCode) Fields() []ent.Field {
 			SchemaType(map[string]string{dialect.Postgres: "decimal(20,8)"}).
 			Default(0).
 			Comment("赠送余额金额"),
+		field.String("currency").
+			MaxLen(3).
+			Default("CNY").
+			Comment("赠送余额币种"),
 		field.Int("max_uses").
 			Default(0).
 			Comment("最大使用次数，0表示无限制"),

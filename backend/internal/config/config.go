@@ -72,6 +72,8 @@ type Config struct {
 	Redis                   RedisConfig                   `mapstructure:"redis"`
 	Ops                     OpsConfig                     `mapstructure:"ops"`
 	JWT                     JWTConfig                     `mapstructure:"jwt"`
+	PlatformIdentity        PlatformIdentityConfig        `mapstructure:"platform_identity"`
+	CanonicalWallet         CanonicalWalletConfig         `mapstructure:"canonical_wallet"`
 	Totp                    TotpConfig                    `mapstructure:"totp"`
 	LinuxDo                 LinuxDoConnectConfig          `mapstructure:"linuxdo_connect"`
 	WeChat                  WeChatConnectConfig           `mapstructure:"wechat_connect"`
@@ -660,6 +662,7 @@ type ServerConfig struct {
 	Host                     string    `mapstructure:"host"`
 	Port                     int       `mapstructure:"port"`
 	Mode                     string    `mapstructure:"mode"`                  // debug/release
+	DataPlaneOnly            bool      `mapstructure:"data_plane_only"`       // omit legacy panel/auth/payment routes
 	EnableServerTiming       bool      `mapstructure:"enable_server_timing"`  // Admin UI Server-Timing response header
 	FrontendURL              string    `mapstructure:"frontend_url"`          // 前端基础 URL，用于生成邮件中的外部链接
 	ReadHeaderTimeout        int       `mapstructure:"read_header_timeout"`   // 读取请求头超时（秒）
@@ -823,6 +826,7 @@ type ProxyProbeConfig struct {
 
 type BillingConfig struct {
 	CircuitBreaker CircuitBreakerConfig `mapstructure:"circuit_breaker"`
+	ExchangeRate   ExchangeRateConfig   `mapstructure:"exchange_rate"`
 	// MinimumBalanceReserve is the conservative preflight floor for balance billing.
 	// Requests in balance mode are rejected when the cached balance is below this
 	// amount, even if it is still positive. Set to 0 to keep the legacy balance > 0 gate.
@@ -836,6 +840,20 @@ type BillingConfig struct {
 	// UserPlatformQuotaSentinelTTLSeconds sentinel(无 limit 占位)entry 的 TTL,
 	// 显著短于 quota cache 默认 86400s 以控 Redis 内存;默认 3600=1h。
 	UserPlatformQuotaSentinelTTLSeconds int `mapstructure:"user_platform_quota_sentinel_ttl_seconds"`
+}
+
+type ExchangeRateConfig struct {
+	Provider          string  `mapstructure:"provider"`
+	ProviderURL       string  `mapstructure:"provider_url"`
+	APIKey            string  `mapstructure:"api_key"`
+	BootstrapUSDToCNY float64 `mapstructure:"bootstrap_usd_to_cny"`
+	MinUSDToCNY       float64 `mapstructure:"min_usd_to_cny"`
+	MaxUSDToCNY       float64 `mapstructure:"max_usd_to_cny"`
+	MaxAgeSeconds     int     `mapstructure:"max_age_seconds"`
+	MaxFutureSeconds  int     `mapstructure:"max_future_seconds"`
+	CacheTTLSeconds   int     `mapstructure:"cache_ttl_seconds"`
+	StaleTTLSeconds   int     `mapstructure:"stale_ttl_seconds"`
+	TimeoutSeconds    int     `mapstructure:"timeout_seconds"`
 }
 
 type CircuitBreakerConfig struct {
@@ -978,6 +996,10 @@ type GatewayConfig struct {
 	MaxAccountSwitches int `mapstructure:"max_account_switches"`
 	// Gemini 账户切换最大次数（Gemini 平台单独配置，因 API 限制更严格）
 	MaxAccountSwitchesGemini int `mapstructure:"max_account_switches_gemini"`
+	// ChannelRoutingEnabled enables per-key cross-channel candidate selection.
+	ChannelRoutingEnabled bool `mapstructure:"channel_routing_enabled"`
+	// ChannelRoutingMaxCandidates bounds groups attempted for one request.
+	ChannelRoutingMaxCandidates int `mapstructure:"channel_routing_max_candidates"`
 
 	// Antigravity 429 fallback 限流时间（分钟），解析重置时间失败时使用
 	AntigravityFallbackCooldownMinutes int `mapstructure:"antigravity_fallback_cooldown_minutes"`
@@ -1499,6 +1521,41 @@ type JWTConfig struct {
 	RefreshWindowMinutes int `mapstructure:"refresh_window_minutes"`
 }
 
+// PlatformIdentityConfig protects the internal control-plane identity bridge.
+// It is intentionally separate from panel JWT configuration and disabled by default.
+type PlatformIdentityConfig struct {
+	Enabled  bool   `mapstructure:"enabled"`
+	Issuer   string `mapstructure:"issuer"`
+	Audience string `mapstructure:"audience"`
+	Secret   string `mapstructure:"secret"`
+	Version  string `mapstructure:"version"`
+}
+
+const (
+	CanonicalWalletModeDisabled = "disabled"
+	CanonicalWalletModeShadow   = "shadow"
+	CanonicalWalletModeEnforce  = "enforce"
+)
+
+// CanonicalWalletConfig defines the future ShipAny-owned wallet boundary. It
+// is deliberately independent from panel JWT and platform identity secrets.
+// Only shadow observation is wired into usage billing today; enforce is gated
+// for a future preflight cutover.
+type CanonicalWalletConfig struct {
+	Mode                string `mapstructure:"mode"`
+	ControlPlaneURL     string `mapstructure:"control_plane_url"`
+	Issuer              string `mapstructure:"issuer"`
+	Audience            string `mapstructure:"audience"`
+	Secret              string `mapstructure:"secret"`
+	Version             string `mapstructure:"version"`
+	LeaseTTLSeconds     int    `mapstructure:"lease_ttl_seconds"`
+	LeaseBudgetMicros   int64  `mapstructure:"lease_budget_micros"`
+	RequestTimeoutMS    int    `mapstructure:"request_timeout_ms"`
+	SettlementQueueSize int    `mapstructure:"settlement_queue_size"`
+	SettlementWorkers   int    `mapstructure:"settlement_workers"`
+	EnforceReady        bool   `mapstructure:"enforce_ready"`
+}
+
 // TotpConfig TOTP 双因素认证配置
 type TotpConfig struct {
 	// EncryptionKey 用于加密 TOTP 密钥的 AES-256 密钥（32 字节 hex 编码）
@@ -1694,6 +1751,16 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 	}
 	cfg.Server.FrontendURL = strings.TrimSpace(cfg.Server.FrontendURL)
 	cfg.JWT.Secret = strings.TrimSpace(cfg.JWT.Secret)
+	cfg.PlatformIdentity.Issuer = strings.TrimSpace(cfg.PlatformIdentity.Issuer)
+	cfg.PlatformIdentity.Audience = strings.TrimSpace(cfg.PlatformIdentity.Audience)
+	cfg.PlatformIdentity.Secret = strings.TrimSpace(cfg.PlatformIdentity.Secret)
+	cfg.PlatformIdentity.Version = strings.TrimSpace(cfg.PlatformIdentity.Version)
+	cfg.CanonicalWallet.Mode = strings.ToLower(strings.TrimSpace(cfg.CanonicalWallet.Mode))
+	cfg.CanonicalWallet.ControlPlaneURL = strings.TrimRight(strings.TrimSpace(cfg.CanonicalWallet.ControlPlaneURL), "/")
+	cfg.CanonicalWallet.Issuer = strings.TrimSpace(cfg.CanonicalWallet.Issuer)
+	cfg.CanonicalWallet.Audience = strings.TrimSpace(cfg.CanonicalWallet.Audience)
+	cfg.CanonicalWallet.Secret = strings.TrimSpace(cfg.CanonicalWallet.Secret)
+	cfg.CanonicalWallet.Version = strings.TrimSpace(cfg.CanonicalWallet.Version)
 	cfg.LinuxDo.ClientID = strings.TrimSpace(cfg.LinuxDo.ClientID)
 	cfg.LinuxDo.ClientSecret = strings.TrimSpace(cfg.LinuxDo.ClientSecret)
 	cfg.LinuxDo.AuthorizeURL = strings.TrimSpace(cfg.LinuxDo.AuthorizeURL)
@@ -1838,6 +1905,7 @@ func setDefaults() {
 	viper.SetDefault("server.host", "0.0.0.0")
 	viper.SetDefault("server.port", 8080)
 	viper.SetDefault("server.mode", "release")
+	viper.SetDefault("server.data_plane_only", false)
 	viper.SetDefault("server.enable_server_timing", false)
 	viper.SetDefault("server.frontend_url", "")
 	viper.SetDefault("server.read_header_timeout", 10) // 10秒读取请求头
@@ -1899,7 +1967,7 @@ func setDefaults() {
 	viper.SetDefault("security.csp.enabled", true)
 	viper.SetDefault("security.csp.policy", DefaultCSPPolicy)
 	viper.SetDefault("security.proxy_probe.insecure_skip_verify", false)
-	viper.SetDefault("security.trust_forwarded_ip_for_api_key_acl", true)
+	viper.SetDefault("security.trust_forwarded_ip_for_api_key_acl", false)
 
 	// Security - disable direct fallback on proxy error
 	viper.SetDefault("security.proxy_fallback.allow_direct_on_error", false)
@@ -1910,8 +1978,33 @@ func setDefaults() {
 	viper.SetDefault("billing.circuit_breaker.reset_timeout_seconds", 30)
 	viper.SetDefault("billing.circuit_breaker.half_open_requests", 3)
 	viper.SetDefault("billing.minimum_balance_reserve", 0.000001)
+	viper.SetDefault("billing.exchange_rate.provider", "currencyapi")
+	viper.SetDefault("billing.exchange_rate.provider_url", "https://api.currencyapi.com/v3/latest")
+	viper.SetDefault("billing.exchange_rate.api_key", "")
+	viper.SetDefault("billing.exchange_rate.bootstrap_usd_to_cny", 0)
+	viper.SetDefault("billing.exchange_rate.min_usd_to_cny", 4)
+	viper.SetDefault("billing.exchange_rate.max_usd_to_cny", 12)
+	viper.SetDefault("billing.exchange_rate.max_age_seconds", 172800)
+	viper.SetDefault("billing.exchange_rate.max_future_seconds", 300)
+	viper.SetDefault("billing.exchange_rate.cache_ttl_seconds", 900)
+	viper.SetDefault("billing.exchange_rate.stale_ttl_seconds", 86400)
+	viper.SetDefault("billing.exchange_rate.timeout_seconds", 2)
 	viper.SetDefault("billing.user_platform_quota_cache_ttl_seconds", 86400)
 	viper.SetDefault("billing.user_platform_quota_sentinel_ttl_seconds", 3600)
+
+	// ShipAny canonical wallet bridge. Disabled means no network or Redis work.
+	viper.SetDefault("canonical_wallet.mode", CanonicalWalletModeDisabled)
+	viper.SetDefault("canonical_wallet.control_plane_url", "")
+	viper.SetDefault("canonical_wallet.issuer", "sub2api-gateway")
+	viper.SetDefault("canonical_wallet.audience", "shipany-control-plane")
+	viper.SetDefault("canonical_wallet.secret", "")
+	viper.SetDefault("canonical_wallet.version", "v1")
+	viper.SetDefault("canonical_wallet.lease_ttl_seconds", 300)
+	viper.SetDefault("canonical_wallet.lease_budget_micros", int64(5_000_000))
+	viper.SetDefault("canonical_wallet.request_timeout_ms", 300)
+	viper.SetDefault("canonical_wallet.settlement_queue_size", 2048)
+	viper.SetDefault("canonical_wallet.settlement_workers", 2)
+	viper.SetDefault("canonical_wallet.enforce_ready", false)
 
 	// Turnstile
 	viper.SetDefault("turnstile.required", false)
@@ -2100,6 +2193,13 @@ func setDefaults() {
 	viper.SetDefault("jwt.refresh_token_expire_days", 30)  // 30天Refresh Token有效期
 	viper.SetDefault("jwt.refresh_window_minutes", 2)      // 过期前2分钟开始允许刷新
 
+	// ShipAny control-plane -> gateway identity bridge (disabled unless explicitly enabled).
+	viper.SetDefault("platform_identity.enabled", false)
+	viper.SetDefault("platform_identity.issuer", "shipany")
+	viper.SetDefault("platform_identity.audience", "sub2api-gateway")
+	viper.SetDefault("platform_identity.secret", "")
+	viper.SetDefault("platform_identity.version", "v1")
+
 	// TOTP
 	viper.SetDefault("totp.encryption_key", "")
 
@@ -2194,6 +2294,8 @@ func setDefaults() {
 	viper.SetDefault("gateway.failover_on_400", false)
 	viper.SetDefault("gateway.max_account_switches", 10)
 	viper.SetDefault("gateway.max_account_switches_gemini", 3)
+	viper.SetDefault("gateway.channel_routing_enabled", false)
+	viper.SetDefault("gateway.channel_routing_max_candidates", 3)
 	viper.SetDefault("gateway.force_codex_cli", false)
 	viper.SetDefault("gateway.codex_image_generation_bridge_enabled", false)
 	viper.SetDefault("gateway.openai_passthrough_allow_timeout_headers", false)
@@ -2471,6 +2573,9 @@ func (c *Config) Validate() error {
 	if c.Server.MaxRequestBodySize < 0 {
 		return fmt.Errorf("server.max_request_body_size must be non-negative")
 	}
+	if c.Server.DataPlaneOnly && !c.PlatformIdentity.Enabled {
+		return fmt.Errorf("server.data_plane_only requires platform_identity.enabled=true")
+	}
 	if c.Server.H2C.Enabled {
 		if c.Server.H2C.MaxConcurrentStreams == 0 {
 			return fmt.Errorf("server.h2c.max_concurrent_streams must be positive")
@@ -2510,6 +2615,60 @@ func (c *Config) Validate() error {
 	// 选择 bytes 而不是 rune 计数，确保二进制/随机串的长度语义更接近“熵”而非“字符数”。
 	if len([]byte(jwtSecret)) < 32 {
 		return fmt.Errorf("jwt.secret must be at least 32 bytes")
+	}
+	if c.PlatformIdentity.Enabled {
+		if strings.TrimSpace(c.PlatformIdentity.Issuer) == "" {
+			return fmt.Errorf("platform_identity.issuer is required when platform_identity.enabled=true")
+		}
+		if strings.TrimSpace(c.PlatformIdentity.Audience) == "" {
+			return fmt.Errorf("platform_identity.audience is required when platform_identity.enabled=true")
+		}
+		if len([]byte(strings.TrimSpace(c.PlatformIdentity.Secret))) < 32 {
+			return fmt.Errorf("platform_identity.secret must be at least 32 bytes when platform_identity.enabled=true")
+		}
+		if strings.TrimSpace(c.PlatformIdentity.Secret) == jwtSecret {
+			return fmt.Errorf("platform_identity.secret must be independent from jwt.secret")
+		}
+		if strings.TrimSpace(c.PlatformIdentity.Version) == "" {
+			return fmt.Errorf("platform_identity.version is required when platform_identity.enabled=true")
+		}
+	}
+	switch c.CanonicalWallet.Mode {
+	case "", CanonicalWalletModeDisabled:
+		c.CanonicalWallet.Mode = CanonicalWalletModeDisabled
+	case CanonicalWalletModeShadow, CanonicalWalletModeEnforce:
+		if c.CanonicalWallet.Mode == CanonicalWalletModeEnforce {
+			return fmt.Errorf("canonical_wallet enforce mode is unavailable until gateway admission is wired")
+		}
+		if err := ValidateAbsoluteHTTPURL(c.CanonicalWallet.ControlPlaneURL); err != nil {
+			return fmt.Errorf("canonical_wallet.control_plane_url invalid: %w", err)
+		}
+		if c.CanonicalWallet.Issuer == "" || c.CanonicalWallet.Audience == "" || c.CanonicalWallet.Version == "" {
+			return fmt.Errorf("canonical_wallet issuer, audience, and version are required when enabled")
+		}
+		if len([]byte(c.CanonicalWallet.Secret)) < 32 {
+			return fmt.Errorf("canonical_wallet.secret must be at least 32 bytes when enabled")
+		}
+		if c.CanonicalWallet.Secret == jwtSecret || c.CanonicalWallet.Secret == c.PlatformIdentity.Secret {
+			return fmt.Errorf("canonical_wallet.secret must be independent from jwt.secret and platform_identity.secret")
+		}
+		if c.CanonicalWallet.LeaseTTLSeconds < 30 || c.CanonicalWallet.LeaseTTLSeconds > 3600 {
+			return fmt.Errorf("canonical_wallet.lease_ttl_seconds must be between 30 and 3600")
+		}
+		if c.CanonicalWallet.LeaseBudgetMicros <= 0 {
+			return fmt.Errorf("canonical_wallet.lease_budget_micros must be positive")
+		}
+		if c.CanonicalWallet.RequestTimeoutMS < 50 || c.CanonicalWallet.RequestTimeoutMS > 5000 {
+			return fmt.Errorf("canonical_wallet.request_timeout_ms must be between 50 and 5000")
+		}
+		if c.CanonicalWallet.SettlementQueueSize < 1 || c.CanonicalWallet.SettlementQueueSize > 1_000_000 {
+			return fmt.Errorf("canonical_wallet.settlement_queue_size must be between 1 and 1000000")
+		}
+		if c.CanonicalWallet.SettlementWorkers < 1 || c.CanonicalWallet.SettlementWorkers > 64 {
+			return fmt.Errorf("canonical_wallet.settlement_workers must be between 1 and 64")
+		}
+	default:
+		return fmt.Errorf("canonical_wallet.mode must be one of: disabled/shadow/enforce")
 	}
 	switch c.Log.Level {
 	case "debug", "info", "warn", "error":
@@ -2801,6 +2960,22 @@ func (c *Config) Validate() error {
 	}
 	if c.Billing.MinimumBalanceReserve < 0 {
 		return fmt.Errorf("billing.minimum_balance_reserve must be non-negative")
+	}
+	if c.Billing.ExchangeRate.BootstrapUSDToCNY < 0 {
+		return fmt.Errorf("billing.exchange_rate.bootstrap_usd_to_cny must be non-negative")
+	}
+	if c.Billing.ExchangeRate.MinUSDToCNY <= 0 || c.Billing.ExchangeRate.MaxUSDToCNY <= c.Billing.ExchangeRate.MinUSDToCNY {
+		return fmt.Errorf("billing.exchange_rate USD/CNY bounds are invalid")
+	}
+	if bootstrap := c.Billing.ExchangeRate.BootstrapUSDToCNY; bootstrap > 0 &&
+		(bootstrap < c.Billing.ExchangeRate.MinUSDToCNY || bootstrap > c.Billing.ExchangeRate.MaxUSDToCNY) {
+		return fmt.Errorf("billing.exchange_rate.bootstrap_usd_to_cny must be within configured USD/CNY bounds")
+	}
+	if c.Billing.ExchangeRate.MaxAgeSeconds <= 0 || c.Billing.ExchangeRate.MaxFutureSeconds < 0 {
+		return fmt.Errorf("billing.exchange_rate timestamp limits are invalid")
+	}
+	if c.Billing.ExchangeRate.CacheTTLSeconds <= 0 || c.Billing.ExchangeRate.StaleTTLSeconds <= 0 || c.Billing.ExchangeRate.TimeoutSeconds <= 0 {
+		return fmt.Errorf("billing.exchange_rate TTL and timeout values must be positive")
 	}
 	if c.Database.MaxOpenConns <= 0 {
 		return fmt.Errorf("database.max_open_conns must be positive")
@@ -3311,18 +3486,12 @@ func (c *Config) Validate() error {
 	if c.Gateway.UsageRecord.TaskTimeoutSeconds <= 0 {
 		return fmt.Errorf("gateway.usage_record.task_timeout_seconds must be positive")
 	}
-	switch strings.ToLower(strings.TrimSpace(c.Gateway.UsageRecord.OverflowPolicy)) {
-	case UsageRecordOverflowPolicyDrop, UsageRecordOverflowPolicySample, UsageRecordOverflowPolicySync:
-	default:
-		return fmt.Errorf("gateway.usage_record.overflow_policy must be one of: %s/%s/%s",
-			UsageRecordOverflowPolicyDrop, UsageRecordOverflowPolicySample, UsageRecordOverflowPolicySync)
+	if !strings.EqualFold(strings.TrimSpace(c.Gateway.UsageRecord.OverflowPolicy), UsageRecordOverflowPolicySync) {
+		return fmt.Errorf("gateway.usage_record.overflow_policy must be %s to preserve billing records",
+			UsageRecordOverflowPolicySync)
 	}
 	if c.Gateway.UsageRecord.OverflowSamplePercent < 0 || c.Gateway.UsageRecord.OverflowSamplePercent > 100 {
 		return fmt.Errorf("gateway.usage_record.overflow_sample_percent must be between 0-100")
-	}
-	if strings.EqualFold(strings.TrimSpace(c.Gateway.UsageRecord.OverflowPolicy), UsageRecordOverflowPolicySample) &&
-		c.Gateway.UsageRecord.OverflowSamplePercent <= 0 {
-		return fmt.Errorf("gateway.usage_record.overflow_sample_percent must be positive when overflow_policy=sample")
 	}
 	if c.Gateway.UsageRecord.AutoScaleEnabled {
 		if c.Gateway.UsageRecord.AutoScaleMinWorkers <= 0 {
@@ -3362,6 +3531,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Gateway.UserGroupRateCacheTTLSeconds <= 0 {
 		return fmt.Errorf("gateway.user_group_rate_cache_ttl_seconds must be positive")
+	}
+	if c.Gateway.ChannelRoutingMaxCandidates <= 0 || c.Gateway.ChannelRoutingMaxCandidates > 20 {
+		return fmt.Errorf("gateway.channel_routing_max_candidates must be between 1-20")
 	}
 	if c.Gateway.ModelsListCacheTTLSeconds < 10 || c.Gateway.ModelsListCacheTTLSeconds > 30 {
 		return fmt.Errorf("gateway.models_list_cache_ttl_seconds must be between 10-30")

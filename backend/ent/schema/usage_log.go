@@ -97,6 +97,28 @@ func (UsageLog) Fields() []ent.Field {
 		field.Float("actual_cost").
 			Default(0).
 			SchemaType(map[string]string{dialect.Postgres: "decimal(20,10)"}),
+		field.String("source_currency").
+			MaxLen(3).
+			Default("USD"),
+		field.String("settlement_currency").
+			MaxLen(3).
+			Default("CNY"),
+		field.Float("exchange_rate").
+			Default(1).
+			SchemaType(map[string]string{dialect.Postgres: "decimal(20,10)"}),
+		field.String("exchange_rate_source").
+			MaxLen(64).
+			Default("legacy"),
+		field.Time("exchange_rate_as_of").
+			Optional().
+			Nillable().
+			SchemaType(map[string]string{dialect.Postgres: "timestamptz"}),
+		field.Float("source_cost").
+			Default(0).
+			SchemaType(map[string]string{dialect.Postgres: "decimal(20,10)"}),
+		field.Float("base_cost").
+			Default(0).
+			SchemaType(map[string]string{dialect.Postgres: "decimal(20,10)"}),
 		field.Float("rate_multiplier").
 			Default(1).
 			SchemaType(map[string]string{dialect.Postgres: "decimal(10,4)"}),

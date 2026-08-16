@@ -15,15 +15,19 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/authidentitychannel"
 	dbgroup "github.com/Wei-Shaw/sub2api/ent/group"
 	"github.com/Wei-Shaw/sub2api/ent/identityadoptiondecision"
+	"github.com/Wei-Shaw/sub2api/ent/paymentorder"
 	"github.com/Wei-Shaw/sub2api/ent/predicate"
 	"github.com/Wei-Shaw/sub2api/ent/schema/mixins"
 	dbuser "github.com/Wei-Shaw/sub2api/ent/user"
 	"github.com/Wei-Shaw/sub2api/ent/userallowedgroup"
 	"github.com/Wei-Shaw/sub2api/ent/usersubscription"
+	"github.com/Wei-Shaw/sub2api/internal/payment"
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/lib/pq"
 
+	"entgo.io/ent/dialect"
 	entsql "entgo.io/ent/dialect/sql"
 )
 
@@ -55,6 +59,10 @@ func (r *userRepository) CreateWithEmailAliasGuard(ctx context.Context, userIn *
 func (r *userRepository) create(ctx context.Context, userIn *service.User, guardEmailAlias bool) error {
 	if userIn == nil {
 		return nil
+	}
+	billingCurrency, err := service.NormalizeBillingCurrency(userIn.BillingCurrency)
+	if err != nil {
+		return err
 	}
 
 	// 统一使用 ent 的事务：保证用户与允许分组的更新原子化，
@@ -116,6 +124,7 @@ func (r *userRepository) create(ctx context.Context, userIn *service.User, guard
 		SetPasswordHash(userIn.PasswordHash).
 		SetRole(userIn.Role).
 		SetBalance(userIn.Balance).
+		SetBillingCurrency(billingCurrency).
 		SetConcurrency(userIn.Concurrency).
 		SetStatus(userIn.Status).
 		SetSignupSource(userSignupSourceOrDefault(userIn.SignupSource)).
@@ -246,11 +255,47 @@ func (r *userRepository) Update(ctx context.Context, userIn *service.User) error
 		return err
 	}
 
-	existing, err := clientFromContext(txCtx, txClient).User.Get(txCtx, userIn.ID)
+	var existing *dbent.User
+	if service.BillingCurrencyUpdateRequested(ctx) {
+		if err := service.AcquireSQLiteBillingWalletWriteLock(txCtx, txClient, userIn.ID); err != nil {
+			return translatePersistenceError(err, service.ErrUserNotFound, nil)
+		}
+		walletQuery := txClient.User.Query().Where(dbuser.IDEQ(userIn.ID))
+		if txClient.Driver().Dialect() != dialect.SQLite {
+			walletQuery = walletQuery.ForUpdate()
+		}
+		existing, err = walletQuery.Only(txCtx)
+	} else {
+		existing, err = clientFromContext(txCtx, txClient).User.Get(txCtx, userIn.ID)
+	}
 	if err != nil {
 		return translatePersistenceError(err, service.ErrUserNotFound, nil)
 	}
 	oldEmail := existing.Email
+	currencyChanged := service.NormalizeUserBillingCurrency(existing.BillingCurrency) != service.NormalizeUserBillingCurrency(userIn.BillingCurrency)
+	if service.BillingCurrencyUpdateRequested(ctx) && currencyChanged {
+		if existing.Balance != 0 || existing.FrozenBalance != 0 {
+			return infraerrors.BadRequest("BILLING_CURRENCY_BALANCE_NOT_EMPTY", "billing currency can only be changed when balance and frozen balance are zero")
+		}
+		pendingBalanceOrders, countErr := txClient.PaymentOrder.Query().Where(
+			paymentorder.UserIDEQ(userIn.ID),
+			paymentorder.OrderTypeEQ(payment.OrderTypeBalance),
+			paymentorder.StatusIn(
+				service.OrderStatusPending,
+				service.OrderStatusPaid,
+				service.OrderStatusRecharging,
+				service.OrderStatusRefundRequested,
+				service.OrderStatusRefunding,
+				service.OrderStatusRefundPending,
+			),
+		).Count(txCtx)
+		if countErr != nil {
+			return countErr
+		}
+		if pendingBalanceOrders > 0 {
+			return infraerrors.BadRequest("BILLING_CURRENCY_PENDING_ORDER", "billing currency cannot be changed while a balance order is pending")
+		}
+	}
 
 	updateOp := txClient.User.UpdateOneID(userIn.ID).
 		SetEmail(userIn.Email).
@@ -258,15 +303,16 @@ func (r *userRepository) Update(ctx context.Context, userIn *service.User) error
 		SetNotes(userIn.Notes).
 		SetPasswordHash(userIn.PasswordHash).
 		SetRole(userIn.Role).
-		SetBalance(userIn.Balance).
 		SetConcurrency(userIn.Concurrency).
 		SetStatus(userIn.Status).
 		SetBalanceNotifyEnabled(userIn.BalanceNotifyEnabled).
 		SetBalanceNotifyThresholdType(userIn.BalanceNotifyThresholdType).
 		SetNillableBalanceNotifyThreshold(userIn.BalanceNotifyThreshold).
 		SetBalanceNotifyExtraEmails(marshalExtraEmails(userIn.BalanceNotifyExtraEmails)).
-		SetTotalRecharged(userIn.TotalRecharged).
 		SetRpmLimit(userIn.RPMLimit)
+	if service.BillingCurrencyUpdateRequested(ctx) {
+		updateOp = updateOp.SetBillingCurrency(service.NormalizeUserBillingCurrency(userIn.BillingCurrency))
+	}
 	if userIn.SignupSource != "" {
 		updateOp = updateOp.SetSignupSource(userIn.SignupSource)
 	}
@@ -1214,6 +1260,8 @@ func applyUserEntityToService(dst *service.User, src *dbent.User) {
 		return
 	}
 	dst.ID = src.ID
+	dst.PlatformUserID = derefString(src.PlatformUserID)
+	dst.BillingCurrency = src.BillingCurrency
 	dst.SignupSource = src.SignupSource
 	dst.LastLoginAt = src.LastLoginAt
 	dst.LastActiveAt = src.LastActiveAt

@@ -946,7 +946,7 @@ func TestExecuteSubscriptionFulfillmentAppliesAffiliateRebate(t *testing.T) {
 		entClient:        client,
 		groupRepo:        &subscriptionGroupRepoStub{group: &Group{ID: 7, Status: payment.EntityStatusActive, SubscriptionType: SubscriptionTypeSubscription}},
 		subscriptionSvc:  subscriptionSvc,
-		affiliateService: NewAffiliateService(affiliateRepo, settingSvc, nil, nil),
+		affiliateService: NewAffiliateService(affiliateRepo, settingSvc, nil, nil, nil),
 	}
 
 	err = svc.ExecuteSubscriptionFulfillment(ctx, order.ID)
@@ -1045,7 +1045,7 @@ func TestExecuteSubscriptionFulfillmentDoesNotDuplicateWorkAfterLegacySuccessAud
 		entClient:        client,
 		groupRepo:        &subscriptionGroupRepoStub{group: &Group{ID: 7, Status: payment.EntityStatusActive, SubscriptionType: SubscriptionTypeSubscription}},
 		subscriptionSvc:  subscriptionSvc,
-		affiliateService: NewAffiliateService(affiliateRepo, settingSvc, nil, nil),
+		affiliateService: NewAffiliateService(affiliateRepo, settingSvc, nil, nil, nil),
 	}
 
 	err = svc.ExecuteSubscriptionFulfillment(ctx, order.ID)

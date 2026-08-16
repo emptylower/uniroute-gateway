@@ -11,6 +11,7 @@ import (
 
 var ErrUsageBillingRequestIDRequired = errors.New("usage billing request_id is required")
 var ErrUsageBillingRequestConflict = errors.New("usage billing request fingerprint conflict")
+var ErrBillingCurrencyChanged = errors.New("wallet billing currency changed during settlement")
 
 // UsageBillingCommand describes one billable request that must be applied at most once.
 type UsageBillingCommand struct {
@@ -20,6 +21,7 @@ type UsageBillingCommand struct {
 	RequestPayloadHash string
 
 	UserID              int64
+	SettlementCurrency  string
 	AccountID           int64
 	SubscriptionID      *int64
 	AccountType         string
@@ -46,6 +48,9 @@ func (c *UsageBillingCommand) Normalize() {
 		return
 	}
 	c.RequestID = strings.TrimSpace(c.RequestID)
+	if strings.TrimSpace(c.SettlementCurrency) != "" {
+		c.SettlementCurrency = NormalizeUserBillingCurrency(c.SettlementCurrency)
+	}
 	if strings.TrimSpace(c.RequestFingerprint) == "" {
 		c.RequestFingerprint = buildUsageBillingFingerprint(c)
 	}
@@ -56,11 +61,12 @@ func buildUsageBillingFingerprint(c *UsageBillingCommand) string {
 		return ""
 	}
 	raw := fmt.Sprintf(
-		"%d|%d|%d|%s|%s|%s|%s|%d|%d|%d|%d|%d|%d|%s|%d|%0.10f|%0.10f|%0.10f|%0.10f|%0.10f",
+		"%d|%d|%d|%s|%s|%s|%s|%s|%d|%d|%d|%d|%d|%d|%s|%d|%0.10f|%0.10f|%0.10f|%0.10f|%0.10f",
 		c.UserID,
 		c.AccountID,
 		c.APIKeyID,
 		strings.TrimSpace(c.AccountType),
+		strings.TrimSpace(c.SettlementCurrency),
 		strings.TrimSpace(c.Model),
 		strings.TrimSpace(c.ServiceTier),
 		strings.TrimSpace(c.ReasoningEffort),
@@ -126,6 +132,7 @@ type BatchImageBalanceHoldCommand struct {
 	RequestFingerprint string
 	RequestPayloadHash string
 	UserID             int64
+	SettlementCurrency string
 	BatchID            string
 	HoldAmount         float64
 	ActualAmount       float64
@@ -137,6 +144,9 @@ func (c *BatchImageBalanceHoldCommand) Normalize() {
 	}
 	c.RequestID = strings.TrimSpace(c.RequestID)
 	c.BatchID = strings.TrimSpace(c.BatchID)
+	if strings.TrimSpace(c.SettlementCurrency) != "" {
+		c.SettlementCurrency = NormalizeUserBillingCurrency(c.SettlementCurrency)
+	}
 	if strings.TrimSpace(c.RequestFingerprint) == "" {
 		c.RequestFingerprint = buildBatchImageBalanceHoldFingerprint(c)
 	}
@@ -147,10 +157,11 @@ func buildBatchImageBalanceHoldFingerprint(c *BatchImageBalanceHoldCommand) stri
 		return ""
 	}
 	raw := fmt.Sprintf(
-		"%d|%d|%s|%0.10f|%0.10f",
+		"%d|%d|%s|%s|%0.10f|%0.10f",
 		c.UserID,
 		c.APIKeyID,
 		strings.TrimSpace(c.BatchID),
+		strings.TrimSpace(c.SettlementCurrency),
 		c.HoldAmount,
 		c.ActualAmount,
 	)

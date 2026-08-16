@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"path"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
@@ -30,6 +31,17 @@ const (
 	liveObserverPollInterval      = 250 * time.Millisecond
 	liveUpstreamBodyLimit         = 2 << 20
 )
+
+type liveUsageDelta struct {
+	inputTokens     int
+	outputTokens    int
+	cacheReadTokens int
+}
+
+type liveUsageFallbackBucket struct {
+	mu        sync.Mutex
+	responses map[string]liveUsageDelta
+}
 
 var (
 	chatGPTLiveCallsURL        = "https://chatgpt.com/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas"
@@ -134,6 +146,28 @@ func (s *OpenAIGatewayService) CreateLiveCall(
 	if err != nil {
 		return nil, err
 	}
+	billingModel := strings.TrimSpace(identity.BillingModel)
+	if billingModel == "" {
+		billingModel = strings.TrimSpace(gjson.GetBytes(request.Session, "model").String())
+	}
+	if billingModel == "" {
+		return nil, fmt.Errorf("%w: live model is empty", ErrModelPricingUnavailable)
+	}
+	if s.resolver == nil || s.billingService == nil || s.exchangeRates == nil || s.usageBillingRepo == nil || s.usageLogRepo == nil {
+		return nil, errors.New("live billing dependencies are unavailable")
+	}
+	resolved := s.resolver.Resolve(ctx, PricingInput{Model: billingModel, GroupID: identity.GroupID})
+	if !resolvedPricingIsBillable(resolved) || resolved.Mode != BillingModeToken || resolved.BasePricing == nil {
+		return nil, fmt.Errorf("%w for live model: %s", ErrModelPricingUnavailable, billingModel)
+	}
+	fx, ok := pinnedBillingSettlementSnapshot(ctx, CurrencyUSD, identity.BillingCurrency)
+	if !ok {
+		fx, err = s.exchangeRates.Snapshot(ctx, CurrencyUSD, identity.BillingCurrency)
+		if err != nil {
+			return nil, err
+		}
+	}
+	pricing := resolved.BasePricing
 	attestation, attestationCiphertext, err := s.prepareLiveAttestation(ctx)
 	if err != nil {
 		return nil, err
@@ -206,22 +240,37 @@ func (s *OpenAIGatewayService) CreateLiveCall(
 			model = "gpt-live"
 		}
 		record := &LiveCallRecord{
-			CallID:                created.CallID,
-			CallHash:              hashLiveCallID(created.CallID),
-			AccountID:             account.ID,
-			APIKeyID:              identity.APIKeyID,
-			UserID:                identity.UserID,
-			GroupID:               liveGroupID(identity.GroupID),
-			SubscriptionID:        liveGroupID(identity.SubscriptionID),
-			LeaseID:               leaseID,
-			Model:                 model,
-			CreatedAt:             now,
-			ExpiresAt:             now.Add(s.liveMaxSessionDuration()),
-			Controller:            LiveControllerPending,
-			UserAgent:             identity.UserAgent,
-			IPAddress:             identity.IPAddress,
-			InboundEndpoint:       identity.InboundEndpoint,
-			AttestationCiphertext: attestationCiphertext,
+			CallID:                 created.CallID,
+			CallHash:               hashLiveCallID(created.CallID),
+			AccountID:              account.ID,
+			APIKeyID:               identity.APIKeyID,
+			UserID:                 identity.UserID,
+			GroupID:                liveGroupID(identity.GroupID),
+			SubscriptionID:         liveGroupID(identity.SubscriptionID),
+			LeaseID:                leaseID,
+			Model:                  billingModel,
+			BillingCurrency:        identity.BillingCurrency,
+			RateMultiplier:         identity.RateMultiplier,
+			GroupRateMultiplier:    identity.GroupRateMultiplier,
+			AccountRateMultiplier:  account.BillingRateMultiplier(),
+			ExchangeRate:           fx.Rate,
+			ExchangeRateSource:     fx.Source,
+			ExchangeRateAsOf:       fx.AsOf,
+			APIKeyQuota:            identity.APIKeyQuota,
+			RateLimit5h:            identity.RateLimit5h,
+			RateLimit1d:            identity.RateLimit1d,
+			RateLimit7d:            identity.RateLimit7d,
+			SubscriptionBilling:    identity.SubscriptionBilling,
+			InputPricePerToken:     pricing.InputPricePerToken,
+			OutputPricePerToken:    pricing.OutputPricePerToken,
+			CacheReadPricePerToken: pricing.CacheReadPricePerToken,
+			CreatedAt:              now,
+			ExpiresAt:              now.Add(s.liveMaxSessionDuration()),
+			Controller:             LiveControllerPending,
+			UserAgent:              identity.UserAgent,
+			IPAddress:              identity.IPAddress,
+			InboundEndpoint:        identity.InboundEndpoint,
+			AttestationCiphertext:  attestationCiphertext,
 		}
 		mappingTTL := s.liveMaxSessionDuration() + 5*time.Minute
 		if saveErr := store.SaveLiveCall(ctx, record, mappingTTL); saveErr != nil {
@@ -537,6 +586,7 @@ func (s *OpenAIGatewayService) ProxyLiveSideband(
 				errCh <- liveSidebandReadError(readErr)
 				return
 			}
+			s.accumulateLiveUsage(record, payload)
 			if writeErr := downstream.Write(proxyCtx, messageType, payload); writeErr != nil {
 				errCh <- writeErr
 				return
@@ -678,6 +728,7 @@ func (s *OpenAIGatewayService) runLiveObserverConnection(record *LiveCallRecord,
 	for {
 		select {
 		case payload := <-frameCh:
+			s.accumulateLiveUsage(record, payload)
 			eventType := strings.TrimSpace(gjson.GetBytes(payload, "type").String())
 			if eventType == "session.closed" || eventType == "session.ended" {
 				return ErrLiveCallNotFound
@@ -741,22 +792,40 @@ func (s *OpenAIGatewayService) releaseLiveLease(accountID, userID, apiKeyID int6
 }
 
 func (s *OpenAIGatewayService) finalizeLiveCall(record *LiveCallRecord) {
-	if record == nil {
+	s.queueLiveFinalization(record)
+	if !s.tryFinalizeLiveCall(record) {
+		s.scheduleLiveFinalizationRetry(record)
 		return
+	}
+	s.removeLiveFinalization(record)
+}
+
+func (s *OpenAIGatewayService) tryFinalizeLiveCall(record *LiveCallRecord) bool {
+	if record == nil {
+		return true
 	}
 	store, err := s.liveStore()
 	if err != nil {
-		return
+		return false
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), liveRedisOperationTimeout)
-	first, err := store.MarkLiveCallClosed(ctx, record.CallHash, liveClosedRecordTTL)
-	cancel()
-	if err != nil || !first {
-		return
+	usageStore, ok := s.cache.(LiveUsageStore)
+	if !ok {
+		return false
 	}
-	s.releaseLiveLease(record.AccountID, record.UserID, record.APIKeyID, record.LeaseID)
-	if s.usageLogRepo == nil {
-		return
+	if err := s.flushLiveUsageFallback(record, usageStore); err != nil {
+		logger.L().Error("openai.live_usage_flush_failed", zap.String("call_hash", record.CallHash), zap.Error(err))
+		return false
+	}
+	latest, loadErr := store.GetLiveCall(context.Background(), record.CallHash)
+	if loadErr != nil {
+		return errors.Is(loadErr, ErrLiveCallNotFound)
+	}
+	if latest.Controller == LiveControllerClosed {
+		return true
+	}
+	record = latest
+	if s.usageLogRepo == nil || s.usageBillingRepo == nil {
+		return false
 	}
 	duration := int(time.Since(record.CreatedAt).Milliseconds())
 	if duration < 0 {
@@ -770,23 +839,270 @@ func (s *OpenAIGatewayService) finalizeLiveCall(record *LiveCallRecord) {
 	if record.SubscriptionID > 0 {
 		billingType = BillingTypeSubscription
 	}
-	_, _ = s.usageLogRepo.Create(context.Background(), &UsageLog{
-		UserID:           record.UserID,
-		APIKeyID:         record.APIKeyID,
-		AccountID:        record.AccountID,
-		RequestID:        record.CallHash,
-		Model:            record.Model,
-		RequestedModel:   record.Model,
-		GroupID:          liveOptionalID(record.GroupID),
-		SubscriptionID:   liveOptionalID(record.SubscriptionID),
-		RateMultiplier:   1,
-		BillingType:      billingType,
-		RequestType:      RequestTypeLive,
-		DurationMs:       &duration,
-		UserAgent:        &userAgent,
-		IPAddress:        &ipAddress,
-		InboundEndpoint:  &inboundEndpoint,
-		UpstreamEndpoint: &upstreamEndpoint,
-		CreatedAt:        record.CreatedAt,
-	})
+	inputTokens := record.InputTokens - record.CacheReadTokens
+	if inputTokens < 0 {
+		inputTokens = 0
+	}
+	inputCost := float64(inputTokens) * record.InputPricePerToken
+	outputCost := float64(record.OutputTokens) * record.OutputPricePerToken
+	cacheReadCost := float64(record.CacheReadTokens) * record.CacheReadPricePerToken
+	sourceCost := inputCost + outputCost + cacheReadCost
+	baseCost := sourceCost * record.ExchangeRate
+	actualCost := baseCost * record.RateMultiplier
+	usageLog := &UsageLog{
+		UserID:             record.UserID,
+		APIKeyID:           record.APIKeyID,
+		AccountID:          record.AccountID,
+		RequestID:          record.CallHash,
+		Model:              record.Model,
+		RequestedModel:     record.Model,
+		GroupID:            liveOptionalID(record.GroupID),
+		SubscriptionID:     liveOptionalID(record.SubscriptionID),
+		InputTokens:        inputTokens,
+		OutputTokens:       record.OutputTokens,
+		CacheReadTokens:    record.CacheReadTokens,
+		InputCost:          inputCost,
+		OutputCost:         outputCost,
+		CacheReadCost:      cacheReadCost,
+		TotalCost:          sourceCost,
+		ActualCost:         actualCost,
+		RateMultiplier:     record.RateMultiplier,
+		BillingType:        billingType,
+		RequestType:        RequestTypeLive,
+		DurationMs:         &duration,
+		UserAgent:          &userAgent,
+		IPAddress:          &ipAddress,
+		InboundEndpoint:    &inboundEndpoint,
+		UpstreamEndpoint:   &upstreamEndpoint,
+		SourceCurrency:     CurrencyUSD,
+		SettlementCurrency: record.BillingCurrency,
+		ExchangeRate:       record.ExchangeRate,
+		ExchangeRateSource: record.ExchangeRateSource,
+		ExchangeRateAsOf:   &record.ExchangeRateAsOf,
+		SourceCost:         sourceCost,
+		BaseCost:           baseCost,
+		CreatedAt:          record.CreatedAt,
+	}
+	apiKey := &APIKey{ID: record.APIKeyID, UserID: record.UserID, GroupID: liveOptionalID(record.GroupID), Quota: record.APIKeyQuota, RateLimit5h: record.RateLimit5h, RateLimit1d: record.RateLimit1d, RateLimit7d: record.RateLimit7d}
+	user := &User{ID: record.UserID, BillingCurrency: record.BillingCurrency}
+	account := &Account{ID: record.AccountID}
+	var subscription *UserSubscription
+	if record.SubscriptionID > 0 {
+		subscription = &UserSubscription{ID: record.SubscriptionID, UserID: record.UserID, GroupID: record.GroupID}
+	}
+	if _, billingErr := applyUsageBilling(context.Background(), record.CallHash, usageLog, &postUsageBillingParams{
+		Cost: &CostBreakdown{InputCost: inputCost, OutputCost: outputCost, CacheReadCost: cacheReadCost, TotalCost: sourceCost, ActualCost: actualCost, BillingMode: string(BillingModeToken)},
+		User: user, APIKey: apiKey, Account: account, Subscription: subscription,
+		IsSubscriptionBill:    record.SubscriptionBilling,
+		AccountRateMultiplier: record.AccountRateMultiplier,
+		APIKeyService:         liveAPIKeyQuotaUpdater{},
+		Platform:              PlatformOpenAI,
+	}, s.billingDeps(), s.usageBillingRepo); billingErr != nil {
+		logger.L().Error("openai.live_billing_failed", zap.String("call_hash", record.CallHash), zap.Error(billingErr))
+		return false
+	}
+	usageCtx, usageCancel := detachedBillingContext(context.Background())
+	_, usageErr := s.usageLogRepo.Create(usageCtx, usageLog)
+	usageCancel()
+	if usageErr != nil {
+		logger.L().Error("openai.live_usage_log_failed", zap.String("call_hash", record.CallHash), zap.Error(usageErr))
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), liveRedisOperationTimeout)
+	first, closeErr := store.MarkLiveCallClosed(ctx, record.CallHash, liveClosedRecordTTL)
+	cancel()
+	if closeErr != nil {
+		return false
+	}
+	if first {
+		s.releaseLiveLease(record.AccountID, record.UserID, record.APIKeyID, record.LeaseID)
+	}
+	return true
+}
+
+func (s *OpenAIGatewayService) scheduleLiveFinalizationRetry(record *LiveCallRecord) {
+	if record == nil {
+		return
+	}
+	if _, loaded := s.liveFinalizeRetrying.LoadOrStore(record.CallHash, struct{}{}); loaded {
+		return
+	}
+	copy := *record
+	go func() {
+		defer s.liveFinalizeRetrying.Delete(copy.CallHash)
+		delay := time.Second
+		for {
+			timer := time.NewTimer(delay)
+			<-timer.C
+			if s.tryFinalizeLiveCall(&copy) {
+				s.removeLiveFinalization(&copy)
+				return
+			}
+			if delay < time.Minute {
+				delay *= 2
+				if delay > time.Minute {
+					delay = time.Minute
+				}
+			}
+		}
+	}()
+}
+
+func (s *OpenAIGatewayService) queueLiveFinalization(record *LiveCallRecord) {
+	if record == nil {
+		return
+	}
+	if store, ok := s.cache.(LiveFinalizationStore); ok {
+		ctx, cancel := context.WithTimeout(context.Background(), liveRedisOperationTimeout)
+		defer cancel()
+		if err := store.QueueLiveFinalization(ctx, record.CallHash); err != nil {
+			logger.L().Error("openai.live_finalize_queue_failed", zap.String("call_hash", record.CallHash), zap.Error(err))
+		}
+	}
+}
+
+func (s *OpenAIGatewayService) removeLiveFinalization(record *LiveCallRecord) {
+	if record == nil {
+		return
+	}
+	if store, ok := s.cache.(LiveFinalizationStore); ok {
+		ctx, cancel := context.WithTimeout(context.Background(), liveRedisOperationTimeout)
+		defer cancel()
+		if err := store.RemoveLiveFinalization(ctx, record.CallHash); err != nil {
+			logger.L().Error("openai.live_finalize_dequeue_failed", zap.String("call_hash", record.CallHash), zap.Error(err))
+		}
+	}
+}
+
+func (s *OpenAIGatewayService) recoverLiveFinalizations() {
+	store, ok := s.cache.(LiveFinalizationStore)
+	if !ok || s.usageLogRepo == nil || s.usageBillingRepo == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), liveRedisOperationTimeout)
+	hashes, err := store.ListLiveFinalizations(ctx, 1000)
+	cancel()
+	if err != nil {
+		logger.L().Error("openai.live_finalize_recovery_list_failed", zap.Error(err))
+		return
+	}
+	callStore, err := s.liveStore()
+	if err != nil {
+		return
+	}
+	for _, callHash := range hashes {
+		loadCtx, loadCancel := context.WithTimeout(context.Background(), liveRedisOperationTimeout)
+		record, loadErr := callStore.GetLiveCall(loadCtx, callHash)
+		loadCancel()
+		if loadErr != nil {
+			if errors.Is(loadErr, ErrLiveCallNotFound) {
+				s.removeLiveFinalization(&LiveCallRecord{CallHash: callHash})
+			}
+			continue
+		}
+		s.scheduleLiveFinalizationRetry(record)
+	}
+}
+
+func (s *OpenAIGatewayService) runLiveFinalizationRecovery() {
+	if _, ok := s.cache.(LiveFinalizationStore); !ok || s.usageLogRepo == nil || s.usageBillingRepo == nil {
+		return
+	}
+	for {
+		s.recoverLiveFinalizations()
+		timer := time.NewTimer(time.Minute)
+		<-timer.C
+	}
+}
+
+// liveAPIKeyQuotaUpdater is a capability marker for the unified billing command.
+// The repository applies API-key quota and rate-limit mutations atomically with
+// the wallet deduction; these methods are never called while that repository is present.
+type liveAPIKeyQuotaUpdater struct{}
+
+func (liveAPIKeyQuotaUpdater) UpdateQuotaUsed(context.Context, int64, float64) error { return nil }
+
+func (liveAPIKeyQuotaUpdater) UpdateRateLimitUsage(context.Context, int64, float64) error { return nil }
+
+func (s *OpenAIGatewayService) accumulateLiveUsage(record *LiveCallRecord, payload []byte) {
+	if record == nil {
+		return
+	}
+	eventType := strings.TrimSpace(gjson.GetBytes(payload, "type").String())
+	if eventType != "response.done" && eventType != "response.completed" {
+		return
+	}
+	usage := gjson.GetBytes(payload, "response.usage")
+	if !usage.Exists() {
+		usage = gjson.GetBytes(payload, "usage")
+	}
+	input := int(usage.Get("input_tokens").Int())
+	if input == 0 {
+		input = int(usage.Get("prompt_tokens").Int())
+	}
+	output := int(usage.Get("output_tokens").Int())
+	if output == 0 {
+		output = int(usage.Get("completion_tokens").Int())
+	}
+	cacheRead := int(usage.Get("input_tokens_details.cached_tokens").Int())
+	if cacheRead == 0 {
+		cacheRead = int(usage.Get("prompt_tokens_details.cached_tokens").Int())
+	}
+	if input <= 0 && output <= 0 && cacheRead <= 0 {
+		return
+	}
+	responseID := strings.TrimSpace(gjson.GetBytes(payload, "response.id").String())
+	if responseID == "" {
+		responseID = fmt.Sprintf("%x", sha256.Sum256(payload))
+	}
+	store, ok := s.cache.(LiveUsageStore)
+	if !ok {
+		s.storeLiveUsageFallback(record.CallHash, responseID, liveUsageDelta{inputTokens: input, outputTokens: output, cacheReadTokens: cacheRead})
+		return
+	}
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), liveRedisOperationTimeout)
+		_, err = store.AccumulateLiveUsage(ctx, record.CallHash, responseID, input, output, cacheRead)
+		cancel()
+		if err == nil {
+			return
+		}
+	}
+	s.storeLiveUsageFallback(record.CallHash, responseID, liveUsageDelta{inputTokens: input, outputTokens: output, cacheReadTokens: cacheRead})
+	logger.L().Error("openai.live_usage_accumulate_failed", zap.String("call_hash", record.CallHash), zap.String("response_id", responseID), zap.Error(err))
+}
+
+func (s *OpenAIGatewayService) storeLiveUsageFallback(callHash, responseID string, delta liveUsageDelta) {
+	value, _ := s.liveUsageFallback.LoadOrStore(callHash, &liveUsageFallbackBucket{responses: make(map[string]liveUsageDelta)})
+	bucket := value.(*liveUsageFallbackBucket)
+	bucket.mu.Lock()
+	bucket.responses[responseID] = delta
+	bucket.mu.Unlock()
+}
+
+func (s *OpenAIGatewayService) flushLiveUsageFallback(record *LiveCallRecord, store LiveUsageStore) error {
+	if record == nil || store == nil {
+		return nil
+	}
+	value, ok := s.liveUsageFallback.Load(record.CallHash)
+	if !ok {
+		return nil
+	}
+	bucket := value.(*liveUsageFallbackBucket)
+	bucket.mu.Lock()
+	defer bucket.mu.Unlock()
+	for responseID, delta := range bucket.responses {
+		ctx, cancel := context.WithTimeout(context.Background(), liveRedisOperationTimeout)
+		_, err := store.AccumulateLiveUsage(ctx, record.CallHash, responseID, delta.inputTokens, delta.outputTokens, delta.cacheReadTokens)
+		cancel()
+		if err != nil {
+			return err
+		}
+		delete(bucket.responses, responseID)
+	}
+	if len(bucket.responses) == 0 {
+		s.liveUsageFallback.Delete(record.CallHash)
+	}
+	return nil
 }

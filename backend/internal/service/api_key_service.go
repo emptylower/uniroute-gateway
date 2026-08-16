@@ -23,14 +23,18 @@ import (
 )
 
 var (
-	ErrAPIKeyNotFound       = infraerrors.NotFound("API_KEY_NOT_FOUND", "api key not found")
-	ErrGroupNotAllowed      = infraerrors.Forbidden("GROUP_NOT_ALLOWED", "user is not allowed to bind this group")
-	ErrAPIKeyExists         = infraerrors.Conflict("API_KEY_EXISTS", "api key already exists")
-	ErrAPIKeyTooShort       = infraerrors.BadRequest("API_KEY_TOO_SHORT", "api key must be at least 16 characters")
-	ErrAPIKeyInvalidChars   = infraerrors.BadRequest("API_KEY_INVALID_CHARS", "api key can only contain letters, numbers, underscores, and hyphens")
-	ErrAPIKeyRateLimited    = infraerrors.TooManyRequests("API_KEY_RATE_LIMITED", "too many failed attempts, please try again later")
-	ErrAPIKeyAuthOverloaded = infraerrors.ServiceUnavailable("API_KEY_AUTH_OVERLOADED", "api key authentication is temporarily overloaded")
-	ErrInvalidIPPattern     = infraerrors.BadRequest("INVALID_IP_PATTERN", "invalid IP or CIDR pattern")
+	ErrAPIKeyNotFound                   = infraerrors.NotFound("API_KEY_NOT_FOUND", "api key not found")
+	ErrGroupNotAllowed                  = infraerrors.Forbidden("GROUP_NOT_ALLOWED", "user is not allowed to bind this group")
+	ErrAPIKeyExists                     = infraerrors.Conflict("API_KEY_EXISTS", "api key already exists")
+	ErrAPIKeyTooShort                   = infraerrors.BadRequest("API_KEY_TOO_SHORT", "api key must be at least 16 characters")
+	ErrAPIKeyInvalidChars               = infraerrors.BadRequest("API_KEY_INVALID_CHARS", "api key can only contain letters, numbers, underscores, and hyphens")
+	ErrAPIKeyRateLimited                = infraerrors.TooManyRequests("API_KEY_RATE_LIMITED", "too many failed attempts, please try again later")
+	ErrAPIKeyAuthOverloaded             = infraerrors.ServiceUnavailable("API_KEY_AUTH_OVERLOADED", "api key authentication is temporarily overloaded")
+	ErrProjectedAPIKeyManagedExternally = infraerrors.Forbidden("PROJECTED_API_KEY_MANAGED_EXTERNALLY", "platform-owned api keys can only be changed through the internal projection API")
+	ErrInvalidIPPattern                 = infraerrors.BadRequest("INVALID_IP_PATTERN", "invalid IP or CIDR pattern")
+	ErrInvalidRoutingMode               = infraerrors.BadRequest("INVALID_ROUTING_MODE", "routing_mode must be legacy_group, channels, or auto_channels")
+	ErrChannelsRequired                 = infraerrors.BadRequest("CHANNELS_REQUIRED", "at least one channel is required in channels mode")
+	ErrChannelNotAllowed                = infraerrors.Forbidden("CHANNEL_NOT_ALLOWED", "one or more channels are unavailable to this user")
 	// ErrAPIKeyExpired        = infraerrors.Forbidden("API_KEY_EXPIRED", "api key has expired")
 	ErrAPIKeyExpired = infraerrors.Forbidden("API_KEY_EXPIRED", "api key 已过期")
 	// ErrAPIKeyQuotaExhausted = infraerrors.TooManyRequests("API_KEY_QUOTA_EXHAUSTED", "api key quota exhausted")
@@ -181,6 +185,8 @@ type APIKeyAuthCacheInvalidator interface {
 type CreateAPIKeyRequest struct {
 	Name        string   `json:"name"`
 	GroupID     *int64   `json:"group_id"`
+	RoutingMode string   `json:"routing_mode"`
+	ChannelIDs  []int64  `json:"channel_ids"`
 	CustomKey   *string  `json:"custom_key"`   // 可选的自定义key
 	IPWhitelist []string `json:"ip_whitelist"` // IP 白名单
 	IPBlacklist []string `json:"ip_blacklist"` // IP 黑名单
@@ -214,6 +220,19 @@ type UpdateAPIKeyRequest struct {
 	RateLimit1d         *float64 `json:"rate_limit_1d"`
 	RateLimit7d         *float64 `json:"rate_limit_7d"`
 	ResetRateLimitUsage *bool    `json:"reset_rate_limit_usage"` // Reset all usage counters to 0
+}
+
+func NormalizeAPIKeyRoutingMode(mode string) (string, error) {
+	mode = strings.TrimSpace(mode)
+	if mode == "" {
+		return APIKeyRoutingModeLegacyGroup, nil
+	}
+	switch mode {
+	case APIKeyRoutingModeLegacyGroup, APIKeyRoutingModeChannels, APIKeyRoutingModeAutoChannels:
+		return mode, nil
+	default:
+		return "", ErrInvalidRoutingMode
+	}
 }
 
 // APIKeyService API Key服务
@@ -399,6 +418,14 @@ func (s *APIKeyService) canUserBindGroup(ctx context.Context, user *User, group 
 
 // Create 创建API Key
 func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIKeyRequest) (*APIKey, error) {
+	routingMode, err := NormalizeAPIKeyRoutingMode(req.RoutingMode)
+	if err != nil {
+		return nil, err
+	}
+	if routingMode == APIKeyRoutingModeChannels && len(req.ChannelIDs) == 0 {
+		return nil, ErrChannelsRequired
+	}
+
 	// 验证用户存在
 	user, err := s.userRepo.GetByID(ctx, userID)
 	if err != nil {
@@ -473,6 +500,8 @@ func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIK
 		Key:         key,
 		Name:        html.EscapeString(req.Name),
 		GroupID:     req.GroupID,
+		RoutingMode: routingMode,
+		ChannelIDs:  append([]int64(nil), req.ChannelIDs...),
 		Status:      StatusActive,
 		IPWhitelist: req.IPWhitelist,
 		IPBlacklist: req.IPBlacklist,
@@ -702,6 +731,9 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 	// 验证所有权
 	if apiKey.UserID != userID {
 		return nil, ErrInsufficientPerms
+	}
+	if apiKey.PlatformKeyID != nil {
+		return nil, ErrProjectedAPIKeyManagedExternally
 	}
 
 	// 验证 IP 白名单格式
@@ -991,6 +1023,14 @@ func (s *APIKeyService) GetUserGroupRates(ctx context.Context, userID int64) (ma
 		return nil, fmt.Errorf("get user group rates: %w", err)
 	}
 	return rates, nil
+}
+
+// GetActiveSubscriptionForGroup returns the subscription that applies to a
+// routed candidate group. Channel routing cannot reuse the middleware's
+// subscription because that snapshot belongs to the key's compatibility
+// anchor group.
+func (s *APIKeyService) GetActiveSubscriptionForGroup(ctx context.Context, userID, groupID int64) (*UserSubscription, error) {
+	return s.userSubRepo.GetActiveByUserIDAndGroupID(ctx, userID, groupID)
 }
 
 // CheckAPIKeyQuotaAndExpiry checks if the API key is valid for use (not expired, quota not exhausted)

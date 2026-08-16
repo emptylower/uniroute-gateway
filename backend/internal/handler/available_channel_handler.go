@@ -2,6 +2,7 @@ package handler
 
 import (
 	"sort"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
@@ -18,8 +19,8 @@ import (
 //  3. 平台过滤：渠道的 SupportedModels 只保留平台在用户可见 Groups 中出现过的模型，
 //     防止"渠道同时挂在 antigravity / anthropic 两个平台的分组上，用户只访问
 //     antigravity，却看到 anthropic 模型"这类跨平台信息泄漏；
-//  4. 字段白名单：仅返回用户需要的字段（省略 BillingModelSource / RestrictModels
-//     / 内部 ID / Status 等管理字段）。
+//  4. 字段白名单：返回稳定渠道 ID 和用户需要的展示字段，省略
+//     BillingModelSource / RestrictModels / Status 等管理字段。
 type AvailableChannelHandler struct {
 	channelService *service.ChannelService
 	apiKeyService  *service.APIKeyService
@@ -50,19 +51,20 @@ func (h *AvailableChannelHandler) featureEnabled(c *gin.Context) bool {
 // userAvailableGroup 用户可见的分组概要（白名单字段）。
 //
 // 前端据此区分专属 vs 公开分组（IsExclusive）、订阅 vs 标准分组（SubscriptionType，
-// 订阅视觉加深），并展示默认倍率与高峰倍率规则；用户专属倍率前端走
-// /groups/rates，和 API 密钥页面保持一致。
+// 订阅视觉加深），并展示默认倍率、高峰倍率规则，以及服务端按当前时间和
+// 用户专属倍率计算出的 EffectiveMultiplier。
 type userAvailableGroup struct {
-	ID                 int64   `json:"id"`
-	Name               string  `json:"name"`
-	Platform           string  `json:"platform"`
-	SubscriptionType   string  `json:"subscription_type"`
-	RateMultiplier     float64 `json:"rate_multiplier"`
-	PeakRateEnabled    bool    `json:"peak_rate_enabled"`
-	PeakStart          string  `json:"peak_start"`
-	PeakEnd            string  `json:"peak_end"`
-	PeakRateMultiplier float64 `json:"peak_rate_multiplier"`
-	IsExclusive        bool    `json:"is_exclusive"`
+	ID                  int64   `json:"id"`
+	Name                string  `json:"name"`
+	Platform            string  `json:"platform"`
+	SubscriptionType    string  `json:"subscription_type"`
+	RateMultiplier      float64 `json:"rate_multiplier"`
+	EffectiveMultiplier float64 `json:"effective_multiplier"`
+	PeakRateEnabled     bool    `json:"peak_rate_enabled"`
+	PeakStart           string  `json:"peak_start"`
+	PeakEnd             string  `json:"peak_end"`
+	PeakRateMultiplier  float64 `json:"peak_rate_multiplier"`
+	IsExclusive         bool    `json:"is_exclusive"`
 }
 
 // userSupportedModelPricing 用户可见的定价字段白名单。
@@ -111,6 +113,7 @@ type userChannelPlatformSection struct {
 // 每个渠道聚合为一条记录，内嵌 platforms 子数组：每个 section 对应一个平台，
 // 包含该平台的 groups 和 supported_models。
 type userAvailableChannel struct {
+	ID          int64                        `json:"id"`
 	Name        string                       `json:"name"`
 	Description string                       `json:"description"`
 	Platforms   []userChannelPlatformSection `json:"platforms"`
@@ -141,6 +144,11 @@ func (h *AvailableChannelHandler) List(c *gin.Context) {
 	for i := range userGroups {
 		allowedGroupIDs[userGroups[i].ID] = struct{}{}
 	}
+	userGroupRates, err := h.apiKeyService.GetUserGroupRates(c.Request.Context(), subject.UserID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
 
 	channels, err := h.channelService.ListAvailable(c.Request.Context())
 	if err != nil {
@@ -153,7 +161,7 @@ func (h *AvailableChannelHandler) List(c *gin.Context) {
 		if ch.Status != service.StatusActive {
 			continue
 		}
-		visibleGroups := filterUserVisibleGroups(ch.Groups, allowedGroupIDs)
+		visibleGroups := filterUserVisibleGroups(ch.Groups, allowedGroupIDs, userGroupRates, time.Now())
 		if len(visibleGroups) == 0 {
 			continue
 		}
@@ -162,6 +170,7 @@ func (h *AvailableChannelHandler) List(c *gin.Context) {
 			continue
 		}
 		out = append(out, userAvailableChannel{
+			ID:          ch.ID,
 			Name:        ch.Name,
 			Description: ch.Description,
 			Platforms:   sections,
@@ -211,23 +220,37 @@ func buildPlatformSections(
 func filterUserVisibleGroups(
 	groups []service.AvailableGroupRef,
 	allowed map[int64]struct{},
+	userRates map[int64]float64,
+	now time.Time,
 ) []userAvailableGroup {
 	visible := make([]userAvailableGroup, 0, len(groups))
 	for _, g := range groups {
 		if _, ok := allowed[g.ID]; !ok {
 			continue
 		}
-		visible = append(visible, userAvailableGroup{
-			ID:                 g.ID,
-			Name:               g.Name,
-			Platform:           g.Platform,
+		rate := g.RateMultiplier
+		if override, ok := userRates[g.ID]; ok {
+			rate = override
+		}
+		group := service.Group{
 			SubscriptionType:   g.SubscriptionType,
-			RateMultiplier:     g.RateMultiplier,
 			PeakRateEnabled:    g.PeakRateEnabled,
 			PeakStart:          g.PeakStart,
 			PeakEnd:            g.PeakEnd,
 			PeakRateMultiplier: g.PeakRateMultiplier,
-			IsExclusive:        g.IsExclusive,
+		}
+		visible = append(visible, userAvailableGroup{
+			ID:                  g.ID,
+			Name:                g.Name,
+			Platform:            g.Platform,
+			SubscriptionType:    g.SubscriptionType,
+			RateMultiplier:      g.RateMultiplier,
+			EffectiveMultiplier: rate * group.PeakMultiplierAt(now),
+			PeakRateEnabled:     g.PeakRateEnabled,
+			PeakStart:           g.PeakStart,
+			PeakEnd:             g.PeakEnd,
+			PeakRateMultiplier:  g.PeakRateMultiplier,
+			IsExclusive:         g.IsExclusive,
 		})
 	}
 	return visible

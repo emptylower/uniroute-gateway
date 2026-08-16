@@ -2,6 +2,7 @@ package routes
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -56,6 +57,46 @@ func newGatewayRoutesTestRouterWithConfig(cfg *config.Config, platform ...string
 	)
 
 	return router
+}
+
+func TestDynamicChannelRoutingPlatformUsesRequestModelWithoutAnchor(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cfg := &config.Config{}
+	cfg.Gateway.ChannelRoutingEnabled = true
+	gateway := &handler.GatewayHandler{}
+	gateway.SetChannelRoutingSelector(service.NewChannelRoutingSelector(nil, nil, cfg))
+
+	for _, tt := range []struct {
+		model    string
+		platform string
+	}{
+		{model: "gpt-5.6-sol", platform: service.PlatformOpenAI},
+		{model: "claude-sonnet-4-5", platform: service.PlatformAnthropic},
+	} {
+		t.Run(tt.model, func(t *testing.T) {
+			staleGroupID := int64(99)
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/responses", strings.NewReader(`{"model":"`+tt.model+`"}`))
+			c.Request.Header.Set("Content-Type", "application/json")
+			c.Set(string(servermiddleware.ContextKeyAPIKey), &service.APIKey{
+				RoutingMode: service.APIKeyRoutingModeAutoChannels,
+				GroupID:     &staleGroupID,
+				Group:       nil,
+			})
+
+			platform, ok := dynamicChannelRoutingPlatform(c, gateway)
+
+			require.True(t, ok)
+			require.Equal(t, tt.platform, platform)
+			family, familySet := service.ChannelRoutingFamilyFromContext(c.Request.Context())
+			require.True(t, familySet)
+			require.NotEmpty(t, family)
+			body, err := io.ReadAll(c.Request.Body)
+			require.NoError(t, err)
+			require.JSONEq(t, `{"model":"`+tt.model+`"}`, string(body))
+		})
+	}
 }
 
 func TestGatewayRoutesOpenAIResponsesCompactPathIsRegistered(t *testing.T) {

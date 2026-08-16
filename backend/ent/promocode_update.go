@@ -64,6 +64,20 @@ func (_u *PromoCodeUpdate) AddBonusAmount(v float64) *PromoCodeUpdate {
 	return _u
 }
 
+// SetCurrency sets the "currency" field.
+func (_u *PromoCodeUpdate) SetCurrency(v string) *PromoCodeUpdate {
+	_u.mutation.SetCurrency(v)
+	return _u
+}
+
+// SetNillableCurrency sets the "currency" field if the given value is not nil.
+func (_u *PromoCodeUpdate) SetNillableCurrency(v *string) *PromoCodeUpdate {
+	if v != nil {
+		_u.SetCurrency(*v)
+	}
+	return _u
+}
+
 // SetMaxUses sets the "max_uses" field.
 func (_u *PromoCodeUpdate) SetMaxUses(v int) *PromoCodeUpdate {
 	_u.mutation.ResetMaxUses()
@@ -250,6 +264,11 @@ func (_u *PromoCodeUpdate) check() error {
 			return &ValidationError{Name: "code", err: fmt.Errorf(`ent: validator failed for field "PromoCode.code": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.Currency(); ok {
+		if err := promocode.CurrencyValidator(v); err != nil {
+			return &ValidationError{Name: "currency", err: fmt.Errorf(`ent: validator failed for field "PromoCode.currency": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.Status(); ok {
 		if err := promocode.StatusValidator(v); err != nil {
 			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "PromoCode.status": %w`, err)}
@@ -278,6 +297,9 @@ func (_u *PromoCodeUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if value, ok := _u.mutation.AddedBonusAmount(); ok {
 		_spec.AddField(promocode.FieldBonusAmount, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.Currency(); ok {
+		_spec.SetField(promocode.FieldCurrency, field.TypeString, value)
 	}
 	if value, ok := _u.mutation.MaxUses(); ok {
 		_spec.SetField(promocode.FieldMaxUses, field.TypeInt, value)
@@ -406,6 +428,20 @@ func (_u *PromoCodeUpdateOne) SetNillableBonusAmount(v *float64) *PromoCodeUpdat
 // AddBonusAmount adds value to the "bonus_amount" field.
 func (_u *PromoCodeUpdateOne) AddBonusAmount(v float64) *PromoCodeUpdateOne {
 	_u.mutation.AddBonusAmount(v)
+	return _u
+}
+
+// SetCurrency sets the "currency" field.
+func (_u *PromoCodeUpdateOne) SetCurrency(v string) *PromoCodeUpdateOne {
+	_u.mutation.SetCurrency(v)
+	return _u
+}
+
+// SetNillableCurrency sets the "currency" field if the given value is not nil.
+func (_u *PromoCodeUpdateOne) SetNillableCurrency(v *string) *PromoCodeUpdateOne {
+	if v != nil {
+		_u.SetCurrency(*v)
+	}
 	return _u
 }
 
@@ -608,6 +644,11 @@ func (_u *PromoCodeUpdateOne) check() error {
 			return &ValidationError{Name: "code", err: fmt.Errorf(`ent: validator failed for field "PromoCode.code": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.Currency(); ok {
+		if err := promocode.CurrencyValidator(v); err != nil {
+			return &ValidationError{Name: "currency", err: fmt.Errorf(`ent: validator failed for field "PromoCode.currency": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.Status(); ok {
 		if err := promocode.StatusValidator(v); err != nil {
 			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "PromoCode.status": %w`, err)}
@@ -653,6 +694,9 @@ func (_u *PromoCodeUpdateOne) sqlSave(ctx context.Context) (_node *PromoCode, er
 	}
 	if value, ok := _u.mutation.AddedBonusAmount(); ok {
 		_spec.AddField(promocode.FieldBonusAmount, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.Currency(); ok {
+		_spec.SetField(promocode.FieldCurrency, field.TypeString, value)
 	}
 	if value, ok := _u.mutation.MaxUses(); ok {
 		_spec.SetField(promocode.FieldMaxUses, field.TypeInt, value)

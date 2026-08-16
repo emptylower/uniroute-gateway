@@ -85,6 +85,16 @@ func RateMultiplier(v float64) predicate.Group {
 	return predicate.Group(sql.FieldEQ(FieldRateMultiplier, v))
 }
 
+// RateMultiplierCny applies equality check predicate on the "rate_multiplier_cny" field. It's identical to RateMultiplierCnyEQ.
+func RateMultiplierCny(v float64) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldRateMultiplierCny, v))
+}
+
+// RateMultiplierUsd applies equality check predicate on the "rate_multiplier_usd" field. It's identical to RateMultiplierUsdEQ.
+func RateMultiplierUsd(v float64) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldRateMultiplierUsd, v))
+}
+
 // PeakRateEnabled applies equality check predicate on the "peak_rate_enabled" field. It's identical to PeakRateEnabledEQ.
 func PeakRateEnabled(v bool) predicate.Group {
 	return predicate.Group(sql.FieldEQ(FieldPeakRateEnabled, v))
@@ -598,6 +608,106 @@ func RateMultiplierLT(v float64) predicate.Group {
 // RateMultiplierLTE applies the LTE predicate on the "rate_multiplier" field.
 func RateMultiplierLTE(v float64) predicate.Group {
 	return predicate.Group(sql.FieldLTE(FieldRateMultiplier, v))
+}
+
+// RateMultiplierCnyEQ applies the EQ predicate on the "rate_multiplier_cny" field.
+func RateMultiplierCnyEQ(v float64) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldRateMultiplierCny, v))
+}
+
+// RateMultiplierCnyNEQ applies the NEQ predicate on the "rate_multiplier_cny" field.
+func RateMultiplierCnyNEQ(v float64) predicate.Group {
+	return predicate.Group(sql.FieldNEQ(FieldRateMultiplierCny, v))
+}
+
+// RateMultiplierCnyIn applies the In predicate on the "rate_multiplier_cny" field.
+func RateMultiplierCnyIn(vs ...float64) predicate.Group {
+	return predicate.Group(sql.FieldIn(FieldRateMultiplierCny, vs...))
+}
+
+// RateMultiplierCnyNotIn applies the NotIn predicate on the "rate_multiplier_cny" field.
+func RateMultiplierCnyNotIn(vs ...float64) predicate.Group {
+	return predicate.Group(sql.FieldNotIn(FieldRateMultiplierCny, vs...))
+}
+
+// RateMultiplierCnyGT applies the GT predicate on the "rate_multiplier_cny" field.
+func RateMultiplierCnyGT(v float64) predicate.Group {
+	return predicate.Group(sql.FieldGT(FieldRateMultiplierCny, v))
+}
+
+// RateMultiplierCnyGTE applies the GTE predicate on the "rate_multiplier_cny" field.
+func RateMultiplierCnyGTE(v float64) predicate.Group {
+	return predicate.Group(sql.FieldGTE(FieldRateMultiplierCny, v))
+}
+
+// RateMultiplierCnyLT applies the LT predicate on the "rate_multiplier_cny" field.
+func RateMultiplierCnyLT(v float64) predicate.Group {
+	return predicate.Group(sql.FieldLT(FieldRateMultiplierCny, v))
+}
+
+// RateMultiplierCnyLTE applies the LTE predicate on the "rate_multiplier_cny" field.
+func RateMultiplierCnyLTE(v float64) predicate.Group {
+	return predicate.Group(sql.FieldLTE(FieldRateMultiplierCny, v))
+}
+
+// RateMultiplierCnyIsNil applies the IsNil predicate on the "rate_multiplier_cny" field.
+func RateMultiplierCnyIsNil() predicate.Group {
+	return predicate.Group(sql.FieldIsNull(FieldRateMultiplierCny))
+}
+
+// RateMultiplierCnyNotNil applies the NotNil predicate on the "rate_multiplier_cny" field.
+func RateMultiplierCnyNotNil() predicate.Group {
+	return predicate.Group(sql.FieldNotNull(FieldRateMultiplierCny))
+}
+
+// RateMultiplierUsdEQ applies the EQ predicate on the "rate_multiplier_usd" field.
+func RateMultiplierUsdEQ(v float64) predicate.Group {
+	return predicate.Group(sql.FieldEQ(FieldRateMultiplierUsd, v))
+}
+
+// RateMultiplierUsdNEQ applies the NEQ predicate on the "rate_multiplier_usd" field.
+func RateMultiplierUsdNEQ(v float64) predicate.Group {
+	return predicate.Group(sql.FieldNEQ(FieldRateMultiplierUsd, v))
+}
+
+// RateMultiplierUsdIn applies the In predicate on the "rate_multiplier_usd" field.
+func RateMultiplierUsdIn(vs ...float64) predicate.Group {
+	return predicate.Group(sql.FieldIn(FieldRateMultiplierUsd, vs...))
+}
+
+// RateMultiplierUsdNotIn applies the NotIn predicate on the "rate_multiplier_usd" field.
+func RateMultiplierUsdNotIn(vs ...float64) predicate.Group {
+	return predicate.Group(sql.FieldNotIn(FieldRateMultiplierUsd, vs...))
+}
+
+// RateMultiplierUsdGT applies the GT predicate on the "rate_multiplier_usd" field.
+func RateMultiplierUsdGT(v float64) predicate.Group {
+	return predicate.Group(sql.FieldGT(FieldRateMultiplierUsd, v))
+}
+
+// RateMultiplierUsdGTE applies the GTE predicate on the "rate_multiplier_usd" field.
+func RateMultiplierUsdGTE(v float64) predicate.Group {
+	return predicate.Group(sql.FieldGTE(FieldRateMultiplierUsd, v))
+}
+
+// RateMultiplierUsdLT applies the LT predicate on the "rate_multiplier_usd" field.
+func RateMultiplierUsdLT(v float64) predicate.Group {
+	return predicate.Group(sql.FieldLT(FieldRateMultiplierUsd, v))
+}
+
+// RateMultiplierUsdLTE applies the LTE predicate on the "rate_multiplier_usd" field.
+func RateMultiplierUsdLTE(v float64) predicate.Group {
+	return predicate.Group(sql.FieldLTE(FieldRateMultiplierUsd, v))
+}
+
+// RateMultiplierUsdIsNil applies the IsNil predicate on the "rate_multiplier_usd" field.
+func RateMultiplierUsdIsNil() predicate.Group {
+	return predicate.Group(sql.FieldIsNull(FieldRateMultiplierUsd))
+}
+
+// RateMultiplierUsdNotNil applies the NotNil predicate on the "rate_multiplier_usd" field.
+func RateMultiplierUsdNotNil() predicate.Group {
+	return predicate.Group(sql.FieldNotNull(FieldRateMultiplierUsd))
 }
 
 // PeakRateEnabledEQ applies the EQ predicate on the "peak_rate_enabled" field.

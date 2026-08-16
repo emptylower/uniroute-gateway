@@ -713,6 +713,8 @@ type GatewayService struct {
 	tlsFPProfileService   *TLSFingerprintProfileService
 	balanceNotifyService  *BalanceNotifyService
 	userPlatformQuotaRepo UserPlatformQuotaRepository
+	exchangeRates         *ExchangeRateService
+	canonicalWallet       *CanonicalWalletBridge
 }
 
 // NewGatewayService creates a new GatewayService
@@ -782,6 +784,12 @@ func NewGatewayService(
 		compositeResolver:     compositeResolver,
 		balanceNotifyService:  balanceNotifyService,
 		userPlatformQuotaRepo: userPlatformQuotaRepo,
+		exchangeRates:         NewExchangeRateService(cfg),
+	}
+	if walletStore, ok := cache.(CanonicalWalletLeaseStore); ok {
+		svc.canonicalWallet = NewCanonicalWalletBridge(cfg, walletStore)
+	} else if cfg != nil && (cfg.CanonicalWallet.Mode == config.CanonicalWalletModeShadow || cfg.CanonicalWallet.Mode == config.CanonicalWalletModeEnforce) {
+		slog.Error("canonical wallet bridge configured without a Redis lease store; shadow observations are disabled")
 	}
 	svc.userGroupRateResolver = newUserGroupRateResolver(
 		userGroupRateRepo,

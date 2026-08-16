@@ -86,6 +86,73 @@ func (_u *APIKeyUpdate) SetNillableKey(v *string) *APIKeyUpdate {
 	return _u
 }
 
+// SetKeySha256 sets the "key_sha256" field.
+func (_u *APIKeyUpdate) SetKeySha256(v string) *APIKeyUpdate {
+	_u.mutation.SetKeySha256(v)
+	return _u
+}
+
+// SetNillableKeySha256 sets the "key_sha256" field if the given value is not nil.
+func (_u *APIKeyUpdate) SetNillableKeySha256(v *string) *APIKeyUpdate {
+	if v != nil {
+		_u.SetKeySha256(*v)
+	}
+	return _u
+}
+
+// ClearKeySha256 clears the value of the "key_sha256" field.
+func (_u *APIKeyUpdate) ClearKeySha256() *APIKeyUpdate {
+	_u.mutation.ClearKeySha256()
+	return _u
+}
+
+// SetKeyPrefix sets the "key_prefix" field.
+func (_u *APIKeyUpdate) SetKeyPrefix(v string) *APIKeyUpdate {
+	_u.mutation.SetKeyPrefix(v)
+	return _u
+}
+
+// SetNillableKeyPrefix sets the "key_prefix" field if the given value is not nil.
+func (_u *APIKeyUpdate) SetNillableKeyPrefix(v *string) *APIKeyUpdate {
+	if v != nil {
+		_u.SetKeyPrefix(*v)
+	}
+	return _u
+}
+
+// ClearKeyPrefix clears the value of the "key_prefix" field.
+func (_u *APIKeyUpdate) ClearKeyPrefix() *APIKeyUpdate {
+	_u.mutation.ClearKeyPrefix()
+	return _u
+}
+
+// SetPlatformKeyVersion sets the "platform_key_version" field.
+func (_u *APIKeyUpdate) SetPlatformKeyVersion(v int64) *APIKeyUpdate {
+	_u.mutation.ResetPlatformKeyVersion()
+	_u.mutation.SetPlatformKeyVersion(v)
+	return _u
+}
+
+// SetNillablePlatformKeyVersion sets the "platform_key_version" field if the given value is not nil.
+func (_u *APIKeyUpdate) SetNillablePlatformKeyVersion(v *int64) *APIKeyUpdate {
+	if v != nil {
+		_u.SetPlatformKeyVersion(*v)
+	}
+	return _u
+}
+
+// AddPlatformKeyVersion adds value to the "platform_key_version" field.
+func (_u *APIKeyUpdate) AddPlatformKeyVersion(v int64) *APIKeyUpdate {
+	_u.mutation.AddPlatformKeyVersion(v)
+	return _u
+}
+
+// ClearPlatformKeyVersion clears the value of the "platform_key_version" field.
+func (_u *APIKeyUpdate) ClearPlatformKeyVersion() *APIKeyUpdate {
+	_u.mutation.ClearPlatformKeyVersion()
+	return _u
+}
+
 // SetName sets the "name" field.
 func (_u *APIKeyUpdate) SetName(v string) *APIKeyUpdate {
 	_u.mutation.SetName(v)
@@ -117,6 +184,20 @@ func (_u *APIKeyUpdate) SetNillableGroupID(v *int64) *APIKeyUpdate {
 // ClearGroupID clears the value of the "group_id" field.
 func (_u *APIKeyUpdate) ClearGroupID() *APIKeyUpdate {
 	_u.mutation.ClearGroupID()
+	return _u
+}
+
+// SetRoutingMode sets the "routing_mode" field.
+func (_u *APIKeyUpdate) SetRoutingMode(v string) *APIKeyUpdate {
+	_u.mutation.SetRoutingMode(v)
+	return _u
+}
+
+// SetNillableRoutingMode sets the "routing_mode" field if the given value is not nil.
+func (_u *APIKeyUpdate) SetNillableRoutingMode(v *string) *APIKeyUpdate {
+	if v != nil {
+		_u.SetRoutingMode(*v)
+	}
 	return _u
 }
 
@@ -550,9 +631,24 @@ func (_u *APIKeyUpdate) check() error {
 			return &ValidationError{Name: "key", err: fmt.Errorf(`ent: validator failed for field "APIKey.key": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.KeySha256(); ok {
+		if err := apikey.KeySha256Validator(v); err != nil {
+			return &ValidationError{Name: "key_sha256", err: fmt.Errorf(`ent: validator failed for field "APIKey.key_sha256": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.KeyPrefix(); ok {
+		if err := apikey.KeyPrefixValidator(v); err != nil {
+			return &ValidationError{Name: "key_prefix", err: fmt.Errorf(`ent: validator failed for field "APIKey.key_prefix": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.Name(); ok {
 		if err := apikey.NameValidator(v); err != nil {
 			return &ValidationError{Name: "name", err: fmt.Errorf(`ent: validator failed for field "APIKey.name": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.RoutingMode(); ok {
+		if err := apikey.RoutingModeValidator(v); err != nil {
+			return &ValidationError{Name: "routing_mode", err: fmt.Errorf(`ent: validator failed for field "APIKey.routing_mode": %w`, err)}
 		}
 	}
 	if v, ok := _u.mutation.Status(); ok {
@@ -590,8 +686,35 @@ func (_u *APIKeyUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if value, ok := _u.mutation.Key(); ok {
 		_spec.SetField(apikey.FieldKey, field.TypeString, value)
 	}
+	if _u.mutation.PlatformKeyIDCleared() {
+		_spec.ClearField(apikey.FieldPlatformKeyID, field.TypeString)
+	}
+	if value, ok := _u.mutation.KeySha256(); ok {
+		_spec.SetField(apikey.FieldKeySha256, field.TypeString, value)
+	}
+	if _u.mutation.KeySha256Cleared() {
+		_spec.ClearField(apikey.FieldKeySha256, field.TypeString)
+	}
+	if value, ok := _u.mutation.KeyPrefix(); ok {
+		_spec.SetField(apikey.FieldKeyPrefix, field.TypeString, value)
+	}
+	if _u.mutation.KeyPrefixCleared() {
+		_spec.ClearField(apikey.FieldKeyPrefix, field.TypeString)
+	}
+	if value, ok := _u.mutation.PlatformKeyVersion(); ok {
+		_spec.SetField(apikey.FieldPlatformKeyVersion, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedPlatformKeyVersion(); ok {
+		_spec.AddField(apikey.FieldPlatformKeyVersion, field.TypeInt64, value)
+	}
+	if _u.mutation.PlatformKeyVersionCleared() {
+		_spec.ClearField(apikey.FieldPlatformKeyVersion, field.TypeInt64)
+	}
 	if value, ok := _u.mutation.Name(); ok {
 		_spec.SetField(apikey.FieldName, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.RoutingMode(); ok {
+		_spec.SetField(apikey.FieldRoutingMode, field.TypeString, value)
 	}
 	if value, ok := _u.mutation.Status(); ok {
 		_spec.SetField(apikey.FieldStatus, field.TypeString, value)
@@ -873,6 +996,73 @@ func (_u *APIKeyUpdateOne) SetNillableKey(v *string) *APIKeyUpdateOne {
 	return _u
 }
 
+// SetKeySha256 sets the "key_sha256" field.
+func (_u *APIKeyUpdateOne) SetKeySha256(v string) *APIKeyUpdateOne {
+	_u.mutation.SetKeySha256(v)
+	return _u
+}
+
+// SetNillableKeySha256 sets the "key_sha256" field if the given value is not nil.
+func (_u *APIKeyUpdateOne) SetNillableKeySha256(v *string) *APIKeyUpdateOne {
+	if v != nil {
+		_u.SetKeySha256(*v)
+	}
+	return _u
+}
+
+// ClearKeySha256 clears the value of the "key_sha256" field.
+func (_u *APIKeyUpdateOne) ClearKeySha256() *APIKeyUpdateOne {
+	_u.mutation.ClearKeySha256()
+	return _u
+}
+
+// SetKeyPrefix sets the "key_prefix" field.
+func (_u *APIKeyUpdateOne) SetKeyPrefix(v string) *APIKeyUpdateOne {
+	_u.mutation.SetKeyPrefix(v)
+	return _u
+}
+
+// SetNillableKeyPrefix sets the "key_prefix" field if the given value is not nil.
+func (_u *APIKeyUpdateOne) SetNillableKeyPrefix(v *string) *APIKeyUpdateOne {
+	if v != nil {
+		_u.SetKeyPrefix(*v)
+	}
+	return _u
+}
+
+// ClearKeyPrefix clears the value of the "key_prefix" field.
+func (_u *APIKeyUpdateOne) ClearKeyPrefix() *APIKeyUpdateOne {
+	_u.mutation.ClearKeyPrefix()
+	return _u
+}
+
+// SetPlatformKeyVersion sets the "platform_key_version" field.
+func (_u *APIKeyUpdateOne) SetPlatformKeyVersion(v int64) *APIKeyUpdateOne {
+	_u.mutation.ResetPlatformKeyVersion()
+	_u.mutation.SetPlatformKeyVersion(v)
+	return _u
+}
+
+// SetNillablePlatformKeyVersion sets the "platform_key_version" field if the given value is not nil.
+func (_u *APIKeyUpdateOne) SetNillablePlatformKeyVersion(v *int64) *APIKeyUpdateOne {
+	if v != nil {
+		_u.SetPlatformKeyVersion(*v)
+	}
+	return _u
+}
+
+// AddPlatformKeyVersion adds value to the "platform_key_version" field.
+func (_u *APIKeyUpdateOne) AddPlatformKeyVersion(v int64) *APIKeyUpdateOne {
+	_u.mutation.AddPlatformKeyVersion(v)
+	return _u
+}
+
+// ClearPlatformKeyVersion clears the value of the "platform_key_version" field.
+func (_u *APIKeyUpdateOne) ClearPlatformKeyVersion() *APIKeyUpdateOne {
+	_u.mutation.ClearPlatformKeyVersion()
+	return _u
+}
+
 // SetName sets the "name" field.
 func (_u *APIKeyUpdateOne) SetName(v string) *APIKeyUpdateOne {
 	_u.mutation.SetName(v)
@@ -904,6 +1094,20 @@ func (_u *APIKeyUpdateOne) SetNillableGroupID(v *int64) *APIKeyUpdateOne {
 // ClearGroupID clears the value of the "group_id" field.
 func (_u *APIKeyUpdateOne) ClearGroupID() *APIKeyUpdateOne {
 	_u.mutation.ClearGroupID()
+	return _u
+}
+
+// SetRoutingMode sets the "routing_mode" field.
+func (_u *APIKeyUpdateOne) SetRoutingMode(v string) *APIKeyUpdateOne {
+	_u.mutation.SetRoutingMode(v)
+	return _u
+}
+
+// SetNillableRoutingMode sets the "routing_mode" field if the given value is not nil.
+func (_u *APIKeyUpdateOne) SetNillableRoutingMode(v *string) *APIKeyUpdateOne {
+	if v != nil {
+		_u.SetRoutingMode(*v)
+	}
 	return _u
 }
 
@@ -1350,9 +1554,24 @@ func (_u *APIKeyUpdateOne) check() error {
 			return &ValidationError{Name: "key", err: fmt.Errorf(`ent: validator failed for field "APIKey.key": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.KeySha256(); ok {
+		if err := apikey.KeySha256Validator(v); err != nil {
+			return &ValidationError{Name: "key_sha256", err: fmt.Errorf(`ent: validator failed for field "APIKey.key_sha256": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.KeyPrefix(); ok {
+		if err := apikey.KeyPrefixValidator(v); err != nil {
+			return &ValidationError{Name: "key_prefix", err: fmt.Errorf(`ent: validator failed for field "APIKey.key_prefix": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.Name(); ok {
 		if err := apikey.NameValidator(v); err != nil {
 			return &ValidationError{Name: "name", err: fmt.Errorf(`ent: validator failed for field "APIKey.name": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.RoutingMode(); ok {
+		if err := apikey.RoutingModeValidator(v); err != nil {
+			return &ValidationError{Name: "routing_mode", err: fmt.Errorf(`ent: validator failed for field "APIKey.routing_mode": %w`, err)}
 		}
 	}
 	if v, ok := _u.mutation.Status(); ok {
@@ -1407,8 +1626,35 @@ func (_u *APIKeyUpdateOne) sqlSave(ctx context.Context) (_node *APIKey, err erro
 	if value, ok := _u.mutation.Key(); ok {
 		_spec.SetField(apikey.FieldKey, field.TypeString, value)
 	}
+	if _u.mutation.PlatformKeyIDCleared() {
+		_spec.ClearField(apikey.FieldPlatformKeyID, field.TypeString)
+	}
+	if value, ok := _u.mutation.KeySha256(); ok {
+		_spec.SetField(apikey.FieldKeySha256, field.TypeString, value)
+	}
+	if _u.mutation.KeySha256Cleared() {
+		_spec.ClearField(apikey.FieldKeySha256, field.TypeString)
+	}
+	if value, ok := _u.mutation.KeyPrefix(); ok {
+		_spec.SetField(apikey.FieldKeyPrefix, field.TypeString, value)
+	}
+	if _u.mutation.KeyPrefixCleared() {
+		_spec.ClearField(apikey.FieldKeyPrefix, field.TypeString)
+	}
+	if value, ok := _u.mutation.PlatformKeyVersion(); ok {
+		_spec.SetField(apikey.FieldPlatformKeyVersion, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedPlatformKeyVersion(); ok {
+		_spec.AddField(apikey.FieldPlatformKeyVersion, field.TypeInt64, value)
+	}
+	if _u.mutation.PlatformKeyVersionCleared() {
+		_spec.ClearField(apikey.FieldPlatformKeyVersion, field.TypeInt64)
+	}
 	if value, ok := _u.mutation.Name(); ok {
 		_spec.SetField(apikey.FieldName, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.RoutingMode(); ok {
+		_spec.SetField(apikey.FieldRoutingMode, field.TypeString, value)
 	}
 	if value, ok := _u.mutation.Status(); ok {
 		_spec.SetField(apikey.FieldStatus, field.TypeString, value)

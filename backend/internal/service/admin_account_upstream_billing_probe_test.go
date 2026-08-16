@@ -64,6 +64,23 @@ func TestCreateAccountAcceptsDedicatedUpstreamBillingProbeSetting(t *testing.T) 
 	require.ErrorIs(t, err, ErrUpstreamBillingProbeAccountInvalid)
 }
 
+func TestCreateAccountNormalizesDeprecatedOpenAIUpstreamType(t *testing.T) {
+	enabled := true
+	repo := &upstreamBillingProbeAccountRepo{}
+	created, err := (&adminServiceImpl{accountRepo: repo}).CreateAccount(context.Background(), &CreateAccountInput{
+		Name:                 "custom-openai",
+		Platform:             PlatformOpenAI,
+		Type:                 AccountTypeUpstream,
+		Credentials:          map[string]any{"api_key": "sk-test", "base_url": "https://openai.example.com"},
+		ProbeEnabled:         &enabled,
+		SkipDefaultGroupBind: true,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, AccountTypeAPIKey, created.Type)
+	require.Equal(t, true, created.Extra[UpstreamBillingProbeEnabledExtraKey])
+}
+
 func TestUpdateAccountPreservesManagedUpstreamBillingProbeStateForUnrelatedEdit(t *testing.T) {
 	accountID := int64(110)
 	repo := &upstreamBillingProbeAccountRepo{accounts: map[int64]*Account{

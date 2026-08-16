@@ -88,6 +88,20 @@ func (_c *UserCreate) SetPasswordHash(v string) *UserCreate {
 	return _c
 }
 
+// SetPlatformUserID sets the "platform_user_id" field.
+func (_c *UserCreate) SetPlatformUserID(v string) *UserCreate {
+	_c.mutation.SetPlatformUserID(v)
+	return _c
+}
+
+// SetNillablePlatformUserID sets the "platform_user_id" field if the given value is not nil.
+func (_c *UserCreate) SetNillablePlatformUserID(v *string) *UserCreate {
+	if v != nil {
+		_c.SetPlatformUserID(*v)
+	}
+	return _c
+}
+
 // SetRole sets the "role" field.
 func (_c *UserCreate) SetRole(v string) *UserCreate {
 	_c.mutation.SetRole(v)
@@ -126,6 +140,20 @@ func (_c *UserCreate) SetFrozenBalance(v float64) *UserCreate {
 func (_c *UserCreate) SetNillableFrozenBalance(v *float64) *UserCreate {
 	if v != nil {
 		_c.SetFrozenBalance(*v)
+	}
+	return _c
+}
+
+// SetBillingCurrency sets the "billing_currency" field.
+func (_c *UserCreate) SetBillingCurrency(v string) *UserCreate {
+	_c.mutation.SetBillingCurrency(v)
+	return _c
+}
+
+// SetNillableBillingCurrency sets the "billing_currency" field if the given value is not nil.
+func (_c *UserCreate) SetNillableBillingCurrency(v *string) *UserCreate {
+	if v != nil {
+		_c.SetBillingCurrency(*v)
 	}
 	return _c
 }
@@ -612,6 +640,10 @@ func (_c *UserCreate) defaults() error {
 		v := user.DefaultFrozenBalance
 		_c.mutation.SetFrozenBalance(v)
 	}
+	if _, ok := _c.mutation.BillingCurrency(); !ok {
+		v := user.DefaultBillingCurrency
+		_c.mutation.SetBillingCurrency(v)
+	}
 	if _, ok := _c.mutation.Concurrency(); !ok {
 		v := user.DefaultConcurrency
 		_c.mutation.SetConcurrency(v)
@@ -683,6 +715,11 @@ func (_c *UserCreate) check() error {
 			return &ValidationError{Name: "password_hash", err: fmt.Errorf(`ent: validator failed for field "User.password_hash": %w`, err)}
 		}
 	}
+	if v, ok := _c.mutation.PlatformUserID(); ok {
+		if err := user.PlatformUserIDValidator(v); err != nil {
+			return &ValidationError{Name: "platform_user_id", err: fmt.Errorf(`ent: validator failed for field "User.platform_user_id": %w`, err)}
+		}
+	}
 	if _, ok := _c.mutation.Role(); !ok {
 		return &ValidationError{Name: "role", err: errors.New(`ent: missing required field "User.role"`)}
 	}
@@ -696,6 +733,14 @@ func (_c *UserCreate) check() error {
 	}
 	if _, ok := _c.mutation.FrozenBalance(); !ok {
 		return &ValidationError{Name: "frozen_balance", err: errors.New(`ent: missing required field "User.frozen_balance"`)}
+	}
+	if _, ok := _c.mutation.BillingCurrency(); !ok {
+		return &ValidationError{Name: "billing_currency", err: errors.New(`ent: missing required field "User.billing_currency"`)}
+	}
+	if v, ok := _c.mutation.BillingCurrency(); ok {
+		if err := user.BillingCurrencyValidator(v); err != nil {
+			return &ValidationError{Name: "billing_currency", err: fmt.Errorf(`ent: validator failed for field "User.billing_currency": %w`, err)}
+		}
 	}
 	if _, ok := _c.mutation.Concurrency(); !ok {
 		return &ValidationError{Name: "concurrency", err: errors.New(`ent: missing required field "User.concurrency"`)}
@@ -792,6 +837,10 @@ func (_c *UserCreate) createSpec() (*User, *sqlgraph.CreateSpec) {
 		_spec.SetField(user.FieldPasswordHash, field.TypeString, value)
 		_node.PasswordHash = value
 	}
+	if value, ok := _c.mutation.PlatformUserID(); ok {
+		_spec.SetField(user.FieldPlatformUserID, field.TypeString, value)
+		_node.PlatformUserID = &value
+	}
 	if value, ok := _c.mutation.Role(); ok {
 		_spec.SetField(user.FieldRole, field.TypeString, value)
 		_node.Role = value
@@ -803,6 +852,10 @@ func (_c *UserCreate) createSpec() (*User, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.FrozenBalance(); ok {
 		_spec.SetField(user.FieldFrozenBalance, field.TypeFloat64, value)
 		_node.FrozenBalance = value
+	}
+	if value, ok := _c.mutation.BillingCurrency(); ok {
+		_spec.SetField(user.FieldBillingCurrency, field.TypeString, value)
+		_node.BillingCurrency = value
 	}
 	if value, ok := _c.mutation.Concurrency(); ok {
 		_spec.SetField(user.FieldConcurrency, field.TypeInt, value)
@@ -1234,6 +1287,18 @@ func (u *UserUpsert) AddFrozenBalance(v float64) *UserUpsert {
 	return u
 }
 
+// SetBillingCurrency sets the "billing_currency" field.
+func (u *UserUpsert) SetBillingCurrency(v string) *UserUpsert {
+	u.Set(user.FieldBillingCurrency, v)
+	return u
+}
+
+// UpdateBillingCurrency sets the "billing_currency" field to the value that was provided on create.
+func (u *UserUpsert) UpdateBillingCurrency() *UserUpsert {
+	u.SetExcluded(user.FieldBillingCurrency)
+	return u
+}
+
 // SetConcurrency sets the "concurrency" field.
 func (u *UserUpsert) SetConcurrency(v int) *UserUpsert {
 	u.Set(user.FieldConcurrency, v)
@@ -1494,6 +1559,9 @@ func (u *UserUpsertOne) UpdateNewValues() *UserUpsertOne {
 		if _, exists := u.create.mutation.CreatedAt(); exists {
 			s.SetIgnore(user.FieldCreatedAt)
 		}
+		if _, exists := u.create.mutation.PlatformUserID(); exists {
+			s.SetIgnore(user.FieldPlatformUserID)
+		}
 	}))
 	return u
 }
@@ -1641,6 +1709,20 @@ func (u *UserUpsertOne) AddFrozenBalance(v float64) *UserUpsertOne {
 func (u *UserUpsertOne) UpdateFrozenBalance() *UserUpsertOne {
 	return u.Update(func(s *UserUpsert) {
 		s.UpdateFrozenBalance()
+	})
+}
+
+// SetBillingCurrency sets the "billing_currency" field.
+func (u *UserUpsertOne) SetBillingCurrency(v string) *UserUpsertOne {
+	return u.Update(func(s *UserUpsert) {
+		s.SetBillingCurrency(v)
+	})
+}
+
+// UpdateBillingCurrency sets the "billing_currency" field to the value that was provided on create.
+func (u *UserUpsertOne) UpdateBillingCurrency() *UserUpsertOne {
+	return u.Update(func(s *UserUpsert) {
+		s.UpdateBillingCurrency()
 	})
 }
 
@@ -2110,6 +2192,9 @@ func (u *UserUpsertBulk) UpdateNewValues() *UserUpsertBulk {
 			if _, exists := b.mutation.CreatedAt(); exists {
 				s.SetIgnore(user.FieldCreatedAt)
 			}
+			if _, exists := b.mutation.PlatformUserID(); exists {
+				s.SetIgnore(user.FieldPlatformUserID)
+			}
 		}
 	}))
 	return u
@@ -2258,6 +2343,20 @@ func (u *UserUpsertBulk) AddFrozenBalance(v float64) *UserUpsertBulk {
 func (u *UserUpsertBulk) UpdateFrozenBalance() *UserUpsertBulk {
 	return u.Update(func(s *UserUpsert) {
 		s.UpdateFrozenBalance()
+	})
+}
+
+// SetBillingCurrency sets the "billing_currency" field.
+func (u *UserUpsertBulk) SetBillingCurrency(v string) *UserUpsertBulk {
+	return u.Update(func(s *UserUpsert) {
+		s.SetBillingCurrency(v)
+	})
+}
+
+// UpdateBillingCurrency sets the "billing_currency" field to the value that was provided on create.
+func (u *UserUpsertBulk) UpdateBillingCurrency() *UserUpsertBulk {
+	return u.Update(func(s *UserUpsert) {
+		s.UpdateBillingCurrency()
 	})
 }
 

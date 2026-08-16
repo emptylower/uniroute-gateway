@@ -14,12 +14,13 @@ import (
 )
 
 var (
-	ErrPromoCodeNotFound    = infraerrors.NotFound("PROMO_CODE_NOT_FOUND", "promo code not found")
-	ErrPromoCodeExpired     = infraerrors.BadRequest("PROMO_CODE_EXPIRED", "promo code has expired")
-	ErrPromoCodeDisabled    = infraerrors.BadRequest("PROMO_CODE_DISABLED", "promo code is disabled")
-	ErrPromoCodeMaxUsed     = infraerrors.BadRequest("PROMO_CODE_MAX_USED", "promo code has reached maximum uses")
-	ErrPromoCodeAlreadyUsed = infraerrors.Conflict("PROMO_CODE_ALREADY_USED", "you have already used this promo code")
-	ErrPromoCodeInvalid     = infraerrors.BadRequest("PROMO_CODE_INVALID", "invalid promo code")
+	ErrPromoCodeNotFound     = infraerrors.NotFound("PROMO_CODE_NOT_FOUND", "promo code not found")
+	ErrPromoCodeExpired      = infraerrors.BadRequest("PROMO_CODE_EXPIRED", "promo code has expired")
+	ErrPromoCodeDisabled     = infraerrors.BadRequest("PROMO_CODE_DISABLED", "promo code is disabled")
+	ErrPromoCodeMaxUsed      = infraerrors.BadRequest("PROMO_CODE_MAX_USED", "promo code has reached maximum uses")
+	ErrPromoCodeAlreadyUsed  = infraerrors.Conflict("PROMO_CODE_ALREADY_USED", "you have already used this promo code")
+	ErrPromoCodeInvalid      = infraerrors.BadRequest("PROMO_CODE_INVALID", "invalid promo code")
+	ErrPromoCurrencyMismatch = infraerrors.BadRequest("PROMO_CURRENCY_MISMATCH", "promo code currency does not match wallet currency")
 )
 
 // PromoService 优惠码服务
@@ -122,6 +123,13 @@ func (s *PromoService) ApplyPromoCode(ctx context.Context, userID int64, code st
 	if existing != nil {
 		return ErrPromoCodeAlreadyUsed
 	}
+	promoUser, err := lockBillingWallet(txCtx, tx.Client(), userID)
+	if err != nil {
+		return fmt.Errorf("lock promo wallet: %w", err)
+	}
+	if NormalizeUserBillingCurrency(promoUser.BillingCurrency) != NormalizeUserBillingCurrency(promoCode.Currency) {
+		return ErrPromoCurrencyMismatch
+	}
 
 	// 增加用户余额
 	if err := s.userRepo.UpdateBalance(txCtx, userID, promoCode.BonusAmount); err != nil {
@@ -193,6 +201,7 @@ func (s *PromoService) Create(ctx context.Context, input *CreatePromoCodeInput) 
 	promoCode := &PromoCode{
 		Code:        strings.ToUpper(code),
 		BonusAmount: input.BonusAmount,
+		Currency:    NormalizeUserBillingCurrency(input.Currency),
 		MaxUses:     input.MaxUses,
 		UsedCount:   0,
 		Status:      PromoCodeStatusActive,
@@ -228,6 +237,13 @@ func (s *PromoService) Update(ctx context.Context, id int64, input *UpdatePromoC
 	}
 	if input.BonusAmount != nil {
 		promoCode.BonusAmount = *input.BonusAmount
+	}
+	if input.Currency != nil {
+		currency, err := NormalizeBillingCurrency(*input.Currency)
+		if err != nil {
+			return nil, err
+		}
+		promoCode.Currency = currency
 	}
 	if input.MaxUses != nil {
 		promoCode.MaxUses = *input.MaxUses

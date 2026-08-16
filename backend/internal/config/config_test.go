@@ -40,6 +40,93 @@ func TestLoadServerTimingConfig(t *testing.T) {
 	})
 }
 
+func TestLoadPlatformIdentityBridgeIsDisabledByDefault(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.False(t, cfg.PlatformIdentity.Enabled)
+	require.Empty(t, cfg.PlatformIdentity.Secret)
+}
+
+func TestLoadPlatformIdentityBridgeRequiresIndependentStrongSecret(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	t.Setenv("PLATFORM_IDENTITY_ENABLED", "true")
+	t.Setenv("PLATFORM_IDENTITY_SECRET", "too-short")
+	_, err := Load()
+	require.ErrorContains(t, err, "platform_identity.secret must be at least 32 bytes")
+
+	resetViperWithJWTSecret(t)
+	t.Setenv("PLATFORM_IDENTITY_ENABLED", "true")
+	t.Setenv("PLATFORM_IDENTITY_SECRET", strings.Repeat("p", 32))
+	t.Setenv("PLATFORM_IDENTITY_VERSION", "v9")
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.True(t, cfg.PlatformIdentity.Enabled)
+	require.Equal(t, "v9", cfg.PlatformIdentity.Version)
+}
+
+func TestLoadPlatformIdentityBridgeRejectsPanelJWTSecretReuse(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	t.Setenv("PLATFORM_IDENTITY_ENABLED", "true")
+	t.Setenv("PLATFORM_IDENTITY_SECRET", strings.Repeat("x", 32))
+
+	_, err := Load()
+	require.ErrorContains(t, err, "must be independent from jwt.secret")
+}
+
+func TestLoadCanonicalWalletIsDisabledByDefault(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, CanonicalWalletModeDisabled, cfg.CanonicalWallet.Mode)
+	require.Empty(t, cfg.CanonicalWallet.Secret)
+}
+
+func TestLoadCanonicalWalletShadowRequiresIndependentSecret(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	t.Setenv("CANONICAL_WALLET_MODE", CanonicalWalletModeShadow)
+	t.Setenv("CANONICAL_WALLET_CONTROL_PLANE_URL", "https://control.example.test")
+	t.Setenv("CANONICAL_WALLET_SECRET", strings.Repeat("w", 32))
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, CanonicalWalletModeShadow, cfg.CanonicalWallet.Mode)
+
+	resetViperWithJWTSecret(t)
+	t.Setenv("CANONICAL_WALLET_MODE", CanonicalWalletModeShadow)
+	t.Setenv("CANONICAL_WALLET_CONTROL_PLANE_URL", "https://control.example.test")
+	t.Setenv("CANONICAL_WALLET_SECRET", strings.Repeat("x", 32))
+	_, err = Load()
+	require.ErrorContains(t, err, "must be independent")
+}
+
+func TestLoadCanonicalWalletEnforceIsRejectedUntilAdmissionIsWired(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	t.Setenv("CANONICAL_WALLET_MODE", CanonicalWalletModeEnforce)
+	t.Setenv("CANONICAL_WALLET_CONTROL_PLANE_URL", "https://control.example.test")
+	t.Setenv("CANONICAL_WALLET_SECRET", strings.Repeat("w", 32))
+	_, err := Load()
+	require.ErrorContains(t, err, "enforce mode is unavailable")
+
+	t.Setenv("CANONICAL_WALLET_ENFORCE_READY", "true")
+	_, err = Load()
+	require.ErrorContains(t, err, "enforce mode is unavailable")
+}
+
+func TestLoadDataPlaneOnlyRequiresPlatformIdentity(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	t.Setenv("SERVER_DATA_PLANE_ONLY", "true")
+	_, err := Load()
+	require.ErrorContains(t, err, "requires platform_identity.enabled=true")
+
+	resetViperWithJWTSecret(t)
+	t.Setenv("SERVER_DATA_PLANE_ONLY", "true")
+	t.Setenv("PLATFORM_IDENTITY_ENABLED", "true")
+	t.Setenv("PLATFORM_IDENTITY_SECRET", strings.Repeat("p", 32))
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.True(t, cfg.Server.DataPlaneOnly)
+}
+
 func TestLoadRedisUsernameFromEnvironment(t *testing.T) {
 	resetViperWithJWTSecret(t)
 	t.Setenv("REDIS_USERNAME", "app-user")
@@ -57,7 +144,7 @@ func TestLoadHTTPIngressSafetyDefaults(t *testing.T) {
 	require.Equal(t, 64*1024, cfg.Server.MaxHeaderBytes)
 	require.Empty(t, cfg.Server.TrustedProxies)
 	require.False(t, cfg.Server.TrustedProxiesConfigured)
-	require.True(t, cfg.TrustForwardedIPForAPIKeyACL())
+	require.False(t, cfg.TrustForwardedIPForAPIKeyACL())
 	require.Equal(t, int64(32*1024*1024), cfg.Gateway.TextMaxBodySize)
 	require.True(t, cfg.APIKeyAuth.InvalidAbuse.Enabled)
 	require.Equal(t, 120, cfg.APIKeyAuth.InvalidAbuse.Threshold)
@@ -1932,12 +2019,9 @@ func TestValidateConfigErrors(t *testing.T) {
 			wantErr: "gateway.usage_record.overflow_sample_percent",
 		},
 		{
-			name: "gateway usage record sample percent required for sample policy",
-			mutate: func(c *Config) {
-				c.Gateway.UsageRecord.OverflowPolicy = UsageRecordOverflowPolicySample
-				c.Gateway.UsageRecord.OverflowSamplePercent = 0
-			},
-			wantErr: "gateway.usage_record.overflow_sample_percent must be positive",
+			name:    "gateway usage record lossy overflow policy",
+			mutate:  func(c *Config) { c.Gateway.UsageRecord.OverflowPolicy = UsageRecordOverflowPolicySample },
+			wantErr: "gateway.usage_record.overflow_policy must be sync",
 		},
 		{
 			name: "gateway usage record auto scale max gte min",

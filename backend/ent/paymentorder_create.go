@@ -81,6 +81,20 @@ func (_c *PaymentOrderCreate) SetNillableFeeRate(v *float64) *PaymentOrderCreate
 	return _c
 }
 
+// SetSettlementCurrency sets the "settlement_currency" field.
+func (_c *PaymentOrderCreate) SetSettlementCurrency(v string) *PaymentOrderCreate {
+	_c.mutation.SetSettlementCurrency(v)
+	return _c
+}
+
+// SetNillableSettlementCurrency sets the "settlement_currency" field if the given value is not nil.
+func (_c *PaymentOrderCreate) SetNillableSettlementCurrency(v *string) *PaymentOrderCreate {
+	if v != nil {
+		_c.SetSettlementCurrency(*v)
+	}
+	return _c
+}
+
 // SetRechargeCode sets the "recharge_code" field.
 func (_c *PaymentOrderCreate) SetRechargeCode(v string) *PaymentOrderCreate {
 	_c.mutation.SetRechargeCode(v)
@@ -577,6 +591,11 @@ func (_c *PaymentOrderCreate) check() error {
 	if _, ok := _c.mutation.FeeRate(); !ok {
 		return &ValidationError{Name: "fee_rate", err: errors.New(`ent: missing required field "PaymentOrder.fee_rate"`)}
 	}
+	if v, ok := _c.mutation.SettlementCurrency(); ok {
+		if err := paymentorder.SettlementCurrencyValidator(v); err != nil {
+			return &ValidationError{Name: "settlement_currency", err: fmt.Errorf(`ent: validator failed for field "PaymentOrder.settlement_currency": %w`, err)}
+		}
+	}
 	if _, ok := _c.mutation.RechargeCode(); !ok {
 		return &ValidationError{Name: "recharge_code", err: errors.New(`ent: missing required field "PaymentOrder.recharge_code"`)}
 	}
@@ -724,6 +743,10 @@ func (_c *PaymentOrderCreate) createSpec() (*PaymentOrder, *sqlgraph.CreateSpec)
 	if value, ok := _c.mutation.FeeRate(); ok {
 		_spec.SetField(paymentorder.FieldFeeRate, field.TypeFloat64, value)
 		_node.FeeRate = value
+	}
+	if value, ok := _c.mutation.SettlementCurrency(); ok {
+		_spec.SetField(paymentorder.FieldSettlementCurrency, field.TypeString, value)
+		_node.SettlementCurrency = &value
 	}
 	if value, ok := _c.mutation.RechargeCode(); ok {
 		_spec.SetField(paymentorder.FieldRechargeCode, field.TypeString, value)
@@ -1027,6 +1050,24 @@ func (u *PaymentOrderUpsert) UpdateFeeRate() *PaymentOrderUpsert {
 // AddFeeRate adds v to the "fee_rate" field.
 func (u *PaymentOrderUpsert) AddFeeRate(v float64) *PaymentOrderUpsert {
 	u.Add(paymentorder.FieldFeeRate, v)
+	return u
+}
+
+// SetSettlementCurrency sets the "settlement_currency" field.
+func (u *PaymentOrderUpsert) SetSettlementCurrency(v string) *PaymentOrderUpsert {
+	u.Set(paymentorder.FieldSettlementCurrency, v)
+	return u
+}
+
+// UpdateSettlementCurrency sets the "settlement_currency" field to the value that was provided on create.
+func (u *PaymentOrderUpsert) UpdateSettlementCurrency() *PaymentOrderUpsert {
+	u.SetExcluded(paymentorder.FieldSettlementCurrency)
+	return u
+}
+
+// ClearSettlementCurrency clears the value of the "settlement_currency" field.
+func (u *PaymentOrderUpsert) ClearSettlementCurrency() *PaymentOrderUpsert {
+	u.SetNull(paymentorder.FieldSettlementCurrency)
 	return u
 }
 
@@ -1708,6 +1749,27 @@ func (u *PaymentOrderUpsertOne) AddFeeRate(v float64) *PaymentOrderUpsertOne {
 func (u *PaymentOrderUpsertOne) UpdateFeeRate() *PaymentOrderUpsertOne {
 	return u.Update(func(s *PaymentOrderUpsert) {
 		s.UpdateFeeRate()
+	})
+}
+
+// SetSettlementCurrency sets the "settlement_currency" field.
+func (u *PaymentOrderUpsertOne) SetSettlementCurrency(v string) *PaymentOrderUpsertOne {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.SetSettlementCurrency(v)
+	})
+}
+
+// UpdateSettlementCurrency sets the "settlement_currency" field to the value that was provided on create.
+func (u *PaymentOrderUpsertOne) UpdateSettlementCurrency() *PaymentOrderUpsertOne {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.UpdateSettlementCurrency()
+	})
+}
+
+// ClearSettlementCurrency clears the value of the "settlement_currency" field.
+func (u *PaymentOrderUpsertOne) ClearSettlementCurrency() *PaymentOrderUpsertOne {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.ClearSettlementCurrency()
 	})
 }
 
@@ -2640,6 +2702,27 @@ func (u *PaymentOrderUpsertBulk) AddFeeRate(v float64) *PaymentOrderUpsertBulk {
 func (u *PaymentOrderUpsertBulk) UpdateFeeRate() *PaymentOrderUpsertBulk {
 	return u.Update(func(s *PaymentOrderUpsert) {
 		s.UpdateFeeRate()
+	})
+}
+
+// SetSettlementCurrency sets the "settlement_currency" field.
+func (u *PaymentOrderUpsertBulk) SetSettlementCurrency(v string) *PaymentOrderUpsertBulk {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.SetSettlementCurrency(v)
+	})
+}
+
+// UpdateSettlementCurrency sets the "settlement_currency" field to the value that was provided on create.
+func (u *PaymentOrderUpsertBulk) UpdateSettlementCurrency() *PaymentOrderUpsertBulk {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.UpdateSettlementCurrency()
+	})
+}
+
+// ClearSettlementCurrency clears the value of the "settlement_currency" field.
+func (u *PaymentOrderUpsertBulk) ClearSettlementCurrency() *PaymentOrderUpsertBulk {
+	return u.Update(func(s *PaymentOrderUpsert) {
+		s.ClearSettlementCurrency()
 	})
 }
 

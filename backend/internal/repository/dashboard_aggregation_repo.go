@@ -330,7 +330,7 @@ func (r *dashboardAggregationRepository) upsertHourlyAggregates(ctx context.Cont
 				COALESCE(SUM(cache_creation_tokens), 0) AS cache_creation_tokens,
 				COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
 				COALESCE(SUM(total_cost), 0) AS total_cost,
-				COALESCE(SUM(actual_cost), 0) AS actual_cost,
+				COALESCE(SUM(CASE WHEN exchange_rate_source <> 'legacy' AND exchange_rate > 0 THEN actual_cost / exchange_rate ELSE actual_cost END), 0) AS actual_cost,
 				COALESCE(SUM(COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)), 0) AS account_cost,
 				COALESCE(SUM(COALESCE(duration_ms, 0)), 0) AS total_duration_ms
 			FROM usage_logs

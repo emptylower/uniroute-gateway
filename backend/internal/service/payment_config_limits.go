@@ -34,10 +34,32 @@ func (s *PaymentConfigService) GetAvailableMethodLimits(ctx context.Context) (*M
 		ml := pcAggregateMethodLimits(pt, insts)
 		ml.DisplayName = s.pcAggregateMethodDisplayName(pt, insts)
 		ml.Currency = currency
+		ml.Available = true
 		resp.Methods[ml.PaymentType] = ml
 	}
 	resp.GlobalMin, resp.GlobalMax = pcComputeGlobalRange(resp.Methods)
 	return resp, nil
+}
+
+// ApplyConfig keeps checkout discovery and order creation on the same payment
+// enablement rules. Provider instances alone must never expose a disabled
+// payment method to users.
+func (r *MethodLimitsResponse) ApplyConfig(cfg *PaymentConfig) {
+	if r == nil {
+		return
+	}
+	if cfg == nil || !cfg.Enabled {
+		r.Methods = map[string]MethodLimits{}
+		r.GlobalMin = 0
+		r.GlobalMax = 0
+		return
+	}
+	for method := range r.Methods {
+		if !cfg.IsPaymentTypeEnabled(method) {
+			delete(r.Methods, method)
+		}
+	}
+	r.GlobalMin, r.GlobalMax = pcComputeGlobalRange(r.Methods)
 }
 
 func (s *PaymentConfigService) pcApplyEnabledVisibleMethodInstances(ctx context.Context, typeInstances map[string][]*dbent.PaymentProviderInstance, instances []*dbent.PaymentProviderInstance) map[string][]*dbent.PaymentProviderInstance {

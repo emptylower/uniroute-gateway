@@ -36,6 +36,9 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 	if !cfg.Enabled {
 		return nil, infraerrors.Forbidden("PAYMENT_DISABLED", "payment system is disabled")
 	}
+	if !cfg.IsPaymentTypeEnabled(req.PaymentType) {
+		return nil, infraerrors.Forbidden("PAYMENT_METHOD_DISABLED", "payment method is disabled")
+	}
 	plan, err := s.validateOrderInput(ctx, req, cfg)
 	if err != nil {
 		return nil, err
@@ -69,6 +72,9 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 			return nil, err
 		}
 	}
+	if err := validateBalanceSettlementCurrency(user, req.OrderType, methodCurrency); err != nil {
+		return nil, err
+	}
 	payAmountStr, payAmount, err := calculateCreateOrderPayAmountForOrderType(limitAmount, feeRate, methodCurrency, req.OrderType, cfg.SubscriptionUSDToCNYRate)
 	if err != nil {
 		return nil, err
@@ -89,6 +95,9 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 		if err != nil {
 			return nil, err
 		}
+	}
+	if err := validateBalanceSettlementCurrency(user, req.OrderType, selectedCurrency); err != nil {
+		return nil, err
 	}
 	if err := validateSelectedCreateOrderAmountCurrency(payAmountStr, sel); err != nil {
 		return nil, err
@@ -112,6 +121,24 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 		return nil, err
 	}
 	return resp, nil
+}
+
+func validateBalanceSettlementCurrency(user *User, orderType, paymentCurrency string) error {
+	if orderType != payment.OrderTypeBalance || user == nil {
+		return nil
+	}
+	settlementCurrency := NormalizeUserBillingCurrency(user.BillingCurrency)
+	paymentCurrency = strings.ToUpper(strings.TrimSpace(paymentCurrency))
+	if paymentCurrency == "" {
+		paymentCurrency = payment.DefaultPaymentCurrency
+	}
+	if settlementCurrency == paymentCurrency {
+		return nil
+	}
+	return infraerrors.BadRequest(
+		"PAYMENT_CURRENCY_MISMATCH",
+		fmt.Sprintf("%s balance cannot be recharged through a %s payment channel", settlementCurrency, paymentCurrency),
+	)
 }
 
 func (s *PaymentService) validateOrderInput(ctx context.Context, req CreateOrderRequest, cfg *PaymentConfig) (*dbent.SubscriptionPlan, error) {
@@ -155,6 +182,27 @@ func (s *PaymentService) createOrderInTx(ctx context.Context, req CreateOrderReq
 		return nil, fmt.Errorf("begin transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	orderUser := user
+	if req.OrderType == payment.OrderTypeBalance {
+		locked, lockErr := lockBillingWallet(ctx, tx.Client(), req.UserID)
+		if lockErr != nil {
+			return nil, fmt.Errorf("lock user for balance order: %w", lockErr)
+		}
+		selectedCurrency := payment.DefaultPaymentCurrency
+		if sel != nil {
+			selectedCurrency = paymentProviderConfigCurrency(sel.ProviderKey, sel.Config)
+		}
+		if err := validateBalanceSettlementCurrency(&User{BillingCurrency: locked.BillingCurrency}, req.OrderType, selectedCurrency); err != nil {
+			return nil, err
+		}
+		if locked.Status != payment.EntityStatusActive {
+			return nil, infraerrors.Forbidden("USER_INACTIVE", "user account is disabled")
+		}
+		orderUser = &User{
+			ID: locked.ID, Email: locked.Email, Username: locked.Username,
+			Notes: locked.Notes, BillingCurrency: locked.BillingCurrency,
+		}
+	}
 	if err := s.checkPendingLimit(ctx, tx, req.UserID, cfg.MaxPendingOrders); err != nil {
 		return nil, err
 	}
@@ -179,9 +227,9 @@ func (s *PaymentService) createOrderInTx(ctx context.Context, req CreateOrderReq
 	}
 	b := tx.PaymentOrder.Create().
 		SetUserID(req.UserID).
-		SetUserEmail(user.Email).
-		SetUserName(user.Username).
-		SetNillableUserNotes(psNilIfEmpty(user.Notes)).
+		SetUserEmail(orderUser.Email).
+		SetUserName(orderUser.Username).
+		SetNillableUserNotes(psNilIfEmpty(orderUser.Notes)).
 		SetAmount(orderAmount).
 		SetPayAmount(payAmount).
 		SetFeeRate(feeRate).
@@ -194,6 +242,9 @@ func (s *PaymentService) createOrderInTx(ctx context.Context, req CreateOrderReq
 		SetExpiresAt(exp).
 		SetClientIP(req.ClientIP).
 		SetSrcHost(req.SrcHost)
+	if req.OrderType == payment.OrderTypeBalance {
+		b.SetSettlementCurrency(NormalizeUserBillingCurrency(orderUser.BillingCurrency))
+	}
 	if req.SrcURL != "" {
 		b.SetSrcURL(req.SrcURL)
 	}

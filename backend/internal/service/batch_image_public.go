@@ -76,9 +76,10 @@ type BatchImageReferenceInput struct {
 }
 
 type BatchImageOwner struct {
-	UserID   int64
-	APIKeyID int64
-	GroupID  *int64
+	UserID          int64
+	APIKeyID        int64
+	GroupID         *int64
+	BillingCurrency string
 }
 
 type BatchImagePublicService struct {
@@ -92,9 +93,14 @@ type BatchImagePublicService struct {
 	BillingRepo       UsageBillingRepository
 	AuthCache         APIKeyAuthCacheInvalidator
 	Config            *config.Config
+	ExchangeRates     *ExchangeRateService
 }
 
 type BatchImagePricingSnapshot struct {
+	Currency                string
+	ExchangeRate            float64
+	ExchangeRateSource      string
+	ExchangeRateAsOf        time.Time
 	BaseUnitPrice           float64
 	GroupRateMultiplier     float64
 	AccountRateMultiplier   float64
@@ -194,6 +200,7 @@ func NewBatchImagePublicService(repo BatchImageRepository, accountRepo AccountRe
 		BillingRepo:       billingRepo,
 		AuthCache:         authCache,
 		Config:            cfg,
+		ExchangeRates:     NewExchangeRateService(cfg),
 	}
 }
 
@@ -278,7 +285,10 @@ func (s *BatchImagePublicService) Submit(ctx context.Context, owner BatchImageOw
 		BillableUnitPrice:       pricingSnapshot.BillableUnitPrice,
 		HoldUnitPrice:           pricingSnapshot.HoldUnitPrice,
 		PricingSnapshotVersion:  1,
-		Currency:                "USD",
+		Currency:                pricingSnapshot.Currency,
+		ExchangeRate:            pricingSnapshot.ExchangeRate,
+		ExchangeRateSource:      pricingSnapshot.ExchangeRateSource,
+		ExchangeRateAsOf:        pricingSnapshot.ExchangeRateAsOf,
 		HoldID:                  &holdID,
 		IdempotencyKey:          batchImageOptionalStringPtr(idempotencyKey),
 		RequestHash:             batchImageStringPtr(requestHash),
@@ -997,6 +1007,14 @@ func (s *BatchImagePublicService) ensureGroupAllowsBatchImage(ctx context.Contex
 }
 
 func (s *BatchImagePublicService) resolvePricingSnapshot(ctx context.Context, owner BatchImageOwner, req BatchImageSubmitRequest, provider string, account *Account) (*BatchImagePricingSnapshot, error) {
+	currency := CurrencyUSD
+	if strings.TrimSpace(owner.BillingCurrency) != "" {
+		currency = NormalizeUserBillingCurrency(owner.BillingCurrency)
+	}
+	fx, err := s.ExchangeRates.Snapshot(ctx, CurrencyUSD, currency)
+	if err != nil {
+		return nil, ErrBatchImageSettlementPricingMissing.WithCause(err)
+	}
 	unit := -1.0
 	groupMultiplier := 1.0
 	discountMultiplier := defaultBatchImageDiscountMultiplier
@@ -1012,7 +1030,7 @@ func (s *BatchImagePublicService) resolvePricingSnapshot(ctx context.Context, ow
 		if !group.AllowBatchImageGeneration {
 			return nil, ErrBatchImageGroupDisabled
 		}
-		groupDefaultMultiplier := group.RateMultiplier
+		groupDefaultMultiplier := group.RateMultiplierForCurrency(currency)
 		if groupDefaultMultiplier < 0 {
 			groupDefaultMultiplier = 0
 		}
@@ -1071,10 +1089,14 @@ func (s *BatchImagePublicService) resolvePricingSnapshot(ctx context.Context, ow
 	if accountMultiplier < 0 {
 		accountMultiplier = 0
 	}
-	standardUnitPrice := unit * groupMultiplier * accountMultiplier
+	standardUnitPrice := unit * fx.Rate * groupMultiplier * accountMultiplier
 	billableUnitPrice := standardUnitPrice * discountMultiplier
 	holdUnitPrice := standardUnitPrice * holdMultiplier
 	return &BatchImagePricingSnapshot{
+		Currency:                currency,
+		ExchangeRate:            fx.Rate,
+		ExchangeRateSource:      fx.Source,
+		ExchangeRateAsOf:        fx.AsOf,
 		BaseUnitPrice:           unit,
 		GroupRateMultiplier:     groupMultiplier,
 		AccountRateMultiplier:   accountMultiplier,

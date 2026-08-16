@@ -19,6 +19,13 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 )
 
+func equalOptionalFloat(a, b *float64) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
+}
+
 // Group management implementations
 func (s *adminServiceImpl) ListGroups(ctx context.Context, page, pageSize int, platform, status, search string, isExclusive *bool, sortBy, sortOrder string) ([]Group, int64, error) {
 	params := pagination.PaginationParams{Page: page, PageSize: pageSize, SortBy: sortBy, SortOrder: sortOrder}
@@ -299,6 +306,12 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 	if input.RateMultiplier <= 0 {
 		return nil, errors.New("rate_multiplier must be > 0")
 	}
+	if input.RateMultiplierCNY != nil && *input.RateMultiplierCNY <= 0 {
+		return nil, errors.New("rate_multiplier_cny must be > 0")
+	}
+	if input.RateMultiplierUSD != nil && *input.RateMultiplierUSD <= 0 {
+		return nil, errors.New("rate_multiplier_usd must be > 0")
+	}
 
 	platform := input.Platform
 	if platform == "" {
@@ -438,6 +451,8 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		Description:                     input.Description,
 		Platform:                        platform,
 		RateMultiplier:                  input.RateMultiplier,
+		RateMultiplierCNY:               input.RateMultiplierCNY,
+		RateMultiplierUSD:               input.RateMultiplierUSD,
 		IsExclusive:                     input.IsExclusive,
 		Status:                          StatusActive,
 		SubscriptionType:                subscriptionType,
@@ -488,6 +503,8 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 	if err := s.groupRepo.Create(ctx, group); err != nil {
 		return nil, err
 	}
+	logger.LegacyPrintf("service.admin", "audit: billing group created group_id=%d rate_multiplier=%.8f rate_multiplier_cny=%v rate_multiplier_usd=%v",
+		group.ID, group.RateMultiplier, group.RateMultiplierCNY, group.RateMultiplierUSD)
 
 	// require_oauth_only: 过滤掉 apikey 类型账号
 	if group.RequireOAuthOnly && groupSupportsOAuthOnlyFilter(group.Platform) && len(accountIDsToCopy) > 0 {
@@ -607,6 +624,10 @@ func (s *adminServiceImpl) validateFallbackGroupOnInvalidRequest(ctx context.Con
 }
 
 func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *UpdateGroupInput) (*Group, error) {
+	before, beforeErr := s.groupRepo.GetByID(ctx, id)
+	if beforeErr != nil {
+		return nil, beforeErr
+	}
 	group, err := s.groupRepo.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
@@ -626,6 +647,18 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 			return nil, errors.New("rate_multiplier must be > 0")
 		}
 		group.RateMultiplier = *input.RateMultiplier
+	}
+	if input.RateMultiplierCNY != nil {
+		if *input.RateMultiplierCNY <= 0 {
+			return nil, errors.New("rate_multiplier_cny must be > 0")
+		}
+		group.RateMultiplierCNY = input.RateMultiplierCNY
+	}
+	if input.RateMultiplierUSD != nil {
+		if *input.RateMultiplierUSD <= 0 {
+			return nil, errors.New("rate_multiplier_usd must be > 0")
+		}
+		group.RateMultiplierUSD = input.RateMultiplierUSD
 	}
 	if input.IsExclusive != nil {
 		group.IsExclusive = *input.IsExclusive
@@ -824,6 +857,10 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 
 	if err := s.groupRepo.Update(ctx, group); err != nil {
 		return nil, err
+	}
+	if before.RateMultiplier != group.RateMultiplier || !equalOptionalFloat(before.RateMultiplierCNY, group.RateMultiplierCNY) || !equalOptionalFloat(before.RateMultiplierUSD, group.RateMultiplierUSD) {
+		logger.LegacyPrintf("service.admin", "audit: billing group multipliers changed group_id=%d old_legacy=%.8f new_legacy=%.8f old_cny=%v new_cny=%v old_usd=%v new_usd=%v",
+			group.ID, before.RateMultiplier, group.RateMultiplier, before.RateMultiplierCNY, group.RateMultiplierCNY, before.RateMultiplierUSD, group.RateMultiplierUSD)
 	}
 
 	if s.authCacheInvalidator != nil {

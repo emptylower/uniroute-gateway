@@ -57,6 +57,74 @@ type GatewayHandler struct {
 	maxAccountSwitchesGemini  int
 	cfg                       *config.Config
 	settingService            *service.SettingService
+	channelRoutingSelector    *service.ChannelRoutingSelector
+}
+
+func (h *GatewayHandler) SetChannelRoutingSelector(selector *service.ChannelRoutingSelector) {
+	h.channelRoutingSelector = selector
+}
+
+func (h *GatewayHandler) PreferredChannelRoutingFamily(ctx context.Context, apiKey *service.APIKey, model string) (string, bool, error) {
+	if h == nil || h.channelRoutingSelector == nil {
+		return "", false, nil
+	}
+	return h.channelRoutingSelector.PreferredFamily(ctx, apiKey, model, time.Now())
+}
+
+func (h *GatewayHandler) channelCandidates(ctx context.Context, apiKey *service.APIKey, model string) ([]service.ChannelRoutingCandidate, error) {
+	if h.channelRoutingSelector == nil {
+		if apiKey == nil || apiKey.Group == nil {
+			return nil, service.ErrNoChannelRoutingCandidate
+		}
+		return []service.ChannelRoutingCandidate{{Group: *apiKey.Group}}, nil
+	}
+	family := service.ChannelRoutingFamilyAnthropic
+	if selected, ok := service.ChannelRoutingFamilyFromContext(ctx); ok {
+		family = selected
+	} else if apiKey != nil && apiKey.Group != nil {
+		family = service.ChannelRoutingFamilyForPlatform(apiKey.Group.Platform)
+	}
+	return h.channelRoutingSelector.Candidates(ctx, apiKey, model, family, time.Now())
+}
+
+func routedCandidateSubscription(
+	ctx context.Context,
+	apiKeyService *service.APIKeyService,
+	routedKey *service.APIKey,
+	anchor *service.UserSubscription,
+) (*service.UserSubscription, error) {
+	if routedKey == nil || routedKey.Group == nil || !routedKey.Group.IsSubscriptionType() {
+		return nil, nil
+	}
+	if anchor != nil && anchor.GroupID == routedKey.Group.ID {
+		return anchor, nil
+	}
+	return apiKeyService.GetActiveSubscriptionForGroup(ctx, routedKey.UserID, routedKey.Group.ID)
+}
+
+func isRecoverableChannelBillingError(err error) bool {
+	return errors.Is(err, service.ErrSubscriptionInvalid) ||
+		errors.Is(err, service.ErrDailyLimitExceeded) ||
+		errors.Is(err, service.ErrWeeklyLimitExceeded) ||
+		errors.Is(err, service.ErrMonthlyLimitExceeded) ||
+		errors.Is(err, service.ErrGroupRPMExceeded)
+}
+
+func applyRoutedCandidateContext(c *gin.Context, routedKey *service.APIKey) context.Context {
+	if c == nil || c.Request == nil || routedKey == nil || routedKey.Group == nil || !service.IsChannelRoutingMode(routedKey.RoutingMode) {
+		if c == nil || c.Request == nil {
+			return context.Background()
+		}
+		return c.Request.Context()
+	}
+	ctx := c.Request.Context()
+	ctx = context.WithValue(ctx, ctxkey.Group, routedKey.Group)
+	if routedKey.Group.Platform != service.PlatformComposite {
+		ctx = service.WithResolvedTargetPlatform(ctx, routedKey.Group.Platform)
+	}
+	c.Request = c.Request.WithContext(ctx)
+	c.Set(string(middleware2.ContextKeyAPIKey), routedKey)
+	return ctx
 }
 
 // NewGatewayHandler creates a new GatewayHandler
@@ -174,6 +242,14 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 
 	// 解析渠道级模型映射
 	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, reqModel)
+	billingModel := reqModel
+	if channelMapping.Mapped {
+		billingModel = channelMapping.MappedModel
+	}
+	if err := h.gatewayService.EnsureModelPricing(c.Request.Context(), apiKey, billingModel); err != nil {
+		h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "Model pricing is not configured")
+		return
+	}
 
 	// 设置 max_tokens=1 + haiku 探测请求标识到 context 中
 	// 必须在 SetClaudeCodeClientContext 之前设置，因为 ClaudeCodeValidator 需要读取此标识进行绕过判断

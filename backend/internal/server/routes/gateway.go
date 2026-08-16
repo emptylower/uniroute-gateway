@@ -44,9 +44,15 @@ func RegisterGatewayRoutes(
 	// 未分组 Key 拦截中间件（按协议格式区分错误响应）
 	requireGroupAnthropic := middleware.RequireGroupAssignment(settingService, middleware.AnthropicErrorWriter)
 	requireGroupGoogle := middleware.RequireGroupAssignment(settingService, middleware.GoogleErrorWriter)
+	gatewayPlatform := func(c *gin.Context) string {
+		if platform, ok := dynamicChannelRoutingPlatform(c, h.Gateway); ok {
+			return platform
+		}
+		return getGroupPlatform(c)
+	}
 
 	isOpenAIResponsesCompatibleGatewayPlatform := func(c *gin.Context) bool {
-		switch getGroupPlatform(c) {
+		switch gatewayPlatform(c) {
 		case service.PlatformOpenAI, service.PlatformGrok:
 			return true
 		default:
@@ -54,10 +60,10 @@ func RegisterGatewayRoutes(
 		}
 	}
 	isOpenAIGatewayPlatform := func(c *gin.Context) bool {
-		return getGroupPlatform(c) == service.PlatformOpenAI
+		return gatewayPlatform(c) == service.PlatformOpenAI
 	}
 	countTokensHandler := func(c *gin.Context) {
-		switch getGroupPlatform(c) {
+		switch gatewayPlatform(c) {
 		case service.PlatformOpenAI:
 			h.OpenAIGateway.CountTokens(c)
 		case service.PlatformGrok:
@@ -74,10 +80,10 @@ func RegisterGatewayRoutes(
 		h.Gateway.Models(c)
 	}
 	isOpenAIOnlyEndpointGatewayPlatform := func(c *gin.Context) bool {
-		return getGroupPlatform(c) == service.PlatformOpenAI
+		return gatewayPlatform(c) == service.PlatformOpenAI
 	}
 	imagesHandler := func(c *gin.Context) {
-		switch getGroupPlatform(c) {
+		switch gatewayPlatform(c) {
 		case service.PlatformOpenAI:
 			h.OpenAIGateway.Images(c)
 		case service.PlatformGrok:
@@ -93,7 +99,7 @@ func RegisterGatewayRoutes(
 		}
 	}
 	videoGenerationHandler := func(c *gin.Context) {
-		if getGroupPlatform(c) == service.PlatformGrok {
+		if gatewayPlatform(c) == service.PlatformGrok {
 			h.OpenAIGateway.GrokVideoGeneration(c)
 			return
 		}
@@ -138,7 +144,7 @@ func RegisterGatewayRoutes(
 		})
 	}
 	videoEditHandler := func(c *gin.Context) {
-		if getGroupPlatform(c) == service.PlatformGrok {
+		if gatewayPlatform(c) == service.PlatformGrok {
 			h.OpenAIGateway.GrokVideoEdit(c)
 			return
 		}
@@ -146,7 +152,7 @@ func RegisterGatewayRoutes(
 		c.JSON(http.StatusNotFound, gin.H{"error": gin.H{"type": "not_found_error", "message": "Videos API is not supported for this platform"}})
 	}
 	videoExtensionHandler := func(c *gin.Context) {
-		if getGroupPlatform(c) == service.PlatformGrok {
+		if gatewayPlatform(c) == service.PlatformGrok {
 			h.OpenAIGateway.GrokVideoExtension(c)
 			return
 		}
@@ -368,6 +374,46 @@ func getGroupPlatform(c *gin.Context) string {
 		}
 	}
 	return apiKey.Group.Platform
+}
+
+func dynamicChannelRoutingPlatform(c *gin.Context, gateway *handler.GatewayHandler) (string, bool) {
+	if c == nil || c.Request == nil || gateway == nil {
+		return "", false
+	}
+	if family, ok := service.ChannelRoutingFamilyFromContext(c.Request.Context()); ok {
+		return channelRoutingPlatformForFamily(family)
+	}
+	apiKey, ok := middleware.GetAPIKeyFromContext(c)
+	if !ok || apiKey == nil || !service.IsChannelRoutingMode(apiKey.RoutingMode) ||
+		!service.IsChannelRoutingEndpoint(c.Request.URL.Path) || c.Request.Method == http.MethodGet {
+		return "", false
+	}
+	body, err := pkghttputil.ReadRequestBodyWithPrealloc(c.Request)
+	if err != nil {
+		return "", false
+	}
+	resetRequestBody(c, body)
+	model := compositeRequestModelFromBody(c.GetHeader("Content-Type"), body)
+	if model == "" {
+		return "", false
+	}
+	family, selected, err := gateway.PreferredChannelRoutingFamily(c.Request.Context(), apiKey, model)
+	if err != nil || !selected {
+		return "", false
+	}
+	c.Request = c.Request.WithContext(service.WithChannelRoutingFamily(c.Request.Context(), family))
+	return channelRoutingPlatformForFamily(family)
+}
+
+func channelRoutingPlatformForFamily(family string) (string, bool) {
+	switch family {
+	case service.ChannelRoutingFamilyOpenAI:
+		return service.PlatformOpenAI, true
+	case service.ChannelRoutingFamilyAnthropic:
+		return service.PlatformAnthropic, true
+	default:
+		return "", false
+	}
 }
 
 func compositeTargetPlatformMiddleware(resolver *service.CompositeRouteResolver) gin.HandlerFunc {

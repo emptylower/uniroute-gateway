@@ -90,6 +90,11 @@ func FeeRate(v float64) predicate.PaymentOrder {
 	return predicate.PaymentOrder(sql.FieldEQ(FieldFeeRate, v))
 }
 
+// SettlementCurrency applies equality check predicate on the "settlement_currency" field. It's identical to SettlementCurrencyEQ.
+func SettlementCurrency(v string) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldEQ(FieldSettlementCurrency, v))
+}
+
 // RechargeCode applies equality check predicate on the "recharge_code" field. It's identical to RechargeCodeEQ.
 func RechargeCode(v string) predicate.PaymentOrder {
 	return predicate.PaymentOrder(sql.FieldEQ(FieldRechargeCode, v))
@@ -588,6 +593,81 @@ func FeeRateLT(v float64) predicate.PaymentOrder {
 // FeeRateLTE applies the LTE predicate on the "fee_rate" field.
 func FeeRateLTE(v float64) predicate.PaymentOrder {
 	return predicate.PaymentOrder(sql.FieldLTE(FieldFeeRate, v))
+}
+
+// SettlementCurrencyEQ applies the EQ predicate on the "settlement_currency" field.
+func SettlementCurrencyEQ(v string) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldEQ(FieldSettlementCurrency, v))
+}
+
+// SettlementCurrencyNEQ applies the NEQ predicate on the "settlement_currency" field.
+func SettlementCurrencyNEQ(v string) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldNEQ(FieldSettlementCurrency, v))
+}
+
+// SettlementCurrencyIn applies the In predicate on the "settlement_currency" field.
+func SettlementCurrencyIn(vs ...string) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldIn(FieldSettlementCurrency, vs...))
+}
+
+// SettlementCurrencyNotIn applies the NotIn predicate on the "settlement_currency" field.
+func SettlementCurrencyNotIn(vs ...string) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldNotIn(FieldSettlementCurrency, vs...))
+}
+
+// SettlementCurrencyGT applies the GT predicate on the "settlement_currency" field.
+func SettlementCurrencyGT(v string) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldGT(FieldSettlementCurrency, v))
+}
+
+// SettlementCurrencyGTE applies the GTE predicate on the "settlement_currency" field.
+func SettlementCurrencyGTE(v string) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldGTE(FieldSettlementCurrency, v))
+}
+
+// SettlementCurrencyLT applies the LT predicate on the "settlement_currency" field.
+func SettlementCurrencyLT(v string) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldLT(FieldSettlementCurrency, v))
+}
+
+// SettlementCurrencyLTE applies the LTE predicate on the "settlement_currency" field.
+func SettlementCurrencyLTE(v string) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldLTE(FieldSettlementCurrency, v))
+}
+
+// SettlementCurrencyContains applies the Contains predicate on the "settlement_currency" field.
+func SettlementCurrencyContains(v string) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldContains(FieldSettlementCurrency, v))
+}
+
+// SettlementCurrencyHasPrefix applies the HasPrefix predicate on the "settlement_currency" field.
+func SettlementCurrencyHasPrefix(v string) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldHasPrefix(FieldSettlementCurrency, v))
+}
+
+// SettlementCurrencyHasSuffix applies the HasSuffix predicate on the "settlement_currency" field.
+func SettlementCurrencyHasSuffix(v string) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldHasSuffix(FieldSettlementCurrency, v))
+}
+
+// SettlementCurrencyIsNil applies the IsNil predicate on the "settlement_currency" field.
+func SettlementCurrencyIsNil() predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldIsNull(FieldSettlementCurrency))
+}
+
+// SettlementCurrencyNotNil applies the NotNil predicate on the "settlement_currency" field.
+func SettlementCurrencyNotNil() predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldNotNull(FieldSettlementCurrency))
+}
+
+// SettlementCurrencyEqualFold applies the EqualFold predicate on the "settlement_currency" field.
+func SettlementCurrencyEqualFold(v string) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldEqualFold(FieldSettlementCurrency, v))
+}
+
+// SettlementCurrencyContainsFold applies the ContainsFold predicate on the "settlement_currency" field.
+func SettlementCurrencyContainsFold(v string) predicate.PaymentOrder {
+	return predicate.PaymentOrder(sql.FieldContainsFold(FieldSettlementCurrency, v))
 }
 
 // RechargeCodeEQ applies the EQ predicate on the "recharge_code" field.

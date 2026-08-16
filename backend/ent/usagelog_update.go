@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
@@ -521,6 +522,131 @@ func (_u *UsageLogUpdate) AddActualCost(v float64) *UsageLogUpdate {
 	return _u
 }
 
+// SetSourceCurrency sets the "source_currency" field.
+func (_u *UsageLogUpdate) SetSourceCurrency(v string) *UsageLogUpdate {
+	_u.mutation.SetSourceCurrency(v)
+	return _u
+}
+
+// SetNillableSourceCurrency sets the "source_currency" field if the given value is not nil.
+func (_u *UsageLogUpdate) SetNillableSourceCurrency(v *string) *UsageLogUpdate {
+	if v != nil {
+		_u.SetSourceCurrency(*v)
+	}
+	return _u
+}
+
+// SetSettlementCurrency sets the "settlement_currency" field.
+func (_u *UsageLogUpdate) SetSettlementCurrency(v string) *UsageLogUpdate {
+	_u.mutation.SetSettlementCurrency(v)
+	return _u
+}
+
+// SetNillableSettlementCurrency sets the "settlement_currency" field if the given value is not nil.
+func (_u *UsageLogUpdate) SetNillableSettlementCurrency(v *string) *UsageLogUpdate {
+	if v != nil {
+		_u.SetSettlementCurrency(*v)
+	}
+	return _u
+}
+
+// SetExchangeRate sets the "exchange_rate" field.
+func (_u *UsageLogUpdate) SetExchangeRate(v float64) *UsageLogUpdate {
+	_u.mutation.ResetExchangeRate()
+	_u.mutation.SetExchangeRate(v)
+	return _u
+}
+
+// SetNillableExchangeRate sets the "exchange_rate" field if the given value is not nil.
+func (_u *UsageLogUpdate) SetNillableExchangeRate(v *float64) *UsageLogUpdate {
+	if v != nil {
+		_u.SetExchangeRate(*v)
+	}
+	return _u
+}
+
+// AddExchangeRate adds value to the "exchange_rate" field.
+func (_u *UsageLogUpdate) AddExchangeRate(v float64) *UsageLogUpdate {
+	_u.mutation.AddExchangeRate(v)
+	return _u
+}
+
+// SetExchangeRateSource sets the "exchange_rate_source" field.
+func (_u *UsageLogUpdate) SetExchangeRateSource(v string) *UsageLogUpdate {
+	_u.mutation.SetExchangeRateSource(v)
+	return _u
+}
+
+// SetNillableExchangeRateSource sets the "exchange_rate_source" field if the given value is not nil.
+func (_u *UsageLogUpdate) SetNillableExchangeRateSource(v *string) *UsageLogUpdate {
+	if v != nil {
+		_u.SetExchangeRateSource(*v)
+	}
+	return _u
+}
+
+// SetExchangeRateAsOf sets the "exchange_rate_as_of" field.
+func (_u *UsageLogUpdate) SetExchangeRateAsOf(v time.Time) *UsageLogUpdate {
+	_u.mutation.SetExchangeRateAsOf(v)
+	return _u
+}
+
+// SetNillableExchangeRateAsOf sets the "exchange_rate_as_of" field if the given value is not nil.
+func (_u *UsageLogUpdate) SetNillableExchangeRateAsOf(v *time.Time) *UsageLogUpdate {
+	if v != nil {
+		_u.SetExchangeRateAsOf(*v)
+	}
+	return _u
+}
+
+// ClearExchangeRateAsOf clears the value of the "exchange_rate_as_of" field.
+func (_u *UsageLogUpdate) ClearExchangeRateAsOf() *UsageLogUpdate {
+	_u.mutation.ClearExchangeRateAsOf()
+	return _u
+}
+
+// SetSourceCost sets the "source_cost" field.
+func (_u *UsageLogUpdate) SetSourceCost(v float64) *UsageLogUpdate {
+	_u.mutation.ResetSourceCost()
+	_u.mutation.SetSourceCost(v)
+	return _u
+}
+
+// SetNillableSourceCost sets the "source_cost" field if the given value is not nil.
+func (_u *UsageLogUpdate) SetNillableSourceCost(v *float64) *UsageLogUpdate {
+	if v != nil {
+		_u.SetSourceCost(*v)
+	}
+	return _u
+}
+
+// AddSourceCost adds value to the "source_cost" field.
+func (_u *UsageLogUpdate) AddSourceCost(v float64) *UsageLogUpdate {
+	_u.mutation.AddSourceCost(v)
+	return _u
+}
+
+// SetBaseCost sets the "base_cost" field.
+func (_u *UsageLogUpdate) SetBaseCost(v float64) *UsageLogUpdate {
+	_u.mutation.ResetBaseCost()
+	_u.mutation.SetBaseCost(v)
+	return _u
+}
+
+// SetNillableBaseCost sets the "base_cost" field if the given value is not nil.
+func (_u *UsageLogUpdate) SetNillableBaseCost(v *float64) *UsageLogUpdate {
+	if v != nil {
+		_u.SetBaseCost(*v)
+	}
+	return _u
+}
+
+// AddBaseCost adds value to the "base_cost" field.
+func (_u *UsageLogUpdate) AddBaseCost(v float64) *UsageLogUpdate {
+	_u.mutation.AddBaseCost(v)
+	return _u
+}
+
 // SetRateMultiplier sets the "rate_multiplier" field.
 func (_u *UsageLogUpdate) SetRateMultiplier(v float64) *UsageLogUpdate {
 	_u.mutation.ResetRateMultiplier()
@@ -1031,6 +1157,21 @@ func (_u *UsageLogUpdate) check() error {
 			return &ValidationError{Name: "billing_mode", err: fmt.Errorf(`ent: validator failed for field "UsageLog.billing_mode": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.SourceCurrency(); ok {
+		if err := usagelog.SourceCurrencyValidator(v); err != nil {
+			return &ValidationError{Name: "source_currency", err: fmt.Errorf(`ent: validator failed for field "UsageLog.source_currency": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.SettlementCurrency(); ok {
+		if err := usagelog.SettlementCurrencyValidator(v); err != nil {
+			return &ValidationError{Name: "settlement_currency", err: fmt.Errorf(`ent: validator failed for field "UsageLog.settlement_currency": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.ExchangeRateSource(); ok {
+		if err := usagelog.ExchangeRateSourceValidator(v); err != nil {
+			return &ValidationError{Name: "exchange_rate_source", err: fmt.Errorf(`ent: validator failed for field "UsageLog.exchange_rate_source": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.UserAgent(); ok {
 		if err := usagelog.UserAgentValidator(v); err != nil {
 			return &ValidationError{Name: "user_agent", err: fmt.Errorf(`ent: validator failed for field "UsageLog.user_agent": %w`, err)}
@@ -1206,6 +1347,39 @@ func (_u *UsageLogUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if value, ok := _u.mutation.AddedActualCost(); ok {
 		_spec.AddField(usagelog.FieldActualCost, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.SourceCurrency(); ok {
+		_spec.SetField(usagelog.FieldSourceCurrency, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.SettlementCurrency(); ok {
+		_spec.SetField(usagelog.FieldSettlementCurrency, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.ExchangeRate(); ok {
+		_spec.SetField(usagelog.FieldExchangeRate, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedExchangeRate(); ok {
+		_spec.AddField(usagelog.FieldExchangeRate, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.ExchangeRateSource(); ok {
+		_spec.SetField(usagelog.FieldExchangeRateSource, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.ExchangeRateAsOf(); ok {
+		_spec.SetField(usagelog.FieldExchangeRateAsOf, field.TypeTime, value)
+	}
+	if _u.mutation.ExchangeRateAsOfCleared() {
+		_spec.ClearField(usagelog.FieldExchangeRateAsOf, field.TypeTime)
+	}
+	if value, ok := _u.mutation.SourceCost(); ok {
+		_spec.SetField(usagelog.FieldSourceCost, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedSourceCost(); ok {
+		_spec.AddField(usagelog.FieldSourceCost, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.BaseCost(); ok {
+		_spec.SetField(usagelog.FieldBaseCost, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedBaseCost(); ok {
+		_spec.AddField(usagelog.FieldBaseCost, field.TypeFloat64, value)
 	}
 	if value, ok := _u.mutation.RateMultiplier(); ok {
 		_spec.SetField(usagelog.FieldRateMultiplier, field.TypeFloat64, value)
@@ -1978,6 +2152,131 @@ func (_u *UsageLogUpdateOne) AddActualCost(v float64) *UsageLogUpdateOne {
 	return _u
 }
 
+// SetSourceCurrency sets the "source_currency" field.
+func (_u *UsageLogUpdateOne) SetSourceCurrency(v string) *UsageLogUpdateOne {
+	_u.mutation.SetSourceCurrency(v)
+	return _u
+}
+
+// SetNillableSourceCurrency sets the "source_currency" field if the given value is not nil.
+func (_u *UsageLogUpdateOne) SetNillableSourceCurrency(v *string) *UsageLogUpdateOne {
+	if v != nil {
+		_u.SetSourceCurrency(*v)
+	}
+	return _u
+}
+
+// SetSettlementCurrency sets the "settlement_currency" field.
+func (_u *UsageLogUpdateOne) SetSettlementCurrency(v string) *UsageLogUpdateOne {
+	_u.mutation.SetSettlementCurrency(v)
+	return _u
+}
+
+// SetNillableSettlementCurrency sets the "settlement_currency" field if the given value is not nil.
+func (_u *UsageLogUpdateOne) SetNillableSettlementCurrency(v *string) *UsageLogUpdateOne {
+	if v != nil {
+		_u.SetSettlementCurrency(*v)
+	}
+	return _u
+}
+
+// SetExchangeRate sets the "exchange_rate" field.
+func (_u *UsageLogUpdateOne) SetExchangeRate(v float64) *UsageLogUpdateOne {
+	_u.mutation.ResetExchangeRate()
+	_u.mutation.SetExchangeRate(v)
+	return _u
+}
+
+// SetNillableExchangeRate sets the "exchange_rate" field if the given value is not nil.
+func (_u *UsageLogUpdateOne) SetNillableExchangeRate(v *float64) *UsageLogUpdateOne {
+	if v != nil {
+		_u.SetExchangeRate(*v)
+	}
+	return _u
+}
+
+// AddExchangeRate adds value to the "exchange_rate" field.
+func (_u *UsageLogUpdateOne) AddExchangeRate(v float64) *UsageLogUpdateOne {
+	_u.mutation.AddExchangeRate(v)
+	return _u
+}
+
+// SetExchangeRateSource sets the "exchange_rate_source" field.
+func (_u *UsageLogUpdateOne) SetExchangeRateSource(v string) *UsageLogUpdateOne {
+	_u.mutation.SetExchangeRateSource(v)
+	return _u
+}
+
+// SetNillableExchangeRateSource sets the "exchange_rate_source" field if the given value is not nil.
+func (_u *UsageLogUpdateOne) SetNillableExchangeRateSource(v *string) *UsageLogUpdateOne {
+	if v != nil {
+		_u.SetExchangeRateSource(*v)
+	}
+	return _u
+}
+
+// SetExchangeRateAsOf sets the "exchange_rate_as_of" field.
+func (_u *UsageLogUpdateOne) SetExchangeRateAsOf(v time.Time) *UsageLogUpdateOne {
+	_u.mutation.SetExchangeRateAsOf(v)
+	return _u
+}
+
+// SetNillableExchangeRateAsOf sets the "exchange_rate_as_of" field if the given value is not nil.
+func (_u *UsageLogUpdateOne) SetNillableExchangeRateAsOf(v *time.Time) *UsageLogUpdateOne {
+	if v != nil {
+		_u.SetExchangeRateAsOf(*v)
+	}
+	return _u
+}
+
+// ClearExchangeRateAsOf clears the value of the "exchange_rate_as_of" field.
+func (_u *UsageLogUpdateOne) ClearExchangeRateAsOf() *UsageLogUpdateOne {
+	_u.mutation.ClearExchangeRateAsOf()
+	return _u
+}
+
+// SetSourceCost sets the "source_cost" field.
+func (_u *UsageLogUpdateOne) SetSourceCost(v float64) *UsageLogUpdateOne {
+	_u.mutation.ResetSourceCost()
+	_u.mutation.SetSourceCost(v)
+	return _u
+}
+
+// SetNillableSourceCost sets the "source_cost" field if the given value is not nil.
+func (_u *UsageLogUpdateOne) SetNillableSourceCost(v *float64) *UsageLogUpdateOne {
+	if v != nil {
+		_u.SetSourceCost(*v)
+	}
+	return _u
+}
+
+// AddSourceCost adds value to the "source_cost" field.
+func (_u *UsageLogUpdateOne) AddSourceCost(v float64) *UsageLogUpdateOne {
+	_u.mutation.AddSourceCost(v)
+	return _u
+}
+
+// SetBaseCost sets the "base_cost" field.
+func (_u *UsageLogUpdateOne) SetBaseCost(v float64) *UsageLogUpdateOne {
+	_u.mutation.ResetBaseCost()
+	_u.mutation.SetBaseCost(v)
+	return _u
+}
+
+// SetNillableBaseCost sets the "base_cost" field if the given value is not nil.
+func (_u *UsageLogUpdateOne) SetNillableBaseCost(v *float64) *UsageLogUpdateOne {
+	if v != nil {
+		_u.SetBaseCost(*v)
+	}
+	return _u
+}
+
+// AddBaseCost adds value to the "base_cost" field.
+func (_u *UsageLogUpdateOne) AddBaseCost(v float64) *UsageLogUpdateOne {
+	_u.mutation.AddBaseCost(v)
+	return _u
+}
+
 // SetRateMultiplier sets the "rate_multiplier" field.
 func (_u *UsageLogUpdateOne) SetRateMultiplier(v float64) *UsageLogUpdateOne {
 	_u.mutation.ResetRateMultiplier()
@@ -2501,6 +2800,21 @@ func (_u *UsageLogUpdateOne) check() error {
 			return &ValidationError{Name: "billing_mode", err: fmt.Errorf(`ent: validator failed for field "UsageLog.billing_mode": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.SourceCurrency(); ok {
+		if err := usagelog.SourceCurrencyValidator(v); err != nil {
+			return &ValidationError{Name: "source_currency", err: fmt.Errorf(`ent: validator failed for field "UsageLog.source_currency": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.SettlementCurrency(); ok {
+		if err := usagelog.SettlementCurrencyValidator(v); err != nil {
+			return &ValidationError{Name: "settlement_currency", err: fmt.Errorf(`ent: validator failed for field "UsageLog.settlement_currency": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.ExchangeRateSource(); ok {
+		if err := usagelog.ExchangeRateSourceValidator(v); err != nil {
+			return &ValidationError{Name: "exchange_rate_source", err: fmt.Errorf(`ent: validator failed for field "UsageLog.exchange_rate_source": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.UserAgent(); ok {
 		if err := usagelog.UserAgentValidator(v); err != nil {
 			return &ValidationError{Name: "user_agent", err: fmt.Errorf(`ent: validator failed for field "UsageLog.user_agent": %w`, err)}
@@ -2693,6 +3007,39 @@ func (_u *UsageLogUpdateOne) sqlSave(ctx context.Context) (_node *UsageLog, err 
 	}
 	if value, ok := _u.mutation.AddedActualCost(); ok {
 		_spec.AddField(usagelog.FieldActualCost, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.SourceCurrency(); ok {
+		_spec.SetField(usagelog.FieldSourceCurrency, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.SettlementCurrency(); ok {
+		_spec.SetField(usagelog.FieldSettlementCurrency, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.ExchangeRate(); ok {
+		_spec.SetField(usagelog.FieldExchangeRate, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedExchangeRate(); ok {
+		_spec.AddField(usagelog.FieldExchangeRate, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.ExchangeRateSource(); ok {
+		_spec.SetField(usagelog.FieldExchangeRateSource, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.ExchangeRateAsOf(); ok {
+		_spec.SetField(usagelog.FieldExchangeRateAsOf, field.TypeTime, value)
+	}
+	if _u.mutation.ExchangeRateAsOfCleared() {
+		_spec.ClearField(usagelog.FieldExchangeRateAsOf, field.TypeTime)
+	}
+	if value, ok := _u.mutation.SourceCost(); ok {
+		_spec.SetField(usagelog.FieldSourceCost, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedSourceCost(); ok {
+		_spec.AddField(usagelog.FieldSourceCost, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.BaseCost(); ok {
+		_spec.SetField(usagelog.FieldBaseCost, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedBaseCost(); ok {
+		_spec.AddField(usagelog.FieldBaseCost, field.TypeFloat64, value)
 	}
 	if value, ok := _u.mutation.RateMultiplier(); ok {
 		_spec.SetField(usagelog.FieldRateMultiplier, field.TypeFloat64, value)

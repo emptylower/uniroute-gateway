@@ -225,7 +225,7 @@ func TestUserUsageListKeepsUserBillingAndIPWithoutAdminCostFields(t *testing.T) 
 	require.NotContains(t, body, "account_stats_cost")
 	require.NotContains(t, body, "upstream_model")
 	require.NotContains(t, body, "billing_tier")
-	require.NotContains(t, body, "channel_id")
+	require.Contains(t, body, `"channel_id":99`)
 	require.NotContains(t, body, `"account":`)
 }
 

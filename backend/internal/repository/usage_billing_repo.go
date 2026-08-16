@@ -179,7 +179,7 @@ func (r *usageBillingRepository) applyUsageBillingEffects(ctx context.Context, t
 	}
 
 	if cmd.BalanceCost > 0 {
-		newBalance, sufficient, err := deductUsageBillingBalance(ctx, tx, cmd.UserID, cmd.BalanceCost)
+		newBalance, sufficient, err := deductUsageBillingBalance(ctx, tx, cmd.UserID, cmd.SettlementCurrency, cmd.BalanceCost)
 		if err != nil {
 			return err
 		}
@@ -240,15 +240,18 @@ func incrementUsageBillingSubscription(ctx context.Context, tx *sql.Tx, subscrip
 	return service.ErrSubscriptionNotFound
 }
 
-func deductUsageBillingBalance(ctx context.Context, tx *sql.Tx, userID int64, amount float64) (float64, bool, error) {
+func deductUsageBillingBalance(ctx context.Context, tx *sql.Tx, userID int64, settlementCurrency string, amount float64) (float64, bool, error) {
+	if !service.IsSupportedBillingCurrency(settlementCurrency) {
+		return 0, false, service.ErrBillingCurrencyChanged
+	}
 	var newBalance float64
 	err := tx.QueryRowContext(ctx, `
 		UPDATE users
 		SET balance = balance - $1,
 			updated_at = NOW()
-		WHERE id = $2 AND deleted_at IS NULL AND balance >= $1
+		WHERE id = $2 AND deleted_at IS NULL AND billing_currency = $3 AND balance >= $1
 		RETURNING balance
-	`, amount, userID).Scan(&newBalance)
+	`, amount, userID, settlementCurrency).Scan(&newBalance)
 	if err == nil {
 		return newBalance, true, nil
 	}
@@ -260,11 +263,11 @@ func deductUsageBillingBalance(ctx context.Context, tx *sql.Tx, userID int64, am
 		UPDATE users
 		SET balance = balance - $1,
 			updated_at = NOW()
-		WHERE id = $2 AND deleted_at IS NULL
+		WHERE id = $2 AND deleted_at IS NULL AND billing_currency = $3
 		RETURNING balance
-	`, amount, userID).Scan(&newBalance)
+	`, amount, userID, settlementCurrency).Scan(&newBalance)
 	if errors.Is(err, sql.ErrNoRows) {
-		return 0, false, service.ErrUserNotFound
+		return 0, false, billingUserMutationError(ctx, tx, userID, settlementCurrency)
 	}
 	if err != nil {
 		return 0, false, err
@@ -282,19 +285,19 @@ func reserveUsageBillingBatchImageBalance(ctx context.Context, tx *sql.Tx, cmd *
 		SET balance = balance - $1,
 			frozen_balance = COALESCE(frozen_balance, 0) + $1,
 			updated_at = NOW()
-		WHERE id = $2 AND deleted_at IS NULL AND balance >= $1
+		WHERE id = $2 AND deleted_at IS NULL AND billing_currency = $3 AND balance >= $1
 		RETURNING balance, frozen_balance
-	`, cmd.HoldAmount, cmd.UserID).Scan(&balance, &frozen)
+	`, cmd.HoldAmount, cmd.UserID, cmd.SettlementCurrency).Scan(&balance, &frozen)
 	if err == nil {
 		return &service.BatchImageBalanceHoldResult{NewBalance: &balance, FrozenBalance: &frozen}, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
-	if exists, existsErr := userExistsForBilling(ctx, tx, cmd.UserID); existsErr != nil {
-		return nil, existsErr
-	} else if !exists {
-		return nil, service.ErrUserNotFound
+	if mutationErr := billingUserMutationError(ctx, tx, cmd.UserID, cmd.SettlementCurrency); mutationErr != nil && !errors.Is(mutationErr, service.ErrUserNotFound) {
+		return nil, mutationErr
+	} else if errors.Is(mutationErr, service.ErrUserNotFound) {
+		return nil, mutationErr
 	}
 	return nil, service.ErrBatchImageInsufficientBalance
 }
@@ -314,19 +317,19 @@ func captureUsageBillingBatchImageBalance(ctx context.Context, tx *sql.Tx, cmd *
 				- CASE WHEN $2 > $1 THEN $2 - $1 ELSE 0 END,
 			frozen_balance = COALESCE(frozen_balance, 0) - $1,
 			updated_at = NOW()
-		WHERE id = $3 AND deleted_at IS NULL AND COALESCE(frozen_balance, 0) >= $1
+		WHERE id = $3 AND deleted_at IS NULL AND billing_currency = $4 AND COALESCE(frozen_balance, 0) >= $1
 		RETURNING balance, frozen_balance
-	`, cmd.HoldAmount, cmd.ActualAmount, cmd.UserID).Scan(&balance, &frozen)
+	`, cmd.HoldAmount, cmd.ActualAmount, cmd.UserID, cmd.SettlementCurrency).Scan(&balance, &frozen)
 	if err == nil {
 		return &service.BatchImageBalanceHoldResult{NewBalance: &balance, FrozenBalance: &frozen}, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
-	if exists, existsErr := userExistsForBilling(ctx, tx, cmd.UserID); existsErr != nil {
-		return nil, existsErr
-	} else if !exists {
-		return nil, service.ErrUserNotFound
+	if mutationErr := billingUserMutationError(ctx, tx, cmd.UserID, cmd.SettlementCurrency); mutationErr != nil && !errors.Is(mutationErr, service.ErrUserNotFound) {
+		return nil, mutationErr
+	} else if errors.Is(mutationErr, service.ErrUserNotFound) {
+		return nil, mutationErr
 	}
 	return nil, errors.New("batch image frozen balance is insufficient")
 }
@@ -351,19 +354,19 @@ func releaseUsageBillingBatchImageBalance(ctx context.Context, tx *sql.Tx, cmd *
 		SET balance = balance + $1,
 			frozen_balance = COALESCE(frozen_balance, 0) - $1,
 			updated_at = NOW()
-		WHERE id = $2 AND deleted_at IS NULL AND COALESCE(frozen_balance, 0) >= $1
+		WHERE id = $2 AND deleted_at IS NULL AND billing_currency = $3 AND COALESCE(frozen_balance, 0) >= $1
 		RETURNING balance, frozen_balance
-	`, cmd.HoldAmount, cmd.UserID).Scan(&balance, &frozen)
+	`, cmd.HoldAmount, cmd.UserID, cmd.SettlementCurrency).Scan(&balance, &frozen)
 	if err == nil {
 		return &service.BatchImageBalanceHoldResult{NewBalance: &balance, FrozenBalance: &frozen}, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
-	if exists, existsErr := userExistsForBilling(ctx, tx, cmd.UserID); existsErr != nil {
-		return nil, existsErr
-	} else if !exists {
-		return nil, service.ErrUserNotFound
+	if mutationErr := billingUserMutationError(ctx, tx, cmd.UserID, cmd.SettlementCurrency); mutationErr != nil && !errors.Is(mutationErr, service.ErrUserNotFound) {
+		return nil, mutationErr
+	} else if errors.Is(mutationErr, service.ErrUserNotFound) {
+		return nil, mutationErr
 	}
 	return nil, errors.New("batch image frozen balance is insufficient")
 }
@@ -411,6 +414,25 @@ func userExistsForBilling(ctx context.Context, tx *sql.Tx, userID int64) (bool, 
 		return false, err
 	}
 	return true, nil
+}
+
+func billingUserMutationError(ctx context.Context, tx *sql.Tx, userID int64, expectedCurrency string) error {
+	var currency string
+	err := tx.QueryRowContext(ctx, `
+		SELECT billing_currency
+		FROM users
+		WHERE id = $1 AND deleted_at IS NULL
+	`, userID).Scan(&currency)
+	if errors.Is(err, sql.ErrNoRows) {
+		return service.ErrUserNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if !service.IsSupportedBillingCurrency(expectedCurrency) || service.NormalizeUserBillingCurrency(currency) != expectedCurrency {
+		return service.ErrBillingCurrencyChanged
+	}
+	return nil
 }
 
 func incrementUsageBillingAPIKeyQuota(ctx context.Context, tx *sql.Tx, apiKeyID int64, amount float64) (bool, error) {

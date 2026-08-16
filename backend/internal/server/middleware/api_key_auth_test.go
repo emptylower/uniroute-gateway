@@ -577,6 +577,42 @@ func TestAPIKeyAuthRejectsUnavailableGroup(t *testing.T) {
 	}
 }
 
+func TestAPIKeyAuthDynamicRoutingDefersDeletedAnchorValidation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	deletedGroupID := int64(88)
+	user := &service.User{ID: 7, Role: service.RoleAdmin, Status: service.StatusActive}
+	apiKey := &service.APIKey{
+		ID: 100, UserID: user.ID, Key: "dynamic-key", Status: service.StatusActive,
+		RoutingMode: service.APIKeyRoutingModeAutoChannels,
+		GroupID:     &deletedGroupID,
+		Group:       nil,
+		User:        user,
+	}
+	repo := &stubApiKeyRepo{getByKey: func(_ context.Context, key string) (*service.APIKey, error) {
+		require.Equal(t, apiKey.Key, key)
+		clone := *apiKey
+		return &clone, nil
+	}}
+	cfg := &config.Config{RunMode: config.RunModeStandard}
+	cfg.Gateway.ChannelRoutingEnabled = true
+	svc := service.NewAPIKeyService(repo, nil, nil, nil, nil, nil, cfg)
+
+	router := gin.New()
+	router.Use(gin.HandlerFunc(NewAPIKeyAuthMiddleware(svc, nil, cfg)))
+	router.POST("/responses", func(c *gin.Context) {
+		_, groupWasSet := c.Request.Context().Value(ctxkey.Group).(*service.Group)
+		require.False(t, groupWasSet, "compatibility anchor must not enter request context")
+		c.Status(http.StatusOK)
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/responses", strings.NewReader(`{"model":"gpt-5.6-sol"}`))
+	req.Header.Set("Authorization", "Bearer "+apiKey.Key)
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+}
+
 func TestAPIKeyAuthMarksOnlyExpectedIngressRejections(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

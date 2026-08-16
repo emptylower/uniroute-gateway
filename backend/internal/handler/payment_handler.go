@@ -44,6 +44,15 @@ func (h *PaymentHandler) GetPaymentConfig(c *gin.Context) {
 // GetPlans returns subscription plans available for sale.
 // GET /api/v1/payment/plans
 func (h *PaymentHandler) GetPlans(c *gin.Context) {
+	cfg, err := h.configService.GetPaymentConfig(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if !cfg.Enabled {
+		response.Success(c, []any{})
+		return
+	}
 	plans, err := h.configService.ListPlansForSale(c.Request.Context())
 	if err != nil {
 		response.ErrorFrom(c, err)
@@ -96,19 +105,20 @@ func (h *PaymentHandler) GetPlans(c *gin.Context) {
 func (h *PaymentHandler) GetCheckoutInfo(c *gin.Context) {
 	ctx := c.Request.Context()
 
-	// Fetch limits (methods + global range)
-	limitsResp, err := h.configService.GetAvailableMethodLimits(ctx)
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-
-	// Fetch payment config
+	// Fetch payment config before provider discovery so the response follows the
+	// same global and per-method switches used when an order is created.
 	cfg, err := h.configService.GetPaymentConfig(ctx)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
 	}
+
+	limitsResp, err := h.configService.GetAvailableMethodLimits(ctx)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	limitsResp.ApplyConfig(cfg)
 	alipayMobilePrecreateDeepLink := false
 	if cfg.AlipayMobilePrecreateDeepLink {
 		alipayMobilePrecreateDeepLink, err = h.configService.UsesOfficialAlipayVisibleMethod(ctx)
@@ -119,7 +129,10 @@ func (h *PaymentHandler) GetCheckoutInfo(c *gin.Context) {
 	}
 
 	// Fetch plans with group info
-	plans, _ := h.configService.ListPlansForSale(ctx)
+	plans := []*dbent.SubscriptionPlan{}
+	if cfg.Enabled {
+		plans, _ = h.configService.ListPlansForSale(ctx)
+	}
 	groupInfo := h.configService.GetGroupInfoMap(ctx, plans)
 	planList := make([]checkoutPlan, 0, len(plans))
 	for _, p := range plans {
@@ -141,6 +154,7 @@ func (h *PaymentHandler) GetCheckoutInfo(c *gin.Context) {
 	}
 
 	response.Success(c, checkoutInfoResponse{
+		PaymentEnabled:                cfg.Enabled,
 		Methods:                       limitsResp.Methods,
 		GlobalMin:                     limitsResp.GlobalMin,
 		GlobalMax:                     limitsResp.GlobalMax,
@@ -158,6 +172,7 @@ func (h *PaymentHandler) GetCheckoutInfo(c *gin.Context) {
 }
 
 type checkoutInfoResponse struct {
+	PaymentEnabled                bool                            `json:"payment_enabled"`
 	Methods                       map[string]service.MethodLimits `json:"methods"`
 	GlobalMin                     float64                         `json:"global_min"`
 	GlobalMax                     float64                         `json:"global_max"`

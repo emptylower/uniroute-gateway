@@ -240,6 +240,15 @@ func (r *affiliateRepository) TransferQuotaToBalance(ctx context.Context, userID
 		if _, err := ensureUserAffiliateWithClient(txCtx, txClient, userID); err != nil {
 			return err
 		}
+		wallet, err := txClient.User.Query().Where(user.IDEQ(userID)).ForUpdate().Only(txCtx)
+		if err != nil {
+			return err
+		}
+		// Existing affiliate quota is denominated in CNY. Reject USD wallets
+		// rather than crediting the same numeric value 1:1.
+		if service.NormalizeUserBillingCurrency(wallet.BillingCurrency) != service.CurrencyCNY {
+			return service.ErrAffiliateCurrencyMismatch
+		}
 
 		// Thaw any matured frozen quota before transfer.
 		if _, err := thawFrozenQuotaTx(txCtx, txClient, userID); err != nil {

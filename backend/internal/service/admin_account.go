@@ -452,6 +452,13 @@ func normalizeGrokMediaEligibilityUpdateExtra(account *Account, input *UpdateAcc
 	return normalized, nil
 }
 
+func normalizeDeprecatedUpstreamAccountType(platform, accountType string) string {
+	if accountType == AccountTypeUpstream && (platform == PlatformOpenAI || platform == PlatformGrok) {
+		return AccountTypeAPIKey
+	}
+	return accountType
+}
+
 func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]any) (*Account, error) {
 	// Probe/session state is system-managed. New accounts always start with automatic refresh disabled.
 	delete(accountExtra, UpstreamBillingProbeEnabledExtraKey)
@@ -459,15 +466,16 @@ func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]an
 	delete(accountExtra, OllamaCloudUsageSessionExtraKey)
 	delete(accountExtra, OllamaCloudUsageAutoRefreshExtraKey)
 	delete(accountExtra, OllamaCloudUsageSnapshotExtraKey)
+	accountType := normalizeDeprecatedUpstreamAccountType(input.Platform, input.Type)
 	account := &Account{
 		Name:        input.Name,
 		Notes:       normalizeAccountNotes(input.Notes),
 		Platform:    input.Platform,
-		Type:        input.Type,
+		Type:        accountType,
 		Credentials: input.Credentials,
 		Extra:       accountExtra,
 		ProxyID:     input.ProxyID,
-		Concurrency: normalizeAccountConcurrency(input.Platform, input.Type, input.Concurrency),
+		Concurrency: normalizeAccountConcurrency(input.Platform, accountType, input.Concurrency),
 		Priority:    input.Priority,
 		Status:      StatusActive,
 		Schedulable: true,
@@ -616,6 +624,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	}
 	previousProbeIdentity := upstreamBillingProbeIdentity(account)
 	previousOllamaUsageIdentity := ollamaCloudUsageIdentity(account)
+	requestedType := normalizeDeprecatedUpstreamAccountType(account.Platform, input.Type)
 	// 安全/身份不变量(影子账号):通用更新路径被 edit/re-auth/refresh/batch 共用,
 	// 必须在此守住,否则仅在创建时的保证可被这些路径绕过。
 	if account.IsCredentialShadow() {
@@ -626,11 +635,11 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		}
 		// 影子 type 不可变——很多上游逻辑按 account.Type 分支(OAuth transform / ChatGPT
 		// header 注入 / WS OAuth 决策),改成 apikey 会让 spark 影子被选中后按错误协议转发(外审 G7)。
-		if input.Type != "" && input.Type != account.Type {
+		if requestedType != "" && requestedType != account.Type {
 			return nil, infraerrors.Newf(http.StatusBadRequest, "SPARK_SHADOW_IMMUTABLE_TYPE",
 				"spark shadow account type cannot be changed; it must remain an OpenAI OAuth shadow")
 		}
-	} else if input.Type != "" && input.Type != account.Type && input.Type != AccountTypeOAuth {
+	} else if requestedType != "" && requestedType != account.Type && requestedType != AccountTypeOAuth {
 		// 母账号守卫(外审 D/P1):有 spark 影子的账号不能把 type 改出 OpenAI OAuth——影子读透母
 		// 凭据,母变成 apikey/setup_token 会让影子被调度后按错协议失败(resolveCredentialAccount
 		// 必报错)。须先删影子再改 type。
@@ -648,8 +657,8 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	if input.Name != "" {
 		account.Name = input.Name
 	}
-	if input.Type != "" {
-		account.Type = input.Type
+	if requestedType != "" {
+		account.Type = requestedType
 	}
 	if input.Notes != nil {
 		account.Notes = normalizeAccountNotes(input.Notes)

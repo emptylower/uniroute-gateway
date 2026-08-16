@@ -108,51 +108,57 @@ const (
 // APIKeyMutation represents an operation that mutates the APIKey nodes in the graph.
 type APIKeyMutation struct {
 	config
-	op                 Op
-	typ                string
-	id                 *int64
-	created_at         *time.Time
-	updated_at         *time.Time
-	deleted_at         *time.Time
-	key                *string
-	name               *string
-	status             *string
-	last_used_at       *time.Time
-	ip_whitelist       *[]string
-	appendip_whitelist []string
-	ip_blacklist       *[]string
-	appendip_blacklist []string
-	quota              *float64
-	addquota           *float64
-	quota_used         *float64
-	addquota_used      *float64
-	expires_at         *time.Time
-	rate_limit_5h      *float64
-	addrate_limit_5h   *float64
-	rate_limit_1d      *float64
-	addrate_limit_1d   *float64
-	rate_limit_7d      *float64
-	addrate_limit_7d   *float64
-	usage_5h           *float64
-	addusage_5h        *float64
-	usage_1d           *float64
-	addusage_1d        *float64
-	usage_7d           *float64
-	addusage_7d        *float64
-	window_5h_start    *time.Time
-	window_1d_start    *time.Time
-	window_7d_start    *time.Time
-	clearedFields      map[string]struct{}
-	user               *int64
-	cleareduser        bool
-	group              *int64
-	clearedgroup       bool
-	usage_logs         map[int64]struct{}
-	removedusage_logs  map[int64]struct{}
-	clearedusage_logs  bool
-	done               bool
-	oldValue           func(context.Context) (*APIKey, error)
-	predicates         []predicate.APIKey
+	op                      Op
+	typ                     string
+	id                      *int64
+	created_at              *time.Time
+	updated_at              *time.Time
+	deleted_at              *time.Time
+	key                     *string
+	platform_key_id         *string
+	key_sha256              *string
+	key_prefix              *string
+	platform_key_version    *int64
+	addplatform_key_version *int64
+	name                    *string
+	routing_mode            *string
+	status                  *string
+	last_used_at            *time.Time
+	ip_whitelist            *[]string
+	appendip_whitelist      []string
+	ip_blacklist            *[]string
+	appendip_blacklist      []string
+	quota                   *float64
+	addquota                *float64
+	quota_used              *float64
+	addquota_used           *float64
+	expires_at              *time.Time
+	rate_limit_5h           *float64
+	addrate_limit_5h        *float64
+	rate_limit_1d           *float64
+	addrate_limit_1d        *float64
+	rate_limit_7d           *float64
+	addrate_limit_7d        *float64
+	usage_5h                *float64
+	addusage_5h             *float64
+	usage_1d                *float64
+	addusage_1d             *float64
+	usage_7d                *float64
+	addusage_7d             *float64
+	window_5h_start         *time.Time
+	window_1d_start         *time.Time
+	window_7d_start         *time.Time
+	clearedFields           map[string]struct{}
+	user                    *int64
+	cleareduser             bool
+	group                   *int64
+	clearedgroup            bool
+	usage_logs              map[int64]struct{}
+	removedusage_logs       map[int64]struct{}
+	clearedusage_logs       bool
+	done                    bool
+	oldValue                func(context.Context) (*APIKey, error)
+	predicates              []predicate.APIKey
 }
 
 var _ ent.Mutation = (*APIKeyMutation)(nil)
@@ -446,6 +452,223 @@ func (m *APIKeyMutation) ResetKey() {
 	m.key = nil
 }
 
+// SetPlatformKeyID sets the "platform_key_id" field.
+func (m *APIKeyMutation) SetPlatformKeyID(s string) {
+	m.platform_key_id = &s
+}
+
+// PlatformKeyID returns the value of the "platform_key_id" field in the mutation.
+func (m *APIKeyMutation) PlatformKeyID() (r string, exists bool) {
+	v := m.platform_key_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPlatformKeyID returns the old "platform_key_id" field's value of the APIKey entity.
+// If the APIKey object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *APIKeyMutation) OldPlatformKeyID(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPlatformKeyID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPlatformKeyID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPlatformKeyID: %w", err)
+	}
+	return oldValue.PlatformKeyID, nil
+}
+
+// ClearPlatformKeyID clears the value of the "platform_key_id" field.
+func (m *APIKeyMutation) ClearPlatformKeyID() {
+	m.platform_key_id = nil
+	m.clearedFields[apikey.FieldPlatformKeyID] = struct{}{}
+}
+
+// PlatformKeyIDCleared returns if the "platform_key_id" field was cleared in this mutation.
+func (m *APIKeyMutation) PlatformKeyIDCleared() bool {
+	_, ok := m.clearedFields[apikey.FieldPlatformKeyID]
+	return ok
+}
+
+// ResetPlatformKeyID resets all changes to the "platform_key_id" field.
+func (m *APIKeyMutation) ResetPlatformKeyID() {
+	m.platform_key_id = nil
+	delete(m.clearedFields, apikey.FieldPlatformKeyID)
+}
+
+// SetKeySha256 sets the "key_sha256" field.
+func (m *APIKeyMutation) SetKeySha256(s string) {
+	m.key_sha256 = &s
+}
+
+// KeySha256 returns the value of the "key_sha256" field in the mutation.
+func (m *APIKeyMutation) KeySha256() (r string, exists bool) {
+	v := m.key_sha256
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldKeySha256 returns the old "key_sha256" field's value of the APIKey entity.
+// If the APIKey object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *APIKeyMutation) OldKeySha256(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldKeySha256 is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldKeySha256 requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldKeySha256: %w", err)
+	}
+	return oldValue.KeySha256, nil
+}
+
+// ClearKeySha256 clears the value of the "key_sha256" field.
+func (m *APIKeyMutation) ClearKeySha256() {
+	m.key_sha256 = nil
+	m.clearedFields[apikey.FieldKeySha256] = struct{}{}
+}
+
+// KeySha256Cleared returns if the "key_sha256" field was cleared in this mutation.
+func (m *APIKeyMutation) KeySha256Cleared() bool {
+	_, ok := m.clearedFields[apikey.FieldKeySha256]
+	return ok
+}
+
+// ResetKeySha256 resets all changes to the "key_sha256" field.
+func (m *APIKeyMutation) ResetKeySha256() {
+	m.key_sha256 = nil
+	delete(m.clearedFields, apikey.FieldKeySha256)
+}
+
+// SetKeyPrefix sets the "key_prefix" field.
+func (m *APIKeyMutation) SetKeyPrefix(s string) {
+	m.key_prefix = &s
+}
+
+// KeyPrefix returns the value of the "key_prefix" field in the mutation.
+func (m *APIKeyMutation) KeyPrefix() (r string, exists bool) {
+	v := m.key_prefix
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldKeyPrefix returns the old "key_prefix" field's value of the APIKey entity.
+// If the APIKey object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *APIKeyMutation) OldKeyPrefix(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldKeyPrefix is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldKeyPrefix requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldKeyPrefix: %w", err)
+	}
+	return oldValue.KeyPrefix, nil
+}
+
+// ClearKeyPrefix clears the value of the "key_prefix" field.
+func (m *APIKeyMutation) ClearKeyPrefix() {
+	m.key_prefix = nil
+	m.clearedFields[apikey.FieldKeyPrefix] = struct{}{}
+}
+
+// KeyPrefixCleared returns if the "key_prefix" field was cleared in this mutation.
+func (m *APIKeyMutation) KeyPrefixCleared() bool {
+	_, ok := m.clearedFields[apikey.FieldKeyPrefix]
+	return ok
+}
+
+// ResetKeyPrefix resets all changes to the "key_prefix" field.
+func (m *APIKeyMutation) ResetKeyPrefix() {
+	m.key_prefix = nil
+	delete(m.clearedFields, apikey.FieldKeyPrefix)
+}
+
+// SetPlatformKeyVersion sets the "platform_key_version" field.
+func (m *APIKeyMutation) SetPlatformKeyVersion(i int64) {
+	m.platform_key_version = &i
+	m.addplatform_key_version = nil
+}
+
+// PlatformKeyVersion returns the value of the "platform_key_version" field in the mutation.
+func (m *APIKeyMutation) PlatformKeyVersion() (r int64, exists bool) {
+	v := m.platform_key_version
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPlatformKeyVersion returns the old "platform_key_version" field's value of the APIKey entity.
+// If the APIKey object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *APIKeyMutation) OldPlatformKeyVersion(ctx context.Context) (v *int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPlatformKeyVersion is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPlatformKeyVersion requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPlatformKeyVersion: %w", err)
+	}
+	return oldValue.PlatformKeyVersion, nil
+}
+
+// AddPlatformKeyVersion adds i to the "platform_key_version" field.
+func (m *APIKeyMutation) AddPlatformKeyVersion(i int64) {
+	if m.addplatform_key_version != nil {
+		*m.addplatform_key_version += i
+	} else {
+		m.addplatform_key_version = &i
+	}
+}
+
+// AddedPlatformKeyVersion returns the value that was added to the "platform_key_version" field in this mutation.
+func (m *APIKeyMutation) AddedPlatformKeyVersion() (r int64, exists bool) {
+	v := m.addplatform_key_version
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearPlatformKeyVersion clears the value of the "platform_key_version" field.
+func (m *APIKeyMutation) ClearPlatformKeyVersion() {
+	m.platform_key_version = nil
+	m.addplatform_key_version = nil
+	m.clearedFields[apikey.FieldPlatformKeyVersion] = struct{}{}
+}
+
+// PlatformKeyVersionCleared returns if the "platform_key_version" field was cleared in this mutation.
+func (m *APIKeyMutation) PlatformKeyVersionCleared() bool {
+	_, ok := m.clearedFields[apikey.FieldPlatformKeyVersion]
+	return ok
+}
+
+// ResetPlatformKeyVersion resets all changes to the "platform_key_version" field.
+func (m *APIKeyMutation) ResetPlatformKeyVersion() {
+	m.platform_key_version = nil
+	m.addplatform_key_version = nil
+	delete(m.clearedFields, apikey.FieldPlatformKeyVersion)
+}
+
 // SetName sets the "name" field.
 func (m *APIKeyMutation) SetName(s string) {
 	m.name = &s
@@ -529,6 +752,42 @@ func (m *APIKeyMutation) GroupIDCleared() bool {
 func (m *APIKeyMutation) ResetGroupID() {
 	m.group = nil
 	delete(m.clearedFields, apikey.FieldGroupID)
+}
+
+// SetRoutingMode sets the "routing_mode" field.
+func (m *APIKeyMutation) SetRoutingMode(s string) {
+	m.routing_mode = &s
+}
+
+// RoutingMode returns the value of the "routing_mode" field in the mutation.
+func (m *APIKeyMutation) RoutingMode() (r string, exists bool) {
+	v := m.routing_mode
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRoutingMode returns the old "routing_mode" field's value of the APIKey entity.
+// If the APIKey object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *APIKeyMutation) OldRoutingMode(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRoutingMode is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRoutingMode requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRoutingMode: %w", err)
+	}
+	return oldValue.RoutingMode, nil
+}
+
+// ResetRoutingMode resets all changes to the "routing_mode" field.
+func (m *APIKeyMutation) ResetRoutingMode() {
+	m.routing_mode = nil
 }
 
 // SetStatus sets the "status" field.
@@ -1532,7 +1791,7 @@ func (m *APIKeyMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *APIKeyMutation) Fields() []string {
-	fields := make([]string, 0, 23)
+	fields := make([]string, 0, 28)
 	if m.created_at != nil {
 		fields = append(fields, apikey.FieldCreatedAt)
 	}
@@ -1548,11 +1807,26 @@ func (m *APIKeyMutation) Fields() []string {
 	if m.key != nil {
 		fields = append(fields, apikey.FieldKey)
 	}
+	if m.platform_key_id != nil {
+		fields = append(fields, apikey.FieldPlatformKeyID)
+	}
+	if m.key_sha256 != nil {
+		fields = append(fields, apikey.FieldKeySha256)
+	}
+	if m.key_prefix != nil {
+		fields = append(fields, apikey.FieldKeyPrefix)
+	}
+	if m.platform_key_version != nil {
+		fields = append(fields, apikey.FieldPlatformKeyVersion)
+	}
 	if m.name != nil {
 		fields = append(fields, apikey.FieldName)
 	}
 	if m.group != nil {
 		fields = append(fields, apikey.FieldGroupID)
+	}
+	if m.routing_mode != nil {
+		fields = append(fields, apikey.FieldRoutingMode)
 	}
 	if m.status != nil {
 		fields = append(fields, apikey.FieldStatus)
@@ -1620,10 +1894,20 @@ func (m *APIKeyMutation) Field(name string) (ent.Value, bool) {
 		return m.UserID()
 	case apikey.FieldKey:
 		return m.Key()
+	case apikey.FieldPlatformKeyID:
+		return m.PlatformKeyID()
+	case apikey.FieldKeySha256:
+		return m.KeySha256()
+	case apikey.FieldKeyPrefix:
+		return m.KeyPrefix()
+	case apikey.FieldPlatformKeyVersion:
+		return m.PlatformKeyVersion()
 	case apikey.FieldName:
 		return m.Name()
 	case apikey.FieldGroupID:
 		return m.GroupID()
+	case apikey.FieldRoutingMode:
+		return m.RoutingMode()
 	case apikey.FieldStatus:
 		return m.Status()
 	case apikey.FieldLastUsedAt:
@@ -1675,10 +1959,20 @@ func (m *APIKeyMutation) OldField(ctx context.Context, name string) (ent.Value, 
 		return m.OldUserID(ctx)
 	case apikey.FieldKey:
 		return m.OldKey(ctx)
+	case apikey.FieldPlatformKeyID:
+		return m.OldPlatformKeyID(ctx)
+	case apikey.FieldKeySha256:
+		return m.OldKeySha256(ctx)
+	case apikey.FieldKeyPrefix:
+		return m.OldKeyPrefix(ctx)
+	case apikey.FieldPlatformKeyVersion:
+		return m.OldPlatformKeyVersion(ctx)
 	case apikey.FieldName:
 		return m.OldName(ctx)
 	case apikey.FieldGroupID:
 		return m.OldGroupID(ctx)
+	case apikey.FieldRoutingMode:
+		return m.OldRoutingMode(ctx)
 	case apikey.FieldStatus:
 		return m.OldStatus(ctx)
 	case apikey.FieldLastUsedAt:
@@ -1755,6 +2049,34 @@ func (m *APIKeyMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetKey(v)
 		return nil
+	case apikey.FieldPlatformKeyID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPlatformKeyID(v)
+		return nil
+	case apikey.FieldKeySha256:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetKeySha256(v)
+		return nil
+	case apikey.FieldKeyPrefix:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetKeyPrefix(v)
+		return nil
+	case apikey.FieldPlatformKeyVersion:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPlatformKeyVersion(v)
+		return nil
 	case apikey.FieldName:
 		v, ok := value.(string)
 		if !ok {
@@ -1768,6 +2090,13 @@ func (m *APIKeyMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetGroupID(v)
+		return nil
+	case apikey.FieldRoutingMode:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRoutingMode(v)
 		return nil
 	case apikey.FieldStatus:
 		v, ok := value.(string)
@@ -1889,6 +2218,9 @@ func (m *APIKeyMutation) SetField(name string, value ent.Value) error {
 // this mutation.
 func (m *APIKeyMutation) AddedFields() []string {
 	var fields []string
+	if m.addplatform_key_version != nil {
+		fields = append(fields, apikey.FieldPlatformKeyVersion)
+	}
 	if m.addquota != nil {
 		fields = append(fields, apikey.FieldQuota)
 	}
@@ -1921,6 +2253,8 @@ func (m *APIKeyMutation) AddedFields() []string {
 // was not set, or was not defined in the schema.
 func (m *APIKeyMutation) AddedField(name string) (ent.Value, bool) {
 	switch name {
+	case apikey.FieldPlatformKeyVersion:
+		return m.AddedPlatformKeyVersion()
 	case apikey.FieldQuota:
 		return m.AddedQuota()
 	case apikey.FieldQuotaUsed:
@@ -1946,6 +2280,13 @@ func (m *APIKeyMutation) AddedField(name string) (ent.Value, bool) {
 // type.
 func (m *APIKeyMutation) AddField(name string, value ent.Value) error {
 	switch name {
+	case apikey.FieldPlatformKeyVersion:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddPlatformKeyVersion(v)
+		return nil
 	case apikey.FieldQuota:
 		v, ok := value.(float64)
 		if !ok {
@@ -2013,6 +2354,18 @@ func (m *APIKeyMutation) ClearedFields() []string {
 	if m.FieldCleared(apikey.FieldDeletedAt) {
 		fields = append(fields, apikey.FieldDeletedAt)
 	}
+	if m.FieldCleared(apikey.FieldPlatformKeyID) {
+		fields = append(fields, apikey.FieldPlatformKeyID)
+	}
+	if m.FieldCleared(apikey.FieldKeySha256) {
+		fields = append(fields, apikey.FieldKeySha256)
+	}
+	if m.FieldCleared(apikey.FieldKeyPrefix) {
+		fields = append(fields, apikey.FieldKeyPrefix)
+	}
+	if m.FieldCleared(apikey.FieldPlatformKeyVersion) {
+		fields = append(fields, apikey.FieldPlatformKeyVersion)
+	}
 	if m.FieldCleared(apikey.FieldGroupID) {
 		fields = append(fields, apikey.FieldGroupID)
 	}
@@ -2053,6 +2406,18 @@ func (m *APIKeyMutation) ClearField(name string) error {
 	switch name {
 	case apikey.FieldDeletedAt:
 		m.ClearDeletedAt()
+		return nil
+	case apikey.FieldPlatformKeyID:
+		m.ClearPlatformKeyID()
+		return nil
+	case apikey.FieldKeySha256:
+		m.ClearKeySha256()
+		return nil
+	case apikey.FieldKeyPrefix:
+		m.ClearKeyPrefix()
+		return nil
+	case apikey.FieldPlatformKeyVersion:
+		m.ClearPlatformKeyVersion()
 		return nil
 	case apikey.FieldGroupID:
 		m.ClearGroupID()
@@ -2101,11 +2466,26 @@ func (m *APIKeyMutation) ResetField(name string) error {
 	case apikey.FieldKey:
 		m.ResetKey()
 		return nil
+	case apikey.FieldPlatformKeyID:
+		m.ResetPlatformKeyID()
+		return nil
+	case apikey.FieldKeySha256:
+		m.ResetKeySha256()
+		return nil
+	case apikey.FieldKeyPrefix:
+		m.ResetKeyPrefix()
+		return nil
+	case apikey.FieldPlatformKeyVersion:
+		m.ResetPlatformKeyVersion()
+		return nil
 	case apikey.FieldName:
 		m.ResetName()
 		return nil
 	case apikey.FieldGroupID:
 		m.ResetGroupID()
+		return nil
+	case apikey.FieldRoutingMode:
+		m.ResetRoutingMode()
 		return nil
 	case apikey.FieldStatus:
 		m.ResetStatus()
@@ -21854,6 +22234,10 @@ type GroupMutation struct {
 	description                             *string
 	rate_multiplier                         *float64
 	addrate_multiplier                      *float64
+	rate_multiplier_cny                     *float64
+	addrate_multiplier_cny                  *float64
+	rate_multiplier_usd                     *float64
+	addrate_multiplier_usd                  *float64
 	peak_rate_enabled                       *bool
 	peak_start                              *string
 	peak_end                                *string
@@ -22304,6 +22688,146 @@ func (m *GroupMutation) AddedRateMultiplier() (r float64, exists bool) {
 func (m *GroupMutation) ResetRateMultiplier() {
 	m.rate_multiplier = nil
 	m.addrate_multiplier = nil
+}
+
+// SetRateMultiplierCny sets the "rate_multiplier_cny" field.
+func (m *GroupMutation) SetRateMultiplierCny(f float64) {
+	m.rate_multiplier_cny = &f
+	m.addrate_multiplier_cny = nil
+}
+
+// RateMultiplierCny returns the value of the "rate_multiplier_cny" field in the mutation.
+func (m *GroupMutation) RateMultiplierCny() (r float64, exists bool) {
+	v := m.rate_multiplier_cny
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRateMultiplierCny returns the old "rate_multiplier_cny" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldRateMultiplierCny(ctx context.Context) (v *float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRateMultiplierCny is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRateMultiplierCny requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRateMultiplierCny: %w", err)
+	}
+	return oldValue.RateMultiplierCny, nil
+}
+
+// AddRateMultiplierCny adds f to the "rate_multiplier_cny" field.
+func (m *GroupMutation) AddRateMultiplierCny(f float64) {
+	if m.addrate_multiplier_cny != nil {
+		*m.addrate_multiplier_cny += f
+	} else {
+		m.addrate_multiplier_cny = &f
+	}
+}
+
+// AddedRateMultiplierCny returns the value that was added to the "rate_multiplier_cny" field in this mutation.
+func (m *GroupMutation) AddedRateMultiplierCny() (r float64, exists bool) {
+	v := m.addrate_multiplier_cny
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearRateMultiplierCny clears the value of the "rate_multiplier_cny" field.
+func (m *GroupMutation) ClearRateMultiplierCny() {
+	m.rate_multiplier_cny = nil
+	m.addrate_multiplier_cny = nil
+	m.clearedFields[group.FieldRateMultiplierCny] = struct{}{}
+}
+
+// RateMultiplierCnyCleared returns if the "rate_multiplier_cny" field was cleared in this mutation.
+func (m *GroupMutation) RateMultiplierCnyCleared() bool {
+	_, ok := m.clearedFields[group.FieldRateMultiplierCny]
+	return ok
+}
+
+// ResetRateMultiplierCny resets all changes to the "rate_multiplier_cny" field.
+func (m *GroupMutation) ResetRateMultiplierCny() {
+	m.rate_multiplier_cny = nil
+	m.addrate_multiplier_cny = nil
+	delete(m.clearedFields, group.FieldRateMultiplierCny)
+}
+
+// SetRateMultiplierUsd sets the "rate_multiplier_usd" field.
+func (m *GroupMutation) SetRateMultiplierUsd(f float64) {
+	m.rate_multiplier_usd = &f
+	m.addrate_multiplier_usd = nil
+}
+
+// RateMultiplierUsd returns the value of the "rate_multiplier_usd" field in the mutation.
+func (m *GroupMutation) RateMultiplierUsd() (r float64, exists bool) {
+	v := m.rate_multiplier_usd
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRateMultiplierUsd returns the old "rate_multiplier_usd" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldRateMultiplierUsd(ctx context.Context) (v *float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRateMultiplierUsd is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRateMultiplierUsd requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRateMultiplierUsd: %w", err)
+	}
+	return oldValue.RateMultiplierUsd, nil
+}
+
+// AddRateMultiplierUsd adds f to the "rate_multiplier_usd" field.
+func (m *GroupMutation) AddRateMultiplierUsd(f float64) {
+	if m.addrate_multiplier_usd != nil {
+		*m.addrate_multiplier_usd += f
+	} else {
+		m.addrate_multiplier_usd = &f
+	}
+}
+
+// AddedRateMultiplierUsd returns the value that was added to the "rate_multiplier_usd" field in this mutation.
+func (m *GroupMutation) AddedRateMultiplierUsd() (r float64, exists bool) {
+	v := m.addrate_multiplier_usd
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearRateMultiplierUsd clears the value of the "rate_multiplier_usd" field.
+func (m *GroupMutation) ClearRateMultiplierUsd() {
+	m.rate_multiplier_usd = nil
+	m.addrate_multiplier_usd = nil
+	m.clearedFields[group.FieldRateMultiplierUsd] = struct{}{}
+}
+
+// RateMultiplierUsdCleared returns if the "rate_multiplier_usd" field was cleared in this mutation.
+func (m *GroupMutation) RateMultiplierUsdCleared() bool {
+	_, ok := m.clearedFields[group.FieldRateMultiplierUsd]
+	return ok
+}
+
+// ResetRateMultiplierUsd resets all changes to the "rate_multiplier_usd" field.
+func (m *GroupMutation) ResetRateMultiplierUsd() {
+	m.rate_multiplier_usd = nil
+	m.addrate_multiplier_usd = nil
+	delete(m.clearedFields, group.FieldRateMultiplierUsd)
 }
 
 // SetPeakRateEnabled sets the "peak_rate_enabled" field.
@@ -24944,7 +25468,7 @@ func (m *GroupMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *GroupMutation) Fields() []string {
-	fields := make([]string, 0, 52)
+	fields := make([]string, 0, 54)
 	if m.created_at != nil {
 		fields = append(fields, group.FieldCreatedAt)
 	}
@@ -24962,6 +25486,12 @@ func (m *GroupMutation) Fields() []string {
 	}
 	if m.rate_multiplier != nil {
 		fields = append(fields, group.FieldRateMultiplier)
+	}
+	if m.rate_multiplier_cny != nil {
+		fields = append(fields, group.FieldRateMultiplierCny)
+	}
+	if m.rate_multiplier_usd != nil {
+		fields = append(fields, group.FieldRateMultiplierUsd)
 	}
 	if m.peak_rate_enabled != nil {
 		fields = append(fields, group.FieldPeakRateEnabled)
@@ -25121,6 +25651,10 @@ func (m *GroupMutation) Field(name string) (ent.Value, bool) {
 		return m.Description()
 	case group.FieldRateMultiplier:
 		return m.RateMultiplier()
+	case group.FieldRateMultiplierCny:
+		return m.RateMultiplierCny()
+	case group.FieldRateMultiplierUsd:
+		return m.RateMultiplierUsd()
 	case group.FieldPeakRateEnabled:
 		return m.PeakRateEnabled()
 	case group.FieldPeakStart:
@@ -25234,6 +25768,10 @@ func (m *GroupMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldDescription(ctx)
 	case group.FieldRateMultiplier:
 		return m.OldRateMultiplier(ctx)
+	case group.FieldRateMultiplierCny:
+		return m.OldRateMultiplierCny(ctx)
+	case group.FieldRateMultiplierUsd:
+		return m.OldRateMultiplierUsd(ctx)
 	case group.FieldPeakRateEnabled:
 		return m.OldPeakRateEnabled(ctx)
 	case group.FieldPeakStart:
@@ -25376,6 +25914,20 @@ func (m *GroupMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetRateMultiplier(v)
+		return nil
+	case group.FieldRateMultiplierCny:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRateMultiplierCny(v)
+		return nil
+	case group.FieldRateMultiplierUsd:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRateMultiplierUsd(v)
 		return nil
 	case group.FieldPeakRateEnabled:
 		v, ok := value.(bool)
@@ -25710,6 +26262,12 @@ func (m *GroupMutation) AddedFields() []string {
 	if m.addrate_multiplier != nil {
 		fields = append(fields, group.FieldRateMultiplier)
 	}
+	if m.addrate_multiplier_cny != nil {
+		fields = append(fields, group.FieldRateMultiplierCny)
+	}
+	if m.addrate_multiplier_usd != nil {
+		fields = append(fields, group.FieldRateMultiplierUsd)
+	}
 	if m.addpeak_rate_multiplier != nil {
 		fields = append(fields, group.FieldPeakRateMultiplier)
 	}
@@ -25780,6 +26338,10 @@ func (m *GroupMutation) AddedField(name string) (ent.Value, bool) {
 	switch name {
 	case group.FieldRateMultiplier:
 		return m.AddedRateMultiplier()
+	case group.FieldRateMultiplierCny:
+		return m.AddedRateMultiplierCny()
+	case group.FieldRateMultiplierUsd:
+		return m.AddedRateMultiplierUsd()
 	case group.FieldPeakRateMultiplier:
 		return m.AddedPeakRateMultiplier()
 	case group.FieldDailyLimitUsd:
@@ -25835,6 +26397,20 @@ func (m *GroupMutation) AddField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.AddRateMultiplier(v)
+		return nil
+	case group.FieldRateMultiplierCny:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddRateMultiplierCny(v)
+		return nil
+	case group.FieldRateMultiplierUsd:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddRateMultiplierUsd(v)
 		return nil
 	case group.FieldPeakRateMultiplier:
 		v, ok := value.(float64)
@@ -25990,6 +26566,12 @@ func (m *GroupMutation) ClearedFields() []string {
 	if m.FieldCleared(group.FieldDescription) {
 		fields = append(fields, group.FieldDescription)
 	}
+	if m.FieldCleared(group.FieldRateMultiplierCny) {
+		fields = append(fields, group.FieldRateMultiplierCny)
+	}
+	if m.FieldCleared(group.FieldRateMultiplierUsd) {
+		fields = append(fields, group.FieldRateMultiplierUsd)
+	}
 	if m.FieldCleared(group.FieldDuplicateOperationID) {
 		fields = append(fields, group.FieldDuplicateOperationID)
 	}
@@ -26051,6 +26633,12 @@ func (m *GroupMutation) ClearField(name string) error {
 		return nil
 	case group.FieldDescription:
 		m.ClearDescription()
+		return nil
+	case group.FieldRateMultiplierCny:
+		m.ClearRateMultiplierCny()
+		return nil
+	case group.FieldRateMultiplierUsd:
+		m.ClearRateMultiplierUsd()
 		return nil
 	case group.FieldDuplicateOperationID:
 		m.ClearDuplicateOperationID()
@@ -26119,6 +26707,12 @@ func (m *GroupMutation) ResetField(name string) error {
 		return nil
 	case group.FieldRateMultiplier:
 		m.ResetRateMultiplier()
+		return nil
+	case group.FieldRateMultiplierCny:
+		m.ResetRateMultiplierCny()
+		return nil
+	case group.FieldRateMultiplierUsd:
+		m.ResetRateMultiplierUsd()
 		return nil
 	case group.FieldPeakRateEnabled:
 		m.ResetPeakRateEnabled()
@@ -28790,6 +29384,7 @@ type PaymentOrderMutation struct {
 	addpay_amount            *float64
 	fee_rate                 *float64
 	addfee_rate              *float64
+	settlement_currency      *string
 	recharge_code            *string
 	out_trade_no             *string
 	payment_type             *string
@@ -29255,6 +29850,55 @@ func (m *PaymentOrderMutation) AddedFeeRate() (r float64, exists bool) {
 func (m *PaymentOrderMutation) ResetFeeRate() {
 	m.fee_rate = nil
 	m.addfee_rate = nil
+}
+
+// SetSettlementCurrency sets the "settlement_currency" field.
+func (m *PaymentOrderMutation) SetSettlementCurrency(s string) {
+	m.settlement_currency = &s
+}
+
+// SettlementCurrency returns the value of the "settlement_currency" field in the mutation.
+func (m *PaymentOrderMutation) SettlementCurrency() (r string, exists bool) {
+	v := m.settlement_currency
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSettlementCurrency returns the old "settlement_currency" field's value of the PaymentOrder entity.
+// If the PaymentOrder object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *PaymentOrderMutation) OldSettlementCurrency(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSettlementCurrency is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSettlementCurrency requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSettlementCurrency: %w", err)
+	}
+	return oldValue.SettlementCurrency, nil
+}
+
+// ClearSettlementCurrency clears the value of the "settlement_currency" field.
+func (m *PaymentOrderMutation) ClearSettlementCurrency() {
+	m.settlement_currency = nil
+	m.clearedFields[paymentorder.FieldSettlementCurrency] = struct{}{}
+}
+
+// SettlementCurrencyCleared returns if the "settlement_currency" field was cleared in this mutation.
+func (m *PaymentOrderMutation) SettlementCurrencyCleared() bool {
+	_, ok := m.clearedFields[paymentorder.FieldSettlementCurrency]
+	return ok
+}
+
+// ResetSettlementCurrency resets all changes to the "settlement_currency" field.
+func (m *PaymentOrderMutation) ResetSettlementCurrency() {
+	m.settlement_currency = nil
+	delete(m.clearedFields, paymentorder.FieldSettlementCurrency)
 }
 
 // SetRechargeCode sets the "recharge_code" field.
@@ -30800,7 +31444,7 @@ func (m *PaymentOrderMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *PaymentOrderMutation) Fields() []string {
-	fields := make([]string, 0, 39)
+	fields := make([]string, 0, 40)
 	if m.user != nil {
 		fields = append(fields, paymentorder.FieldUserID)
 	}
@@ -30821,6 +31465,9 @@ func (m *PaymentOrderMutation) Fields() []string {
 	}
 	if m.fee_rate != nil {
 		fields = append(fields, paymentorder.FieldFeeRate)
+	}
+	if m.settlement_currency != nil {
+		fields = append(fields, paymentorder.FieldSettlementCurrency)
 	}
 	if m.recharge_code != nil {
 		fields = append(fields, paymentorder.FieldRechargeCode)
@@ -30940,6 +31587,8 @@ func (m *PaymentOrderMutation) Field(name string) (ent.Value, bool) {
 		return m.PayAmount()
 	case paymentorder.FieldFeeRate:
 		return m.FeeRate()
+	case paymentorder.FieldSettlementCurrency:
+		return m.SettlementCurrency()
 	case paymentorder.FieldRechargeCode:
 		return m.RechargeCode()
 	case paymentorder.FieldOutTradeNo:
@@ -31027,6 +31676,8 @@ func (m *PaymentOrderMutation) OldField(ctx context.Context, name string) (ent.V
 		return m.OldPayAmount(ctx)
 	case paymentorder.FieldFeeRate:
 		return m.OldFeeRate(ctx)
+	case paymentorder.FieldSettlementCurrency:
+		return m.OldSettlementCurrency(ctx)
 	case paymentorder.FieldRechargeCode:
 		return m.OldRechargeCode(ctx)
 	case paymentorder.FieldOutTradeNo:
@@ -31148,6 +31799,13 @@ func (m *PaymentOrderMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetFeeRate(v)
+		return nil
+	case paymentorder.FieldSettlementCurrency:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSettlementCurrency(v)
 		return nil
 	case paymentorder.FieldRechargeCode:
 		v, ok := value.(string)
@@ -31493,6 +32151,9 @@ func (m *PaymentOrderMutation) ClearedFields() []string {
 	if m.FieldCleared(paymentorder.FieldUserNotes) {
 		fields = append(fields, paymentorder.FieldUserNotes)
 	}
+	if m.FieldCleared(paymentorder.FieldSettlementCurrency) {
+		fields = append(fields, paymentorder.FieldSettlementCurrency)
+	}
 	if m.FieldCleared(paymentorder.FieldPayURL) {
 		fields = append(fields, paymentorder.FieldPayURL)
 	}
@@ -31566,6 +32227,9 @@ func (m *PaymentOrderMutation) ClearField(name string) error {
 	switch name {
 	case paymentorder.FieldUserNotes:
 		m.ClearUserNotes()
+		return nil
+	case paymentorder.FieldSettlementCurrency:
+		m.ClearSettlementCurrency()
 		return nil
 	case paymentorder.FieldPayURL:
 		m.ClearPayURL()
@@ -31652,6 +32316,9 @@ func (m *PaymentOrderMutation) ResetField(name string) error {
 		return nil
 	case paymentorder.FieldFeeRate:
 		m.ResetFeeRate()
+		return nil
+	case paymentorder.FieldSettlementCurrency:
+		m.ResetSettlementCurrency()
 		return nil
 	case paymentorder.FieldRechargeCode:
 		m.ResetRechargeCode()
@@ -34431,6 +35098,7 @@ type PromoCodeMutation struct {
 	code                 *string
 	bonus_amount         *float64
 	addbonus_amount      *float64
+	currency             *string
 	max_uses             *int
 	addmax_uses          *int
 	used_count           *int
@@ -34637,6 +35305,42 @@ func (m *PromoCodeMutation) AddedBonusAmount() (r float64, exists bool) {
 func (m *PromoCodeMutation) ResetBonusAmount() {
 	m.bonus_amount = nil
 	m.addbonus_amount = nil
+}
+
+// SetCurrency sets the "currency" field.
+func (m *PromoCodeMutation) SetCurrency(s string) {
+	m.currency = &s
+}
+
+// Currency returns the value of the "currency" field in the mutation.
+func (m *PromoCodeMutation) Currency() (r string, exists bool) {
+	v := m.currency
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCurrency returns the old "currency" field's value of the PromoCode entity.
+// If the PromoCode object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *PromoCodeMutation) OldCurrency(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCurrency is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCurrency requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCurrency: %w", err)
+	}
+	return oldValue.Currency, nil
+}
+
+// ResetCurrency resets all changes to the "currency" field.
+func (m *PromoCodeMutation) ResetCurrency() {
+	m.currency = nil
 }
 
 // SetMaxUses sets the "max_uses" field.
@@ -35045,12 +35749,15 @@ func (m *PromoCodeMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *PromoCodeMutation) Fields() []string {
-	fields := make([]string, 0, 9)
+	fields := make([]string, 0, 10)
 	if m.code != nil {
 		fields = append(fields, promocode.FieldCode)
 	}
 	if m.bonus_amount != nil {
 		fields = append(fields, promocode.FieldBonusAmount)
+	}
+	if m.currency != nil {
+		fields = append(fields, promocode.FieldCurrency)
 	}
 	if m.max_uses != nil {
 		fields = append(fields, promocode.FieldMaxUses)
@@ -35085,6 +35792,8 @@ func (m *PromoCodeMutation) Field(name string) (ent.Value, bool) {
 		return m.Code()
 	case promocode.FieldBonusAmount:
 		return m.BonusAmount()
+	case promocode.FieldCurrency:
+		return m.Currency()
 	case promocode.FieldMaxUses:
 		return m.MaxUses()
 	case promocode.FieldUsedCount:
@@ -35112,6 +35821,8 @@ func (m *PromoCodeMutation) OldField(ctx context.Context, name string) (ent.Valu
 		return m.OldCode(ctx)
 	case promocode.FieldBonusAmount:
 		return m.OldBonusAmount(ctx)
+	case promocode.FieldCurrency:
+		return m.OldCurrency(ctx)
 	case promocode.FieldMaxUses:
 		return m.OldMaxUses(ctx)
 	case promocode.FieldUsedCount:
@@ -35148,6 +35859,13 @@ func (m *PromoCodeMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetBonusAmount(v)
+		return nil
+	case promocode.FieldCurrency:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCurrency(v)
 		return nil
 	case promocode.FieldMaxUses:
 		v, ok := value.(int)
@@ -35306,6 +36024,9 @@ func (m *PromoCodeMutation) ResetField(name string) error {
 		return nil
 	case promocode.FieldBonusAmount:
 		m.ResetBonusAmount()
+		return nil
+	case promocode.FieldCurrency:
+		m.ResetCurrency()
 		return nil
 	case promocode.FieldMaxUses:
 		m.ResetMaxUses()
@@ -37384,6 +38105,7 @@ type RedeemCodeMutation struct {
 	_type            *string
 	value            *float64
 	addvalue         *float64
+	currency         *string
 	status           *string
 	used_at          *time.Time
 	notes            *string
@@ -37625,6 +38347,42 @@ func (m *RedeemCodeMutation) AddedValue() (r float64, exists bool) {
 func (m *RedeemCodeMutation) ResetValue() {
 	m.value = nil
 	m.addvalue = nil
+}
+
+// SetCurrency sets the "currency" field.
+func (m *RedeemCodeMutation) SetCurrency(s string) {
+	m.currency = &s
+}
+
+// Currency returns the value of the "currency" field in the mutation.
+func (m *RedeemCodeMutation) Currency() (r string, exists bool) {
+	v := m.currency
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCurrency returns the old "currency" field's value of the RedeemCode entity.
+// If the RedeemCode object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *RedeemCodeMutation) OldCurrency(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCurrency is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCurrency requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCurrency: %w", err)
+	}
+	return oldValue.Currency, nil
+}
+
+// ResetCurrency resets all changes to the "currency" field.
+func (m *RedeemCodeMutation) ResetCurrency() {
+	m.currency = nil
 }
 
 // SetStatus sets the "status" field.
@@ -38101,7 +38859,7 @@ func (m *RedeemCodeMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *RedeemCodeMutation) Fields() []string {
-	fields := make([]string, 0, 11)
+	fields := make([]string, 0, 12)
 	if m.code != nil {
 		fields = append(fields, redeemcode.FieldCode)
 	}
@@ -38110,6 +38868,9 @@ func (m *RedeemCodeMutation) Fields() []string {
 	}
 	if m.value != nil {
 		fields = append(fields, redeemcode.FieldValue)
+	}
+	if m.currency != nil {
+		fields = append(fields, redeemcode.FieldCurrency)
 	}
 	if m.status != nil {
 		fields = append(fields, redeemcode.FieldStatus)
@@ -38149,6 +38910,8 @@ func (m *RedeemCodeMutation) Field(name string) (ent.Value, bool) {
 		return m.GetType()
 	case redeemcode.FieldValue:
 		return m.Value()
+	case redeemcode.FieldCurrency:
+		return m.Currency()
 	case redeemcode.FieldStatus:
 		return m.Status()
 	case redeemcode.FieldUsedBy:
@@ -38180,6 +38943,8 @@ func (m *RedeemCodeMutation) OldField(ctx context.Context, name string) (ent.Val
 		return m.OldType(ctx)
 	case redeemcode.FieldValue:
 		return m.OldValue(ctx)
+	case redeemcode.FieldCurrency:
+		return m.OldCurrency(ctx)
 	case redeemcode.FieldStatus:
 		return m.OldStatus(ctx)
 	case redeemcode.FieldUsedBy:
@@ -38225,6 +38990,13 @@ func (m *RedeemCodeMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetValue(v)
+		return nil
+	case redeemcode.FieldCurrency:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCurrency(v)
 		return nil
 	case redeemcode.FieldStatus:
 		v, ok := value.(string)
@@ -38399,6 +39171,9 @@ func (m *RedeemCodeMutation) ResetField(name string) error {
 		return nil
 	case redeemcode.FieldValue:
 		m.ResetValue()
+		return nil
+	case redeemcode.FieldCurrency:
+		m.ResetCurrency()
 		return nil
 	case redeemcode.FieldStatus:
 		m.ResetStatus()
@@ -43157,6 +43932,16 @@ type UsageLogMutation struct {
 	addtotal_cost                *float64
 	actual_cost                  *float64
 	addactual_cost               *float64
+	source_currency              *string
+	settlement_currency          *string
+	exchange_rate                *float64
+	addexchange_rate             *float64
+	exchange_rate_source         *string
+	exchange_rate_as_of          *time.Time
+	source_cost                  *float64
+	addsource_cost               *float64
+	base_cost                    *float64
+	addbase_cost                 *float64
 	rate_multiplier              *float64
 	addrate_multiplier           *float64
 	long_context_billing_applied *bool
@@ -44564,6 +45349,331 @@ func (m *UsageLogMutation) ResetActualCost() {
 	m.addactual_cost = nil
 }
 
+// SetSourceCurrency sets the "source_currency" field.
+func (m *UsageLogMutation) SetSourceCurrency(s string) {
+	m.source_currency = &s
+}
+
+// SourceCurrency returns the value of the "source_currency" field in the mutation.
+func (m *UsageLogMutation) SourceCurrency() (r string, exists bool) {
+	v := m.source_currency
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSourceCurrency returns the old "source_currency" field's value of the UsageLog entity.
+// If the UsageLog object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UsageLogMutation) OldSourceCurrency(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSourceCurrency is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSourceCurrency requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSourceCurrency: %w", err)
+	}
+	return oldValue.SourceCurrency, nil
+}
+
+// ResetSourceCurrency resets all changes to the "source_currency" field.
+func (m *UsageLogMutation) ResetSourceCurrency() {
+	m.source_currency = nil
+}
+
+// SetSettlementCurrency sets the "settlement_currency" field.
+func (m *UsageLogMutation) SetSettlementCurrency(s string) {
+	m.settlement_currency = &s
+}
+
+// SettlementCurrency returns the value of the "settlement_currency" field in the mutation.
+func (m *UsageLogMutation) SettlementCurrency() (r string, exists bool) {
+	v := m.settlement_currency
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSettlementCurrency returns the old "settlement_currency" field's value of the UsageLog entity.
+// If the UsageLog object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UsageLogMutation) OldSettlementCurrency(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSettlementCurrency is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSettlementCurrency requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSettlementCurrency: %w", err)
+	}
+	return oldValue.SettlementCurrency, nil
+}
+
+// ResetSettlementCurrency resets all changes to the "settlement_currency" field.
+func (m *UsageLogMutation) ResetSettlementCurrency() {
+	m.settlement_currency = nil
+}
+
+// SetExchangeRate sets the "exchange_rate" field.
+func (m *UsageLogMutation) SetExchangeRate(f float64) {
+	m.exchange_rate = &f
+	m.addexchange_rate = nil
+}
+
+// ExchangeRate returns the value of the "exchange_rate" field in the mutation.
+func (m *UsageLogMutation) ExchangeRate() (r float64, exists bool) {
+	v := m.exchange_rate
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldExchangeRate returns the old "exchange_rate" field's value of the UsageLog entity.
+// If the UsageLog object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UsageLogMutation) OldExchangeRate(ctx context.Context) (v float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldExchangeRate is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldExchangeRate requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldExchangeRate: %w", err)
+	}
+	return oldValue.ExchangeRate, nil
+}
+
+// AddExchangeRate adds f to the "exchange_rate" field.
+func (m *UsageLogMutation) AddExchangeRate(f float64) {
+	if m.addexchange_rate != nil {
+		*m.addexchange_rate += f
+	} else {
+		m.addexchange_rate = &f
+	}
+}
+
+// AddedExchangeRate returns the value that was added to the "exchange_rate" field in this mutation.
+func (m *UsageLogMutation) AddedExchangeRate() (r float64, exists bool) {
+	v := m.addexchange_rate
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetExchangeRate resets all changes to the "exchange_rate" field.
+func (m *UsageLogMutation) ResetExchangeRate() {
+	m.exchange_rate = nil
+	m.addexchange_rate = nil
+}
+
+// SetExchangeRateSource sets the "exchange_rate_source" field.
+func (m *UsageLogMutation) SetExchangeRateSource(s string) {
+	m.exchange_rate_source = &s
+}
+
+// ExchangeRateSource returns the value of the "exchange_rate_source" field in the mutation.
+func (m *UsageLogMutation) ExchangeRateSource() (r string, exists bool) {
+	v := m.exchange_rate_source
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldExchangeRateSource returns the old "exchange_rate_source" field's value of the UsageLog entity.
+// If the UsageLog object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UsageLogMutation) OldExchangeRateSource(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldExchangeRateSource is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldExchangeRateSource requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldExchangeRateSource: %w", err)
+	}
+	return oldValue.ExchangeRateSource, nil
+}
+
+// ResetExchangeRateSource resets all changes to the "exchange_rate_source" field.
+func (m *UsageLogMutation) ResetExchangeRateSource() {
+	m.exchange_rate_source = nil
+}
+
+// SetExchangeRateAsOf sets the "exchange_rate_as_of" field.
+func (m *UsageLogMutation) SetExchangeRateAsOf(t time.Time) {
+	m.exchange_rate_as_of = &t
+}
+
+// ExchangeRateAsOf returns the value of the "exchange_rate_as_of" field in the mutation.
+func (m *UsageLogMutation) ExchangeRateAsOf() (r time.Time, exists bool) {
+	v := m.exchange_rate_as_of
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldExchangeRateAsOf returns the old "exchange_rate_as_of" field's value of the UsageLog entity.
+// If the UsageLog object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UsageLogMutation) OldExchangeRateAsOf(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldExchangeRateAsOf is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldExchangeRateAsOf requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldExchangeRateAsOf: %w", err)
+	}
+	return oldValue.ExchangeRateAsOf, nil
+}
+
+// ClearExchangeRateAsOf clears the value of the "exchange_rate_as_of" field.
+func (m *UsageLogMutation) ClearExchangeRateAsOf() {
+	m.exchange_rate_as_of = nil
+	m.clearedFields[usagelog.FieldExchangeRateAsOf] = struct{}{}
+}
+
+// ExchangeRateAsOfCleared returns if the "exchange_rate_as_of" field was cleared in this mutation.
+func (m *UsageLogMutation) ExchangeRateAsOfCleared() bool {
+	_, ok := m.clearedFields[usagelog.FieldExchangeRateAsOf]
+	return ok
+}
+
+// ResetExchangeRateAsOf resets all changes to the "exchange_rate_as_of" field.
+func (m *UsageLogMutation) ResetExchangeRateAsOf() {
+	m.exchange_rate_as_of = nil
+	delete(m.clearedFields, usagelog.FieldExchangeRateAsOf)
+}
+
+// SetSourceCost sets the "source_cost" field.
+func (m *UsageLogMutation) SetSourceCost(f float64) {
+	m.source_cost = &f
+	m.addsource_cost = nil
+}
+
+// SourceCost returns the value of the "source_cost" field in the mutation.
+func (m *UsageLogMutation) SourceCost() (r float64, exists bool) {
+	v := m.source_cost
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSourceCost returns the old "source_cost" field's value of the UsageLog entity.
+// If the UsageLog object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UsageLogMutation) OldSourceCost(ctx context.Context) (v float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSourceCost is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSourceCost requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSourceCost: %w", err)
+	}
+	return oldValue.SourceCost, nil
+}
+
+// AddSourceCost adds f to the "source_cost" field.
+func (m *UsageLogMutation) AddSourceCost(f float64) {
+	if m.addsource_cost != nil {
+		*m.addsource_cost += f
+	} else {
+		m.addsource_cost = &f
+	}
+}
+
+// AddedSourceCost returns the value that was added to the "source_cost" field in this mutation.
+func (m *UsageLogMutation) AddedSourceCost() (r float64, exists bool) {
+	v := m.addsource_cost
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetSourceCost resets all changes to the "source_cost" field.
+func (m *UsageLogMutation) ResetSourceCost() {
+	m.source_cost = nil
+	m.addsource_cost = nil
+}
+
+// SetBaseCost sets the "base_cost" field.
+func (m *UsageLogMutation) SetBaseCost(f float64) {
+	m.base_cost = &f
+	m.addbase_cost = nil
+}
+
+// BaseCost returns the value of the "base_cost" field in the mutation.
+func (m *UsageLogMutation) BaseCost() (r float64, exists bool) {
+	v := m.base_cost
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldBaseCost returns the old "base_cost" field's value of the UsageLog entity.
+// If the UsageLog object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UsageLogMutation) OldBaseCost(ctx context.Context) (v float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldBaseCost is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldBaseCost requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldBaseCost: %w", err)
+	}
+	return oldValue.BaseCost, nil
+}
+
+// AddBaseCost adds f to the "base_cost" field.
+func (m *UsageLogMutation) AddBaseCost(f float64) {
+	if m.addbase_cost != nil {
+		*m.addbase_cost += f
+	} else {
+		m.addbase_cost = &f
+	}
+}
+
+// AddedBaseCost returns the value that was added to the "base_cost" field in this mutation.
+func (m *UsageLogMutation) AddedBaseCost() (r float64, exists bool) {
+	v := m.addbase_cost
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetBaseCost resets all changes to the "base_cost" field.
+func (m *UsageLogMutation) ResetBaseCost() {
+	m.base_cost = nil
+	m.addbase_cost = nil
+}
+
 // SetRateMultiplier sets the "rate_multiplier" field.
 func (m *UsageLogMutation) SetRateMultiplier(f float64) {
 	m.rate_multiplier = &f
@@ -45773,7 +46883,7 @@ func (m *UsageLogMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *UsageLogMutation) Fields() []string {
-	fields := make([]string, 0, 45)
+	fields := make([]string, 0, 52)
 	if m.user != nil {
 		fields = append(fields, usagelog.FieldUserID)
 	}
@@ -45848,6 +46958,27 @@ func (m *UsageLogMutation) Fields() []string {
 	}
 	if m.actual_cost != nil {
 		fields = append(fields, usagelog.FieldActualCost)
+	}
+	if m.source_currency != nil {
+		fields = append(fields, usagelog.FieldSourceCurrency)
+	}
+	if m.settlement_currency != nil {
+		fields = append(fields, usagelog.FieldSettlementCurrency)
+	}
+	if m.exchange_rate != nil {
+		fields = append(fields, usagelog.FieldExchangeRate)
+	}
+	if m.exchange_rate_source != nil {
+		fields = append(fields, usagelog.FieldExchangeRateSource)
+	}
+	if m.exchange_rate_as_of != nil {
+		fields = append(fields, usagelog.FieldExchangeRateAsOf)
+	}
+	if m.source_cost != nil {
+		fields = append(fields, usagelog.FieldSourceCost)
+	}
+	if m.base_cost != nil {
+		fields = append(fields, usagelog.FieldBaseCost)
 	}
 	if m.rate_multiplier != nil {
 		fields = append(fields, usagelog.FieldRateMultiplier)
@@ -45967,6 +47098,20 @@ func (m *UsageLogMutation) Field(name string) (ent.Value, bool) {
 		return m.TotalCost()
 	case usagelog.FieldActualCost:
 		return m.ActualCost()
+	case usagelog.FieldSourceCurrency:
+		return m.SourceCurrency()
+	case usagelog.FieldSettlementCurrency:
+		return m.SettlementCurrency()
+	case usagelog.FieldExchangeRate:
+		return m.ExchangeRate()
+	case usagelog.FieldExchangeRateSource:
+		return m.ExchangeRateSource()
+	case usagelog.FieldExchangeRateAsOf:
+		return m.ExchangeRateAsOf()
+	case usagelog.FieldSourceCost:
+		return m.SourceCost()
+	case usagelog.FieldBaseCost:
+		return m.BaseCost()
 	case usagelog.FieldRateMultiplier:
 		return m.RateMultiplier()
 	case usagelog.FieldLongContextBillingApplied:
@@ -46066,6 +47211,20 @@ func (m *UsageLogMutation) OldField(ctx context.Context, name string) (ent.Value
 		return m.OldTotalCost(ctx)
 	case usagelog.FieldActualCost:
 		return m.OldActualCost(ctx)
+	case usagelog.FieldSourceCurrency:
+		return m.OldSourceCurrency(ctx)
+	case usagelog.FieldSettlementCurrency:
+		return m.OldSettlementCurrency(ctx)
+	case usagelog.FieldExchangeRate:
+		return m.OldExchangeRate(ctx)
+	case usagelog.FieldExchangeRateSource:
+		return m.OldExchangeRateSource(ctx)
+	case usagelog.FieldExchangeRateAsOf:
+		return m.OldExchangeRateAsOf(ctx)
+	case usagelog.FieldSourceCost:
+		return m.OldSourceCost(ctx)
+	case usagelog.FieldBaseCost:
+		return m.OldBaseCost(ctx)
 	case usagelog.FieldRateMultiplier:
 		return m.OldRateMultiplier(ctx)
 	case usagelog.FieldLongContextBillingApplied:
@@ -46290,6 +47449,55 @@ func (m *UsageLogMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetActualCost(v)
 		return nil
+	case usagelog.FieldSourceCurrency:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSourceCurrency(v)
+		return nil
+	case usagelog.FieldSettlementCurrency:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSettlementCurrency(v)
+		return nil
+	case usagelog.FieldExchangeRate:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetExchangeRate(v)
+		return nil
+	case usagelog.FieldExchangeRateSource:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetExchangeRateSource(v)
+		return nil
+	case usagelog.FieldExchangeRateAsOf:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetExchangeRateAsOf(v)
+		return nil
+	case usagelog.FieldSourceCost:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSourceCost(v)
+		return nil
+	case usagelog.FieldBaseCost:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetBaseCost(v)
+		return nil
 	case usagelog.FieldRateMultiplier:
 		v, ok := value.(float64)
 		if !ok {
@@ -46477,6 +47685,15 @@ func (m *UsageLogMutation) AddedFields() []string {
 	if m.addactual_cost != nil {
 		fields = append(fields, usagelog.FieldActualCost)
 	}
+	if m.addexchange_rate != nil {
+		fields = append(fields, usagelog.FieldExchangeRate)
+	}
+	if m.addsource_cost != nil {
+		fields = append(fields, usagelog.FieldSourceCost)
+	}
+	if m.addbase_cost != nil {
+		fields = append(fields, usagelog.FieldBaseCost)
+	}
 	if m.addrate_multiplier != nil {
 		fields = append(fields, usagelog.FieldRateMultiplier)
 	}
@@ -46535,6 +47752,12 @@ func (m *UsageLogMutation) AddedField(name string) (ent.Value, bool) {
 		return m.AddedTotalCost()
 	case usagelog.FieldActualCost:
 		return m.AddedActualCost()
+	case usagelog.FieldExchangeRate:
+		return m.AddedExchangeRate()
+	case usagelog.FieldSourceCost:
+		return m.AddedSourceCost()
+	case usagelog.FieldBaseCost:
+		return m.AddedBaseCost()
 	case usagelog.FieldRateMultiplier:
 		return m.AddedRateMultiplier()
 	case usagelog.FieldAccountRateMultiplier:
@@ -46651,6 +47874,27 @@ func (m *UsageLogMutation) AddField(name string, value ent.Value) error {
 		}
 		m.AddActualCost(v)
 		return nil
+	case usagelog.FieldExchangeRate:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddExchangeRate(v)
+		return nil
+	case usagelog.FieldSourceCost:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddSourceCost(v)
+		return nil
+	case usagelog.FieldBaseCost:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddBaseCost(v)
+		return nil
 	case usagelog.FieldRateMultiplier:
 		v, ok := value.(float64)
 		if !ok {
@@ -46739,6 +47983,9 @@ func (m *UsageLogMutation) ClearedFields() []string {
 	if m.FieldCleared(usagelog.FieldSubscriptionID) {
 		fields = append(fields, usagelog.FieldSubscriptionID)
 	}
+	if m.FieldCleared(usagelog.FieldExchangeRateAsOf) {
+		fields = append(fields, usagelog.FieldExchangeRateAsOf)
+	}
 	if m.FieldCleared(usagelog.FieldAccountRateMultiplier) {
 		fields = append(fields, usagelog.FieldAccountRateMultiplier)
 	}
@@ -46812,6 +48059,9 @@ func (m *UsageLogMutation) ClearField(name string) error {
 		return nil
 	case usagelog.FieldSubscriptionID:
 		m.ClearSubscriptionID()
+		return nil
+	case usagelog.FieldExchangeRateAsOf:
+		m.ClearExchangeRateAsOf()
 		return nil
 	case usagelog.FieldAccountRateMultiplier:
 		m.ClearAccountRateMultiplier()
@@ -46931,6 +48181,27 @@ func (m *UsageLogMutation) ResetField(name string) error {
 		return nil
 	case usagelog.FieldActualCost:
 		m.ResetActualCost()
+		return nil
+	case usagelog.FieldSourceCurrency:
+		m.ResetSourceCurrency()
+		return nil
+	case usagelog.FieldSettlementCurrency:
+		m.ResetSettlementCurrency()
+		return nil
+	case usagelog.FieldExchangeRate:
+		m.ResetExchangeRate()
+		return nil
+	case usagelog.FieldExchangeRateSource:
+		m.ResetExchangeRateSource()
+		return nil
+	case usagelog.FieldExchangeRateAsOf:
+		m.ResetExchangeRateAsOf()
+		return nil
+	case usagelog.FieldSourceCost:
+		m.ResetSourceCost()
+		return nil
+	case usagelog.FieldBaseCost:
+		m.ResetBaseCost()
 		return nil
 	case usagelog.FieldRateMultiplier:
 		m.ResetRateMultiplier()
@@ -47153,11 +48424,13 @@ type UserMutation struct {
 	deleted_at                    *time.Time
 	email                         *string
 	password_hash                 *string
+	platform_user_id              *string
 	role                          *string
 	balance                       *float64
 	addbalance                    *float64
 	frozen_balance                *float64
 	addfrozen_balance             *float64
+	billing_currency              *string
 	concurrency                   *int
 	addconcurrency                *int
 	status                        *string
@@ -47514,6 +48787,55 @@ func (m *UserMutation) ResetPasswordHash() {
 	m.password_hash = nil
 }
 
+// SetPlatformUserID sets the "platform_user_id" field.
+func (m *UserMutation) SetPlatformUserID(s string) {
+	m.platform_user_id = &s
+}
+
+// PlatformUserID returns the value of the "platform_user_id" field in the mutation.
+func (m *UserMutation) PlatformUserID() (r string, exists bool) {
+	v := m.platform_user_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPlatformUserID returns the old "platform_user_id" field's value of the User entity.
+// If the User object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UserMutation) OldPlatformUserID(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPlatformUserID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPlatformUserID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPlatformUserID: %w", err)
+	}
+	return oldValue.PlatformUserID, nil
+}
+
+// ClearPlatformUserID clears the value of the "platform_user_id" field.
+func (m *UserMutation) ClearPlatformUserID() {
+	m.platform_user_id = nil
+	m.clearedFields[user.FieldPlatformUserID] = struct{}{}
+}
+
+// PlatformUserIDCleared returns if the "platform_user_id" field was cleared in this mutation.
+func (m *UserMutation) PlatformUserIDCleared() bool {
+	_, ok := m.clearedFields[user.FieldPlatformUserID]
+	return ok
+}
+
+// ResetPlatformUserID resets all changes to the "platform_user_id" field.
+func (m *UserMutation) ResetPlatformUserID() {
+	m.platform_user_id = nil
+	delete(m.clearedFields, user.FieldPlatformUserID)
+}
+
 // SetRole sets the "role" field.
 func (m *UserMutation) SetRole(s string) {
 	m.role = &s
@@ -47660,6 +48982,42 @@ func (m *UserMutation) AddedFrozenBalance() (r float64, exists bool) {
 func (m *UserMutation) ResetFrozenBalance() {
 	m.frozen_balance = nil
 	m.addfrozen_balance = nil
+}
+
+// SetBillingCurrency sets the "billing_currency" field.
+func (m *UserMutation) SetBillingCurrency(s string) {
+	m.billing_currency = &s
+}
+
+// BillingCurrency returns the value of the "billing_currency" field in the mutation.
+func (m *UserMutation) BillingCurrency() (r string, exists bool) {
+	v := m.billing_currency
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldBillingCurrency returns the old "billing_currency" field's value of the User entity.
+// If the User object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UserMutation) OldBillingCurrency(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldBillingCurrency is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldBillingCurrency requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldBillingCurrency: %w", err)
+	}
+	return oldValue.BillingCurrency, nil
+}
+
+// ResetBillingCurrency resets all changes to the "billing_currency" field.
+func (m *UserMutation) ResetBillingCurrency() {
+	m.billing_currency = nil
 }
 
 // SetConcurrency sets the "concurrency" field.
@@ -49120,7 +50478,7 @@ func (m *UserMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *UserMutation) Fields() []string {
-	fields := make([]string, 0, 24)
+	fields := make([]string, 0, 26)
 	if m.created_at != nil {
 		fields = append(fields, user.FieldCreatedAt)
 	}
@@ -49136,6 +50494,9 @@ func (m *UserMutation) Fields() []string {
 	if m.password_hash != nil {
 		fields = append(fields, user.FieldPasswordHash)
 	}
+	if m.platform_user_id != nil {
+		fields = append(fields, user.FieldPlatformUserID)
+	}
 	if m.role != nil {
 		fields = append(fields, user.FieldRole)
 	}
@@ -49144,6 +50505,9 @@ func (m *UserMutation) Fields() []string {
 	}
 	if m.frozen_balance != nil {
 		fields = append(fields, user.FieldFrozenBalance)
+	}
+	if m.billing_currency != nil {
+		fields = append(fields, user.FieldBillingCurrency)
 	}
 	if m.concurrency != nil {
 		fields = append(fields, user.FieldConcurrency)
@@ -49211,12 +50575,16 @@ func (m *UserMutation) Field(name string) (ent.Value, bool) {
 		return m.Email()
 	case user.FieldPasswordHash:
 		return m.PasswordHash()
+	case user.FieldPlatformUserID:
+		return m.PlatformUserID()
 	case user.FieldRole:
 		return m.Role()
 	case user.FieldBalance:
 		return m.Balance()
 	case user.FieldFrozenBalance:
 		return m.FrozenBalance()
+	case user.FieldBillingCurrency:
+		return m.BillingCurrency()
 	case user.FieldConcurrency:
 		return m.Concurrency()
 	case user.FieldStatus:
@@ -49268,12 +50636,16 @@ func (m *UserMutation) OldField(ctx context.Context, name string) (ent.Value, er
 		return m.OldEmail(ctx)
 	case user.FieldPasswordHash:
 		return m.OldPasswordHash(ctx)
+	case user.FieldPlatformUserID:
+		return m.OldPlatformUserID(ctx)
 	case user.FieldRole:
 		return m.OldRole(ctx)
 	case user.FieldBalance:
 		return m.OldBalance(ctx)
 	case user.FieldFrozenBalance:
 		return m.OldFrozenBalance(ctx)
+	case user.FieldBillingCurrency:
+		return m.OldBillingCurrency(ctx)
 	case user.FieldConcurrency:
 		return m.OldConcurrency(ctx)
 	case user.FieldStatus:
@@ -49350,6 +50722,13 @@ func (m *UserMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetPasswordHash(v)
 		return nil
+	case user.FieldPlatformUserID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPlatformUserID(v)
+		return nil
 	case user.FieldRole:
 		v, ok := value.(string)
 		if !ok {
@@ -49370,6 +50749,13 @@ func (m *UserMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetFrozenBalance(v)
+		return nil
+	case user.FieldBillingCurrency:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetBillingCurrency(v)
 		return nil
 	case user.FieldConcurrency:
 		v, ok := value.(int)
@@ -49591,6 +50977,9 @@ func (m *UserMutation) ClearedFields() []string {
 	if m.FieldCleared(user.FieldDeletedAt) {
 		fields = append(fields, user.FieldDeletedAt)
 	}
+	if m.FieldCleared(user.FieldPlatformUserID) {
+		fields = append(fields, user.FieldPlatformUserID)
+	}
 	if m.FieldCleared(user.FieldTotpSecretEncrypted) {
 		fields = append(fields, user.FieldTotpSecretEncrypted)
 	}
@@ -49622,6 +51011,9 @@ func (m *UserMutation) ClearField(name string) error {
 	switch name {
 	case user.FieldDeletedAt:
 		m.ClearDeletedAt()
+		return nil
+	case user.FieldPlatformUserID:
+		m.ClearPlatformUserID()
 		return nil
 	case user.FieldTotpSecretEncrypted:
 		m.ClearTotpSecretEncrypted()
@@ -49661,6 +51053,9 @@ func (m *UserMutation) ResetField(name string) error {
 	case user.FieldPasswordHash:
 		m.ResetPasswordHash()
 		return nil
+	case user.FieldPlatformUserID:
+		m.ResetPlatformUserID()
+		return nil
 	case user.FieldRole:
 		m.ResetRole()
 		return nil
@@ -49669,6 +51064,9 @@ func (m *UserMutation) ResetField(name string) error {
 		return nil
 	case user.FieldFrozenBalance:
 		m.ResetFrozenBalance()
+		return nil
+	case user.FieldBillingCurrency:
+		m.ResetBillingCurrency()
 		return nil
 	case user.FieldConcurrency:
 		m.ResetConcurrency()

@@ -130,17 +130,22 @@ func (s *adminServiceImpl) CreateUser(ctx context.Context, input *CreateUserInpu
 	if err != nil {
 		return nil, err
 	}
+	billingCurrency, err := NormalizeBillingCurrency(input.BillingCurrency)
+	if err != nil {
+		return nil, err
+	}
 
 	user := &User{
-		Email:         input.Email,
-		Username:      input.Username,
-		Notes:         input.Notes,
-		Role:          role,
-		Balance:       balance,
-		Concurrency:   input.Concurrency,
-		RPMLimit:      input.RPMLimit,
-		Status:        StatusActive,
-		AllowedGroups: input.AllowedGroups,
+		Email:           input.Email,
+		Username:        input.Username,
+		Notes:           input.Notes,
+		Role:            role,
+		Balance:         balance,
+		BillingCurrency: billingCurrency,
+		Concurrency:     input.Concurrency,
+		RPMLimit:        input.RPMLimit,
+		Status:          StatusActive,
+		AllowedGroups:   input.AllowedGroups,
 	}
 	if err := user.SetPassword(input.Password); err != nil {
 		return nil, err
@@ -217,6 +222,7 @@ func (s *adminServiceImpl) UpdateUser(ctx context.Context, id int64, input *Upda
 	oldRole := user.Role
 	oldRPMLimit := user.RPMLimit
 	oldAllowedGroups := append([]int64(nil), user.AllowedGroups...)
+	oldBillingCurrency := NormalizeUserBillingCurrency(user.BillingCurrency)
 
 	if input.Email != "" {
 		user.Email = input.Email
@@ -236,6 +242,20 @@ func (s *adminServiceImpl) UpdateUser(ctx context.Context, id int64, input *Upda
 
 	if input.Status != "" {
 		user.Status = input.Status
+	}
+	if input.BillingCurrency != nil {
+		currency, currencyErr := NormalizeBillingCurrency(*input.BillingCurrency)
+		if currencyErr != nil {
+			return nil, currencyErr
+		}
+		if currency != oldBillingCurrency && (user.Balance != 0 || user.FrozenBalance != 0) {
+			return nil, infraerrors.BadRequest(
+				"BILLING_CURRENCY_BALANCE_NOT_EMPTY",
+				"billing currency can only be changed when balance and frozen balance are zero",
+			)
+		}
+		user.BillingCurrency = currency
+		ctx = ContextWithBillingCurrencyUpdate(ctx)
 	}
 
 	// 角色变更(admin/user);空字符串表示不修改。
@@ -275,6 +295,10 @@ func (s *adminServiceImpl) UpdateUser(ctx context.Context, id int64, input *Upda
 		logger.LegacyPrintf("service.admin", "audit: user role changed actor_admin_id=%d target_user_id=%d old_role=%s new_role=%s",
 			input.ActorAdminID, user.ID, oldRole, user.Role)
 	}
+	if NormalizeUserBillingCurrency(user.BillingCurrency) != oldBillingCurrency {
+		logger.LegacyPrintf("service.admin", "audit: user billing currency changed actor_admin_id=%d target_user_id=%d old_currency=%s new_currency=%s",
+			input.ActorAdminID, user.ID, oldBillingCurrency, NormalizeUserBillingCurrency(user.BillingCurrency))
+	}
 
 	// 同步用户专属分组倍率
 	if input.GroupRates != nil && s.userGroupRateRepo != nil {
@@ -286,7 +310,7 @@ func (s *adminServiceImpl) UpdateUser(ctx context.Context, id int64, input *Upda
 	if s.authCacheInvalidator != nil {
 		// RPMLimit 直接参与 billing_cache_service.checkRPM 的三级级联，
 		// allowed_groups 参与 API Key 专属分组授权判断；不失效缓存会让修改在一个 L2 TTL 内失去效果。
-		if user.Concurrency != oldConcurrency || user.Status != oldStatus || user.Role != oldRole || user.RPMLimit != oldRPMLimit || !sameInt64Set(user.AllowedGroups, oldAllowedGroups) {
+		if user.Concurrency != oldConcurrency || user.Status != oldStatus || user.Role != oldRole || user.RPMLimit != oldRPMLimit || NormalizeUserBillingCurrency(user.BillingCurrency) != oldBillingCurrency || !sameInt64Set(user.AllowedGroups, oldAllowedGroups) {
 			s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, user.ID)
 		}
 	}
@@ -498,25 +522,10 @@ func (s *adminServiceImpl) UpdateUserBalance(ctx context.Context, userID int64, 
 		return nil, err
 	}
 
-	oldBalance := user.Balance
-
-	switch operation {
-	case "set":
-		user.Balance = balance
-	case "add":
-		user.Balance += balance
-	case "subtract":
-		user.Balance -= balance
-	}
-
-	if user.Balance < 0 {
-		return nil, fmt.Errorf("balance cannot be negative, current balance: %.2f, requested operation would result in: %.2f", oldBalance, user.Balance)
-	}
-
-	if err := s.userRepo.Update(ctx, user); err != nil {
+	balanceDiff, err := s.applyAdminBalanceAdjustment(ctx, user, balance, operation)
+	if err != nil {
 		return nil, err
 	}
-	balanceDiff := user.Balance - oldBalance
 	if s.authCacheInvalidator != nil && balanceDiff != 0 {
 		s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, userID)
 	}
@@ -540,12 +549,13 @@ func (s *adminServiceImpl) UpdateUserBalance(ctx context.Context, userID int64, 
 		}
 
 		adjustmentRecord := &RedeemCode{
-			Code:   code,
-			Type:   AdjustmentTypeAdminBalance,
-			Value:  balanceDiff,
-			Status: StatusUsed,
-			UsedBy: &user.ID,
-			Notes:  notes,
+			Code:     code,
+			Type:     AdjustmentTypeAdminBalance,
+			Value:    balanceDiff,
+			Currency: NormalizeUserBillingCurrency(user.BillingCurrency),
+			Status:   StatusUsed,
+			UsedBy:   &user.ID,
+			Notes:    notes,
 		}
 		now := time.Now()
 		adjustmentRecord.UsedAt = &now
@@ -556,6 +566,66 @@ func (s *adminServiceImpl) UpdateUserBalance(ctx context.Context, userID int64, 
 	}
 
 	return user, nil
+}
+
+func (s *adminServiceImpl) applyAdminBalanceAdjustment(ctx context.Context, user *User, amount float64, operation string) (float64, error) {
+	if user == nil {
+		return 0, ErrUserNotFound
+	}
+	if s.entClient == nil {
+		newBalance := adminBalanceAfterOperation(user.Balance, amount, operation)
+		if newBalance < 0 {
+			return 0, fmt.Errorf("balance cannot be negative, current balance: %.2f, requested operation would result in: %.2f", user.Balance, newBalance)
+		}
+		delta := newBalance - user.Balance
+		if delta != 0 {
+			if err := s.userRepo.UpdateBalance(ctx, user.ID, delta); err != nil {
+				return 0, err
+			}
+		}
+		user.Balance = newBalance
+		return delta, nil
+	}
+
+	tx, err := s.entClient.Tx(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("begin admin balance transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	txCtx := dbent.NewTxContext(ctx, tx)
+	locked, err := lockBillingWallet(txCtx, tx.Client(), user.ID)
+	if err != nil {
+		return 0, fmt.Errorf("lock admin balance wallet: %w", err)
+	}
+	newBalance := adminBalanceAfterOperation(locked.Balance, amount, operation)
+	if newBalance < 0 {
+		return 0, fmt.Errorf("balance cannot be negative, current balance: %.2f, requested operation would result in: %.2f", locked.Balance, newBalance)
+	}
+	delta := newBalance - locked.Balance
+	if delta != 0 {
+		if err := s.userRepo.UpdateBalance(txCtx, user.ID, delta); err != nil {
+			return 0, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit admin balance transaction: %w", err)
+	}
+	user.Balance = newBalance
+	user.BillingCurrency = NormalizeUserBillingCurrency(locked.BillingCurrency)
+	return delta, nil
+}
+
+func adminBalanceAfterOperation(current, amount float64, operation string) float64 {
+	switch operation {
+	case "set":
+		return amount
+	case "add":
+		return current + amount
+	case "subtract":
+		return current - amount
+	default:
+		return current
+	}
 }
 
 func (s *adminServiceImpl) tryAccrueAffiliateRebateForAdminRecharge(ctx context.Context, userID int64, operation string, amount float64) {
@@ -1257,6 +1327,7 @@ func (s *adminServiceImpl) GenerateRedeemCodes(ctx context.Context, input *Gener
 			Code:      codeValue,
 			Type:      input.Type,
 			Value:     input.Value,
+			Currency:  NormalizeUserBillingCurrency(input.Currency),
 			Status:    StatusUnused,
 			ExpiresAt: input.ExpiresAt,
 		}

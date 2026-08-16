@@ -50,6 +50,12 @@ func (PaymentOrder) Fields() []ent.Field {
 		field.Float("fee_rate").
 			SchemaType(map[string]string{dialect.Postgres: "decimal(10,4)"}).
 			Default(0),
+		// Wallet ledger currency pinned when the order is created. Provider
+		// currency describes payment collection; this field describes credit.
+		field.String("settlement_currency").
+			MaxLen(3).
+			Optional().
+			Nillable(),
 		field.String("recharge_code").
 			MaxLen(64),
 

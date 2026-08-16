@@ -142,6 +142,15 @@ func (h *UsageHandler) parseUserUsageFilters(c *gin.Context, requireRange bool) 
 		response.BadRequest(c, "Invalid billing_mode")
 		return nil, false
 	}
+	displayCurrency := strings.TrimSpace(c.Query("display_currency"))
+	if displayCurrency != "" {
+		var currencyErr error
+		displayCurrency, currencyErr = service.NormalizeBillingCurrency(displayCurrency)
+		if currencyErr != nil {
+			response.BadRequest(c, currencyErr.Error())
+			return nil, false
+		}
+	}
 
 	userTZ := c.Query("timezone")
 	now := timezone.NowInUserLocation(userTZ)
@@ -204,6 +213,7 @@ func (h *UsageHandler) parseUserUsageFilters(c *gin.Context, requireRange bool) 
 			Stream:            stream,
 			BillingType:       billingType,
 			BillingMode:       billingMode,
+			DisplayCurrency:   displayCurrency,
 			StartTime:         startPtr,
 			EndTime:           endPtr,
 		},

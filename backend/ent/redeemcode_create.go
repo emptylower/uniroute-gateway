@@ -58,6 +58,20 @@ func (_c *RedeemCodeCreate) SetNillableValue(v *float64) *RedeemCodeCreate {
 	return _c
 }
 
+// SetCurrency sets the "currency" field.
+func (_c *RedeemCodeCreate) SetCurrency(v string) *RedeemCodeCreate {
+	_c.mutation.SetCurrency(v)
+	return _c
+}
+
+// SetNillableCurrency sets the "currency" field if the given value is not nil.
+func (_c *RedeemCodeCreate) SetNillableCurrency(v *string) *RedeemCodeCreate {
+	if v != nil {
+		_c.SetCurrency(*v)
+	}
+	return _c
+}
+
 // SetStatus sets the "status" field.
 func (_c *RedeemCodeCreate) SetStatus(v string) *RedeemCodeCreate {
 	_c.mutation.SetStatus(v)
@@ -237,6 +251,10 @@ func (_c *RedeemCodeCreate) defaults() {
 		v := redeemcode.DefaultValue
 		_c.mutation.SetValue(v)
 	}
+	if _, ok := _c.mutation.Currency(); !ok {
+		v := redeemcode.DefaultCurrency
+		_c.mutation.SetCurrency(v)
+	}
 	if _, ok := _c.mutation.Status(); !ok {
 		v := redeemcode.DefaultStatus
 		_c.mutation.SetStatus(v)
@@ -271,6 +289,14 @@ func (_c *RedeemCodeCreate) check() error {
 	}
 	if _, ok := _c.mutation.Value(); !ok {
 		return &ValidationError{Name: "value", err: errors.New(`ent: missing required field "RedeemCode.value"`)}
+	}
+	if _, ok := _c.mutation.Currency(); !ok {
+		return &ValidationError{Name: "currency", err: errors.New(`ent: missing required field "RedeemCode.currency"`)}
+	}
+	if v, ok := _c.mutation.Currency(); ok {
+		if err := redeemcode.CurrencyValidator(v); err != nil {
+			return &ValidationError{Name: "currency", err: fmt.Errorf(`ent: validator failed for field "RedeemCode.currency": %w`, err)}
+		}
 	}
 	if _, ok := _c.mutation.Status(); !ok {
 		return &ValidationError{Name: "status", err: errors.New(`ent: missing required field "RedeemCode.status"`)}
@@ -324,6 +350,10 @@ func (_c *RedeemCodeCreate) createSpec() (*RedeemCode, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.Value(); ok {
 		_spec.SetField(redeemcode.FieldValue, field.TypeFloat64, value)
 		_node.Value = value
+	}
+	if value, ok := _c.mutation.Currency(); ok {
+		_spec.SetField(redeemcode.FieldCurrency, field.TypeString, value)
+		_node.Currency = value
 	}
 	if value, ok := _c.mutation.Status(); ok {
 		_spec.SetField(redeemcode.FieldStatus, field.TypeString, value)
@@ -474,6 +504,18 @@ func (u *RedeemCodeUpsert) UpdateValue() *RedeemCodeUpsert {
 // AddValue adds v to the "value" field.
 func (u *RedeemCodeUpsert) AddValue(v float64) *RedeemCodeUpsert {
 	u.Add(redeemcode.FieldValue, v)
+	return u
+}
+
+// SetCurrency sets the "currency" field.
+func (u *RedeemCodeUpsert) SetCurrency(v string) *RedeemCodeUpsert {
+	u.Set(redeemcode.FieldCurrency, v)
+	return u
+}
+
+// UpdateCurrency sets the "currency" field to the value that was provided on create.
+func (u *RedeemCodeUpsert) UpdateCurrency() *RedeemCodeUpsert {
+	u.SetExcluded(redeemcode.FieldCurrency)
 	return u
 }
 
@@ -688,6 +730,20 @@ func (u *RedeemCodeUpsertOne) AddValue(v float64) *RedeemCodeUpsertOne {
 func (u *RedeemCodeUpsertOne) UpdateValue() *RedeemCodeUpsertOne {
 	return u.Update(func(s *RedeemCodeUpsert) {
 		s.UpdateValue()
+	})
+}
+
+// SetCurrency sets the "currency" field.
+func (u *RedeemCodeUpsertOne) SetCurrency(v string) *RedeemCodeUpsertOne {
+	return u.Update(func(s *RedeemCodeUpsert) {
+		s.SetCurrency(v)
+	})
+}
+
+// UpdateCurrency sets the "currency" field to the value that was provided on create.
+func (u *RedeemCodeUpsertOne) UpdateCurrency() *RedeemCodeUpsertOne {
+	return u.Update(func(s *RedeemCodeUpsert) {
+		s.UpdateCurrency()
 	})
 }
 
@@ -1088,6 +1144,20 @@ func (u *RedeemCodeUpsertBulk) AddValue(v float64) *RedeemCodeUpsertBulk {
 func (u *RedeemCodeUpsertBulk) UpdateValue() *RedeemCodeUpsertBulk {
 	return u.Update(func(s *RedeemCodeUpsert) {
 		s.UpdateValue()
+	})
+}
+
+// SetCurrency sets the "currency" field.
+func (u *RedeemCodeUpsertBulk) SetCurrency(v string) *RedeemCodeUpsertBulk {
+	return u.Update(func(s *RedeemCodeUpsert) {
+		s.SetCurrency(v)
+	})
+}
+
+// UpdateCurrency sets the "currency" field to the value that was provided on create.
+func (u *RedeemCodeUpsertBulk) UpdateCurrency() *RedeemCodeUpsertBulk {
+	return u.Update(func(s *RedeemCodeUpsert) {
+		s.UpdateCurrency()
 	})
 }
 

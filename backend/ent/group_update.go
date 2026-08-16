@@ -117,6 +117,60 @@ func (_u *GroupUpdate) AddRateMultiplier(v float64) *GroupUpdate {
 	return _u
 }
 
+// SetRateMultiplierCny sets the "rate_multiplier_cny" field.
+func (_u *GroupUpdate) SetRateMultiplierCny(v float64) *GroupUpdate {
+	_u.mutation.ResetRateMultiplierCny()
+	_u.mutation.SetRateMultiplierCny(v)
+	return _u
+}
+
+// SetNillableRateMultiplierCny sets the "rate_multiplier_cny" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableRateMultiplierCny(v *float64) *GroupUpdate {
+	if v != nil {
+		_u.SetRateMultiplierCny(*v)
+	}
+	return _u
+}
+
+// AddRateMultiplierCny adds value to the "rate_multiplier_cny" field.
+func (_u *GroupUpdate) AddRateMultiplierCny(v float64) *GroupUpdate {
+	_u.mutation.AddRateMultiplierCny(v)
+	return _u
+}
+
+// ClearRateMultiplierCny clears the value of the "rate_multiplier_cny" field.
+func (_u *GroupUpdate) ClearRateMultiplierCny() *GroupUpdate {
+	_u.mutation.ClearRateMultiplierCny()
+	return _u
+}
+
+// SetRateMultiplierUsd sets the "rate_multiplier_usd" field.
+func (_u *GroupUpdate) SetRateMultiplierUsd(v float64) *GroupUpdate {
+	_u.mutation.ResetRateMultiplierUsd()
+	_u.mutation.SetRateMultiplierUsd(v)
+	return _u
+}
+
+// SetNillableRateMultiplierUsd sets the "rate_multiplier_usd" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableRateMultiplierUsd(v *float64) *GroupUpdate {
+	if v != nil {
+		_u.SetRateMultiplierUsd(*v)
+	}
+	return _u
+}
+
+// AddRateMultiplierUsd adds value to the "rate_multiplier_usd" field.
+func (_u *GroupUpdate) AddRateMultiplierUsd(v float64) *GroupUpdate {
+	_u.mutation.AddRateMultiplierUsd(v)
+	return _u
+}
+
+// ClearRateMultiplierUsd clears the value of the "rate_multiplier_usd" field.
+func (_u *GroupUpdate) ClearRateMultiplierUsd() *GroupUpdate {
+	_u.mutation.ClearRateMultiplierUsd()
+	return _u
+}
+
 // SetPeakRateEnabled sets the "peak_rate_enabled" field.
 func (_u *GroupUpdate) SetPeakRateEnabled(v bool) *GroupUpdate {
 	_u.mutation.SetPeakRateEnabled(v)
@@ -1297,6 +1351,24 @@ func (_u *GroupUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if value, ok := _u.mutation.AddedRateMultiplier(); ok {
 		_spec.AddField(group.FieldRateMultiplier, field.TypeFloat64, value)
 	}
+	if value, ok := _u.mutation.RateMultiplierCny(); ok {
+		_spec.SetField(group.FieldRateMultiplierCny, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedRateMultiplierCny(); ok {
+		_spec.AddField(group.FieldRateMultiplierCny, field.TypeFloat64, value)
+	}
+	if _u.mutation.RateMultiplierCnyCleared() {
+		_spec.ClearField(group.FieldRateMultiplierCny, field.TypeFloat64)
+	}
+	if value, ok := _u.mutation.RateMultiplierUsd(); ok {
+		_spec.SetField(group.FieldRateMultiplierUsd, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedRateMultiplierUsd(); ok {
+		_spec.AddField(group.FieldRateMultiplierUsd, field.TypeFloat64, value)
+	}
+	if _u.mutation.RateMultiplierUsdCleared() {
+		_spec.ClearField(group.FieldRateMultiplierUsd, field.TypeFloat64)
+	}
 	if value, ok := _u.mutation.PeakRateEnabled(); ok {
 		_spec.SetField(group.FieldPeakRateEnabled, field.TypeBool, value)
 	}
@@ -1936,6 +2008,60 @@ func (_u *GroupUpdateOne) SetNillableRateMultiplier(v *float64) *GroupUpdateOne 
 // AddRateMultiplier adds value to the "rate_multiplier" field.
 func (_u *GroupUpdateOne) AddRateMultiplier(v float64) *GroupUpdateOne {
 	_u.mutation.AddRateMultiplier(v)
+	return _u
+}
+
+// SetRateMultiplierCny sets the "rate_multiplier_cny" field.
+func (_u *GroupUpdateOne) SetRateMultiplierCny(v float64) *GroupUpdateOne {
+	_u.mutation.ResetRateMultiplierCny()
+	_u.mutation.SetRateMultiplierCny(v)
+	return _u
+}
+
+// SetNillableRateMultiplierCny sets the "rate_multiplier_cny" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableRateMultiplierCny(v *float64) *GroupUpdateOne {
+	if v != nil {
+		_u.SetRateMultiplierCny(*v)
+	}
+	return _u
+}
+
+// AddRateMultiplierCny adds value to the "rate_multiplier_cny" field.
+func (_u *GroupUpdateOne) AddRateMultiplierCny(v float64) *GroupUpdateOne {
+	_u.mutation.AddRateMultiplierCny(v)
+	return _u
+}
+
+// ClearRateMultiplierCny clears the value of the "rate_multiplier_cny" field.
+func (_u *GroupUpdateOne) ClearRateMultiplierCny() *GroupUpdateOne {
+	_u.mutation.ClearRateMultiplierCny()
+	return _u
+}
+
+// SetRateMultiplierUsd sets the "rate_multiplier_usd" field.
+func (_u *GroupUpdateOne) SetRateMultiplierUsd(v float64) *GroupUpdateOne {
+	_u.mutation.ResetRateMultiplierUsd()
+	_u.mutation.SetRateMultiplierUsd(v)
+	return _u
+}
+
+// SetNillableRateMultiplierUsd sets the "rate_multiplier_usd" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableRateMultiplierUsd(v *float64) *GroupUpdateOne {
+	if v != nil {
+		_u.SetRateMultiplierUsd(*v)
+	}
+	return _u
+}
+
+// AddRateMultiplierUsd adds value to the "rate_multiplier_usd" field.
+func (_u *GroupUpdateOne) AddRateMultiplierUsd(v float64) *GroupUpdateOne {
+	_u.mutation.AddRateMultiplierUsd(v)
+	return _u
+}
+
+// ClearRateMultiplierUsd clears the value of the "rate_multiplier_usd" field.
+func (_u *GroupUpdateOne) ClearRateMultiplierUsd() *GroupUpdateOne {
+	_u.mutation.ClearRateMultiplierUsd()
 	return _u
 }
 
@@ -3148,6 +3274,24 @@ func (_u *GroupUpdateOne) sqlSave(ctx context.Context) (_node *Group, err error)
 	}
 	if value, ok := _u.mutation.AddedRateMultiplier(); ok {
 		_spec.AddField(group.FieldRateMultiplier, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.RateMultiplierCny(); ok {
+		_spec.SetField(group.FieldRateMultiplierCny, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedRateMultiplierCny(); ok {
+		_spec.AddField(group.FieldRateMultiplierCny, field.TypeFloat64, value)
+	}
+	if _u.mutation.RateMultiplierCnyCleared() {
+		_spec.ClearField(group.FieldRateMultiplierCny, field.TypeFloat64)
+	}
+	if value, ok := _u.mutation.RateMultiplierUsd(); ok {
+		_spec.SetField(group.FieldRateMultiplierUsd, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedRateMultiplierUsd(); ok {
+		_spec.AddField(group.FieldRateMultiplierUsd, field.TypeFloat64, value)
+	}
+	if _u.mutation.RateMultiplierUsdCleared() {
+		_spec.ClearField(group.FieldRateMultiplierUsd, field.TypeFloat64)
 	}
 	if value, ok := _u.mutation.PeakRateEnabled(); ok {
 		_spec.SetField(group.FieldPeakRateEnabled, field.TypeBool, value)

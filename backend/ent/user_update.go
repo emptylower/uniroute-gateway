@@ -150,6 +150,20 @@ func (_u *UserUpdate) AddFrozenBalance(v float64) *UserUpdate {
 	return _u
 }
 
+// SetBillingCurrency sets the "billing_currency" field.
+func (_u *UserUpdate) SetBillingCurrency(v string) *UserUpdate {
+	_u.mutation.SetBillingCurrency(v)
+	return _u
+}
+
+// SetNillableBillingCurrency sets the "billing_currency" field if the given value is not nil.
+func (_u *UserUpdate) SetNillableBillingCurrency(v *string) *UserUpdate {
+	if v != nil {
+		_u.SetBillingCurrency(*v)
+	}
+	return _u
+}
+
 // SetConcurrency sets the "concurrency" field.
 func (_u *UserUpdate) SetConcurrency(v int) *UserUpdate {
 	_u.mutation.ResetConcurrency()
@@ -964,6 +978,11 @@ func (_u *UserUpdate) check() error {
 			return &ValidationError{Name: "role", err: fmt.Errorf(`ent: validator failed for field "User.role": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.BillingCurrency(); ok {
+		if err := user.BillingCurrencyValidator(v); err != nil {
+			return &ValidationError{Name: "billing_currency", err: fmt.Errorf(`ent: validator failed for field "User.billing_currency": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.Status(); ok {
 		if err := user.StatusValidator(v); err != nil {
 			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "User.status": %w`, err)}
@@ -1009,6 +1028,9 @@ func (_u *UserUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if value, ok := _u.mutation.PasswordHash(); ok {
 		_spec.SetField(user.FieldPasswordHash, field.TypeString, value)
 	}
+	if _u.mutation.PlatformUserIDCleared() {
+		_spec.ClearField(user.FieldPlatformUserID, field.TypeString)
+	}
 	if value, ok := _u.mutation.Role(); ok {
 		_spec.SetField(user.FieldRole, field.TypeString, value)
 	}
@@ -1023,6 +1045,9 @@ func (_u *UserUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if value, ok := _u.mutation.AddedFrozenBalance(); ok {
 		_spec.AddField(user.FieldFrozenBalance, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.BillingCurrency(); ok {
+		_spec.SetField(user.FieldBillingCurrency, field.TypeString, value)
 	}
 	if value, ok := _u.mutation.Concurrency(); ok {
 		_spec.SetField(user.FieldConcurrency, field.TypeInt, value)
@@ -1823,6 +1848,20 @@ func (_u *UserUpdateOne) SetNillableFrozenBalance(v *float64) *UserUpdateOne {
 // AddFrozenBalance adds value to the "frozen_balance" field.
 func (_u *UserUpdateOne) AddFrozenBalance(v float64) *UserUpdateOne {
 	_u.mutation.AddFrozenBalance(v)
+	return _u
+}
+
+// SetBillingCurrency sets the "billing_currency" field.
+func (_u *UserUpdateOne) SetBillingCurrency(v string) *UserUpdateOne {
+	_u.mutation.SetBillingCurrency(v)
+	return _u
+}
+
+// SetNillableBillingCurrency sets the "billing_currency" field if the given value is not nil.
+func (_u *UserUpdateOne) SetNillableBillingCurrency(v *string) *UserUpdateOne {
+	if v != nil {
+		_u.SetBillingCurrency(*v)
+	}
 	return _u
 }
 
@@ -2653,6 +2692,11 @@ func (_u *UserUpdateOne) check() error {
 			return &ValidationError{Name: "role", err: fmt.Errorf(`ent: validator failed for field "User.role": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.BillingCurrency(); ok {
+		if err := user.BillingCurrencyValidator(v); err != nil {
+			return &ValidationError{Name: "billing_currency", err: fmt.Errorf(`ent: validator failed for field "User.billing_currency": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.Status(); ok {
 		if err := user.StatusValidator(v); err != nil {
 			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "User.status": %w`, err)}
@@ -2715,6 +2759,9 @@ func (_u *UserUpdateOne) sqlSave(ctx context.Context) (_node *User, err error) {
 	if value, ok := _u.mutation.PasswordHash(); ok {
 		_spec.SetField(user.FieldPasswordHash, field.TypeString, value)
 	}
+	if _u.mutation.PlatformUserIDCleared() {
+		_spec.ClearField(user.FieldPlatformUserID, field.TypeString)
+	}
 	if value, ok := _u.mutation.Role(); ok {
 		_spec.SetField(user.FieldRole, field.TypeString, value)
 	}
@@ -2729,6 +2776,9 @@ func (_u *UserUpdateOne) sqlSave(ctx context.Context) (_node *User, err error) {
 	}
 	if value, ok := _u.mutation.AddedFrozenBalance(); ok {
 		_spec.AddField(user.FieldFrozenBalance, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.BillingCurrency(); ok {
+		_spec.SetField(user.FieldBillingCurrency, field.TypeString, value)
 	}
 	if value, ok := _u.mutation.Concurrency(); ok {
 		_spec.SetField(user.FieldConcurrency, field.TypeInt, value)

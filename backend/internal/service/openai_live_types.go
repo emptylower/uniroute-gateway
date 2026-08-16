@@ -40,32 +40,59 @@ type LiveCallRequest struct {
 }
 
 type LiveCallIdentity struct {
-	APIKeyID        int64
-	UserID          int64
-	GroupID         *int64
-	SubscriptionID  *int64
-	UserAgent       string
-	IPAddress       string
-	InboundEndpoint string
+	APIKeyID            int64
+	UserID              int64
+	GroupID             *int64
+	SubscriptionID      *int64
+	UserAgent           string
+	IPAddress           string
+	InboundEndpoint     string
+	APIKeyQuota         float64
+	RateLimit5h         float64
+	RateLimit1d         float64
+	RateLimit7d         float64
+	BillingCurrency     string
+	RateMultiplier      float64
+	GroupRateMultiplier float64
+	SubscriptionBilling bool
+	BillingModel        string
 }
 
 type LiveCallRecord struct {
-	CallID          string
-	CallHash        string
-	AccountID       int64
-	APIKeyID        int64
-	UserID          int64
-	GroupID         int64
-	SubscriptionID  int64
-	LeaseID         string
-	Model           string
-	CreatedAt       time.Time
-	ExpiresAt       time.Time
-	Controller      string
-	ControllerOwner string
-	UserAgent       string
-	IPAddress       string
-	InboundEndpoint string
+	CallID                 string
+	CallHash               string
+	AccountID              int64
+	APIKeyID               int64
+	UserID                 int64
+	GroupID                int64
+	SubscriptionID         int64
+	LeaseID                string
+	Model                  string
+	InputTokens            int
+	OutputTokens           int
+	CacheReadTokens        int
+	BillingCurrency        string
+	RateMultiplier         float64
+	GroupRateMultiplier    float64
+	AccountRateMultiplier  float64
+	ExchangeRate           float64
+	ExchangeRateSource     string
+	ExchangeRateAsOf       time.Time
+	APIKeyQuota            float64
+	RateLimit5h            float64
+	RateLimit1d            float64
+	RateLimit7d            float64
+	SubscriptionBilling    bool
+	InputPricePerToken     float64
+	OutputPricePerToken    float64
+	CacheReadPricePerToken float64
+	CreatedAt              time.Time
+	ExpiresAt              time.Time
+	Controller             string
+	ControllerOwner        string
+	UserAgent              string
+	IPAddress              string
+	InboundEndpoint        string
 	// AttestationCiphertext 仅用于让同一会话的 Sideband 复用创建时的证明。
 	AttestationCiphertext string
 }
@@ -100,4 +127,15 @@ type LiveConcurrencyCache interface {
 	) (bool, error)
 	RefreshLiveLease(ctx context.Context, accountID, userID, apiKeyID int64, leaseID string) (bool, error)
 	ReleaseLiveLease(ctx context.Context, accountID, userID, apiKeyID int64, leaseID string) error
+}
+
+type LiveUsageStore interface {
+	AccumulateLiveUsage(ctx context.Context, callHash, responseKey string, inputTokens, outputTokens, cacheReadTokens int) (bool, error)
+}
+
+// LiveFinalizationStore persists unsettled Live calls across process restarts.
+type LiveFinalizationStore interface {
+	QueueLiveFinalization(ctx context.Context, callHash string) error
+	RemoveLiveFinalization(ctx context.Context, callHash string) error
+	ListLiveFinalizations(ctx context.Context, limit int64) ([]string, error)
 }

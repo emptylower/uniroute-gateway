@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/payment"
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -109,6 +110,34 @@ func TestCreateOrderInTx_WritesProviderSnapshot(t *testing.T) {
 	require.NotContains(t, order.ProviderSnapshot, "secretKey")
 	require.NotContains(t, order.ProviderSnapshot, "supported_types")
 	require.NotContains(t, order.ProviderSnapshot, "instance_name")
+}
+
+func TestCreateOrderInTx_RevalidatesLockedWalletCurrencyOnSQLite(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	user, err := client.User.Create().
+		SetEmail("locked-wallet-currency@example.com").
+		SetPasswordHash("hash").
+		SetUsername("locked-wallet-currency").
+		SetBillingCurrency(CurrencyUSD).
+		Save(ctx)
+	require.NoError(t, err)
+
+	svc := &PaymentService{entClient: client}
+	_, err = svc.createOrderInTx(
+		ctx,
+		CreateOrderRequest{UserID: user.ID, PaymentType: payment.TypeAlipay, OrderType: payment.OrderTypeBalance},
+		&User{ID: user.ID, Email: user.Email, Username: user.Username, BillingCurrency: CurrencyCNY},
+		nil,
+		&PaymentConfig{MaxPendingOrders: 3, OrderTimeoutMin: 30},
+		10, 10, 0, 10,
+		&payment.InstanceSelection{ProviderKey: payment.TypeAlipay},
+	)
+
+	require.Equal(t, "PAYMENT_CURRENCY_MISMATCH", infraerrors.Reason(err))
+	count, countErr := client.PaymentOrder.Query().Count(ctx)
+	require.NoError(t, countErr)
+	require.Zero(t, count)
 }
 
 func TestBuildPaymentOrderProviderSnapshot_UsesWxpayJSAPIAppIDForOpenIDOrders(t *testing.T) {

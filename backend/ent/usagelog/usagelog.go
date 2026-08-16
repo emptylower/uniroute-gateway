@@ -64,6 +64,20 @@ const (
 	FieldTotalCost = "total_cost"
 	// FieldActualCost holds the string denoting the actual_cost field in the database.
 	FieldActualCost = "actual_cost"
+	// FieldSourceCurrency holds the string denoting the source_currency field in the database.
+	FieldSourceCurrency = "source_currency"
+	// FieldSettlementCurrency holds the string denoting the settlement_currency field in the database.
+	FieldSettlementCurrency = "settlement_currency"
+	// FieldExchangeRate holds the string denoting the exchange_rate field in the database.
+	FieldExchangeRate = "exchange_rate"
+	// FieldExchangeRateSource holds the string denoting the exchange_rate_source field in the database.
+	FieldExchangeRateSource = "exchange_rate_source"
+	// FieldExchangeRateAsOf holds the string denoting the exchange_rate_as_of field in the database.
+	FieldExchangeRateAsOf = "exchange_rate_as_of"
+	// FieldSourceCost holds the string denoting the source_cost field in the database.
+	FieldSourceCost = "source_cost"
+	// FieldBaseCost holds the string denoting the base_cost field in the database.
+	FieldBaseCost = "base_cost"
 	// FieldRateMultiplier holds the string denoting the rate_multiplier field in the database.
 	FieldRateMultiplier = "rate_multiplier"
 	// FieldLongContextBillingApplied holds the string denoting the long_context_billing_applied field in the database.
@@ -181,6 +195,13 @@ var Columns = []string{
 	FieldCacheReadCost,
 	FieldTotalCost,
 	FieldActualCost,
+	FieldSourceCurrency,
+	FieldSettlementCurrency,
+	FieldExchangeRate,
+	FieldExchangeRateSource,
+	FieldExchangeRateAsOf,
+	FieldSourceCost,
+	FieldBaseCost,
 	FieldRateMultiplier,
 	FieldLongContextBillingApplied,
 	FieldAccountRateMultiplier,
@@ -252,6 +273,24 @@ var (
 	DefaultTotalCost float64
 	// DefaultActualCost holds the default value on creation for the "actual_cost" field.
 	DefaultActualCost float64
+	// DefaultSourceCurrency holds the default value on creation for the "source_currency" field.
+	DefaultSourceCurrency string
+	// SourceCurrencyValidator is a validator for the "source_currency" field. It is called by the builders before save.
+	SourceCurrencyValidator func(string) error
+	// DefaultSettlementCurrency holds the default value on creation for the "settlement_currency" field.
+	DefaultSettlementCurrency string
+	// SettlementCurrencyValidator is a validator for the "settlement_currency" field. It is called by the builders before save.
+	SettlementCurrencyValidator func(string) error
+	// DefaultExchangeRate holds the default value on creation for the "exchange_rate" field.
+	DefaultExchangeRate float64
+	// DefaultExchangeRateSource holds the default value on creation for the "exchange_rate_source" field.
+	DefaultExchangeRateSource string
+	// ExchangeRateSourceValidator is a validator for the "exchange_rate_source" field. It is called by the builders before save.
+	ExchangeRateSourceValidator func(string) error
+	// DefaultSourceCost holds the default value on creation for the "source_cost" field.
+	DefaultSourceCost float64
+	// DefaultBaseCost holds the default value on creation for the "base_cost" field.
+	DefaultBaseCost float64
 	// DefaultRateMultiplier holds the default value on creation for the "rate_multiplier" field.
 	DefaultRateMultiplier float64
 	// DefaultLongContextBillingApplied holds the default value on creation for the "long_context_billing_applied" field.
@@ -415,6 +454,41 @@ func ByTotalCost(opts ...sql.OrderTermOption) OrderOption {
 // ByActualCost orders the results by the actual_cost field.
 func ByActualCost(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldActualCost, opts...).ToFunc()
+}
+
+// BySourceCurrency orders the results by the source_currency field.
+func BySourceCurrency(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldSourceCurrency, opts...).ToFunc()
+}
+
+// BySettlementCurrency orders the results by the settlement_currency field.
+func BySettlementCurrency(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldSettlementCurrency, opts...).ToFunc()
+}
+
+// ByExchangeRate orders the results by the exchange_rate field.
+func ByExchangeRate(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldExchangeRate, opts...).ToFunc()
+}
+
+// ByExchangeRateSource orders the results by the exchange_rate_source field.
+func ByExchangeRateSource(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldExchangeRateSource, opts...).ToFunc()
+}
+
+// ByExchangeRateAsOf orders the results by the exchange_rate_as_of field.
+func ByExchangeRateAsOf(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldExchangeRateAsOf, opts...).ToFunc()
+}
+
+// BySourceCost orders the results by the source_cost field.
+func BySourceCost(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldSourceCost, opts...).ToFunc()
+}
+
+// ByBaseCost orders the results by the base_cost field.
+func ByBaseCost(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldBaseCost, opts...).ToFunc()
 }
 
 // ByRateMultiplier orders the results by the rate_multiplier field.

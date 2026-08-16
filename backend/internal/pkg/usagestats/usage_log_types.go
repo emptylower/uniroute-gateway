@@ -280,6 +280,9 @@ type UsageLogFilters struct {
 	BillingMode       string
 	StartTime         *time.Time
 	EndTime           *time.Time
+	// DisplayCurrency converts monetary aggregates row-by-row before SUM.
+	// Empty preserves the caller's legacy scope semantics.
+	DisplayCurrency string
 	// ExactTotal requests exact COUNT(*) for pagination. Default false for fast large-table paging.
 	ExactTotal bool
 }

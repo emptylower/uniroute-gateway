@@ -12,11 +12,12 @@ import (
 )
 
 var (
-	ErrAffiliateProfileNotFound = infraerrors.NotFound("AFFILIATE_PROFILE_NOT_FOUND", "affiliate profile not found")
-	ErrAffiliateCodeInvalid     = infraerrors.BadRequest("AFFILIATE_CODE_INVALID", "invalid affiliate code")
-	ErrAffiliateCodeTaken       = infraerrors.Conflict("AFFILIATE_CODE_TAKEN", "affiliate code already in use")
-	ErrAffiliateAlreadyBound    = infraerrors.Conflict("AFFILIATE_ALREADY_BOUND", "affiliate inviter already bound")
-	ErrAffiliateQuotaEmpty      = infraerrors.BadRequest("AFFILIATE_QUOTA_EMPTY", "no affiliate quota available to transfer")
+	ErrAffiliateProfileNotFound  = infraerrors.NotFound("AFFILIATE_PROFILE_NOT_FOUND", "affiliate profile not found")
+	ErrAffiliateCodeInvalid      = infraerrors.BadRequest("AFFILIATE_CODE_INVALID", "invalid affiliate code")
+	ErrAffiliateCodeTaken        = infraerrors.Conflict("AFFILIATE_CODE_TAKEN", "affiliate code already in use")
+	ErrAffiliateAlreadyBound     = infraerrors.Conflict("AFFILIATE_ALREADY_BOUND", "affiliate inviter already bound")
+	ErrAffiliateQuotaEmpty       = infraerrors.BadRequest("AFFILIATE_QUOTA_EMPTY", "no affiliate quota available to transfer")
+	ErrAffiliateCurrencyMismatch = infraerrors.BadRequest("AFFILIATE_CURRENCY_MISMATCH", "affiliate quota currency does not match wallet currency")
 )
 
 const (
@@ -209,14 +210,16 @@ type AffiliateService struct {
 	settingService       *SettingService
 	authCacheInvalidator APIKeyAuthCacheInvalidator
 	billingCacheService  *BillingCacheService
+	userRepo             UserRepository
 }
 
-func NewAffiliateService(repo AffiliateRepository, settingService *SettingService, authCacheInvalidator APIKeyAuthCacheInvalidator, billingCacheService *BillingCacheService) *AffiliateService {
+func NewAffiliateService(repo AffiliateRepository, settingService *SettingService, authCacheInvalidator APIKeyAuthCacheInvalidator, billingCacheService *BillingCacheService, userRepo UserRepository) *AffiliateService {
 	return &AffiliateService{
 		repo:                 repo,
 		settingService:       settingService,
 		authCacheInvalidator: authCacheInvalidator,
 		billingCacheService:  billingCacheService,
+		userRepo:             userRepo,
 	}
 }
 
@@ -333,6 +336,23 @@ func (s *AffiliateService) AccrueInviteRebateForOrder(ctx context.Context, invit
 	}
 	if inviteeSummary.InviterID == nil || *inviteeSummary.InviterID <= 0 {
 		return 0, nil
+	}
+	// Affiliate quota is an existing CNY ledger. Until quota storage is
+	// bucketed by currency, accrue only when both wallets are CNY; otherwise
+	// skip the reward instead of creating an implicit 1:1 conversion.
+	if s.userRepo != nil {
+		invitee, inviteeErr := s.userRepo.GetByID(ctx, inviteeUserID)
+		inviter, inviterErr := s.userRepo.GetByID(ctx, *inviteeSummary.InviterID)
+		if inviteeErr != nil || inviterErr != nil {
+			if inviteeErr != nil {
+				return 0, inviteeErr
+			}
+			return 0, inviterErr
+		}
+		if NormalizeUserBillingCurrency(invitee.BillingCurrency) != CurrencyCNY ||
+			NormalizeUserBillingCurrency(inviter.BillingCurrency) != CurrencyCNY {
+			return 0, nil
+		}
 	}
 
 	// 加载邀请人 profile，优先使用专属比例（覆盖全局）

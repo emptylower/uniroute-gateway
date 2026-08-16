@@ -61,8 +61,11 @@ type Handlers struct {
 	Payment          *PaymentHandler
 	PaymentWebhook   *PaymentWebhookHandler
 	AvailableChannel *AvailableChannelHandler
+	ModelCatalog     *ModelCatalogHandler
 	AsyncImage       *AsyncImageHandler
 	BatchImage       *BatchImageHandler
+	PlatformIdentity *PlatformIdentityHandler
+	PlatformAPIKey   *PlatformAPIKeyHandler
 }
 
 // BuildInfo contains build-time information

@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
@@ -83,6 +84,15 @@ func (h *OpenAIGatewayHandler) Live(c *gin.Context) {
 		h.errorResponse(c, status, code, message)
 		return
 	}
+	billingModel := model
+	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, model)
+	if channelMapping.Mapped {
+		billingModel = channelMapping.MappedModel
+	}
+	if err := h.gatewayService.EnsureModelPricing(c.Request.Context(), apiKey, billingModel); err != nil {
+		h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "Model pricing is not configured")
+		return
+	}
 
 	userRelease, acquired, err := h.concurrencyHelper.TryAcquireUserSlot(
 		c.Request.Context(),
@@ -100,6 +110,13 @@ func (h *OpenAIGatewayHandler) Live(c *gin.Context) {
 	defer userRelease()
 
 	identity := liveCallIdentity(c, apiKey, subject.UserID, subscription)
+	identity.BillingModel = billingModel
+	if apiKey.GroupID != nil {
+		identity.GroupRateMultiplier = h.gatewayService.ResolveUserGroupRateMultiplier(
+			c.Request.Context(), subject.UserID, *apiKey.GroupID, identity.GroupRateMultiplier,
+		)
+		identity.RateMultiplier = identity.GroupRateMultiplier * apiKey.Group.PeakMultiplierAt(time.Now())
+	}
 	created, err := h.gatewayService.CreateLiveCall(c.Request.Context(), request, identity, subject.Concurrency)
 	if err != nil {
 		h.writeLiveCreateError(c, err)
@@ -153,14 +170,31 @@ func liveCallIdentity(
 		value := subscription.ID
 		subscriptionID = &value
 	}
+	subscriptionBilling := subscription != nil && apiKey.Group != nil && apiKey.Group.IsSubscriptionType()
+	currency := service.CurrencyUSD
+	if !subscriptionBilling && apiKey.User != nil {
+		currency = service.NormalizeUserBillingCurrency(apiKey.User.BillingCurrency)
+	}
+	multiplier := 1.0
+	if apiKey.Group != nil {
+		multiplier = apiKey.Group.RateMultiplierForCurrency(currency)
+	}
 	return service.LiveCallIdentity{
-		APIKeyID:        apiKey.ID,
-		UserID:          userID,
-		GroupID:         apiKey.GroupID,
-		SubscriptionID:  subscriptionID,
-		UserAgent:       c.GetHeader("User-Agent"),
-		IPAddress:       ip.GetClientIP(c),
-		InboundEndpoint: GetInboundEndpoint(c),
+		APIKeyID:            apiKey.ID,
+		UserID:              userID,
+		GroupID:             apiKey.GroupID,
+		SubscriptionID:      subscriptionID,
+		UserAgent:           c.GetHeader("User-Agent"),
+		IPAddress:           ip.GetClientIP(c),
+		InboundEndpoint:     GetInboundEndpoint(c),
+		APIKeyQuota:         apiKey.Quota,
+		RateLimit5h:         apiKey.RateLimit5h,
+		RateLimit1d:         apiKey.RateLimit1d,
+		RateLimit7d:         apiKey.RateLimit7d,
+		BillingCurrency:     currency,
+		RateMultiplier:      multiplier,
+		GroupRateMultiplier: multiplier,
+		SubscriptionBilling: subscriptionBilling,
 	}
 }
 

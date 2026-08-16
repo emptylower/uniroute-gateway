@@ -18,6 +18,8 @@ const (
 	FieldCode = "code"
 	// FieldBonusAmount holds the string denoting the bonus_amount field in the database.
 	FieldBonusAmount = "bonus_amount"
+	// FieldCurrency holds the string denoting the currency field in the database.
+	FieldCurrency = "currency"
 	// FieldMaxUses holds the string denoting the max_uses field in the database.
 	FieldMaxUses = "max_uses"
 	// FieldUsedCount holds the string denoting the used_count field in the database.
@@ -50,6 +52,7 @@ var Columns = []string{
 	FieldID,
 	FieldCode,
 	FieldBonusAmount,
+	FieldCurrency,
 	FieldMaxUses,
 	FieldUsedCount,
 	FieldStatus,
@@ -74,6 +77,10 @@ var (
 	CodeValidator func(string) error
 	// DefaultBonusAmount holds the default value on creation for the "bonus_amount" field.
 	DefaultBonusAmount float64
+	// DefaultCurrency holds the default value on creation for the "currency" field.
+	DefaultCurrency string
+	// CurrencyValidator is a validator for the "currency" field. It is called by the builders before save.
+	CurrencyValidator func(string) error
 	// DefaultMaxUses holds the default value on creation for the "max_uses" field.
 	DefaultMaxUses int
 	// DefaultUsedCount holds the default value on creation for the "used_count" field.
@@ -106,6 +113,11 @@ func ByCode(opts ...sql.OrderTermOption) OrderOption {
 // ByBonusAmount orders the results by the bonus_amount field.
 func ByBonusAmount(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldBonusAmount, opts...).ToFunc()
+}
+
+// ByCurrency orders the results by the currency field.
+func ByCurrency(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldCurrency, opts...).ToFunc()
 }
 
 // ByMaxUses orders the results by the max_uses field.

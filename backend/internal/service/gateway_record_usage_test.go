@@ -17,7 +17,7 @@ import (
 func newGatewayRecordUsageServiceForTest(usageRepo UsageLogRepository, userRepo UserRepository, subRepo UserSubscriptionRepository) *GatewayService {
 	cfg := &config.Config{}
 	cfg.Default.RateMultiplier = 1.1
-	return NewGatewayService(
+	svc := NewGatewayService(
 		nil,
 		nil,
 		usageRepo,
@@ -47,6 +47,12 @@ func newGatewayRecordUsageServiceForTest(usageRepo UsageLogRepository, userRepo 
 		nil,
 		nil, // userPlatformQuotaRepo
 	)
+	svc.exchangeRates = &ExchangeRateService{
+		bootstrapRate: 1, ttl: time.Minute, staleTTL: time.Hour,
+		minUSDToCNY: 0.5, maxUSDToCNY: 2, maxAge: time.Hour, maxFuture: time.Minute,
+		cache: make(map[string]ExchangeRateSnapshot),
+	}
+	return svc
 }
 
 func newGatewayRecordUsageServiceWithBillingRepoForTest(usageRepo UsageLogRepository, billingRepo UsageBillingRepository, userRepo UserRepository, subRepo UserSubscriptionRepository) *GatewayService {

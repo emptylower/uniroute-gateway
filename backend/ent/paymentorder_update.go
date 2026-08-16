@@ -154,6 +154,26 @@ func (_u *PaymentOrderUpdate) AddFeeRate(v float64) *PaymentOrderUpdate {
 	return _u
 }
 
+// SetSettlementCurrency sets the "settlement_currency" field.
+func (_u *PaymentOrderUpdate) SetSettlementCurrency(v string) *PaymentOrderUpdate {
+	_u.mutation.SetSettlementCurrency(v)
+	return _u
+}
+
+// SetNillableSettlementCurrency sets the "settlement_currency" field if the given value is not nil.
+func (_u *PaymentOrderUpdate) SetNillableSettlementCurrency(v *string) *PaymentOrderUpdate {
+	if v != nil {
+		_u.SetSettlementCurrency(*v)
+	}
+	return _u
+}
+
+// ClearSettlementCurrency clears the value of the "settlement_currency" field.
+func (_u *PaymentOrderUpdate) ClearSettlementCurrency() *PaymentOrderUpdate {
+	_u.mutation.ClearSettlementCurrency()
+	return _u
+}
+
 // SetRechargeCode sets the "recharge_code" field.
 func (_u *PaymentOrderUpdate) SetRechargeCode(v string) *PaymentOrderUpdate {
 	_u.mutation.SetRechargeCode(v)
@@ -778,6 +798,11 @@ func (_u *PaymentOrderUpdate) check() error {
 			return &ValidationError{Name: "user_name", err: fmt.Errorf(`ent: validator failed for field "PaymentOrder.user_name": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.SettlementCurrency(); ok {
+		if err := paymentorder.SettlementCurrencyValidator(v); err != nil {
+			return &ValidationError{Name: "settlement_currency", err: fmt.Errorf(`ent: validator failed for field "PaymentOrder.settlement_currency": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.RechargeCode(); ok {
 		if err := paymentorder.RechargeCodeValidator(v); err != nil {
 			return &ValidationError{Name: "recharge_code", err: fmt.Errorf(`ent: validator failed for field "PaymentOrder.recharge_code": %w`, err)}
@@ -880,6 +905,12 @@ func (_u *PaymentOrderUpdate) sqlSave(ctx context.Context) (_node int, err error
 	}
 	if value, ok := _u.mutation.AddedFeeRate(); ok {
 		_spec.AddField(paymentorder.FieldFeeRate, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.SettlementCurrency(); ok {
+		_spec.SetField(paymentorder.FieldSettlementCurrency, field.TypeString, value)
+	}
+	if _u.mutation.SettlementCurrencyCleared() {
+		_spec.ClearField(paymentorder.FieldSettlementCurrency, field.TypeString)
 	}
 	if value, ok := _u.mutation.RechargeCode(); ok {
 		_spec.SetField(paymentorder.FieldRechargeCode, field.TypeString, value)
@@ -1214,6 +1245,26 @@ func (_u *PaymentOrderUpdateOne) SetNillableFeeRate(v *float64) *PaymentOrderUpd
 // AddFeeRate adds value to the "fee_rate" field.
 func (_u *PaymentOrderUpdateOne) AddFeeRate(v float64) *PaymentOrderUpdateOne {
 	_u.mutation.AddFeeRate(v)
+	return _u
+}
+
+// SetSettlementCurrency sets the "settlement_currency" field.
+func (_u *PaymentOrderUpdateOne) SetSettlementCurrency(v string) *PaymentOrderUpdateOne {
+	_u.mutation.SetSettlementCurrency(v)
+	return _u
+}
+
+// SetNillableSettlementCurrency sets the "settlement_currency" field if the given value is not nil.
+func (_u *PaymentOrderUpdateOne) SetNillableSettlementCurrency(v *string) *PaymentOrderUpdateOne {
+	if v != nil {
+		_u.SetSettlementCurrency(*v)
+	}
+	return _u
+}
+
+// ClearSettlementCurrency clears the value of the "settlement_currency" field.
+func (_u *PaymentOrderUpdateOne) ClearSettlementCurrency() *PaymentOrderUpdateOne {
+	_u.mutation.ClearSettlementCurrency()
 	return _u
 }
 
@@ -1854,6 +1905,11 @@ func (_u *PaymentOrderUpdateOne) check() error {
 			return &ValidationError{Name: "user_name", err: fmt.Errorf(`ent: validator failed for field "PaymentOrder.user_name": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.SettlementCurrency(); ok {
+		if err := paymentorder.SettlementCurrencyValidator(v); err != nil {
+			return &ValidationError{Name: "settlement_currency", err: fmt.Errorf(`ent: validator failed for field "PaymentOrder.settlement_currency": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.RechargeCode(); ok {
 		if err := paymentorder.RechargeCodeValidator(v); err != nil {
 			return &ValidationError{Name: "recharge_code", err: fmt.Errorf(`ent: validator failed for field "PaymentOrder.recharge_code": %w`, err)}
@@ -1973,6 +2029,12 @@ func (_u *PaymentOrderUpdateOne) sqlSave(ctx context.Context) (_node *PaymentOrd
 	}
 	if value, ok := _u.mutation.AddedFeeRate(); ok {
 		_spec.AddField(paymentorder.FieldFeeRate, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.SettlementCurrency(); ok {
+		_spec.SetField(paymentorder.FieldSettlementCurrency, field.TypeString, value)
+	}
+	if _u.mutation.SettlementCurrencyCleared() {
+		_spec.ClearField(paymentorder.FieldSettlementCurrency, field.TypeString)
 	}
 	if value, ok := _u.mutation.RechargeCode(); ok {
 		_spec.SetField(paymentorder.FieldRechargeCode, field.TypeString, value)

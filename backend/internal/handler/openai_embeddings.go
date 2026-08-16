@@ -85,6 +85,14 @@ func (h *OpenAIGatewayHandler) Embeddings(c *gin.Context) {
 	}
 
 	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, reqModel)
+	billingModel := reqModel
+	if channelMapping.Mapped {
+		billingModel = channelMapping.MappedModel
+	}
+	if err := h.gatewayService.EnsureModelPricing(c.Request.Context(), apiKey, billingModel); err != nil {
+		h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "Model pricing is not configured")
+		return
+	}
 
 	subscription, _ := middleware2.GetSubscriptionFromContext(c)
 	service.SetOpsLatencyMs(c, service.OpsAuthLatencyMsKey, time.Since(requestStart).Milliseconds())
@@ -163,6 +171,14 @@ func (h *OpenAIGatewayHandler) Embeddings(c *gin.Context) {
 			return
 		}
 		account := selection.Account
+		if err := h.gatewayService.EnsureModelPricing(c.Request.Context(), apiKey, account.GetMappedModel(billingModel)); err != nil {
+			if selection.ReleaseFunc != nil {
+				selection.ReleaseFunc()
+			}
+			failedAccountIDs[account.ID] = struct{}{}
+			reqLog.Warn("openai_embeddings.model_pricing_unavailable", zap.Int64("account_id", account.ID), zap.Error(err))
+			continue
+		}
 		setOpsSelectedAccount(c, account.ID, account.Platform)
 
 		accountReleaseFunc, accountAcquired := h.acquireResponsesAccountSlot(c, apiKey.GroupID, "", selection, false, &streamStarted, reqLog)

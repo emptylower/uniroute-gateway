@@ -14,6 +14,16 @@ const (
 	StatusAPIKeyExpired        = "expired"
 )
 
+const (
+	APIKeyRoutingModeLegacyGroup  = "legacy_group"
+	APIKeyRoutingModeChannels     = "channels"
+	APIKeyRoutingModeAutoChannels = "auto_channels"
+)
+
+func IsChannelRoutingMode(mode string) bool {
+	return mode == APIKeyRoutingModeChannels || mode == APIKeyRoutingModeAutoChannels
+}
+
 // Rate limit window durations
 const (
 	RateLimitWindow5h = 5 * time.Hour
@@ -28,14 +38,21 @@ func IsWindowExpired(windowStart *time.Time, duration time.Duration) bool {
 }
 
 type APIKey struct {
-	ID          int64
-	UserID      int64
-	Key         string
-	Name        string
-	GroupID     *int64
-	Status      string
-	IPWhitelist []string
-	IPBlacklist []string
+	ID     int64
+	UserID int64
+	Key    string
+	// Platform-owned projections never contain plaintext Key material.
+	PlatformKeyID      *string
+	KeySHA256          *string
+	KeyPrefix          *string
+	PlatformKeyVersion *int64
+	Name               string
+	GroupID            *int64
+	RoutingMode        string
+	ChannelIDs         []int64
+	Status             string
+	IPWhitelist        []string
+	IPBlacklist        []string
 	// 预编译的 IP 规则，用于认证热路径避免重复 ParseIP/ParseCIDR。
 	CompiledIPWhitelist *ip.CompiledIPRules `json:"-"`
 	CompiledIPBlacklist *ip.CompiledIPRules `json:"-"`

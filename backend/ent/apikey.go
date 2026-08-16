@@ -30,10 +30,20 @@ type APIKey struct {
 	UserID int64 `json:"user_id,omitempty"`
 	// Key holds the value of the "key" field.
 	Key string `json:"key,omitempty"`
+	// Immutable identifier of a platform-owned API key projection
+	PlatformKeyID *string `json:"platform_key_id,omitempty"`
+	// Lowercase SHA-256 verifier for a platform-owned API key; plaintext is never stored
+	KeySha256 *string `json:"key_sha256,omitempty"`
+	// Non-secret display prefix supplied by the owning platform
+	KeyPrefix *string `json:"key_prefix,omitempty"`
+	// Monotonic version supplied by the owning platform
+	PlatformKeyVersion *int64 `json:"platform_key_version,omitempty"`
 	// Name holds the value of the "name" field.
 	Name string `json:"name,omitempty"`
 	// GroupID holds the value of the "group_id" field.
 	GroupID *int64 `json:"group_id,omitempty"`
+	// legacy_group uses group_id; channels expands api_key_channels
+	RoutingMode string `json:"routing_mode,omitempty"`
 	// Status holds the value of the "status" field.
 	Status string `json:"status,omitempty"`
 	// Last usage time of this API key
@@ -125,9 +135,9 @@ func (*APIKey) scanValues(columns []string) ([]any, error) {
 			values[i] = new([]byte)
 		case apikey.FieldQuota, apikey.FieldQuotaUsed, apikey.FieldRateLimit5h, apikey.FieldRateLimit1d, apikey.FieldRateLimit7d, apikey.FieldUsage5h, apikey.FieldUsage1d, apikey.FieldUsage7d:
 			values[i] = new(sql.NullFloat64)
-		case apikey.FieldID, apikey.FieldUserID, apikey.FieldGroupID:
+		case apikey.FieldID, apikey.FieldUserID, apikey.FieldPlatformKeyVersion, apikey.FieldGroupID:
 			values[i] = new(sql.NullInt64)
-		case apikey.FieldKey, apikey.FieldName, apikey.FieldStatus:
+		case apikey.FieldKey, apikey.FieldPlatformKeyID, apikey.FieldKeySha256, apikey.FieldKeyPrefix, apikey.FieldName, apikey.FieldRoutingMode, apikey.FieldStatus:
 			values[i] = new(sql.NullString)
 		case apikey.FieldCreatedAt, apikey.FieldUpdatedAt, apikey.FieldDeletedAt, apikey.FieldLastUsedAt, apikey.FieldExpiresAt, apikey.FieldWindow5hStart, apikey.FieldWindow1dStart, apikey.FieldWindow7dStart:
 			values[i] = new(sql.NullTime)
@@ -183,6 +193,34 @@ func (_m *APIKey) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.Key = value.String
 			}
+		case apikey.FieldPlatformKeyID:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field platform_key_id", values[i])
+			} else if value.Valid {
+				_m.PlatformKeyID = new(string)
+				*_m.PlatformKeyID = value.String
+			}
+		case apikey.FieldKeySha256:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field key_sha256", values[i])
+			} else if value.Valid {
+				_m.KeySha256 = new(string)
+				*_m.KeySha256 = value.String
+			}
+		case apikey.FieldKeyPrefix:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field key_prefix", values[i])
+			} else if value.Valid {
+				_m.KeyPrefix = new(string)
+				*_m.KeyPrefix = value.String
+			}
+		case apikey.FieldPlatformKeyVersion:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field platform_key_version", values[i])
+			} else if value.Valid {
+				_m.PlatformKeyVersion = new(int64)
+				*_m.PlatformKeyVersion = value.Int64
+			}
 		case apikey.FieldName:
 			if value, ok := values[i].(*sql.NullString); !ok {
 				return fmt.Errorf("unexpected type %T for field name", values[i])
@@ -195,6 +233,12 @@ func (_m *APIKey) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.GroupID = new(int64)
 				*_m.GroupID = value.Int64
+			}
+		case apikey.FieldRoutingMode:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field routing_mode", values[i])
+			} else if value.Valid {
+				_m.RoutingMode = value.String
 			}
 		case apikey.FieldStatus:
 			if value, ok := values[i].(*sql.NullString); !ok {
@@ -369,6 +413,26 @@ func (_m *APIKey) String() string {
 	builder.WriteString("key=")
 	builder.WriteString(_m.Key)
 	builder.WriteString(", ")
+	if v := _m.PlatformKeyID; v != nil {
+		builder.WriteString("platform_key_id=")
+		builder.WriteString(*v)
+	}
+	builder.WriteString(", ")
+	if v := _m.KeySha256; v != nil {
+		builder.WriteString("key_sha256=")
+		builder.WriteString(*v)
+	}
+	builder.WriteString(", ")
+	if v := _m.KeyPrefix; v != nil {
+		builder.WriteString("key_prefix=")
+		builder.WriteString(*v)
+	}
+	builder.WriteString(", ")
+	if v := _m.PlatformKeyVersion; v != nil {
+		builder.WriteString("platform_key_version=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
+	builder.WriteString(", ")
 	builder.WriteString("name=")
 	builder.WriteString(_m.Name)
 	builder.WriteString(", ")
@@ -376,6 +440,9 @@ func (_m *APIKey) String() string {
 		builder.WriteString("group_id=")
 		builder.WriteString(fmt.Sprintf("%v", *v))
 	}
+	builder.WriteString(", ")
+	builder.WriteString("routing_mode=")
+	builder.WriteString(_m.RoutingMode)
 	builder.WriteString(", ")
 	builder.WriteString("status=")
 	builder.WriteString(_m.Status)

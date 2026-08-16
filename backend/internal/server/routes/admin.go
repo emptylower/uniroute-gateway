@@ -37,7 +37,7 @@ func RegisterAdminRoutes(
 		registerUserManagementRoutes(admin, h)
 
 		// 分组管理
-		registerGroupRoutes(admin, h)
+		registerGroupRoutes(admin, h, stepUpAuth)
 
 		// 账号管理
 		registerAccountRoutes(admin, h, stepUpAuth)
@@ -313,7 +313,7 @@ func registerUserManagementRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	}
 }
 
-func registerGroupRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+func registerGroupRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAuth middleware.StepUpAuthMiddleware) {
 	groups := admin.Group("/groups")
 	{
 		groups.GET("", h.Admin.Group.List)
@@ -329,14 +329,14 @@ func registerGroupRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		groups.PUT("/:id/composite-routes/:route_id", h.Admin.Group.UpdateCompositeRoute)
 		groups.DELETE("/:id/composite-routes/:route_id", h.Admin.Group.DeleteCompositeRoute)
 		groups.GET("/:id", h.Admin.Group.GetByID)
-		groups.POST("", h.Admin.Group.Create)
+		groups.POST("", gin.HandlerFunc(stepUpAuth), h.Admin.Group.Create)
 		groups.POST("/:id/duplicate", h.Admin.Group.Duplicate)
-		groups.PUT("/:id", h.Admin.Group.Update)
+		groups.PUT("/:id", gin.HandlerFunc(stepUpAuth), h.Admin.Group.Update)
 		groups.DELETE("/:id", h.Admin.Group.Delete)
 		groups.GET("/:id/stats", h.Admin.Group.GetStats)
 		groups.GET("/:id/rate-multipliers", h.Admin.Group.GetGroupRateMultipliers)
-		groups.PUT("/:id/rate-multipliers", h.Admin.Group.BatchSetGroupRateMultipliers)
-		groups.DELETE("/:id/rate-multipliers", h.Admin.Group.ClearGroupRateMultipliers)
+		groups.PUT("/:id/rate-multipliers", gin.HandlerFunc(stepUpAuth), h.Admin.Group.BatchSetGroupRateMultipliers)
+		groups.DELETE("/:id/rate-multipliers", gin.HandlerFunc(stepUpAuth), h.Admin.Group.ClearGroupRateMultipliers)
 		groups.PUT("/:id/rpm-overrides", h.Admin.Group.BatchSetGroupRPMOverrides)
 		groups.DELETE("/:id/rpm-overrides", h.Admin.Group.ClearGroupRPMOverrides)
 		groups.GET("/:id/api-keys", h.Admin.Group.GetGroupAPIKeys)

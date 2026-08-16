@@ -109,8 +109,10 @@ func (r *liveTestAccountRepo) GetByID(context.Context, int64) (*Account, error) 
 
 type liveTestStore struct {
 	GatewayCache
-	mu     sync.Mutex
-	record *LiveCallRecord
+	mu                 sync.Mutex
+	record             *LiveCallRecord
+	responses          map[string]struct{}
+	accumulateFailures int
 }
 
 func (s *liveTestStore) SaveLiveCall(_ context.Context, record *LiveCallRecord, _ time.Duration) error {
@@ -176,6 +178,29 @@ func (s *liveTestStore) MarkLiveCallClosed(_ context.Context, callHash string, _
 	}
 	s.record.Controller = LiveControllerClosed
 	s.record.ControllerOwner = ""
+	return true, nil
+}
+
+func (s *liveTestStore) AccumulateLiveUsage(_ context.Context, callHash, responseKey string, inputTokens, outputTokens, cacheReadTokens int) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.accumulateFailures > 0 {
+		s.accumulateFailures--
+		return false, errors.New("temporary usage store failure")
+	}
+	if s.record == nil || s.record.CallHash != callHash {
+		return false, ErrLiveCallNotFound
+	}
+	if s.responses == nil {
+		s.responses = make(map[string]struct{})
+	}
+	if _, exists := s.responses[responseKey]; exists {
+		return false, nil
+	}
+	s.responses[responseKey] = struct{}{}
+	s.record.InputTokens += inputTokens
+	s.record.OutputTokens += outputTokens
+	s.record.CacheReadTokens += cacheReadTokens
 	return true, nil
 }
 
@@ -252,29 +277,52 @@ func TestRunLiveControllerClosesExpiredSession(t *testing.T) {
 	}
 }
 
-func TestFinalizeLiveCallIsIdempotentAndWritesZeroUsage(t *testing.T) {
+func TestFinalizeLiveCallAggregatesTokensAndBillsOnce(t *testing.T) {
+	asOf := time.Now().UTC().Add(-time.Minute)
 	record := &LiveCallRecord{
-		CallID:          "call_secret",
-		CallHash:        hashLiveCallID("call_secret"),
-		AccountID:       11,
-		APIKeyID:        22,
-		UserID:          33,
-		GroupID:         44,
-		LeaseID:         "lease-1",
-		Model:           "gpt-live-test",
-		CreatedAt:       time.Now().Add(-time.Second),
-		ExpiresAt:       time.Now().Add(time.Hour),
-		Controller:      LiveControllerPending,
-		InboundEndpoint: "/v1/live",
+		CallID:                 "call_secret",
+		CallHash:               hashLiveCallID("call_secret"),
+		AccountID:              11,
+		APIKeyID:               22,
+		UserID:                 33,
+		GroupID:                44,
+		LeaseID:                "lease-1",
+		Model:                  "gpt-live-test",
+		CreatedAt:              time.Now().Add(-time.Second),
+		ExpiresAt:              time.Now().Add(time.Hour),
+		Controller:             LiveControllerPending,
+		InboundEndpoint:        "/v1/live",
+		BillingCurrency:        CurrencyCNY,
+		RateMultiplier:         0.5,
+		GroupRateMultiplier:    0.5,
+		AccountRateMultiplier:  1,
+		ExchangeRate:           7.2,
+		ExchangeRateSource:     "test_live",
+		ExchangeRateAsOf:       asOf,
+		InputPricePerToken:     0.001,
+		OutputPricePerToken:    0.002,
+		CacheReadPricePerToken: 0.0001,
 	}
 	store := &liveTestStore{}
 	require.NoError(t, store.SaveLiveCall(context.Background(), record, time.Hour))
+	applied, err := store.AccumulateLiveUsage(context.Background(), record.CallHash, "resp-1", 100, 20, 10)
+	require.NoError(t, err)
+	require.True(t, applied)
+	applied, err = store.AccumulateLiveUsage(context.Background(), record.CallHash, "resp-1", 100, 20, 10)
+	require.NoError(t, err)
+	require.False(t, applied, "duplicate response IDs must not be billed twice")
+	applied, err = store.AccumulateLiveUsage(context.Background(), record.CallHash, "resp-2", 50, 5, 0)
+	require.NoError(t, err)
+	require.True(t, applied)
 	concurrencyCache := &liveTestConcurrencyCache{}
 	usageRepo := &liveTestUsageRepo{}
+	billingRepo := &openAIRecordUsageBillingRepoStub{result: &UsageBillingApplyResult{Applied: true}}
 	service := &OpenAIGatewayService{
 		cache:              store,
 		concurrencyService: NewConcurrencyService(concurrencyCache),
 		usageLogRepo:       usageRepo,
+		usageBillingRepo:   billingRepo,
+		deferredService:    &DeferredService{},
 	}
 
 	service.finalizeLiveCall(record)
@@ -291,10 +339,89 @@ func TestFinalizeLiveCallIsIdempotentAndWritesZeroUsage(t *testing.T) {
 	require.Equal(t, record.CallHash, log.RequestID)
 	require.NotEqual(t, record.CallID, log.RequestID)
 	require.NotNil(t, log.DurationMs)
-	require.Zero(t, log.InputTokens)
-	require.Zero(t, log.OutputTokens)
-	require.Zero(t, log.TotalCost)
-	require.Zero(t, log.ActualCost)
+	require.Equal(t, 140, log.InputTokens)
+	require.Equal(t, 25, log.OutputTokens)
+	require.Equal(t, 10, log.CacheReadTokens)
+	require.InDelta(t, 0.191, log.TotalCost, 1e-12)
+	require.InDelta(t, 1.3752, log.BaseCost, 1e-12)
+	require.InDelta(t, 0.6876, log.ActualCost, 1e-12)
+	require.Equal(t, CurrencyUSD, log.SourceCurrency)
+	require.Equal(t, CurrencyCNY, log.SettlementCurrency)
+	require.InDelta(t, 7.2, log.ExchangeRate, 1e-12)
+	require.Equal(t, "test_live", log.ExchangeRateSource)
+	require.NotNil(t, log.ExchangeRateAsOf)
+	require.Equal(t, asOf, *log.ExchangeRateAsOf)
+	require.Equal(t, 1, billingRepo.calls)
+	require.NotNil(t, billingRepo.lastCmd)
+	require.Equal(t, CurrencyCNY, billingRepo.lastCmd.SettlementCurrency)
+	require.InDelta(t, 0.6876, billingRepo.lastCmd.BalanceCost, 1e-12)
+}
+
+func TestFinalizeLiveCallRetriesBillingBeforeClosing(t *testing.T) {
+	record := newBillableLiveRecordForTest()
+	store := &liveTestStore{}
+	require.NoError(t, store.SaveLiveCall(context.Background(), record, time.Hour))
+	_, err := store.AccumulateLiveUsage(context.Background(), record.CallHash, "resp-retry", 10, 2, 1)
+	require.NoError(t, err)
+	concurrencyCache := &liveTestConcurrencyCache{}
+	usageRepo := &liveTestUsageRepo{}
+	billingRepo := &openAIRecordUsageBillingRepoStub{err: errors.New("temporary billing failure")}
+	svc := &OpenAIGatewayService{
+		cache: store, concurrencyService: NewConcurrencyService(concurrencyCache),
+		usageLogRepo: usageRepo, usageBillingRepo: billingRepo, deferredService: &DeferredService{},
+	}
+
+	require.False(t, svc.tryFinalizeLiveCall(record))
+	loaded, err := store.GetLiveCall(context.Background(), record.CallHash)
+	require.NoError(t, err)
+	require.NotEqual(t, LiveControllerClosed, loaded.Controller)
+	require.Empty(t, usageRepo.logs)
+	concurrencyCache.mu.Lock()
+	require.Zero(t, concurrencyCache.releases)
+	concurrencyCache.mu.Unlock()
+
+	billingRepo.err = nil
+	billingRepo.result = &UsageBillingApplyResult{Applied: true}
+	require.True(t, svc.tryFinalizeLiveCall(record))
+	require.True(t, svc.tryFinalizeLiveCall(record))
+	loaded, err = store.GetLiveCall(context.Background(), record.CallHash)
+	require.NoError(t, err)
+	require.Equal(t, LiveControllerClosed, loaded.Controller)
+	require.Len(t, usageRepo.logs, 1)
+	concurrencyCache.mu.Lock()
+	require.Equal(t, 1, concurrencyCache.releases)
+	concurrencyCache.mu.Unlock()
+}
+
+func TestFinalizeLiveCallFlushesFailedUsageAggregation(t *testing.T) {
+	record := newBillableLiveRecordForTest()
+	store := &liveTestStore{accumulateFailures: 3}
+	require.NoError(t, store.SaveLiveCall(context.Background(), record, time.Hour))
+	concurrencyCache := &liveTestConcurrencyCache{}
+	usageRepo := &liveTestUsageRepo{}
+	billingRepo := &openAIRecordUsageBillingRepoStub{result: &UsageBillingApplyResult{Applied: true}}
+	svc := &OpenAIGatewayService{
+		cache: store, concurrencyService: NewConcurrencyService(concurrencyCache),
+		usageLogRepo: usageRepo, usageBillingRepo: billingRepo, deferredService: &DeferredService{},
+	}
+
+	svc.accumulateLiveUsage(record, []byte(`{"type":"response.done","response":{"id":"resp-fallback","usage":{"input_tokens":12,"output_tokens":3,"input_tokens_details":{"cached_tokens":2}}}}`))
+	require.True(t, svc.tryFinalizeLiveCall(record))
+	require.Len(t, usageRepo.logs, 1)
+	require.Equal(t, 10, usageRepo.logs[0].InputTokens)
+	require.Equal(t, 3, usageRepo.logs[0].OutputTokens)
+	require.Equal(t, 2, usageRepo.logs[0].CacheReadTokens)
+}
+
+func newBillableLiveRecordForTest() *LiveCallRecord {
+	now := time.Now().UTC()
+	return &LiveCallRecord{
+		CallHash: hashLiveCallID("retryable-live-call"), AccountID: 11, APIKeyID: 22, UserID: 33, GroupID: 44,
+		LeaseID: "lease-retry", Model: "gpt-live-test", CreatedAt: now.Add(-time.Second), ExpiresAt: now.Add(time.Hour),
+		BillingCurrency: CurrencyUSD, RateMultiplier: 1, GroupRateMultiplier: 1, AccountRateMultiplier: 1,
+		ExchangeRate: 1, ExchangeRateSource: "identity", ExchangeRateAsOf: now,
+		InputPricePerToken: 0.001, OutputPricePerToken: 0.002, CacheReadPricePerToken: 0.0001,
+	}
 }
 
 func TestGetLiveCallForIdentityRejectsMismatchedCaller(t *testing.T) {

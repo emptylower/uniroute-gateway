@@ -73,6 +73,20 @@ type UsageLog struct {
 	TotalCost float64 `json:"total_cost,omitempty"`
 	// ActualCost holds the value of the "actual_cost" field.
 	ActualCost float64 `json:"actual_cost,omitempty"`
+	// SourceCurrency holds the value of the "source_currency" field.
+	SourceCurrency string `json:"source_currency,omitempty"`
+	// SettlementCurrency holds the value of the "settlement_currency" field.
+	SettlementCurrency string `json:"settlement_currency,omitempty"`
+	// ExchangeRate holds the value of the "exchange_rate" field.
+	ExchangeRate float64 `json:"exchange_rate,omitempty"`
+	// ExchangeRateSource holds the value of the "exchange_rate_source" field.
+	ExchangeRateSource string `json:"exchange_rate_source,omitempty"`
+	// ExchangeRateAsOf holds the value of the "exchange_rate_as_of" field.
+	ExchangeRateAsOf *time.Time `json:"exchange_rate_as_of,omitempty"`
+	// SourceCost holds the value of the "source_cost" field.
+	SourceCost float64 `json:"source_cost,omitempty"`
+	// BaseCost holds the value of the "base_cost" field.
+	BaseCost float64 `json:"base_cost,omitempty"`
 	// RateMultiplier holds the value of the "rate_multiplier" field.
 	RateMultiplier float64 `json:"rate_multiplier,omitempty"`
 	// Whether long-context pricing changed token prices for this request
@@ -200,13 +214,13 @@ func (*UsageLog) scanValues(columns []string) ([]any, error) {
 			values[i] = new([]byte)
 		case usagelog.FieldLongContextBillingApplied, usagelog.FieldStream, usagelog.FieldCacheTTLOverridden:
 			values[i] = new(sql.NullBool)
-		case usagelog.FieldInputCost, usagelog.FieldOutputCost, usagelog.FieldCacheCreationCost, usagelog.FieldCacheReadCost, usagelog.FieldTotalCost, usagelog.FieldActualCost, usagelog.FieldRateMultiplier, usagelog.FieldAccountRateMultiplier:
+		case usagelog.FieldInputCost, usagelog.FieldOutputCost, usagelog.FieldCacheCreationCost, usagelog.FieldCacheReadCost, usagelog.FieldTotalCost, usagelog.FieldActualCost, usagelog.FieldExchangeRate, usagelog.FieldSourceCost, usagelog.FieldBaseCost, usagelog.FieldRateMultiplier, usagelog.FieldAccountRateMultiplier:
 			values[i] = new(sql.NullFloat64)
 		case usagelog.FieldID, usagelog.FieldUserID, usagelog.FieldAPIKeyID, usagelog.FieldAccountID, usagelog.FieldChannelID, usagelog.FieldGroupID, usagelog.FieldSubscriptionID, usagelog.FieldInputTokens, usagelog.FieldOutputTokens, usagelog.FieldCacheCreationTokens, usagelog.FieldCacheReadTokens, usagelog.FieldCacheCreation5mTokens, usagelog.FieldCacheCreation1hTokens, usagelog.FieldBillingType, usagelog.FieldDurationMs, usagelog.FieldFirstTokenMs, usagelog.FieldImageCount, usagelog.FieldVideoCount, usagelog.FieldVideoDurationSeconds:
 			values[i] = new(sql.NullInt64)
-		case usagelog.FieldRequestID, usagelog.FieldModel, usagelog.FieldRequestedModel, usagelog.FieldUpstreamModel, usagelog.FieldModelMappingChain, usagelog.FieldBillingTier, usagelog.FieldBillingMode, usagelog.FieldUserAgent, usagelog.FieldIPAddress, usagelog.FieldImageSize, usagelog.FieldImageInputSize, usagelog.FieldImageOutputSize, usagelog.FieldImageSizeSource, usagelog.FieldVideoResolution:
+		case usagelog.FieldRequestID, usagelog.FieldModel, usagelog.FieldRequestedModel, usagelog.FieldUpstreamModel, usagelog.FieldModelMappingChain, usagelog.FieldBillingTier, usagelog.FieldBillingMode, usagelog.FieldSourceCurrency, usagelog.FieldSettlementCurrency, usagelog.FieldExchangeRateSource, usagelog.FieldUserAgent, usagelog.FieldIPAddress, usagelog.FieldImageSize, usagelog.FieldImageInputSize, usagelog.FieldImageOutputSize, usagelog.FieldImageSizeSource, usagelog.FieldVideoResolution:
 			values[i] = new(sql.NullString)
-		case usagelog.FieldCreatedAt:
+		case usagelog.FieldExchangeRateAsOf, usagelog.FieldCreatedAt:
 			values[i] = new(sql.NullTime)
 		default:
 			values[i] = new(sql.UnknownType)
@@ -386,6 +400,49 @@ func (_m *UsageLog) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field actual_cost", values[i])
 			} else if value.Valid {
 				_m.ActualCost = value.Float64
+			}
+		case usagelog.FieldSourceCurrency:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field source_currency", values[i])
+			} else if value.Valid {
+				_m.SourceCurrency = value.String
+			}
+		case usagelog.FieldSettlementCurrency:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field settlement_currency", values[i])
+			} else if value.Valid {
+				_m.SettlementCurrency = value.String
+			}
+		case usagelog.FieldExchangeRate:
+			if value, ok := values[i].(*sql.NullFloat64); !ok {
+				return fmt.Errorf("unexpected type %T for field exchange_rate", values[i])
+			} else if value.Valid {
+				_m.ExchangeRate = value.Float64
+			}
+		case usagelog.FieldExchangeRateSource:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field exchange_rate_source", values[i])
+			} else if value.Valid {
+				_m.ExchangeRateSource = value.String
+			}
+		case usagelog.FieldExchangeRateAsOf:
+			if value, ok := values[i].(*sql.NullTime); !ok {
+				return fmt.Errorf("unexpected type %T for field exchange_rate_as_of", values[i])
+			} else if value.Valid {
+				_m.ExchangeRateAsOf = new(time.Time)
+				*_m.ExchangeRateAsOf = value.Time
+			}
+		case usagelog.FieldSourceCost:
+			if value, ok := values[i].(*sql.NullFloat64); !ok {
+				return fmt.Errorf("unexpected type %T for field source_cost", values[i])
+			} else if value.Valid {
+				_m.SourceCost = value.Float64
+			}
+		case usagelog.FieldBaseCost:
+			if value, ok := values[i].(*sql.NullFloat64); !ok {
+				return fmt.Errorf("unexpected type %T for field base_cost", values[i])
+			} else if value.Valid {
+				_m.BaseCost = value.Float64
 			}
 		case usagelog.FieldRateMultiplier:
 			if value, ok := values[i].(*sql.NullFloat64); !ok {
@@ -671,6 +728,29 @@ func (_m *UsageLog) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("actual_cost=")
 	builder.WriteString(fmt.Sprintf("%v", _m.ActualCost))
+	builder.WriteString(", ")
+	builder.WriteString("source_currency=")
+	builder.WriteString(_m.SourceCurrency)
+	builder.WriteString(", ")
+	builder.WriteString("settlement_currency=")
+	builder.WriteString(_m.SettlementCurrency)
+	builder.WriteString(", ")
+	builder.WriteString("exchange_rate=")
+	builder.WriteString(fmt.Sprintf("%v", _m.ExchangeRate))
+	builder.WriteString(", ")
+	builder.WriteString("exchange_rate_source=")
+	builder.WriteString(_m.ExchangeRateSource)
+	builder.WriteString(", ")
+	if v := _m.ExchangeRateAsOf; v != nil {
+		builder.WriteString("exchange_rate_as_of=")
+		builder.WriteString(v.Format(time.ANSIC))
+	}
+	builder.WriteString(", ")
+	builder.WriteString("source_cost=")
+	builder.WriteString(fmt.Sprintf("%v", _m.SourceCost))
+	builder.WriteString(", ")
+	builder.WriteString("base_cost=")
+	builder.WriteString(fmt.Sprintf("%v", _m.BaseCost))
 	builder.WriteString(", ")
 	builder.WriteString("rate_multiplier=")
 	builder.WriteString(fmt.Sprintf("%v", _m.RateMultiplier))

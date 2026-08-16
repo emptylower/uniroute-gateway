@@ -337,6 +337,104 @@ func (_c *UsageLogCreate) SetNillableActualCost(v *float64) *UsageLogCreate {
 	return _c
 }
 
+// SetSourceCurrency sets the "source_currency" field.
+func (_c *UsageLogCreate) SetSourceCurrency(v string) *UsageLogCreate {
+	_c.mutation.SetSourceCurrency(v)
+	return _c
+}
+
+// SetNillableSourceCurrency sets the "source_currency" field if the given value is not nil.
+func (_c *UsageLogCreate) SetNillableSourceCurrency(v *string) *UsageLogCreate {
+	if v != nil {
+		_c.SetSourceCurrency(*v)
+	}
+	return _c
+}
+
+// SetSettlementCurrency sets the "settlement_currency" field.
+func (_c *UsageLogCreate) SetSettlementCurrency(v string) *UsageLogCreate {
+	_c.mutation.SetSettlementCurrency(v)
+	return _c
+}
+
+// SetNillableSettlementCurrency sets the "settlement_currency" field if the given value is not nil.
+func (_c *UsageLogCreate) SetNillableSettlementCurrency(v *string) *UsageLogCreate {
+	if v != nil {
+		_c.SetSettlementCurrency(*v)
+	}
+	return _c
+}
+
+// SetExchangeRate sets the "exchange_rate" field.
+func (_c *UsageLogCreate) SetExchangeRate(v float64) *UsageLogCreate {
+	_c.mutation.SetExchangeRate(v)
+	return _c
+}
+
+// SetNillableExchangeRate sets the "exchange_rate" field if the given value is not nil.
+func (_c *UsageLogCreate) SetNillableExchangeRate(v *float64) *UsageLogCreate {
+	if v != nil {
+		_c.SetExchangeRate(*v)
+	}
+	return _c
+}
+
+// SetExchangeRateSource sets the "exchange_rate_source" field.
+func (_c *UsageLogCreate) SetExchangeRateSource(v string) *UsageLogCreate {
+	_c.mutation.SetExchangeRateSource(v)
+	return _c
+}
+
+// SetNillableExchangeRateSource sets the "exchange_rate_source" field if the given value is not nil.
+func (_c *UsageLogCreate) SetNillableExchangeRateSource(v *string) *UsageLogCreate {
+	if v != nil {
+		_c.SetExchangeRateSource(*v)
+	}
+	return _c
+}
+
+// SetExchangeRateAsOf sets the "exchange_rate_as_of" field.
+func (_c *UsageLogCreate) SetExchangeRateAsOf(v time.Time) *UsageLogCreate {
+	_c.mutation.SetExchangeRateAsOf(v)
+	return _c
+}
+
+// SetNillableExchangeRateAsOf sets the "exchange_rate_as_of" field if the given value is not nil.
+func (_c *UsageLogCreate) SetNillableExchangeRateAsOf(v *time.Time) *UsageLogCreate {
+	if v != nil {
+		_c.SetExchangeRateAsOf(*v)
+	}
+	return _c
+}
+
+// SetSourceCost sets the "source_cost" field.
+func (_c *UsageLogCreate) SetSourceCost(v float64) *UsageLogCreate {
+	_c.mutation.SetSourceCost(v)
+	return _c
+}
+
+// SetNillableSourceCost sets the "source_cost" field if the given value is not nil.
+func (_c *UsageLogCreate) SetNillableSourceCost(v *float64) *UsageLogCreate {
+	if v != nil {
+		_c.SetSourceCost(*v)
+	}
+	return _c
+}
+
+// SetBaseCost sets the "base_cost" field.
+func (_c *UsageLogCreate) SetBaseCost(v float64) *UsageLogCreate {
+	_c.mutation.SetBaseCost(v)
+	return _c
+}
+
+// SetNillableBaseCost sets the "base_cost" field if the given value is not nil.
+func (_c *UsageLogCreate) SetNillableBaseCost(v *float64) *UsageLogCreate {
+	if v != nil {
+		_c.SetBaseCost(*v)
+	}
+	return _c
+}
+
 // SetRateMultiplier sets the "rate_multiplier" field.
 func (_c *UsageLogCreate) SetRateMultiplier(v float64) *UsageLogCreate {
 	_c.mutation.SetRateMultiplier(v)
@@ -717,6 +815,30 @@ func (_c *UsageLogCreate) defaults() {
 		v := usagelog.DefaultActualCost
 		_c.mutation.SetActualCost(v)
 	}
+	if _, ok := _c.mutation.SourceCurrency(); !ok {
+		v := usagelog.DefaultSourceCurrency
+		_c.mutation.SetSourceCurrency(v)
+	}
+	if _, ok := _c.mutation.SettlementCurrency(); !ok {
+		v := usagelog.DefaultSettlementCurrency
+		_c.mutation.SetSettlementCurrency(v)
+	}
+	if _, ok := _c.mutation.ExchangeRate(); !ok {
+		v := usagelog.DefaultExchangeRate
+		_c.mutation.SetExchangeRate(v)
+	}
+	if _, ok := _c.mutation.ExchangeRateSource(); !ok {
+		v := usagelog.DefaultExchangeRateSource
+		_c.mutation.SetExchangeRateSource(v)
+	}
+	if _, ok := _c.mutation.SourceCost(); !ok {
+		v := usagelog.DefaultSourceCost
+		_c.mutation.SetSourceCost(v)
+	}
+	if _, ok := _c.mutation.BaseCost(); !ok {
+		v := usagelog.DefaultBaseCost
+		_c.mutation.SetBaseCost(v)
+	}
 	if _, ok := _c.mutation.RateMultiplier(); !ok {
 		v := usagelog.DefaultRateMultiplier
 		_c.mutation.SetRateMultiplier(v)
@@ -838,6 +960,39 @@ func (_c *UsageLogCreate) check() error {
 	}
 	if _, ok := _c.mutation.ActualCost(); !ok {
 		return &ValidationError{Name: "actual_cost", err: errors.New(`ent: missing required field "UsageLog.actual_cost"`)}
+	}
+	if _, ok := _c.mutation.SourceCurrency(); !ok {
+		return &ValidationError{Name: "source_currency", err: errors.New(`ent: missing required field "UsageLog.source_currency"`)}
+	}
+	if v, ok := _c.mutation.SourceCurrency(); ok {
+		if err := usagelog.SourceCurrencyValidator(v); err != nil {
+			return &ValidationError{Name: "source_currency", err: fmt.Errorf(`ent: validator failed for field "UsageLog.source_currency": %w`, err)}
+		}
+	}
+	if _, ok := _c.mutation.SettlementCurrency(); !ok {
+		return &ValidationError{Name: "settlement_currency", err: errors.New(`ent: missing required field "UsageLog.settlement_currency"`)}
+	}
+	if v, ok := _c.mutation.SettlementCurrency(); ok {
+		if err := usagelog.SettlementCurrencyValidator(v); err != nil {
+			return &ValidationError{Name: "settlement_currency", err: fmt.Errorf(`ent: validator failed for field "UsageLog.settlement_currency": %w`, err)}
+		}
+	}
+	if _, ok := _c.mutation.ExchangeRate(); !ok {
+		return &ValidationError{Name: "exchange_rate", err: errors.New(`ent: missing required field "UsageLog.exchange_rate"`)}
+	}
+	if _, ok := _c.mutation.ExchangeRateSource(); !ok {
+		return &ValidationError{Name: "exchange_rate_source", err: errors.New(`ent: missing required field "UsageLog.exchange_rate_source"`)}
+	}
+	if v, ok := _c.mutation.ExchangeRateSource(); ok {
+		if err := usagelog.ExchangeRateSourceValidator(v); err != nil {
+			return &ValidationError{Name: "exchange_rate_source", err: fmt.Errorf(`ent: validator failed for field "UsageLog.exchange_rate_source": %w`, err)}
+		}
+	}
+	if _, ok := _c.mutation.SourceCost(); !ok {
+		return &ValidationError{Name: "source_cost", err: errors.New(`ent: missing required field "UsageLog.source_cost"`)}
+	}
+	if _, ok := _c.mutation.BaseCost(); !ok {
+		return &ValidationError{Name: "base_cost", err: errors.New(`ent: missing required field "UsageLog.base_cost"`)}
 	}
 	if _, ok := _c.mutation.RateMultiplier(); !ok {
 		return &ValidationError{Name: "rate_multiplier", err: errors.New(`ent: missing required field "UsageLog.rate_multiplier"`)}
@@ -1013,6 +1168,34 @@ func (_c *UsageLogCreate) createSpec() (*UsageLog, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.ActualCost(); ok {
 		_spec.SetField(usagelog.FieldActualCost, field.TypeFloat64, value)
 		_node.ActualCost = value
+	}
+	if value, ok := _c.mutation.SourceCurrency(); ok {
+		_spec.SetField(usagelog.FieldSourceCurrency, field.TypeString, value)
+		_node.SourceCurrency = value
+	}
+	if value, ok := _c.mutation.SettlementCurrency(); ok {
+		_spec.SetField(usagelog.FieldSettlementCurrency, field.TypeString, value)
+		_node.SettlementCurrency = value
+	}
+	if value, ok := _c.mutation.ExchangeRate(); ok {
+		_spec.SetField(usagelog.FieldExchangeRate, field.TypeFloat64, value)
+		_node.ExchangeRate = value
+	}
+	if value, ok := _c.mutation.ExchangeRateSource(); ok {
+		_spec.SetField(usagelog.FieldExchangeRateSource, field.TypeString, value)
+		_node.ExchangeRateSource = value
+	}
+	if value, ok := _c.mutation.ExchangeRateAsOf(); ok {
+		_spec.SetField(usagelog.FieldExchangeRateAsOf, field.TypeTime, value)
+		_node.ExchangeRateAsOf = &value
+	}
+	if value, ok := _c.mutation.SourceCost(); ok {
+		_spec.SetField(usagelog.FieldSourceCost, field.TypeFloat64, value)
+		_node.SourceCost = value
+	}
+	if value, ok := _c.mutation.BaseCost(); ok {
+		_spec.SetField(usagelog.FieldBaseCost, field.TypeFloat64, value)
+		_node.BaseCost = value
 	}
 	if value, ok := _c.mutation.RateMultiplier(); ok {
 		_spec.SetField(usagelog.FieldRateMultiplier, field.TypeFloat64, value)
@@ -1654,6 +1837,114 @@ func (u *UsageLogUpsert) UpdateActualCost() *UsageLogUpsert {
 // AddActualCost adds v to the "actual_cost" field.
 func (u *UsageLogUpsert) AddActualCost(v float64) *UsageLogUpsert {
 	u.Add(usagelog.FieldActualCost, v)
+	return u
+}
+
+// SetSourceCurrency sets the "source_currency" field.
+func (u *UsageLogUpsert) SetSourceCurrency(v string) *UsageLogUpsert {
+	u.Set(usagelog.FieldSourceCurrency, v)
+	return u
+}
+
+// UpdateSourceCurrency sets the "source_currency" field to the value that was provided on create.
+func (u *UsageLogUpsert) UpdateSourceCurrency() *UsageLogUpsert {
+	u.SetExcluded(usagelog.FieldSourceCurrency)
+	return u
+}
+
+// SetSettlementCurrency sets the "settlement_currency" field.
+func (u *UsageLogUpsert) SetSettlementCurrency(v string) *UsageLogUpsert {
+	u.Set(usagelog.FieldSettlementCurrency, v)
+	return u
+}
+
+// UpdateSettlementCurrency sets the "settlement_currency" field to the value that was provided on create.
+func (u *UsageLogUpsert) UpdateSettlementCurrency() *UsageLogUpsert {
+	u.SetExcluded(usagelog.FieldSettlementCurrency)
+	return u
+}
+
+// SetExchangeRate sets the "exchange_rate" field.
+func (u *UsageLogUpsert) SetExchangeRate(v float64) *UsageLogUpsert {
+	u.Set(usagelog.FieldExchangeRate, v)
+	return u
+}
+
+// UpdateExchangeRate sets the "exchange_rate" field to the value that was provided on create.
+func (u *UsageLogUpsert) UpdateExchangeRate() *UsageLogUpsert {
+	u.SetExcluded(usagelog.FieldExchangeRate)
+	return u
+}
+
+// AddExchangeRate adds v to the "exchange_rate" field.
+func (u *UsageLogUpsert) AddExchangeRate(v float64) *UsageLogUpsert {
+	u.Add(usagelog.FieldExchangeRate, v)
+	return u
+}
+
+// SetExchangeRateSource sets the "exchange_rate_source" field.
+func (u *UsageLogUpsert) SetExchangeRateSource(v string) *UsageLogUpsert {
+	u.Set(usagelog.FieldExchangeRateSource, v)
+	return u
+}
+
+// UpdateExchangeRateSource sets the "exchange_rate_source" field to the value that was provided on create.
+func (u *UsageLogUpsert) UpdateExchangeRateSource() *UsageLogUpsert {
+	u.SetExcluded(usagelog.FieldExchangeRateSource)
+	return u
+}
+
+// SetExchangeRateAsOf sets the "exchange_rate_as_of" field.
+func (u *UsageLogUpsert) SetExchangeRateAsOf(v time.Time) *UsageLogUpsert {
+	u.Set(usagelog.FieldExchangeRateAsOf, v)
+	return u
+}
+
+// UpdateExchangeRateAsOf sets the "exchange_rate_as_of" field to the value that was provided on create.
+func (u *UsageLogUpsert) UpdateExchangeRateAsOf() *UsageLogUpsert {
+	u.SetExcluded(usagelog.FieldExchangeRateAsOf)
+	return u
+}
+
+// ClearExchangeRateAsOf clears the value of the "exchange_rate_as_of" field.
+func (u *UsageLogUpsert) ClearExchangeRateAsOf() *UsageLogUpsert {
+	u.SetNull(usagelog.FieldExchangeRateAsOf)
+	return u
+}
+
+// SetSourceCost sets the "source_cost" field.
+func (u *UsageLogUpsert) SetSourceCost(v float64) *UsageLogUpsert {
+	u.Set(usagelog.FieldSourceCost, v)
+	return u
+}
+
+// UpdateSourceCost sets the "source_cost" field to the value that was provided on create.
+func (u *UsageLogUpsert) UpdateSourceCost() *UsageLogUpsert {
+	u.SetExcluded(usagelog.FieldSourceCost)
+	return u
+}
+
+// AddSourceCost adds v to the "source_cost" field.
+func (u *UsageLogUpsert) AddSourceCost(v float64) *UsageLogUpsert {
+	u.Add(usagelog.FieldSourceCost, v)
+	return u
+}
+
+// SetBaseCost sets the "base_cost" field.
+func (u *UsageLogUpsert) SetBaseCost(v float64) *UsageLogUpsert {
+	u.Set(usagelog.FieldBaseCost, v)
+	return u
+}
+
+// UpdateBaseCost sets the "base_cost" field to the value that was provided on create.
+func (u *UsageLogUpsert) UpdateBaseCost() *UsageLogUpsert {
+	u.SetExcluded(usagelog.FieldBaseCost)
+	return u
+}
+
+// AddBaseCost adds v to the "base_cost" field.
+func (u *UsageLogUpsert) AddBaseCost(v float64) *UsageLogUpsert {
+	u.Add(usagelog.FieldBaseCost, v)
 	return u
 }
 
@@ -2544,6 +2835,132 @@ func (u *UsageLogUpsertOne) AddActualCost(v float64) *UsageLogUpsertOne {
 func (u *UsageLogUpsertOne) UpdateActualCost() *UsageLogUpsertOne {
 	return u.Update(func(s *UsageLogUpsert) {
 		s.UpdateActualCost()
+	})
+}
+
+// SetSourceCurrency sets the "source_currency" field.
+func (u *UsageLogUpsertOne) SetSourceCurrency(v string) *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetSourceCurrency(v)
+	})
+}
+
+// UpdateSourceCurrency sets the "source_currency" field to the value that was provided on create.
+func (u *UsageLogUpsertOne) UpdateSourceCurrency() *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateSourceCurrency()
+	})
+}
+
+// SetSettlementCurrency sets the "settlement_currency" field.
+func (u *UsageLogUpsertOne) SetSettlementCurrency(v string) *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetSettlementCurrency(v)
+	})
+}
+
+// UpdateSettlementCurrency sets the "settlement_currency" field to the value that was provided on create.
+func (u *UsageLogUpsertOne) UpdateSettlementCurrency() *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateSettlementCurrency()
+	})
+}
+
+// SetExchangeRate sets the "exchange_rate" field.
+func (u *UsageLogUpsertOne) SetExchangeRate(v float64) *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetExchangeRate(v)
+	})
+}
+
+// AddExchangeRate adds v to the "exchange_rate" field.
+func (u *UsageLogUpsertOne) AddExchangeRate(v float64) *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.AddExchangeRate(v)
+	})
+}
+
+// UpdateExchangeRate sets the "exchange_rate" field to the value that was provided on create.
+func (u *UsageLogUpsertOne) UpdateExchangeRate() *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateExchangeRate()
+	})
+}
+
+// SetExchangeRateSource sets the "exchange_rate_source" field.
+func (u *UsageLogUpsertOne) SetExchangeRateSource(v string) *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetExchangeRateSource(v)
+	})
+}
+
+// UpdateExchangeRateSource sets the "exchange_rate_source" field to the value that was provided on create.
+func (u *UsageLogUpsertOne) UpdateExchangeRateSource() *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateExchangeRateSource()
+	})
+}
+
+// SetExchangeRateAsOf sets the "exchange_rate_as_of" field.
+func (u *UsageLogUpsertOne) SetExchangeRateAsOf(v time.Time) *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetExchangeRateAsOf(v)
+	})
+}
+
+// UpdateExchangeRateAsOf sets the "exchange_rate_as_of" field to the value that was provided on create.
+func (u *UsageLogUpsertOne) UpdateExchangeRateAsOf() *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateExchangeRateAsOf()
+	})
+}
+
+// ClearExchangeRateAsOf clears the value of the "exchange_rate_as_of" field.
+func (u *UsageLogUpsertOne) ClearExchangeRateAsOf() *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.ClearExchangeRateAsOf()
+	})
+}
+
+// SetSourceCost sets the "source_cost" field.
+func (u *UsageLogUpsertOne) SetSourceCost(v float64) *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetSourceCost(v)
+	})
+}
+
+// AddSourceCost adds v to the "source_cost" field.
+func (u *UsageLogUpsertOne) AddSourceCost(v float64) *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.AddSourceCost(v)
+	})
+}
+
+// UpdateSourceCost sets the "source_cost" field to the value that was provided on create.
+func (u *UsageLogUpsertOne) UpdateSourceCost() *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateSourceCost()
+	})
+}
+
+// SetBaseCost sets the "base_cost" field.
+func (u *UsageLogUpsertOne) SetBaseCost(v float64) *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetBaseCost(v)
+	})
+}
+
+// AddBaseCost adds v to the "base_cost" field.
+func (u *UsageLogUpsertOne) AddBaseCost(v float64) *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.AddBaseCost(v)
+	})
+}
+
+// UpdateBaseCost sets the "base_cost" field to the value that was provided on create.
+func (u *UsageLogUpsertOne) UpdateBaseCost() *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateBaseCost()
 	})
 }
 
@@ -3658,6 +4075,132 @@ func (u *UsageLogUpsertBulk) AddActualCost(v float64) *UsageLogUpsertBulk {
 func (u *UsageLogUpsertBulk) UpdateActualCost() *UsageLogUpsertBulk {
 	return u.Update(func(s *UsageLogUpsert) {
 		s.UpdateActualCost()
+	})
+}
+
+// SetSourceCurrency sets the "source_currency" field.
+func (u *UsageLogUpsertBulk) SetSourceCurrency(v string) *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetSourceCurrency(v)
+	})
+}
+
+// UpdateSourceCurrency sets the "source_currency" field to the value that was provided on create.
+func (u *UsageLogUpsertBulk) UpdateSourceCurrency() *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateSourceCurrency()
+	})
+}
+
+// SetSettlementCurrency sets the "settlement_currency" field.
+func (u *UsageLogUpsertBulk) SetSettlementCurrency(v string) *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetSettlementCurrency(v)
+	})
+}
+
+// UpdateSettlementCurrency sets the "settlement_currency" field to the value that was provided on create.
+func (u *UsageLogUpsertBulk) UpdateSettlementCurrency() *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateSettlementCurrency()
+	})
+}
+
+// SetExchangeRate sets the "exchange_rate" field.
+func (u *UsageLogUpsertBulk) SetExchangeRate(v float64) *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetExchangeRate(v)
+	})
+}
+
+// AddExchangeRate adds v to the "exchange_rate" field.
+func (u *UsageLogUpsertBulk) AddExchangeRate(v float64) *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.AddExchangeRate(v)
+	})
+}
+
+// UpdateExchangeRate sets the "exchange_rate" field to the value that was provided on create.
+func (u *UsageLogUpsertBulk) UpdateExchangeRate() *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateExchangeRate()
+	})
+}
+
+// SetExchangeRateSource sets the "exchange_rate_source" field.
+func (u *UsageLogUpsertBulk) SetExchangeRateSource(v string) *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetExchangeRateSource(v)
+	})
+}
+
+// UpdateExchangeRateSource sets the "exchange_rate_source" field to the value that was provided on create.
+func (u *UsageLogUpsertBulk) UpdateExchangeRateSource() *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateExchangeRateSource()
+	})
+}
+
+// SetExchangeRateAsOf sets the "exchange_rate_as_of" field.
+func (u *UsageLogUpsertBulk) SetExchangeRateAsOf(v time.Time) *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetExchangeRateAsOf(v)
+	})
+}
+
+// UpdateExchangeRateAsOf sets the "exchange_rate_as_of" field to the value that was provided on create.
+func (u *UsageLogUpsertBulk) UpdateExchangeRateAsOf() *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateExchangeRateAsOf()
+	})
+}
+
+// ClearExchangeRateAsOf clears the value of the "exchange_rate_as_of" field.
+func (u *UsageLogUpsertBulk) ClearExchangeRateAsOf() *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.ClearExchangeRateAsOf()
+	})
+}
+
+// SetSourceCost sets the "source_cost" field.
+func (u *UsageLogUpsertBulk) SetSourceCost(v float64) *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetSourceCost(v)
+	})
+}
+
+// AddSourceCost adds v to the "source_cost" field.
+func (u *UsageLogUpsertBulk) AddSourceCost(v float64) *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.AddSourceCost(v)
+	})
+}
+
+// UpdateSourceCost sets the "source_cost" field to the value that was provided on create.
+func (u *UsageLogUpsertBulk) UpdateSourceCost() *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateSourceCost()
+	})
+}
+
+// SetBaseCost sets the "base_cost" field.
+func (u *UsageLogUpsertBulk) SetBaseCost(v float64) *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetBaseCost(v)
+	})
+}
+
+// AddBaseCost adds v to the "base_cost" field.
+func (u *UsageLogUpsertBulk) AddBaseCost(v float64) *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.AddBaseCost(v)
+	})
+}
+
+// UpdateBaseCost sets the "base_cost" field to the value that was provided on create.
+func (u *UsageLogUpsertBulk) UpdateBaseCost() *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateBaseCost()
 	})
 }
 

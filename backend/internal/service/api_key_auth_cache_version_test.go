@@ -59,3 +59,33 @@ func TestAPIKeyService_RejectsV15AuthSnapshotWithoutReasoningEffortPolicy(t *tes
 		t.Fatalf("expected no API key from stale snapshot, got %#v", apiKey)
 	}
 }
+
+func TestAPIKeyService_AuthSnapshotPreservesBillingCurrencyAndCurrencyRates(t *testing.T) {
+	cny, usd := 0.2, 0.4
+	svc := &APIKeyService{}
+	snapshot := svc.snapshotFromAPIKey(t.Context(), &APIKey{
+		ID: 1, UserID: 2, Status: StatusActive,
+		User: &User{ID: 2, Status: StatusActive, BillingCurrency: CurrencyCNY},
+		Group: &Group{
+			ID: 3, Status: StatusActive, RateMultiplier: 1,
+			RateMultiplierCNY: &cny, RateMultiplierUSD: &usd,
+		},
+	})
+
+	if snapshot == nil {
+		t.Fatal("expected snapshot")
+	}
+	if snapshot.Version != apiKeyAuthSnapshotVersion {
+		t.Fatalf("expected version %d, got %d", apiKeyAuthSnapshotVersion, snapshot.Version)
+	}
+	restored := svc.snapshotToAPIKey("key", snapshot)
+	if restored.User.BillingCurrency != CurrencyCNY {
+		t.Fatalf("expected CNY billing currency, got %q", restored.User.BillingCurrency)
+	}
+	if got := restored.Group.RateMultiplierForCurrency(CurrencyCNY); got != cny {
+		t.Fatalf("expected CNY multiplier %v, got %v", cny, got)
+	}
+	if got := restored.Group.RateMultiplierForCurrency(CurrencyUSD); got != usd {
+		t.Fatalf("expected USD multiplier %v, got %v", usd, got)
+	}
+}

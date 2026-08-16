@@ -80,6 +80,26 @@ func Key(v string) predicate.APIKey {
 	return predicate.APIKey(sql.FieldEQ(FieldKey, v))
 }
 
+// PlatformKeyID applies equality check predicate on the "platform_key_id" field. It's identical to PlatformKeyIDEQ.
+func PlatformKeyID(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldPlatformKeyID, v))
+}
+
+// KeySha256 applies equality check predicate on the "key_sha256" field. It's identical to KeySha256EQ.
+func KeySha256(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldKeySha256, v))
+}
+
+// KeyPrefix applies equality check predicate on the "key_prefix" field. It's identical to KeyPrefixEQ.
+func KeyPrefix(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldKeyPrefix, v))
+}
+
+// PlatformKeyVersion applies equality check predicate on the "platform_key_version" field. It's identical to PlatformKeyVersionEQ.
+func PlatformKeyVersion(v int64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldPlatformKeyVersion, v))
+}
+
 // Name applies equality check predicate on the "name" field. It's identical to NameEQ.
 func Name(v string) predicate.APIKey {
 	return predicate.APIKey(sql.FieldEQ(FieldName, v))
@@ -88,6 +108,11 @@ func Name(v string) predicate.APIKey {
 // GroupID applies equality check predicate on the "group_id" field. It's identical to GroupIDEQ.
 func GroupID(v int64) predicate.APIKey {
 	return predicate.APIKey(sql.FieldEQ(FieldGroupID, v))
+}
+
+// RoutingMode applies equality check predicate on the "routing_mode" field. It's identical to RoutingModeEQ.
+func RoutingMode(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldRoutingMode, v))
 }
 
 // Status applies equality check predicate on the "status" field. It's identical to StatusEQ.
@@ -375,6 +400,281 @@ func KeyContainsFold(v string) predicate.APIKey {
 	return predicate.APIKey(sql.FieldContainsFold(FieldKey, v))
 }
 
+// PlatformKeyIDEQ applies the EQ predicate on the "platform_key_id" field.
+func PlatformKeyIDEQ(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldPlatformKeyID, v))
+}
+
+// PlatformKeyIDNEQ applies the NEQ predicate on the "platform_key_id" field.
+func PlatformKeyIDNEQ(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNEQ(FieldPlatformKeyID, v))
+}
+
+// PlatformKeyIDIn applies the In predicate on the "platform_key_id" field.
+func PlatformKeyIDIn(vs ...string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldIn(FieldPlatformKeyID, vs...))
+}
+
+// PlatformKeyIDNotIn applies the NotIn predicate on the "platform_key_id" field.
+func PlatformKeyIDNotIn(vs ...string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNotIn(FieldPlatformKeyID, vs...))
+}
+
+// PlatformKeyIDGT applies the GT predicate on the "platform_key_id" field.
+func PlatformKeyIDGT(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldGT(FieldPlatformKeyID, v))
+}
+
+// PlatformKeyIDGTE applies the GTE predicate on the "platform_key_id" field.
+func PlatformKeyIDGTE(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldGTE(FieldPlatformKeyID, v))
+}
+
+// PlatformKeyIDLT applies the LT predicate on the "platform_key_id" field.
+func PlatformKeyIDLT(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldLT(FieldPlatformKeyID, v))
+}
+
+// PlatformKeyIDLTE applies the LTE predicate on the "platform_key_id" field.
+func PlatformKeyIDLTE(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldLTE(FieldPlatformKeyID, v))
+}
+
+// PlatformKeyIDContains applies the Contains predicate on the "platform_key_id" field.
+func PlatformKeyIDContains(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldContains(FieldPlatformKeyID, v))
+}
+
+// PlatformKeyIDHasPrefix applies the HasPrefix predicate on the "platform_key_id" field.
+func PlatformKeyIDHasPrefix(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldHasPrefix(FieldPlatformKeyID, v))
+}
+
+// PlatformKeyIDHasSuffix applies the HasSuffix predicate on the "platform_key_id" field.
+func PlatformKeyIDHasSuffix(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldHasSuffix(FieldPlatformKeyID, v))
+}
+
+// PlatformKeyIDIsNil applies the IsNil predicate on the "platform_key_id" field.
+func PlatformKeyIDIsNil() predicate.APIKey {
+	return predicate.APIKey(sql.FieldIsNull(FieldPlatformKeyID))
+}
+
+// PlatformKeyIDNotNil applies the NotNil predicate on the "platform_key_id" field.
+func PlatformKeyIDNotNil() predicate.APIKey {
+	return predicate.APIKey(sql.FieldNotNull(FieldPlatformKeyID))
+}
+
+// PlatformKeyIDEqualFold applies the EqualFold predicate on the "platform_key_id" field.
+func PlatformKeyIDEqualFold(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEqualFold(FieldPlatformKeyID, v))
+}
+
+// PlatformKeyIDContainsFold applies the ContainsFold predicate on the "platform_key_id" field.
+func PlatformKeyIDContainsFold(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldContainsFold(FieldPlatformKeyID, v))
+}
+
+// KeySha256EQ applies the EQ predicate on the "key_sha256" field.
+func KeySha256EQ(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldKeySha256, v))
+}
+
+// KeySha256NEQ applies the NEQ predicate on the "key_sha256" field.
+func KeySha256NEQ(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNEQ(FieldKeySha256, v))
+}
+
+// KeySha256In applies the In predicate on the "key_sha256" field.
+func KeySha256In(vs ...string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldIn(FieldKeySha256, vs...))
+}
+
+// KeySha256NotIn applies the NotIn predicate on the "key_sha256" field.
+func KeySha256NotIn(vs ...string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNotIn(FieldKeySha256, vs...))
+}
+
+// KeySha256GT applies the GT predicate on the "key_sha256" field.
+func KeySha256GT(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldGT(FieldKeySha256, v))
+}
+
+// KeySha256GTE applies the GTE predicate on the "key_sha256" field.
+func KeySha256GTE(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldGTE(FieldKeySha256, v))
+}
+
+// KeySha256LT applies the LT predicate on the "key_sha256" field.
+func KeySha256LT(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldLT(FieldKeySha256, v))
+}
+
+// KeySha256LTE applies the LTE predicate on the "key_sha256" field.
+func KeySha256LTE(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldLTE(FieldKeySha256, v))
+}
+
+// KeySha256Contains applies the Contains predicate on the "key_sha256" field.
+func KeySha256Contains(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldContains(FieldKeySha256, v))
+}
+
+// KeySha256HasPrefix applies the HasPrefix predicate on the "key_sha256" field.
+func KeySha256HasPrefix(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldHasPrefix(FieldKeySha256, v))
+}
+
+// KeySha256HasSuffix applies the HasSuffix predicate on the "key_sha256" field.
+func KeySha256HasSuffix(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldHasSuffix(FieldKeySha256, v))
+}
+
+// KeySha256IsNil applies the IsNil predicate on the "key_sha256" field.
+func KeySha256IsNil() predicate.APIKey {
+	return predicate.APIKey(sql.FieldIsNull(FieldKeySha256))
+}
+
+// KeySha256NotNil applies the NotNil predicate on the "key_sha256" field.
+func KeySha256NotNil() predicate.APIKey {
+	return predicate.APIKey(sql.FieldNotNull(FieldKeySha256))
+}
+
+// KeySha256EqualFold applies the EqualFold predicate on the "key_sha256" field.
+func KeySha256EqualFold(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEqualFold(FieldKeySha256, v))
+}
+
+// KeySha256ContainsFold applies the ContainsFold predicate on the "key_sha256" field.
+func KeySha256ContainsFold(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldContainsFold(FieldKeySha256, v))
+}
+
+// KeyPrefixEQ applies the EQ predicate on the "key_prefix" field.
+func KeyPrefixEQ(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldKeyPrefix, v))
+}
+
+// KeyPrefixNEQ applies the NEQ predicate on the "key_prefix" field.
+func KeyPrefixNEQ(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNEQ(FieldKeyPrefix, v))
+}
+
+// KeyPrefixIn applies the In predicate on the "key_prefix" field.
+func KeyPrefixIn(vs ...string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldIn(FieldKeyPrefix, vs...))
+}
+
+// KeyPrefixNotIn applies the NotIn predicate on the "key_prefix" field.
+func KeyPrefixNotIn(vs ...string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNotIn(FieldKeyPrefix, vs...))
+}
+
+// KeyPrefixGT applies the GT predicate on the "key_prefix" field.
+func KeyPrefixGT(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldGT(FieldKeyPrefix, v))
+}
+
+// KeyPrefixGTE applies the GTE predicate on the "key_prefix" field.
+func KeyPrefixGTE(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldGTE(FieldKeyPrefix, v))
+}
+
+// KeyPrefixLT applies the LT predicate on the "key_prefix" field.
+func KeyPrefixLT(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldLT(FieldKeyPrefix, v))
+}
+
+// KeyPrefixLTE applies the LTE predicate on the "key_prefix" field.
+func KeyPrefixLTE(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldLTE(FieldKeyPrefix, v))
+}
+
+// KeyPrefixContains applies the Contains predicate on the "key_prefix" field.
+func KeyPrefixContains(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldContains(FieldKeyPrefix, v))
+}
+
+// KeyPrefixHasPrefix applies the HasPrefix predicate on the "key_prefix" field.
+func KeyPrefixHasPrefix(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldHasPrefix(FieldKeyPrefix, v))
+}
+
+// KeyPrefixHasSuffix applies the HasSuffix predicate on the "key_prefix" field.
+func KeyPrefixHasSuffix(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldHasSuffix(FieldKeyPrefix, v))
+}
+
+// KeyPrefixIsNil applies the IsNil predicate on the "key_prefix" field.
+func KeyPrefixIsNil() predicate.APIKey {
+	return predicate.APIKey(sql.FieldIsNull(FieldKeyPrefix))
+}
+
+// KeyPrefixNotNil applies the NotNil predicate on the "key_prefix" field.
+func KeyPrefixNotNil() predicate.APIKey {
+	return predicate.APIKey(sql.FieldNotNull(FieldKeyPrefix))
+}
+
+// KeyPrefixEqualFold applies the EqualFold predicate on the "key_prefix" field.
+func KeyPrefixEqualFold(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEqualFold(FieldKeyPrefix, v))
+}
+
+// KeyPrefixContainsFold applies the ContainsFold predicate on the "key_prefix" field.
+func KeyPrefixContainsFold(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldContainsFold(FieldKeyPrefix, v))
+}
+
+// PlatformKeyVersionEQ applies the EQ predicate on the "platform_key_version" field.
+func PlatformKeyVersionEQ(v int64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldPlatformKeyVersion, v))
+}
+
+// PlatformKeyVersionNEQ applies the NEQ predicate on the "platform_key_version" field.
+func PlatformKeyVersionNEQ(v int64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNEQ(FieldPlatformKeyVersion, v))
+}
+
+// PlatformKeyVersionIn applies the In predicate on the "platform_key_version" field.
+func PlatformKeyVersionIn(vs ...int64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldIn(FieldPlatformKeyVersion, vs...))
+}
+
+// PlatformKeyVersionNotIn applies the NotIn predicate on the "platform_key_version" field.
+func PlatformKeyVersionNotIn(vs ...int64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNotIn(FieldPlatformKeyVersion, vs...))
+}
+
+// PlatformKeyVersionGT applies the GT predicate on the "platform_key_version" field.
+func PlatformKeyVersionGT(v int64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldGT(FieldPlatformKeyVersion, v))
+}
+
+// PlatformKeyVersionGTE applies the GTE predicate on the "platform_key_version" field.
+func PlatformKeyVersionGTE(v int64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldGTE(FieldPlatformKeyVersion, v))
+}
+
+// PlatformKeyVersionLT applies the LT predicate on the "platform_key_version" field.
+func PlatformKeyVersionLT(v int64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldLT(FieldPlatformKeyVersion, v))
+}
+
+// PlatformKeyVersionLTE applies the LTE predicate on the "platform_key_version" field.
+func PlatformKeyVersionLTE(v int64) predicate.APIKey {
+	return predicate.APIKey(sql.FieldLTE(FieldPlatformKeyVersion, v))
+}
+
+// PlatformKeyVersionIsNil applies the IsNil predicate on the "platform_key_version" field.
+func PlatformKeyVersionIsNil() predicate.APIKey {
+	return predicate.APIKey(sql.FieldIsNull(FieldPlatformKeyVersion))
+}
+
+// PlatformKeyVersionNotNil applies the NotNil predicate on the "platform_key_version" field.
+func PlatformKeyVersionNotNil() predicate.APIKey {
+	return predicate.APIKey(sql.FieldNotNull(FieldPlatformKeyVersion))
+}
+
 // NameEQ applies the EQ predicate on the "name" field.
 func NameEQ(v string) predicate.APIKey {
 	return predicate.APIKey(sql.FieldEQ(FieldName, v))
@@ -468,6 +768,71 @@ func GroupIDIsNil() predicate.APIKey {
 // GroupIDNotNil applies the NotNil predicate on the "group_id" field.
 func GroupIDNotNil() predicate.APIKey {
 	return predicate.APIKey(sql.FieldNotNull(FieldGroupID))
+}
+
+// RoutingModeEQ applies the EQ predicate on the "routing_mode" field.
+func RoutingModeEQ(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEQ(FieldRoutingMode, v))
+}
+
+// RoutingModeNEQ applies the NEQ predicate on the "routing_mode" field.
+func RoutingModeNEQ(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNEQ(FieldRoutingMode, v))
+}
+
+// RoutingModeIn applies the In predicate on the "routing_mode" field.
+func RoutingModeIn(vs ...string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldIn(FieldRoutingMode, vs...))
+}
+
+// RoutingModeNotIn applies the NotIn predicate on the "routing_mode" field.
+func RoutingModeNotIn(vs ...string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldNotIn(FieldRoutingMode, vs...))
+}
+
+// RoutingModeGT applies the GT predicate on the "routing_mode" field.
+func RoutingModeGT(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldGT(FieldRoutingMode, v))
+}
+
+// RoutingModeGTE applies the GTE predicate on the "routing_mode" field.
+func RoutingModeGTE(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldGTE(FieldRoutingMode, v))
+}
+
+// RoutingModeLT applies the LT predicate on the "routing_mode" field.
+func RoutingModeLT(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldLT(FieldRoutingMode, v))
+}
+
+// RoutingModeLTE applies the LTE predicate on the "routing_mode" field.
+func RoutingModeLTE(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldLTE(FieldRoutingMode, v))
+}
+
+// RoutingModeContains applies the Contains predicate on the "routing_mode" field.
+func RoutingModeContains(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldContains(FieldRoutingMode, v))
+}
+
+// RoutingModeHasPrefix applies the HasPrefix predicate on the "routing_mode" field.
+func RoutingModeHasPrefix(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldHasPrefix(FieldRoutingMode, v))
+}
+
+// RoutingModeHasSuffix applies the HasSuffix predicate on the "routing_mode" field.
+func RoutingModeHasSuffix(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldHasSuffix(FieldRoutingMode, v))
+}
+
+// RoutingModeEqualFold applies the EqualFold predicate on the "routing_mode" field.
+func RoutingModeEqualFold(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldEqualFold(FieldRoutingMode, v))
+}
+
+// RoutingModeContainsFold applies the ContainsFold predicate on the "routing_mode" field.
+func RoutingModeContainsFold(v string) predicate.APIKey {
+	return predicate.APIKey(sql.FieldContainsFold(FieldRoutingMode, v))
 }
 
 // StatusEQ applies the EQ predicate on the "status" field.

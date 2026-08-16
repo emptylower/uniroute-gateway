@@ -40,6 +40,13 @@ func TestGatewayCacheLiveCallIdentityAndController(t *testing.T) {
 	require.Equal(t, record.AccountID, loaded.AccountID)
 	require.Equal(t, record.AttestationCiphertext, loaded.AttestationCiphertext)
 
+	finalizations, ok := NewGatewayCache(client).(service.LiveFinalizationStore)
+	require.True(t, ok)
+	require.NoError(t, finalizations.QueueLiveFinalization(context.Background(), record.CallHash))
+	ttl, err := client.TTL(context.Background(), liveCallKey(record.CallHash)).Result()
+	require.NoError(t, err)
+	require.Equal(t, time.Duration(-1), ttl)
+
 	claimed, err := cache.ClaimLiveController(context.Background(), record.CallHash, service.LiveControllerObserver, "observer-1")
 	require.NoError(t, err)
 	require.True(t, claimed)
@@ -56,7 +63,32 @@ func TestGatewayCacheLiveCallIdentityAndController(t *testing.T) {
 	closed, err := cache.MarkLiveCallClosed(context.Background(), record.CallHash, time.Hour)
 	require.NoError(t, err)
 	require.True(t, closed)
+	ttl, err = client.TTL(context.Background(), liveCallKey(record.CallHash)).Result()
+	require.NoError(t, err)
+	require.Greater(t, ttl, time.Duration(0))
 	closed, err = cache.MarkLiveCallClosed(context.Background(), record.CallHash, time.Hour)
 	require.NoError(t, err)
 	require.False(t, closed)
+}
+
+func TestGatewayCacheLiveFinalizationQueueSharedAcrossInstances(t *testing.T) {
+	redisServer := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
+	first, ok := NewGatewayCache(client).(service.LiveFinalizationStore)
+	require.True(t, ok)
+	second, ok := NewGatewayCache(client).(service.LiveFinalizationStore)
+	require.True(t, ok)
+
+	require.NoError(t, first.QueueLiveFinalization(context.Background(), "call-b"))
+	require.NoError(t, first.QueueLiveFinalization(context.Background(), "call-a"))
+	require.NoError(t, first.QueueLiveFinalization(context.Background(), "call-a"))
+
+	pending, err := second.ListLiveFinalizations(context.Background(), 10)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{"call-a", "call-b"}, pending)
+
+	require.NoError(t, second.RemoveLiveFinalization(context.Background(), "call-a"))
+	pending, err = first.ListLiveFinalizations(context.Background(), 10)
+	require.NoError(t, err)
+	require.Equal(t, []string{"call-b"}, pending)
 }

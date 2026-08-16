@@ -9,6 +9,7 @@ type PromoCode struct {
 	ID          int64
 	Code        string
 	BonusAmount float64
+	Currency    string
 	MaxUses     int
 	UsedCount   int
 	Status      string
@@ -57,6 +58,7 @@ func (p *PromoCode) IsExpired() bool {
 type CreatePromoCodeInput struct {
 	Code        string
 	BonusAmount float64
+	Currency    string
 	MaxUses     int
 	ExpiresAt   *time.Time
 	Notes       string
@@ -66,6 +68,7 @@ type CreatePromoCodeInput struct {
 type UpdatePromoCodeInput struct {
 	Code        *string
 	BonusAmount *float64
+	Currency    *string
 	MaxUses     *int
 	Status      *string
 	ExpiresAt   *time.Time
