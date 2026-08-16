@@ -3,7 +3,9 @@ package middleware
 import (
 	"context"
 	"net/http"
+	"strings"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/googleapi"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -121,10 +123,14 @@ func GoogleErrorWriter(c *gin.Context, status int, message string) {
 
 // RequireGroupAssignment 检查 API Key 是否已分配到分组，
 // 如果未分组且系统设置不允许未分组 Key 调度则返回 403。
-func RequireGroupAssignment(settingService *service.SettingService, writeError GatewayErrorWriter) gin.HandlerFunc {
+func RequireGroupAssignment(settingService *service.SettingService, cfg *config.Config, writeError GatewayErrorWriter) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		apiKey, ok := GetAPIKeyFromContext(c)
 		if !ok || apiKey.GroupID != nil {
+			c.Next()
+			return
+		}
+		if channelRoutedKeyMayResolveGroup(c, apiKey, cfg) {
 			c.Next()
 			return
 		}
@@ -138,4 +144,18 @@ func RequireGroupAssignment(settingService *service.SettingService, writeError G
 		writeError(c, http.StatusForbidden, "API Key is not assigned to any group and cannot be used. Please contact the administrator to assign it to a group.")
 		c.Abort()
 	}
+}
+
+func channelRoutedKeyMayResolveGroup(c *gin.Context, apiKey *service.APIKey, cfg *config.Config) bool {
+	if c == nil || c.Request == nil || apiKey == nil || cfg == nil || !cfg.Gateway.ChannelRoutingEnabled {
+		return false
+	}
+	if !service.IsChannelRoutingMode(apiKey.RoutingMode) {
+		return false
+	}
+	if service.IsChannelRoutingEndpoint(c.Request.URL.Path) {
+		return true
+	}
+	path := "/" + strings.Trim(strings.TrimSpace(c.Request.URL.Path), "/")
+	return c.Request.Method == http.MethodGet && (path == "/models" || path == "/v1/models")
 }

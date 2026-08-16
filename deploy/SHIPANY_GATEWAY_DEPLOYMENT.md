@@ -40,10 +40,11 @@ chmod 600 deploy/.env.shipany
 
 ```env
 RUN_MODE=simple
+GATEWAY_CHANNEL_ROUTING_ENABLED=true
 CANONICAL_WALLET_MODE=disabled
 ```
 
-这只用于联调，不代表收费链路已经切流。
+`GATEWAY_CHANNEL_ROUTING_ENABLED=true` 是 ShipAny 投影 Key 按用户可访问分组自动选路的必需开关。`RUN_MODE=simple` 只用于联调，不代表收费链路已经切流。
 
 ## 4. 构建并启动
 

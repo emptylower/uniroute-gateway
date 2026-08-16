@@ -42,8 +42,8 @@ func RegisterGatewayRoutes(
 	compositeGeminiTarget := compositeGeminiTargetPlatformMiddleware(compositeResolver)
 
 	// 未分组 Key 拦截中间件（按协议格式区分错误响应）
-	requireGroupAnthropic := middleware.RequireGroupAssignment(settingService, middleware.AnthropicErrorWriter)
-	requireGroupGoogle := middleware.RequireGroupAssignment(settingService, middleware.GoogleErrorWriter)
+	requireGroupAnthropic := middleware.RequireGroupAssignment(settingService, cfg, middleware.AnthropicErrorWriter)
+	requireGroupGoogle := middleware.RequireGroupAssignment(settingService, cfg, middleware.GoogleErrorWriter)
 	gatewayPlatform := func(c *gin.Context) string {
 		if platform, ok := dynamicChannelRoutingPlatform(c, h.Gateway); ok {
 			return platform

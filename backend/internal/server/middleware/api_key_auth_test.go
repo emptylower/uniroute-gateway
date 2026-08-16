@@ -882,7 +882,7 @@ func TestRequireGroupAssignmentMarksUngroupedKeyBusinessLimited(t *testing.T) {
 		c.Set(string(ContextKeyAPIKey), apiKey)
 		c.Next()
 	})
-	router.Use(RequireGroupAssignment(settingService, AnthropicErrorWriter))
+	router.Use(RequireGroupAssignment(settingService, &config.Config{}, AnthropicErrorWriter))
 	router.GET("/t", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	})
@@ -897,6 +897,58 @@ func TestRequireGroupAssignmentMarksUngroupedKeyBusinessLimited(t *testing.T) {
 	require.Equal(t, IngressRejectGroupUnassigned, rejectReason)
 	require.True(t, markedBusinessLimited)
 	require.Equal(t, service.OpsClientBusinessLimitedReasonAPIKeyGroupUnassigned, businessLimitedReason)
+}
+
+func TestRequireGroupAssignmentAllowsAutoChannelRoutingEndpoints(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	settingService := service.NewSettingService(fakeSettingRepo{
+		values: map[string]string{service.SettingKeyAllowUngroupedKeyScheduling: "false"},
+	}, &config.Config{})
+	apiKey := &service.APIKey{RoutingMode: service.APIKeyRoutingModeAutoChannels}
+	cfg := &config.Config{}
+	cfg.Gateway.ChannelRoutingEnabled = true
+
+	for _, test := range []struct {
+		method string
+		path   string
+	}{
+		{method: http.MethodPost, path: "/v1/chat/completions"},
+		{method: http.MethodPost, path: "/v1/responses"},
+		{method: http.MethodGet, path: "/v1/models"},
+	} {
+		router := gin.New()
+		router.Use(func(c *gin.Context) {
+			c.Set(string(ContextKeyAPIKey), apiKey)
+			c.Next()
+		})
+		router.Use(RequireGroupAssignment(settingService, cfg, AnthropicErrorWriter))
+		router.Handle(test.method, test.path, func(c *gin.Context) { c.Status(http.StatusNoContent) })
+
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, httptest.NewRequest(test.method, test.path, nil))
+		require.Equal(t, http.StatusNoContent, w.Code, test.path)
+	}
+}
+
+func TestRequireGroupAssignmentStillBlocksUnsupportedAutoChannelEndpoint(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	settingService := service.NewSettingService(fakeSettingRepo{
+		values: map[string]string{service.SettingKeyAllowUngroupedKeyScheduling: "false"},
+	}, &config.Config{})
+	apiKey := &service.APIKey{RoutingMode: service.APIKeyRoutingModeAutoChannels}
+	cfg := &config.Config{}
+	cfg.Gateway.ChannelRoutingEnabled = true
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set(string(ContextKeyAPIKey), apiKey)
+		c.Next()
+	})
+	router.Use(RequireGroupAssignment(settingService, cfg, AnthropicErrorWriter))
+	router.POST("/v1/images/generations", func(c *gin.Context) { c.Status(http.StatusNoContent) })
+
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/v1/images/generations", nil))
+	require.Equal(t, http.StatusForbidden, w.Code)
 }
 
 func TestAPIKeyAuthIPRestrictionUsesTrustedPathWhenSwitchDisabled(t *testing.T) {
