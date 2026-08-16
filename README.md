@@ -27,6 +27,12 @@ Please read the following carefully before using this project:
 - **📖 Disclaimer**: This project is provided for technical learning and research purposes only. The authors assume no liability for account bans, service interruptions, data loss, or any other direct or indirect damages resulting from the use of this project.
 - **🚫 No Commercial Authorization**: The developers of this project have never authorized any individual or organization to conduct any form of commercial operation based on this project. Any commercial activity conducted in the name of or based on this project is unrelated to this project and its developers, and all resulting disputes, losses, and legal liabilities shall be borne solely by the party conducting such activity.
 
+## ShipAny Data-Plane Edition
+
+This repository includes the signed ShipAny control-plane integration. ShipAny owns human accounts, RBAC, payments, credits, and API-key lifecycle; this service owns model traffic, upstream accounts, routing, Redis state, and usage records.
+
+See the [UniRoute Gateway + ShipAny deployment guide](deploy/SHIPANY_GATEWAY_DEPLOYMENT.md) for the source-built Docker Compose stack, secret mapping, Cloudflare integration, backups, and rollback. The authoritative wallet remains shadow-only, so the documented integration mode must not be treated as a paid-traffic cutover.
+
 ## ❤️ Sponsors
 
 > [Want to appear here?](mailto:support@sub2api.org)
