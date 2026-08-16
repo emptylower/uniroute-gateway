@@ -1,0 +1,32 @@
+# ShipAny data-plane override.
+#
+# Use together with the base stack so the image is built from this repository:
+#   docker compose --env-file deploy/.env.shipany \
+#     -f deploy/docker-compose.yml \
+#     -f deploy/docker-compose.shipany.yml up -d --build
+
+services:
+  sub2api:
+    image: uniroute-gateway:local
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    environment:
+      SERVER_DATA_PLANE_ONLY: "true"
+      PLATFORM_IDENTITY_ENABLED: "true"
+      PLATFORM_IDENTITY_ISSUER: ${PLATFORM_IDENTITY_ISSUER:-shipany}
+      PLATFORM_IDENTITY_AUDIENCE: ${PLATFORM_IDENTITY_AUDIENCE:-sub2api-gateway}
+      PLATFORM_IDENTITY_SECRET: ${PLATFORM_IDENTITY_SECRET:?PLATFORM_IDENTITY_SECRET is required}
+      PLATFORM_IDENTITY_VERSION: ${PLATFORM_IDENTITY_VERSION:-v1}
+      RUN_MODE: ${RUN_MODE:?RUN_MODE must be explicitly set to simple or standard}
+      CANONICAL_WALLET_MODE: ${CANONICAL_WALLET_MODE:-disabled}
+      CANONICAL_WALLET_CONTROL_PLANE_URL: ${CANONICAL_WALLET_CONTROL_PLANE_URL:-}
+      CANONICAL_WALLET_ISSUER: ${CANONICAL_WALLET_ISSUER:-sub2api-gateway}
+      CANONICAL_WALLET_AUDIENCE: ${CANONICAL_WALLET_AUDIENCE:-shipany-control-plane}
+      CANONICAL_WALLET_SECRET: ${CANONICAL_WALLET_SECRET:-}
+      CANONICAL_WALLET_VERSION: ${CANONICAL_WALLET_VERSION:-v1}
+      CANONICAL_WALLET_LEASE_TTL_SECONDS: ${CANONICAL_WALLET_LEASE_TTL_SECONDS:-300}
+      CANONICAL_WALLET_LEASE_BUDGET_MICROS: ${CANONICAL_WALLET_LEASE_BUDGET_MICROS:-5000000}
+      CANONICAL_WALLET_REQUEST_TIMEOUT_MS: ${CANONICAL_WALLET_REQUEST_TIMEOUT_MS:-300}
+      CANONICAL_WALLET_SETTLEMENT_QUEUE_SIZE: ${CANONICAL_WALLET_SETTLEMENT_QUEUE_SIZE:-2048}
+      CANONICAL_WALLET_SETTLEMENT_WORKERS: ${CANONICAL_WALLET_SETTLEMENT_WORKERS:-2}
