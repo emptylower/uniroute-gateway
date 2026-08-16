@@ -20,3 +20,26 @@ func TestPlatformUserIdentityMigrationIsAdditiveUniqueAndImmutable(t *testing.T)
 	require.NotContains(t, sql, "DROP COLUMN")
 	require.NotContains(t, sql, "DELETE FROM USERS")
 }
+
+func TestPlatformSignupSourceMigrationAlignsDatabaseConstraint(t *testing.T) {
+	raw, err := os.ReadFile("199_allow_platform_signup_source.sql")
+	require.NoError(t, err)
+	sql := strings.ToUpper(string(raw))
+
+	require.Contains(t, sql, "DROP CONSTRAINT IF EXISTS USERS_SIGNUP_SOURCE_CHECK")
+	require.Contains(t, sql, "ADD CONSTRAINT USERS_SIGNUP_SOURCE_CHECK")
+	for _, source := range []string{
+		"'EMAIL'",
+		"'LINUXDO'",
+		"'WECHAT'",
+		"'OIDC'",
+		"'GITHUB'",
+		"'GOOGLE'",
+		"'DINGTALK'",
+		"'PLATFORM'",
+	} {
+		require.Contains(t, sql, source)
+	}
+	require.NotContains(t, sql, "UPDATE USERS")
+	require.NotContains(t, sql, "DELETE FROM USERS")
+}
