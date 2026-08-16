@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -23,6 +24,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/Wei-Shaw/sub2api/internal/securityaudit"
@@ -1091,6 +1093,10 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 // Falls back to default models if no whitelist is configured
 func (h *GatewayHandler) Models(c *gin.Context) {
 	apiKey, _ := middleware2.GetAPIKeyFromContext(c)
+	if apiKey != nil && apiKey.Group == nil && apiKey.RoutingMode == service.APIKeyRoutingModeAutoChannels {
+		h.writeAutoChannelModels(c, apiKey)
+		return
+	}
 
 	var groupID *int64
 	var platform string
@@ -1157,6 +1163,41 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 		"object": "list",
 		"data":   claude.DefaultModels,
 	})
+}
+
+func (h *GatewayHandler) writeAutoChannelModels(c *gin.Context, apiKey *service.APIKey) {
+	if h == nil || h.apiKeyService == nil || h.gatewayService == nil || apiKey == nil {
+		writeModelsList(c, "", nil)
+		return
+	}
+	groups, err := h.apiKeyService.GetAvailableGroups(c.Request.Context(), apiKey.UserID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	models := make(map[string]struct{})
+	for i := range groups {
+		group := groups[i]
+		groupID := group.ID
+		groupModels := h.gatewayService.GetAvailableModels(c.Request.Context(), &groupID, group.Platform)
+		if len(groupModels) == 0 {
+			platforms := h.gatewayService.GetSchedulablePlatforms(c.Request.Context(), &groupID)
+			if _, ok := platforms[group.Platform]; ok {
+				groupModels = defaultModelIDsForPlatform(group.Platform)
+			}
+		}
+		for _, model := range groupModels {
+			if model = strings.TrimSpace(model); model != "" {
+				models[model] = struct{}{}
+			}
+		}
+	}
+	modelIDs := make([]string, 0, len(models))
+	for model := range models {
+		modelIDs = append(modelIDs, model)
+	}
+	sort.Strings(modelIDs)
+	writeModelsList(c, "", modelIDs)
 }
 
 func (h *GatewayHandler) compositeAvailableModels(ctx context.Context, groupID *int64) []string {
