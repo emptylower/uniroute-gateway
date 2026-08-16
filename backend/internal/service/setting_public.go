@@ -405,6 +405,9 @@ type AvailableChannelsRuntime struct {
 // from the settings store. Fail-closed: on error returns Enabled=false, matching
 // the opt-in default (unknown ↔ disabled).
 func (s *SettingService) GetAvailableChannelsRuntime(ctx context.Context) AvailableChannelsRuntime {
+	if s != nil && s.cfg != nil && s.cfg.Server.DataPlaneOnly {
+		return AvailableChannelsRuntime{Enabled: true}
+	}
 	vals, err := s.settingRepo.GetMultiple(ctx, []string{SettingKeyAvailableChannelsEnabled})
 	if err != nil {
 		return AvailableChannelsRuntime{Enabled: false}

@@ -46,6 +46,8 @@ CANONICAL_WALLET_MODE=disabled
 
 `GATEWAY_CHANNEL_ROUTING_ENABLED=true` 是 ShipAny 投影 Key 按用户可访问分组自动选路的必需开关。`RUN_MODE=simple` 只用于联调，不代表收费链路已经切流。
 
+测试环境默认使用 `BILLING_EXCHANGE_RATE_BOOTSTRAP_USD_TO_CNY=7.2`，响应会标记为 `bootstrap_config`。正式上线前必须配置 `BILLING_EXCHANGE_RATE_API_KEY`，并将 bootstrap 值改为 `0`，不得把固定测试汇率当作实时汇率。
+
 ## 4. 构建并启动
 
 本仓库必须从源码构建。不要把 Compose 中的镜像改回上游 `weishaw/sub2api:latest`，否则不会包含 ShipAny 身份和投影功能。
