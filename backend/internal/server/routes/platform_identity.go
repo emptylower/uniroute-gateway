@@ -117,6 +117,33 @@ func registerDelegatedGatewayAdminRoutes(
 	accounts.POST("/:id/schedulable", h.Admin.Account.SetSchedulable)
 	accounts.GET("/:id/models", h.Admin.Account.GetAvailableModels)
 	accounts.POST("/:id/models/sync-upstream", h.Admin.Account.SyncUpstreamModels)
+	if h.Admin.OAuth != nil {
+		accounts.POST("/generate-auth-url", h.Admin.OAuth.GenerateAuthURL)
+		accounts.POST("/generate-setup-token-url", h.Admin.OAuth.GenerateSetupTokenURL)
+		accounts.POST("/exchange-code", h.Admin.OAuth.ExchangeCode)
+		accounts.POST("/exchange-setup-token-code", h.Admin.OAuth.ExchangeSetupTokenCode)
+	}
+
+	if h.Admin.OpenAIOAuth != nil {
+		openai := admin.Group("/openai")
+		openai.POST("/generate-auth-url", h.Admin.OpenAIOAuth.GenerateAuthURL)
+		openai.POST("/exchange-code", h.Admin.OpenAIOAuth.ExchangeCode)
+	}
+	if h.Admin.GeminiOAuth != nil {
+		gemini := admin.Group("/gemini/oauth")
+		gemini.POST("/auth-url", h.Admin.GeminiOAuth.GenerateAuthURL)
+		gemini.POST("/exchange-code", h.Admin.GeminiOAuth.ExchangeCode)
+	}
+	if h.Admin.AntigravityOAuth != nil {
+		antigravity := admin.Group("/antigravity/oauth")
+		antigravity.POST("/auth-url", h.Admin.AntigravityOAuth.GenerateAuthURL)
+		antigravity.POST("/exchange-code", h.Admin.AntigravityOAuth.ExchangeCode)
+	}
+	if h.Admin.GrokOAuth != nil {
+		grok := admin.Group("/grok/oauth")
+		grok.POST("/auth-url", h.Admin.GrokOAuth.GenerateAuthURL)
+		grok.POST("/exchange-code", h.Admin.GrokOAuth.ExchangeCode)
+	}
 
 	groups := admin.Group("/groups")
 	groups.GET("", h.Admin.Group.List)
