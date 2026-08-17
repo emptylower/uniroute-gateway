@@ -13,6 +13,31 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type codexModelsManifestFetcherStub struct {
+	manifest *CodexModelsManifest
+	err      error
+	account  *Account
+}
+
+type accountModelDiscoveryStoreStub struct {
+	accountID int64
+	mapping   map[string]any
+	discovery map[string]any
+	err       error
+}
+
+func (s *accountModelDiscoveryStoreStub) UpdateModelDiscovery(_ context.Context, accountID int64, mapping map[string]any, discovery map[string]any) error {
+	s.accountID = accountID
+	s.mapping = mapping
+	s.discovery = discovery
+	return s.err
+}
+
+func (s *codexModelsManifestFetcherStub) FetchCodexModelsManifest(_ context.Context, account *Account, _, _ string) (*CodexModelsManifest, error) {
+	s.account = account
+	return s.manifest, s.err
+}
+
 func upstreamModelSyncTestConfig() *config.Config {
 	return &config.Config{
 		Security: config.SecurityConfig{
@@ -121,6 +146,11 @@ func TestExtractUpstreamModelIDs(t *testing.T) {
 		want []string
 	}{
 		{
+			name: "codex manifest slugs",
+			body: `{"models":[{"slug":"gpt-5.6-sol"},{"slug":"gpt-5.6-terra"},{"slug":"gpt-5.6-sol"}]}`,
+			want: []string{"gpt-5.6-sol", "gpt-5.6-terra"},
+		},
+		{
 			name: "openai and anthropic data array",
 			body: `{"data":[{"id":"claude-sonnet-4-5"},{"id":"gpt-5"},{"id":"gpt-5"},{"id":""}]}`,
 			want: []string{"claude-sonnet-4-5", "gpt-5"},
@@ -152,6 +182,128 @@ func TestExtractUpstreamModelIDs(t *testing.T) {
 			require.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestFetchUpstreamSupportedModelsUsesCodexManifestForOpenAIOAuth(t *testing.T) {
+	t.Parallel()
+
+	fetcher := &codexModelsManifestFetcherStub{manifest: &CodexModelsManifest{
+		Body: []byte(`{"models":[{"slug":"gpt-5.6-terra"},{"slug":"gpt-5.6-sol"}]}`),
+	}}
+	svc := &AccountTestService{codexModelsFetcher: fetcher}
+	account := &Account{
+		ID:       17,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token":       "oauth-token",
+			"chatgpt_account_id": "chatgpt-account",
+		},
+	}
+
+	models, err := svc.FetchUpstreamSupportedModels(context.Background(), account)
+	require.NoError(t, err)
+	require.Equal(t, []string{"gpt-5.6-sol", "gpt-5.6-terra"}, models)
+	require.Same(t, account, fetcher.account)
+}
+
+func TestFetchUpstreamSupportedModelsOpenAIOAuthDoesNotFallBackOnManifestFailure(t *testing.T) {
+	t.Parallel()
+
+	fetcher := &codexModelsManifestFetcherStub{err: errors.New("upstream unavailable")}
+	svc := &AccountTestService{codexModelsFetcher: fetcher}
+	_, err := svc.FetchUpstreamSupportedModels(context.Background(), &Account{
+		ID:       18,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+	})
+	require.Error(t, err)
+
+	var syncErr *UpstreamModelSyncError
+	require.True(t, errors.As(err, &syncErr))
+	require.Equal(t, UpstreamModelSyncErrorUpstream, syncErr.Kind)
+}
+
+func TestFetchUpstreamSupportedModelsRejectsCredentialShadow(t *testing.T) {
+	t.Parallel()
+
+	parentID := int64(17)
+	fetcher := &codexModelsManifestFetcherStub{manifest: &CodexModelsManifest{
+		Body: []byte(`{"models":[{"slug":"gpt-5.6-sol"}]}`),
+	}}
+	svc := &AccountTestService{codexModelsFetcher: fetcher}
+	_, err := svc.FetchUpstreamSupportedModels(context.Background(), &Account{
+		ID:              18,
+		Platform:        PlatformOpenAI,
+		Type:            AccountTypeOAuth,
+		ParentAccountID: &parentID,
+		QuotaDimension:  QuotaDimensionSpark,
+	})
+	require.Error(t, err)
+
+	var syncErr *UpstreamModelSyncError
+	require.True(t, errors.As(err, &syncErr))
+	require.Equal(t, UpstreamModelSyncErrorUnsupported, syncErr.Kind)
+	require.Nil(t, fetcher.account, "shadow discovery must not fetch the parent manifest")
+}
+
+func TestPersistDiscoveredModelsReplacesAutomaticSnapshotAndPreservesAliases(t *testing.T) {
+	t.Parallel()
+
+	store := &accountModelDiscoveryStoreStub{}
+	svc := &AccountTestService{modelDiscoveryStore: store}
+	account := &Account{
+		ID: 19,
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{
+				"old-auto": "old-auto",
+				"alias":    "upstream-alias-target",
+				"gpt-*":    "gpt-5.6",
+			},
+		},
+	}
+	syncedAt := time.Date(2026, time.August, 17, 12, 30, 0, 0, time.UTC)
+
+	err := svc.PersistDiscoveredModels(context.Background(), account, []string{"gpt-5.6-terra", "gpt-5.6-sol"}, syncedAt)
+	require.NoError(t, err)
+	require.Equal(t, int64(19), store.accountID)
+	require.Equal(t, map[string]any{
+		"alias":         "upstream-alias-target",
+		"gpt-*":         "gpt-5.6",
+		"gpt-5.6-sol":   "gpt-5.6-sol",
+		"gpt-5.6-terra": "gpt-5.6-terra",
+	}, store.mapping)
+	require.Equal(t, map[string]any{
+		"source":    "upstream",
+		"models":    []string{"gpt-5.6-sol", "gpt-5.6-terra"},
+		"synced_at": "2026-08-17T12:30:00Z",
+	}, store.discovery)
+	require.Contains(t, account.GetModelMapping(), "old-auto", "persistence must not mutate the loaded account")
+}
+
+func TestPersistDiscoveredModelsRejectsCredentialShadow(t *testing.T) {
+	t.Parallel()
+
+	store := &accountModelDiscoveryStoreStub{}
+	svc := &AccountTestService{modelDiscoveryStore: store}
+	parentID := int64(9)
+	account := &Account{
+		ID:              20,
+		ParentAccountID: &parentID,
+		QuotaDimension:  QuotaDimensionSpark,
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{"old": "old"},
+		},
+	}
+
+	err := svc.PersistDiscoveredModels(context.Background(), account, []string{"gpt-5.3-codex-spark"}, time.Now())
+	require.Error(t, err)
+	var syncErr *UpstreamModelSyncError
+	require.True(t, errors.As(err, &syncErr))
+	require.Equal(t, UpstreamModelSyncErrorUnsupported, syncErr.Kind)
+	require.Zero(t, store.accountID)
+	require.Nil(t, store.mapping)
+	require.Nil(t, store.discovery)
 }
 
 func TestExtractGrokUpstreamModelIDs(t *testing.T) {
