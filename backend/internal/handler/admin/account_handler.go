@@ -2375,21 +2375,14 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 
 	// Handle OpenAI accounts
 	if account.IsOpenAI() {
-		// OpenAI 自动透传会绕过常规模型改写，测试/模型列表也应回落到默认模型集。
-		if account.IsOpenAIPassthroughEnabled() {
-			response.Success(c, openai.DefaultModels)
-			return
-		}
-
 		mapping := account.GetModelMapping()
-		if len(mapping) == 0 {
-			response.Success(c, openai.DefaultModels)
-			return
-		}
-
-		// Return mapped models
-		var models []openai.Model
+		requestedModels := make([]string, 0, len(mapping))
 		for requestedModel := range mapping {
+			requestedModels = append(requestedModels, requestedModel)
+		}
+		sort.Strings(requestedModels)
+		models := make([]openai.Model, 0, len(requestedModels))
+		for _, requestedModel := range requestedModels {
 			var found bool
 			for _, dm := range openai.DefaultModels {
 				if dm.ID == requestedModel {
@@ -2586,7 +2579,17 @@ func (h *AccountHandler) SyncUpstreamModels(c *gin.Context) {
 		return
 	}
 
-	response.Success(c, gin.H{"models": models})
+	syncedAt := time.Now().UTC()
+	if err := h.accountTestService.PersistDiscoveredModels(c.Request.Context(), account, models, syncedAt); err != nil {
+		slog.Warn("sync_upstream_models_persist_failed", "account_id", accountID)
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	response.Success(c, gin.H{
+		"models":    models,
+		"synced_at": syncedAt.Format(time.RFC3339),
+	})
 }
 
 // SyncUpstreamModelsPreview handles syncing live supported models using provided credentials (no account ID needed).

@@ -73,6 +73,8 @@ type AccountTestService struct {
 	httpUpstream              HTTPUpstream
 	cfg                       *config.Config
 	tlsFPProfileService       *TLSFingerprintProfileService
+	codexModelsFetcher        codexModelsManifestFetcher
+	modelDiscoveryStore       AccountModelDiscoveryStore
 	agentIdentityTaskMu       sync.Mutex
 	agentIdentityWS           agentIdentityWSConnectionInvalidator
 }
@@ -88,7 +90,7 @@ func NewAccountTestService(
 	cfg *config.Config,
 	tlsFPProfileService *TLSFingerprintProfileService,
 ) *AccountTestService {
-	return &AccountTestService{
+	service := &AccountTestService{
 		accountRepo:               accountRepo,
 		geminiTokenProvider:       geminiTokenProvider,
 		claudeTokenProvider:       claudeTokenProvider,
@@ -97,6 +99,19 @@ func NewAccountTestService(
 		httpUpstream:              httpUpstream,
 		cfg:                       cfg,
 		tlsFPProfileService:       tlsFPProfileService,
+	}
+	if store, ok := accountRepo.(AccountModelDiscoveryStore); ok {
+		service.modelDiscoveryStore = store
+	}
+	return service
+}
+
+// SetModelDiscoveryStore replaces the persistence boundary used by model
+// discovery. Production wiring derives it from AccountRepository; tests may
+// inject a focused store without implementing the full repository contract.
+func (s *AccountTestService) SetModelDiscoveryStore(store AccountModelDiscoveryStore) {
+	if s != nil {
+		s.modelDiscoveryStore = store
 	}
 }
 

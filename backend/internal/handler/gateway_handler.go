@@ -1112,7 +1112,7 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 	if platform == service.PlatformComposite {
 		availableModels := h.compositeAvailableModels(c.Request.Context(), groupID)
 		if apiKey != nil && apiKey.Group != nil && apiKey.Group.CustomModelsListEnabled() {
-			availableModels = filterModelsByCustomList(availableModels, defaultModelIDsForPlatform(service.PlatformComposite), apiKey.Group.ModelsListConfig.Models)
+			availableModels = filterModelsByCustomList(availableModels, nil, apiKey.Group.ModelsListConfig.Models)
 			writeCustomModelsList(c, service.PlatformComposite, availableModels)
 			return
 		}
@@ -1120,7 +1120,7 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 			writeModelsList(c, service.PlatformComposite, availableModels)
 			return
 		}
-		writeModelsList(c, service.PlatformComposite, defaultModelIDsForPlatform(service.PlatformComposite))
+		writeModelsList(c, service.PlatformComposite, nil)
 		return
 	}
 
@@ -1128,6 +1128,9 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 	availableModels := h.gatewayService.GetAvailableModels(c.Request.Context(), groupID, platform)
 	if apiKey != nil && apiKey.Group != nil && apiKey.Group.CustomModelsListEnabled() {
 		fallbackModels := defaultModelIDsForPlatform(platform)
+		if platform == service.PlatformOpenAI {
+			fallbackModels = nil
+		}
 		availableModels = filterModelsByCustomList(customModelsListSource(platform, availableModels, fallbackModels), fallbackModels, apiKey.Group.ModelsListConfig.Models)
 		writeCustomModelsList(c, platform, availableModels)
 		return
@@ -1138,12 +1141,10 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 		return
 	}
 
-	// Fallback to default models
+	// OpenAI is account-discovered. An empty mapping is an unverified account,
+	// not permission to advertise the process-wide static catalog.
 	if platform == service.PlatformOpenAI {
-		c.JSON(http.StatusOK, gin.H{
-			"object": "list",
-			"data":   openai.DefaultModels,
-		})
+		writeOpenAIModelsList(c, nil)
 		return
 	}
 
@@ -1180,7 +1181,7 @@ func (h *GatewayHandler) writeAutoChannelModels(c *gin.Context, apiKey *service.
 		group := groups[i]
 		groupID := group.ID
 		groupModels := h.gatewayService.GetAvailableModels(c.Request.Context(), &groupID, group.Platform)
-		if len(groupModels) == 0 {
+		if len(groupModels) == 0 && group.Platform != service.PlatformOpenAI {
 			platforms := h.gatewayService.GetSchedulablePlatforms(c.Request.Context(), &groupID)
 			if _, ok := platforms[group.Platform]; ok {
 				groupModels = defaultModelIDsForPlatform(group.Platform)
@@ -1209,7 +1210,7 @@ func (h *GatewayHandler) compositeAvailableModels(ctx context.Context, groupID *
 	schedulablePlatforms := h.gatewayService.GetSchedulablePlatforms(ctx, groupID)
 	for _, platform := range []string{service.PlatformAnthropic, service.PlatformGemini, service.PlatformOpenAI, service.PlatformAntigravity, service.PlatformGrok} {
 		platformModels := h.gatewayService.GetAvailableModels(ctx, groupID, platform)
-		if len(platformModels) == 0 {
+		if len(platformModels) == 0 && platform != service.PlatformOpenAI {
 			if _, ok := schedulablePlatforms[platform]; ok {
 				platformModels = defaultModelIDsForPlatform(platform)
 			}
@@ -1230,6 +1231,10 @@ func (h *GatewayHandler) compositeAvailableModels(ctx context.Context, groupID *
 }
 
 func writeModelsList(c *gin.Context, platform string, modelIDs []string) {
+	if platform == service.PlatformOpenAI {
+		writeOpenAIModelsList(c, modelIDs)
+		return
+	}
 	if platform == service.PlatformGrok {
 		writeGrokModelsList(c, modelIDs)
 		return

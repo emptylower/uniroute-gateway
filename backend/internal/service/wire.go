@@ -191,6 +191,7 @@ func ProvideAccountTestService(
 		cfg,
 		tlsFPProfileService,
 	)
+	service.codexModelsFetcher = openAIGatewayService
 	service.agentIdentityWS = openAIGatewayService
 	return service
 }

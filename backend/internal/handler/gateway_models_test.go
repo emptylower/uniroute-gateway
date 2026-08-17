@@ -101,6 +101,36 @@ func TestGatewayModels_GeminiGroupFallsBackToGeminiModels(t *testing.T) {
 	require.NotContains(t, modelIDsForTest(got.Data), "claude-sonnet-4-6")
 }
 
+func TestGatewayModels_OpenAIGroupWithoutDiscoveryReturnsEmpty(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	groupID := int64(35)
+	h := newGatewayModelsHandlerForTest(
+		&gatewayModelsAccountRepoStub{
+			byGroup: map[int64][]service.Account{
+				groupID: {
+					{ID: 1, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth},
+				},
+			},
+		},
+	)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{
+		Group: &service.Group{ID: groupID, Platform: service.PlatformOpenAI},
+	})
+
+	h.Models(c)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var got gatewayModelsResponseForTest
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	require.Equal(t, "list", got.Object)
+	require.Empty(t, got.Data)
+}
+
 func TestGatewayModels_Grok45AdvertisesReasoningEffortForGrokBuild(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -349,7 +379,7 @@ func TestGatewayModels_CompositeCustomModelsListFiltersAcrossConcretePlatforms(t
 	require.Equal(t, []string{"gemini-2.5-flash", "ag-custom-model", "gpt-5.5"}, modelIDsForTest(got.Data))
 }
 
-func TestGatewayModels_CompositeUnmappedAccountsFallbackToLinkedPlatformsOnly(t *testing.T) {
+func TestGatewayModels_CompositeDoesNotAdvertiseUndiscoveredOpenAIModels(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	groupID := int64(34)
@@ -379,7 +409,7 @@ func TestGatewayModels_CompositeUnmappedAccountsFallbackToLinkedPlatformsOnly(t 
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
 
 	ids := modelIDsForTest(got.Data)
-	require.Contains(t, ids, "gpt-5.5")
+	require.NotContains(t, ids, "gpt-5.5")
 	require.Contains(t, ids, "grok-4.3")
 	require.NotContains(t, ids, "claude-sonnet-4-6")
 	require.NotContains(t, ids, "gemini-2.5-flash")
@@ -618,7 +648,7 @@ func TestGatewayModels_CustomModelsListCanReturnEmptyWhenSelectionsUnavailable(t
 	require.Empty(t, modelIDsForTest(got.Data))
 }
 
-func TestGatewayModels_CustomModelsListFiltersDefaultFallbackModels(t *testing.T) {
+func TestGatewayModels_OpenAICustomListCannotEnableUndiscoveredModels(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	groupID := int64(25)
@@ -652,10 +682,10 @@ func TestGatewayModels_CustomModelsListFiltersDefaultFallbackModels(t *testing.T
 
 	var got gatewayModelsResponseForTest
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
-	require.Equal(t, []string{"gpt-5.5", "gpt-5.4"}, modelIDsForTest(got.Data))
+	require.Empty(t, modelIDsForTest(got.Data))
 }
 
-func TestGatewayModels_OpenAICustomModelsListKeepsOpenAIResponseShapeForDefaultFallback(t *testing.T) {
+func TestGatewayModels_OpenAICustomModelsListKeepsOpenAIResponseShapeForDiscoveredModels(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	groupID := int64(27)
@@ -663,7 +693,16 @@ func TestGatewayModels_OpenAICustomModelsListKeepsOpenAIResponseShapeForDefaultF
 		&gatewayModelsAccountRepoStub{
 			byGroup: map[int64][]service.Account{
 				groupID: {
-					{ID: 1, Platform: service.PlatformOpenAI},
+					{
+						ID:       1,
+						Platform: service.PlatformOpenAI,
+						Credentials: map[string]any{
+							"model_mapping": map[string]any{
+								"gpt-5.5": "gpt-5.5",
+								"gpt-5.4": "gpt-5.4",
+							},
+						},
+					},
 				},
 			},
 		},

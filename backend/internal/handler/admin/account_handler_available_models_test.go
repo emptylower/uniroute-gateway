@@ -53,7 +53,21 @@ func (u *syncUpstreamHTTPUpstream) DoWithTLS(req *http.Request, proxyURL string,
 	return u.Do(req, proxyURL, accountID, accountConcurrency)
 }
 
-func setupSyncUpstreamModelsRouter(adminSvc service.AdminService, upstream service.HTTPUpstream) *gin.Engine {
+type syncUpstreamModelDiscoveryStore struct {
+	accountID int64
+	mapping   map[string]any
+	discovery map[string]any
+	err       error
+}
+
+func (s *syncUpstreamModelDiscoveryStore) UpdateModelDiscovery(_ context.Context, accountID int64, mapping map[string]any, discovery map[string]any) error {
+	s.accountID = accountID
+	s.mapping = mapping
+	s.discovery = discovery
+	return s.err
+}
+
+func setupSyncUpstreamModelsRouter(adminSvc service.AdminService, upstream service.HTTPUpstream, stores ...service.AccountModelDiscoveryStore) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	accountTestSvc := service.NewAccountTestService(
@@ -66,6 +80,9 @@ func setupSyncUpstreamModelsRouter(adminSvc service.AdminService, upstream servi
 		&config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
 		nil,
 	)
+	if len(stores) > 0 {
+		accountTestSvc.SetModelDiscoveryStore(stores[0])
+	}
 	handler := NewAccountHandler(adminSvc, nil, nil, nil, nil, nil, nil, nil, accountTestSvc, nil, nil, nil, nil, nil)
 	router.POST("/api/v1/admin/accounts/:id/models/sync-upstream", handler.SyncUpstreamModels)
 	return router
@@ -176,7 +193,7 @@ func TestAccountHandlerGetAvailableModels_OpenAIOAuthUsesExplicitModelMapping(t 
 	require.Equal(t, "gpt-5", resp.Data[0].ID)
 }
 
-func TestAccountHandlerGetAvailableModels_OpenAIOAuthPassthroughFallsBackToDefaults(t *testing.T) {
+func TestAccountHandlerGetAvailableModels_OpenAIOAuthPassthroughUsesDiscoveredMapping(t *testing.T) {
 	svc := &availableModelsAdminService{
 		stubAdminService: newStubAdminService(),
 		account: service.Account{
@@ -209,11 +226,12 @@ func TestAccountHandlerGetAvailableModels_OpenAIOAuthPassthroughFallsBackToDefau
 		} `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
-	require.NotEmpty(t, resp.Data)
-	require.NotEqual(t, "gpt-5", resp.Data[0].ID)
+	require.Equal(t, []struct {
+		ID string `json:"id"`
+	}{{ID: "gpt-5"}}, resp.Data)
 }
 
-func TestAccountHandlerGetAvailableModels_OpenAIAPIKeyDefaultsToConcreteGPT56Sol(t *testing.T) {
+func TestAccountHandlerGetAvailableModels_OpenAIWithoutDiscoveryReturnsEmpty(t *testing.T) {
 	svc := &availableModelsAdminService{
 		stubAdminService: newStubAdminService(),
 		account: service.Account{
@@ -241,8 +259,7 @@ func TestAccountHandlerGetAvailableModels_OpenAIAPIKeyDefaultsToConcreteGPT56Sol
 		} `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
-	require.NotEmpty(t, resp.Data)
-	require.Equal(t, "gpt-5.6-sol", resp.Data[0].ID)
+	require.Empty(t, resp.Data)
 }
 
 func TestAccountHandlerGetAvailableModels_OpenAISparkShadowReturnsMappingModels(t *testing.T) {
@@ -340,4 +357,46 @@ func TestAccountHandlerSyncUpstreamModels_UpstreamErrorDoesNotExposeBody(t *test
 	require.Equal(t, http.StatusBadGateway, rec.Code)
 	require.Contains(t, rec.Body.String(), "Upstream model list request failed with HTTP 502")
 	require.NotContains(t, rec.Body.String(), "SECRET_TOKEN")
+}
+
+func TestAccountHandlerSyncUpstreamModelsPersistsLatestSnapshot(t *testing.T) {
+	svc := &availableModelsAdminService{
+		stubAdminService: newStubAdminService(),
+		account: service.Account{
+			ID:       46,
+			Name:     "openai-apikey",
+			Platform: service.PlatformOpenAI,
+			Type:     service.AccountTypeAPIKey,
+			Status:   service.StatusActive,
+			Credentials: map[string]any{
+				"api_key":  "openai-key",
+				"base_url": "https://openai.example.com/v1",
+				"model_mapping": map[string]any{
+					"old-auto": "old-auto",
+					"alias":    "upstream-target",
+				},
+			},
+		},
+	}
+	upstream := &syncUpstreamHTTPUpstream{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"data":[{"id":"gpt-5.6-terra"},{"id":"gpt-5.6-sol"}]}`)),
+	}}
+	store := &syncUpstreamModelDiscoveryStore{}
+	router := setupSyncUpstreamModelsRouter(svc, upstream, store)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/accounts/46/models/sync-upstream", nil)
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, int64(46), store.accountID)
+	require.Equal(t, map[string]any{
+		"alias":         "upstream-target",
+		"gpt-5.6-sol":   "gpt-5.6-sol",
+		"gpt-5.6-terra": "gpt-5.6-terra",
+	}, store.mapping)
+	require.NotNil(t, store.discovery)
+	require.NotContains(t, store.mapping, "old-auto")
 }

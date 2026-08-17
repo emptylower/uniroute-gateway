@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
@@ -15,6 +16,17 @@ import (
 )
 
 const upstreamModelsBodyLimit int64 = 8 << 20
+
+type codexModelsManifestFetcher interface {
+	FetchCodexModelsManifest(context.Context, *Account, string, string) (*CodexModelsManifest, error)
+}
+
+// AccountModelDiscoveryStore atomically changes only model discovery fields in
+// account credentials so token refreshes and other credential updates are not
+// overwritten by a slow upstream manifest request.
+type AccountModelDiscoveryStore interface {
+	UpdateModelDiscovery(ctx context.Context, accountID int64, mapping map[string]any, discovery map[string]any) error
+}
 
 // UpstreamModelSyncErrorKind classifies model sync failures for safe HTTP mapping.
 type UpstreamModelSyncErrorKind string
@@ -80,6 +92,14 @@ func (s *AccountTestService) FetchUpstreamSupportedModels(ctx context.Context, a
 	if account == nil {
 		return nil, newUpstreamModelSyncConfigError("Account is required", nil)
 	}
+	if account.IsCredentialShadow() {
+		return nil, newUpstreamModelSyncUnsupportedError(
+			"Model discovery must be run on the parent account", nil,
+		)
+	}
+	if account.IsOpenAIOAuth() {
+		return s.fetchOpenAIOAuthUpstreamModels(ctx, account)
+	}
 
 	if account.Platform == PlatformAntigravity && account.Type != AccountTypeAPIKey {
 		return s.fetchAntigravityOAuthUpstreamModels(ctx, account)
@@ -129,6 +149,68 @@ func (s *AccountTestService) FetchUpstreamSupportedModels(ctx context.Context, a
 	}
 
 	return models, nil
+}
+
+func (s *AccountTestService) fetchOpenAIOAuthUpstreamModels(ctx context.Context, account *Account) ([]string, error) {
+	if s.codexModelsFetcher == nil {
+		return nil, newUpstreamModelSyncConfigError("OpenAI Codex model discovery is not configured", nil)
+	}
+
+	manifest, err := s.codexModelsFetcher.FetchCodexModelsManifest(ctx, account, "", "")
+	if err != nil {
+		return nil, newUpstreamModelSyncUpstreamError("Failed to request upstream model list", err)
+	}
+	if manifest == nil || manifest.NotModified || len(manifest.Body) == 0 {
+		return nil, newUpstreamModelSyncUpstreamError("Upstream returned no supported models", nil)
+	}
+
+	models, err := extractUpstreamModelIDs(manifest.Body)
+	if err != nil {
+		return nil, newUpstreamModelSyncUpstreamError("Upstream model list response was not valid JSON", err)
+	}
+	if len(models) == 0 {
+		return nil, newUpstreamModelSyncUpstreamError("Upstream returned no supported models", nil)
+	}
+	return models, nil
+}
+
+// PersistDiscoveredModels stores the latest upstream snapshot as the account's
+// identity mapping while preserving administrator-owned aliases and wildcards.
+func (s *AccountTestService) PersistDiscoveredModels(ctx context.Context, account *Account, models []string, syncedAt time.Time) error {
+	if s == nil || s.modelDiscoveryStore == nil {
+		return newUpstreamModelSyncConfigError("Account model discovery store is not configured", nil)
+	}
+	if account == nil {
+		return newUpstreamModelSyncConfigError("Account is required", nil)
+	}
+	if account.IsCredentialShadow() {
+		return newUpstreamModelSyncUnsupportedError(
+			"Model discovery must be run on the parent account", nil,
+		)
+	}
+	models = dedupeAndSortModelIDs(models)
+	if len(models) == 0 {
+		return newUpstreamModelSyncUpstreamError("Upstream returned no supported models", nil)
+	}
+
+	mapping := make(map[string]any, len(models))
+	for requestedModel, upstreamModel := range account.GetModelMapping() {
+		if requestedModel != upstreamModel || strings.Contains(requestedModel, "*") {
+			mapping[requestedModel] = upstreamModel
+		}
+	}
+	for _, model := range models {
+		if _, customized := mapping[model]; !customized {
+			mapping[model] = model
+		}
+	}
+
+	discovery := map[string]any{
+		"source":    "upstream",
+		"models":    models,
+		"synced_at": syncedAt.UTC().Format(time.RFC3339),
+	}
+	return s.modelDiscoveryStore.UpdateModelDiscovery(ctx, account.ID, mapping, discovery)
 }
 
 func (s *AccountTestService) buildUpstreamModelsRequest(ctx context.Context, account *Account) (*http.Request, error) {
@@ -491,6 +573,7 @@ func buildGeminiModelsURL(base string) string {
 
 type upstreamModelEntry struct {
 	ID           string          `json:"id"`
+	Slug         string          `json:"slug"`
 	Model        string          `json:"model"`
 	ModelID      string          `json:"modelId"`
 	ModelIDSnake string          `json:"model_id"`
@@ -554,6 +637,9 @@ func extractUpstreamModelIDsWithSelector(body []byte, selectID func(upstreamMode
 
 func upstreamModelEntryID(entry upstreamModelEntry) string {
 	modelID := strings.TrimSpace(entry.ID)
+	if modelID == "" {
+		modelID = strings.TrimSpace(entry.Slug)
+	}
 	if modelID == "" {
 		modelID = strings.TrimSpace(entry.Name)
 	}

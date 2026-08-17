@@ -51,6 +51,8 @@ type accountRepository struct {
 	schedulerCache service.SchedulerCache
 }
 
+var _ service.AccountModelDiscoveryStore = (*accountRepository)(nil)
+
 var schedulerNeutralExtraKeyPrefixes = []string{
 	"codex_primary_",
 	"codex_secondary_",
@@ -736,6 +738,79 @@ func (r *accountRepository) UpdateCredentials(ctx context.Context, id int64, cre
 			updated_at = NOW()
 		WHERE id = $2 AND deleted_at IS NULL
 	`, string(payload), id)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return service.ErrAccountNotFound
+	}
+	if err := enqueueSchedulerOutbox(ctx, client, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
+		return err
+	}
+	if tx != nil {
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
+	if contextTx == nil {
+		r.syncSchedulerAccountSnapshot(baseCtx, id)
+	}
+	return nil
+}
+
+// UpdateModelDiscovery updates only the discovery-owned credential keys. The
+// JSONB expressions preserve OAuth tokens and concurrent credential refreshes.
+func (r *accountRepository) UpdateModelDiscovery(ctx context.Context, id int64, mapping map[string]any, discovery map[string]any) error {
+	mappingPayload, err := json.Marshal(normalizeJSONMap(mapping))
+	if err != nil {
+		return err
+	}
+	discoveryPayload, err := json.Marshal(normalizeJSONMap(discovery))
+	if err != nil {
+		return err
+	}
+
+	baseCtx := ctx
+	contextTx := dbent.TxFromContext(ctx)
+	client := r.client
+	var tx *dbent.Tx
+	if contextTx != nil {
+		client = contextTx.Client()
+	} else if r.client != nil {
+		tx, err = r.client.Tx(ctx)
+		if err != nil && !errors.Is(err, dbent.ErrTxStarted) {
+			return err
+		}
+		if tx != nil {
+			defer func() { _ = tx.Rollback() }()
+			ctx = dbent.NewTxContext(ctx, tx)
+			client = tx.Client()
+		}
+	}
+
+	result, err := client.ExecContext(ctx, `
+		UPDATE accounts
+		SET
+			credentials = CASE
+				WHEN $3 THEN jsonb_set(
+					COALESCE(credentials, '{}'::jsonb),
+					'{model_mapping}', $1::jsonb, true
+				) - 'model_discovery'
+				ELSE jsonb_set(
+					jsonb_set(
+						COALESCE(credentials, '{}'::jsonb),
+						'{model_mapping}', $1::jsonb, true
+					),
+					'{model_discovery}', $2::jsonb, true
+				)
+			END,
+			updated_at = NOW()
+		WHERE id = $4 AND deleted_at IS NULL
+	`, string(mappingPayload), string(discoveryPayload), discovery == nil, id)
 	if err != nil {
 		return err
 	}
