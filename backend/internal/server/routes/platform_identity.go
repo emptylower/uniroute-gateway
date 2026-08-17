@@ -205,9 +205,23 @@ func registerDelegatedGatewayAdminRoutes(
 	proxies.GET("/:id/stats", h.Admin.Proxy.GetStats)
 	proxies.GET("/:id/accounts", h.Admin.Proxy.GetProxyAccounts)
 
+	if h.Admin.Dashboard != nil {
+		dashboard := admin.Group("/dashboard")
+		dashboard.GET("/stats", h.Admin.Dashboard.GetStats)
+	}
+
 	models := admin.Group("/models")
 	models.GET("/catalog", h.ModelCatalog.List)
 	models.GET("/channel-costs", h.ModelCatalog.ListChannelCosts)
+
+	if h.Admin.Usage != nil {
+		usage := admin.Group("/usage")
+		usage.GET("", h.Admin.Usage.List)
+		usage.GET("/stats", h.Admin.Usage.Stats)
+		usage.GET("/cleanup-tasks", h.Admin.Usage.ListCleanupTasks)
+		usage.POST("/cleanup-tasks", h.Admin.Usage.CreateCleanupTask)
+		usage.POST("/cleanup-tasks/:id/cancel", h.Admin.Usage.CancelCleanupTask)
+	}
 
 	ops := admin.Group("/ops")
 	ops.GET("/concurrency", h.Admin.Ops.GetConcurrencyStats)
