@@ -220,8 +220,12 @@ func catalogAccountModels(account *Account) []catalogModelSeed {
 	for model := range mapping {
 		addCatalogModelSeed(seeds, model, account.Platform)
 	}
+	if account.Platform == PlatformOpenAI && len(mapping) == 0 {
+		return nil
+	}
 	// Platform defaults make empty mappings enumerable and also resolve concrete
-	// models covered by wildcard mappings.
+	// models covered by wildcard mappings. OpenAI accounts are excluded above:
+	// their catalog is the last successfully discovered account entitlement set.
 	for _, model := range defaultModelsListCandidateIDs(account.Platform) {
 		if account.IsModelSupported(model) {
 			addCatalogModelSeed(seeds, model, account.Platform)
@@ -232,6 +236,16 @@ func catalogAccountModels(account *Account) []catalogModelSeed {
 		items = append(items, seed)
 	}
 	return items
+}
+
+func catalogAccountSupportsModel(account *Account, model string) bool {
+	if account == nil {
+		return false
+	}
+	if account.Platform == PlatformOpenAI && len(account.GetModelMapping()) == 0 {
+		return false
+	}
+	return account.IsModelSupported(model)
 }
 
 // ListChannelCosts returns every currently accessible routing group with the
@@ -341,7 +355,7 @@ func (s *ModelCatalogService) QuoteChannelCosts(ctx context.Context, userID int6
 			}
 			supported := false
 			for j := range accounts {
-				if accounts[j].IsModelSupported(seed.name) {
+				if catalogAccountSupportsModel(&accounts[j], seed.name) {
 					supported = true
 					break
 				}
@@ -435,10 +449,9 @@ func (s *ModelCatalogService) ListText(ctx context.Context, userID int64, now ti
 			addSeed(model.Name, model.Platform)
 		}
 
-		// An unrestricted route and an account with no model mapping both mean
-		// "use the platform defaults" on the request path. Always merge account
-		// capabilities for unrestricted routes: explicit pricing for one provider
-		// must not hide a newly attached provider from the user catalog.
+		// Always merge account capabilities for unrestricted routes: explicit
+		// pricing for one provider must not hide a newly attached provider from the
+		// user catalog. OpenAI contributes only its discovered account snapshot.
 		if !channel.RestrictModels && s.accounts != nil {
 			for _, group := range channel.Groups {
 				accounts, accountErr := loadAccounts(group.ID)
@@ -446,16 +459,8 @@ func (s *ModelCatalogService) ListText(ctx context.Context, userID int64, now ti
 					return nil, accountErr
 				}
 				for i := range accounts {
-					account := &accounts[i]
-					mapping := account.GetModelMapping()
-					if len(mapping) == 0 {
-						for _, model := range defaultModelsListCandidateIDs(account.Platform) {
-							addSeed(model, account.Platform)
-						}
-						continue
-					}
-					for model := range mapping {
-						addSeed(model, account.Platform)
+					for _, seed := range catalogAccountModels(&accounts[i]) {
+						addSeed(seed.name, seed.platform)
 					}
 				}
 			}
@@ -478,7 +483,7 @@ func (s *ModelCatalogService) ListText(ctx context.Context, userID int64, now ti
 					return nil, accountErr
 				}
 				for i := range accounts {
-					if accounts[i].IsModelSupported(seed.name) {
+					if catalogAccountSupportsModel(&accounts[i], seed.name) {
 						filtered = append(filtered, candidate)
 						break
 					}
