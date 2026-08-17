@@ -348,34 +348,10 @@ func TestPlatformIdentityRouteContractIsExplicitAllowlist(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	identityService := service.NewPlatformIdentityService(delegatedIdentityRepoStub{})
-	handlers := &handler.Handlers{
-		PlatformIdentity: handler.NewPlatformIdentityHandler(identityService),
-		PlatformAPIKey:   handler.NewPlatformAPIKeyHandler(service.NewPlatformAPIKeyService(&delegatedPlatformKeyRepoStub{}, nil)),
-		APIKey:           &handler.APIKeyHandler{},
-		AvailableChannel: &handler.AvailableChannelHandler{},
-		ModelCatalog:     &handler.ModelCatalogHandler{},
-		Usage:            &handler.UsageHandler{},
-		Admin: &handler.AdminHandlers{
-			Account:                &adminhandler.AccountHandler{},
-			OAuth:                  &adminhandler.OAuthHandler{},
-			OpenAIOAuth:            &adminhandler.OpenAIOAuthHandler{},
-			GeminiOAuth:            &adminhandler.GeminiOAuthHandler{},
-			AntigravityOAuth:       &adminhandler.AntigravityOAuthHandler{},
-			GrokOAuth:              &adminhandler.GrokOAuthHandler{},
-			Group:                  &adminhandler.GroupHandler{},
-			Channel:                &adminhandler.ChannelHandler{},
-			ChannelMonitor:         &adminhandler.ChannelMonitorHandler{},
-			ChannelMonitorTemplate: &adminhandler.ChannelMonitorRequestTemplateHandler{},
-			Proxy:                  &adminhandler.ProxyHandler{},
-			Ops:                    &adminhandler.OpsHandler{},
-		},
-	}
+	handlers := delegatedRouteContractHandlers(identityService, &adminhandler.UsageHandler{})
 	RegisterPlatformIdentityRoutes(router, handlers, identityService, &service.UserService{}, middleware.AuditLogMiddleware(func(c *gin.Context) { c.Next() }), delegatedTestConfig(), redis.NewClient(&redis.Options{Addr: "127.0.0.1:1"}))
 
-	paths := make(map[string]struct{})
-	for _, route := range router.Routes() {
-		paths[route.Method+" "+route.Path] = struct{}{}
-	}
+	paths := routeContractPaths(router)
 	for _, allowed := range []string{
 		"GET /api/internal/v1/users/:platform_user_id/groups/available",
 		"GET /api/internal/v1/users/:platform_user_id/models/catalog",
@@ -402,7 +378,13 @@ func TestPlatformIdentityRouteContractIsExplicitAllowlist(t *testing.T) {
 		"GET /api/internal/v1/gateway-admin/:platform_user_id/channels",
 		"POST /api/internal/v1/gateway-admin/:platform_user_id/channel-monitors/:id/run",
 		"GET /api/internal/v1/gateway-admin/:platform_user_id/proxies",
+		"GET /api/internal/v1/gateway-admin/:platform_user_id/dashboard/stats",
 		"GET /api/internal/v1/gateway-admin/:platform_user_id/models/catalog",
+		"GET /api/internal/v1/gateway-admin/:platform_user_id/usage",
+		"GET /api/internal/v1/gateway-admin/:platform_user_id/usage/stats",
+		"GET /api/internal/v1/gateway-admin/:platform_user_id/usage/cleanup-tasks",
+		"POST /api/internal/v1/gateway-admin/:platform_user_id/usage/cleanup-tasks",
+		"POST /api/internal/v1/gateway-admin/:platform_user_id/usage/cleanup-tasks/:id/cancel",
 		"GET /api/internal/v1/gateway-admin/:platform_user_id/ops/account-availability",
 		"PUT /api/internal/v1/gateway-admin/:platform_user_id/ops/alert-rules/:id",
 		"PUT /api/internal/v1/gateway-admin/:platform_user_id/ops/runtime/logging",
@@ -423,4 +405,69 @@ func TestPlatformIdentityRouteContractIsExplicitAllowlist(t *testing.T) {
 		require.NotContains(t, route, "/gateway-admin/:platform_user_id/proxies/data")
 		require.NotContains(t, route, "/gateway-admin/:platform_user_id/keys")
 	}
+	for _, omitted := range []string{
+		"GET /api/internal/v1/gateway-admin/:platform_user_id/usage/search-users",
+		"GET /api/internal/v1/gateway-admin/:platform_user_id/usage/search-api-keys",
+	} {
+		_, ok := paths[omitted]
+		require.Falsef(t, ok, "unexpected delegated route %s", omitted)
+	}
+}
+
+func TestDelegatedGatewayAdminOptionalUsageAndDashboardRoutesAreNilSafe(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	identityService := service.NewPlatformIdentityService(delegatedIdentityRepoStub{})
+	handlers := delegatedRouteContractHandlers(identityService, nil)
+	handlers.Admin.Dashboard = nil
+
+	require.NotPanics(t, func() {
+		RegisterPlatformIdentityRoutes(router, handlers, identityService, &service.UserService{}, middleware.AuditLogMiddleware(func(c *gin.Context) { c.Next() }), delegatedTestConfig(), redis.NewClient(&redis.Options{Addr: "127.0.0.1:1"}))
+	})
+
+	paths := routeContractPaths(router)
+	_, accountsRegistered := paths["GET /api/internal/v1/gateway-admin/:platform_user_id/accounts"]
+	require.True(t, accountsRegistered)
+	for route := range paths {
+		require.NotContains(t, route, "/gateway-admin/:platform_user_id/usage")
+		require.NotContains(t, route, "/gateway-admin/:platform_user_id/dashboard")
+	}
+}
+
+func delegatedRouteContractHandlers(
+	identityService *service.PlatformIdentityService,
+	adminUsage *adminhandler.UsageHandler,
+) *handler.Handlers {
+	return &handler.Handlers{
+		PlatformIdentity: handler.NewPlatformIdentityHandler(identityService),
+		PlatformAPIKey:   handler.NewPlatformAPIKeyHandler(service.NewPlatformAPIKeyService(&delegatedPlatformKeyRepoStub{}, nil)),
+		APIKey:           &handler.APIKeyHandler{},
+		AvailableChannel: &handler.AvailableChannelHandler{},
+		ModelCatalog:     &handler.ModelCatalogHandler{},
+		Usage:            &handler.UsageHandler{},
+		Admin: &handler.AdminHandlers{
+			Account:                &adminhandler.AccountHandler{},
+			OAuth:                  &adminhandler.OAuthHandler{},
+			OpenAIOAuth:            &adminhandler.OpenAIOAuthHandler{},
+			GeminiOAuth:            &adminhandler.GeminiOAuthHandler{},
+			AntigravityOAuth:       &adminhandler.AntigravityOAuthHandler{},
+			GrokOAuth:              &adminhandler.GrokOAuthHandler{},
+			Dashboard:              &adminhandler.DashboardHandler{},
+			Group:                  &adminhandler.GroupHandler{},
+			Channel:                &adminhandler.ChannelHandler{},
+			ChannelMonitor:         &adminhandler.ChannelMonitorHandler{},
+			ChannelMonitorTemplate: &adminhandler.ChannelMonitorRequestTemplateHandler{},
+			Proxy:                  &adminhandler.ProxyHandler{},
+			Ops:                    &adminhandler.OpsHandler{},
+			Usage:                  adminUsage,
+		},
+	}
+}
+
+func routeContractPaths(router *gin.Engine) map[string]struct{} {
+	paths := make(map[string]struct{})
+	for _, route := range router.Routes() {
+		paths[route.Method+" "+route.Path] = struct{}{}
+	}
+	return paths
 }
