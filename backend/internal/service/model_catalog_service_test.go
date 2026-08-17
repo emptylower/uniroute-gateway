@@ -179,7 +179,7 @@ func TestModelCatalogOmitsNonTextPricingAndDeduplicatesModels(t *testing.T) {
 	require.Equal(t, "gpt-5.4", items[0].ID)
 }
 
-func TestModelCatalogUsesAccountDefaultsForUnrestrictedRoute(t *testing.T) {
+func TestModelCatalogListTextFailsClosedForOpenAIAccountWithoutDiscoveredModels(t *testing.T) {
 	now := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.UTC)
 	catalog := &channelRoutingCatalogFake{channels: []AvailableChannel{{
 		ID: 10, Status: StatusActive, RestrictModels: false,
@@ -203,14 +203,33 @@ func TestModelCatalogUsesAccountDefaultsForUnrestrictedRoute(t *testing.T) {
 	items, err := svc.ListText(context.Background(), 42, now)
 
 	require.NoError(t, err)
-	require.NotEmpty(t, items)
-	byID := make(map[string]TextModelCatalogItem, len(items))
-	for _, item := range items {
-		byID[item.ID] = item
-		require.NotContains(t, item.ID, "image")
+	require.Empty(t, items)
+}
+
+func TestModelCatalogQuoteFailsClosedForOpenAIAccountWithoutDiscoveredModels(t *testing.T) {
+	now := time.Date(2026, time.August, 10, 12, 0, 0, 0, time.UTC)
+	group := Group{ID: 2, Name: "OpenAI", Platform: PlatformOpenAI, RateMultiplier: 1, Status: StatusActive}
+	access := &channelRoutingAccessFake{groups: []Group{group}}
+	selector := NewChannelRoutingSelector(&channelRoutingCatalogFake{}, access, channelRoutingConfig(true, 3))
+	pricing := &ModelPricing{InputPricePerToken: 1e-6, OutputPricePerToken: 2e-6}
+	svc := &ModelCatalogService{
+		channels: &channelRoutingCatalogFake{},
+		selector: selector,
+		pricing: &modelCatalogPricingFake{
+			byGroup:  map[int64]*ResolvedPricing{2: {Mode: BillingModeToken, BasePricing: pricing}},
+			official: &ResolvedPricing{Mode: BillingModeToken, BasePricing: pricing},
+		},
+		accounts: &modelCatalogAccountFake{byGroup: map[int64][]Account{
+			2: {{ID: 1, Platform: PlatformOpenAI, Status: StatusActive, Schedulable: true}},
+		}},
+		fx: &ExchangeRateService{bootstrapRate: 7.2, ttl: time.Minute, staleTTL: time.Hour, cache: make(map[string]ExchangeRateSnapshot)},
 	}
-	require.True(t, byID["gpt-5.4"].Available)
-	require.Equal(t, 1, byID["gpt-5.4"].AvailableRouteCount)
+
+	quote, err := svc.QuoteChannelCosts(context.Background(), 42, now, CurrencyCNY)
+
+	require.NoError(t, err)
+	require.Len(t, quote.Groups, 1)
+	require.Empty(t, quote.Groups[0].Models)
 }
 
 func TestModelCatalogMergesNewProviderIntoRouteWithExplicitModels(t *testing.T) {
@@ -239,7 +258,9 @@ func TestModelCatalogMergesNewProviderIntoRouteWithExplicitModels(t *testing.T) 
 			2: {Mode: BillingModeToken, BasePricing: &ModelPricing{InputPricePerToken: 1e-6}},
 		}},
 		accounts: &modelCatalogAccountFake{byGroup: map[int64][]Account{
-			1: {{ID: 1, Platform: PlatformOpenAI, Status: StatusActive, Schedulable: true}},
+			1: {{ID: 1, Platform: PlatformOpenAI, Status: StatusActive, Schedulable: true, Credentials: map[string]any{
+				"model_mapping": map[string]any{"gpt-5.4": "gpt-5.4"},
+			}}},
 			2: {{ID: 2, Platform: PlatformAnthropic, Status: StatusActive, Schedulable: true}},
 		}},
 	}
