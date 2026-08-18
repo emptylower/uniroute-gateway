@@ -3,6 +3,7 @@ package migrations
 import (
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -27,13 +28,7 @@ func TestModelGovernanceFoundationMigrationContract(t *testing.T) {
 	for _, table := range expectedTables {
 		require.Contains(t, sql, "CREATE TABLE IF NOT EXISTS "+table)
 	}
-	tablePattern := regexp.MustCompile(`CREATE TABLE IF NOT EXISTS (MODEL_[A-Z0-9_]+)`)
-	tableMatches := tablePattern.FindAllStringSubmatch(sql, -1)
-	createdTables := make([]string, 0, len(tableMatches))
-	for _, match := range tableMatches {
-		createdTables = append(createdTables, match[1])
-	}
-	require.ElementsMatch(t, expectedTables, createdTables, "migration 200 must create exactly the eight approved model tables")
+	require.True(t, hasExactCreateTables(sql, expectedTables), "migration 200 must create exactly the eight approved tables")
 
 	for _, value := range []string{"'ANTHROPIC'", "'OPENAI'", "'GEMINI'", "'GROK'"} {
 		require.Contains(t, sql, value)
@@ -63,4 +58,33 @@ func TestModelGovernanceFoundationMigrationContract(t *testing.T) {
 	require.NotRegexp(t, regexp.MustCompile(`CREATE TABLE IF NOT EXISTS [A-Z0-9_]*ACTIVATION[A-Z0-9_]*`), sql)
 	require.NotContains(t, sql, "DROP TABLE")
 	require.NotContains(t, sql, "DELETE FROM")
+}
+
+func TestModelGovernanceFoundationMigrationRejectsNinthNonModelTable(t *testing.T) {
+	raw, err := os.ReadFile("200_model_governance_foundation.sql")
+	require.NoError(t, err)
+	mutatedSQL := strings.ToUpper(string(raw)) + "\nCREATE TABLE IF NOT EXISTS GOVERNANCE_AUDIT_SHADOW (ID BIGSERIAL PRIMARY KEY);"
+
+	expectedTables := []string{
+		"MODEL_REGISTRY",
+		"MODEL_REGISTRY_ALIASES",
+		"MODEL_REGISTRY_EVENTS",
+		"MODEL_CLASSIFICATION_BATCHES",
+		"MODEL_OBSERVATIONS",
+		"MODEL_OBSERVATION_EVENTS",
+		"MODEL_INVENTORY_RUNS",
+		"MODEL_INVENTORY_ITEMS",
+	}
+	require.False(t, hasExactCreateTables(mutatedSQL, expectedTables), "a ninth table with any name must violate migration 200 scope")
+}
+
+func hasExactCreateTables(sql string, expected []string) bool {
+	tablePattern := regexp.MustCompile(`CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+([A-Z_][A-Z0-9_]*)\s*\(`)
+	tableMatches := tablePattern.FindAllStringSubmatch(sql, -1)
+	created := make([]string, 0, len(tableMatches))
+	for _, match := range tableMatches {
+		created = append(created, match[1])
+	}
+
+	return slices.Equal(expected, created)
 }
