@@ -363,6 +363,7 @@ func TestPlatformIdentityRouteContractIsExplicitAllowlist(t *testing.T) {
 		"POST /api/internal/v1/users/:platform_user_id/keys/:platform_key_id/revoke",
 		"GET /api/internal/v1/gateway-admin/:platform_user_id/accounts",
 		"POST /api/internal/v1/gateway-admin/:platform_user_id/accounts",
+		"PUT /api/internal/v1/gateway-admin/:platform_user_id/accounts/:id/upstream-billing-probe",
 		"POST /api/internal/v1/gateway-admin/:platform_user_id/accounts/generate-auth-url",
 		"POST /api/internal/v1/gateway-admin/:platform_user_id/accounts/exchange-code",
 		"POST /api/internal/v1/gateway-admin/:platform_user_id/openai/generate-auth-url",

@@ -102,6 +102,7 @@ func registerDelegatedGatewayAdminRoutes(
 	accounts.GET("/:id", h.Admin.Account.GetByID)
 	accounts.POST("", h.Admin.Account.Create)
 	accounts.PUT("/:id", h.Admin.Account.Update)
+	accounts.PUT("/:id/upstream-billing-probe", h.Admin.Account.SetUpstreamBillingProbeEnabled)
 	accounts.DELETE("/:id", h.Admin.Account.Delete)
 	accounts.POST("/:id/test", h.Admin.Account.Test)
 	accounts.POST("/:id/recover-state", h.Admin.Account.RecoverState)
