@@ -1,0 +1,4 @@
+# Phase 2 records the requested maximum authorization mode only. Effective
+# authorization remains off until durable activation is added in Phase 5.
+model_governance:
+  authorization_mode: off

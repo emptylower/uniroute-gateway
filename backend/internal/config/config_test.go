@@ -40,6 +40,51 @@ func TestLoadServerTimingConfig(t *testing.T) {
 	})
 }
 
+func TestLoadModelGovernanceAuthorizationModeDefaultsToOff(t *testing.T) {
+	resetViperWithJWTSecret(t)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, "off", cfg.ModelGovernance.AuthorizationMode)
+}
+
+func TestLoadModelGovernanceAuthorizationModeAcceptsSupportedValues(t *testing.T) {
+	for _, mode := range []string{"off", "shadow", "enforce"} {
+		t.Run(mode, func(t *testing.T) {
+			resetViperWithJWTSecret(t)
+			viper.Set("model_governance.authorization_mode", mode)
+
+			cfg, err := Load()
+			require.NoError(t, err)
+			require.Equal(t, mode, cfg.ModelGovernance.AuthorizationMode)
+		})
+	}
+}
+
+func TestLoadModelGovernanceAuthorizationModeRejectsUnsupportedValues(t *testing.T) {
+	for _, mode := range []string{"", "OFF", " shadow ", "disabled", "observe", "enabled", "true", "invalid"} {
+		t.Run(fmt.Sprintf("%q", mode), func(t *testing.T) {
+			resetViperWithJWTSecret(t)
+			viper.Set("model_governance.authorization_mode", mode)
+
+			_, err := Load()
+			require.ErrorContains(t, err, "model_governance.authorization_mode must be one of: off/shadow/enforce")
+		})
+	}
+}
+
+func TestLoadModelGovernanceAuthorizationModeFromApprovedEnvironment(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	configFile := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(configFile, []byte("model_governance:\n  authorization_mode: off\n"), 0o600))
+	t.Setenv("CONFIG_FILE", configFile)
+	t.Setenv("MODEL_AUTHORIZATION_ENFORCE", "shadow")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, "shadow", cfg.ModelGovernance.AuthorizationMode)
+}
+
 func TestLoadPlatformIdentityBridgeIsDisabledByDefault(t *testing.T) {
 	resetViperWithJWTSecret(t)
 	cfg, err := Load()

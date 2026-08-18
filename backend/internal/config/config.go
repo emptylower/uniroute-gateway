@@ -100,6 +100,11 @@ type Config struct {
 	Idempotency             IdempotencyConfig             `mapstructure:"idempotency"`
 	BatchImage              BatchImageConfig              `mapstructure:"batch_image"`
 	ImageStorage            ImageStorageConfig            `mapstructure:"image_storage"`
+	ModelGovernance         ModelGovernanceConfig         `mapstructure:"model_governance"`
+}
+
+type ModelGovernanceConfig struct {
+	AuthorizationMode string `mapstructure:"authorization_mode"`
 }
 
 type LogConfig struct {
@@ -1705,6 +1710,9 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 	if err := viper.BindEnv("server.enable_server_timing", "ENABLE_SERVER_TIMING"); err != nil {
 		return nil, fmt.Errorf("bind ENABLE_SERVER_TIMING: %w", err)
 	}
+	if err := viper.BindEnv("model_governance.authorization_mode", "MODEL_AUTHORIZATION_ENFORCE"); err != nil {
+		return nil, fmt.Errorf("bind MODEL_AUTHORIZATION_ENFORCE: %w", err)
+	}
 
 	// 默认值
 	setDefaults()
@@ -1900,6 +1908,7 @@ func configureConfigSource(setConfigFile, addConfigPath func(string)) {
 
 func setDefaults() {
 	viper.SetDefault("run_mode", RunModeStandard)
+	viper.SetDefault("model_governance.authorization_mode", "off")
 
 	// Server
 	viper.SetDefault("server.host", "0.0.0.0")
@@ -2669,6 +2678,11 @@ func (c *Config) Validate() error {
 		}
 	default:
 		return fmt.Errorf("canonical_wallet.mode must be one of: disabled/shadow/enforce")
+	}
+	switch c.ModelGovernance.AuthorizationMode {
+	case "off", "shadow", "enforce":
+	default:
+		return fmt.Errorf("model_governance.authorization_mode must be one of: off/shadow/enforce")
 	}
 	switch c.Log.Level {
 	case "debug", "info", "warn", "error":
