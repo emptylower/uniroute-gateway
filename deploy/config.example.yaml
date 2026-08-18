@@ -1018,6 +1018,19 @@ canonical_wallet:
   enforce_ready: false
 
 # =============================================================================
+# Model Governance Authorization (Phase 2, effective mode remains off)
+# 模型治理授权（第 2 阶段，实际模式仍为 off）
+# =============================================================================
+model_governance:
+  # Requested maximum mode: off | shadow | enforce.
+  # Phase 2 records this request only; effective authorization remains off until
+  # Phase 5 adds durable activation infrastructure.
+  # 请求的最高模式：off | shadow | enforce。
+  # 第 2 阶段仅记录该请求；实际授权保持 off，直至第 5 阶段加入持久化激活基础设施。
+  # Environment / 环境变量: MODEL_AUTHORIZATION_ENFORCE=off|shadow|enforce
+  authorization_mode: "off"
+
+# =============================================================================
 # TOTP (2FA) Configuration
 # TOTP 双因素认证配置
 # =============================================================================
