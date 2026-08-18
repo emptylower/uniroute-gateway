@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS model_registry_aliases (
 
 CREATE TABLE IF NOT EXISTS model_registry_events (
     id BIGSERIAL PRIMARY KEY,
-    registry_id BIGINT REFERENCES model_registry(id) ON DELETE SET NULL,
+    registry_id BIGINT,
     idempotency_key VARCHAR(255) NOT NULL UNIQUE,
     event_type VARCHAR(64) NOT NULL,
     registry_version BIGINT NOT NULL,
@@ -83,8 +83,8 @@ CREATE TABLE IF NOT EXISTS model_observations (
 
 CREATE TABLE IF NOT EXISTS model_observation_events (
     id BIGSERIAL PRIMARY KEY,
-    observation_id BIGINT NOT NULL REFERENCES model_observations(id) ON DELETE CASCADE,
-    batch_id VARCHAR(64) REFERENCES model_classification_batches(batch_id) ON DELETE SET NULL,
+    observation_id BIGINT NOT NULL,
+    batch_id VARCHAR(64),
     event_type VARCHAR(64) NOT NULL,
     classification VARCHAR(32) NOT NULL,
     classification_reason VARCHAR(128) NOT NULL,
@@ -139,7 +139,7 @@ CREATE TABLE IF NOT EXISTS model_inventory_items (
             revenue_7d_billing_micros >= 0 AND revenue_30d_billing_micros >= 0 AND
             affected_api_keys_7d >= 0 AND affected_api_keys_30d >= 0
         ),
-    UNIQUE (run_id, account_id, group_id, channel_id, upstream_model_id)
+    UNIQUE NULLS NOT DISTINCT (run_id, account_id, group_id, channel_id, upstream_model_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_model_registry_provider_lifecycle

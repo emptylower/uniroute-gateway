@@ -5,6 +5,10 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"os"
+	"regexp"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -245,8 +249,154 @@ func TestMigrationsRunner_ModelGovernanceFoundationSchema(t *testing.T) {
 	requireConstraintDefinitionContains(t, tx, "model_observations", "chk_model_observations_classification", "discovered", "approved", "cross_provider", "unknown", "ignored")
 	requireConstraintDefinitionContains(t, tx, "model_observations", "chk_model_observations_presence", "present", "missing")
 	requireUniqueConstraint(t, tx, "model_observations", "account_id", "upstream_model_id")
+	requireNullsNotDistinctUniqueConstraint(t, tx, "model_inventory_items", "run_id", "account_id", "group_id", "channel_id", "upstream_model_id")
 	requireAppendOnlyTable(t, tx, "model_registry_events")
 	requireAppendOnlyTable(t, tx, "model_observation_events")
+	requireNoForeignKey(t, tx, "model_registry_events", "registry_id")
+	requireNoForeignKey(t, tx, "model_observation_events", "observation_id")
+	requireNoForeignKey(t, tx, "model_observation_events", "batch_id")
+	requireExactModelTables(t, tx)
+	requireNoActivationTables(t, tx)
+}
+
+func TestMigrationsRunner_ModelGovernanceFoundationExactChecks(t *testing.T) {
+	tx := testTx(t)
+
+	requireCheckValues(t, tx, "model_registry", "chk_model_registry_provider", []string{"anthropic", "gemini", "grok", "openai"})
+	requireCheckValues(t, tx, "model_registry", "chk_model_registry_modality", []string{"audio", "embedding", "image", "other", "text", "video"})
+	requireCheckValues(t, tx, "model_registry", "chk_model_registry_lifecycle", []string{"active", "deprecated", "retired"})
+	requireCheckValues(t, tx, "model_observations", "chk_model_observations_classification", []string{"approved", "cross_provider", "discovered", "ignored", "unknown"})
+	requireCheckValues(t, tx, "model_observations", "chk_model_observations_presence", []string{"missing", "present"})
+	requireCheckValues(t, tx, "model_observation_events", "chk_model_observation_events_classification", []string{"approved", "cross_provider", "discovered", "ignored", "unknown"})
+	requireCheckValues(t, tx, "model_observation_events", "chk_model_observation_events_presence", []string{"missing", "present"})
+	requireCheckValues(t, tx, "model_inventory_items", "chk_model_inventory_items_classification", []string{"approved", "cross_provider", "discovered", "ignored", "unknown"})
+}
+
+func TestMigrationsRunner_ModelGovernanceFoundationPreservesEventsWhenAccountDeleted(t *testing.T) {
+	tx := testTx(t)
+	suffix := time.Now().UnixNano()
+
+	var accountID int64
+	require.NoError(t, tx.QueryRowContext(context.Background(), `
+INSERT INTO accounts (name, platform, type)
+VALUES ($1, 'anthropic', 'apikey')
+RETURNING id
+`, fmt.Sprintf("governance-delete-%d", suffix)).Scan(&accountID))
+
+	batchID := fmt.Sprintf("batch-%d", suffix)
+	_, err := tx.ExecContext(context.Background(), `
+INSERT INTO model_classification_batches (batch_id, idempotency_key, account_id, observed_at)
+VALUES ($1, $2, $3, NOW())
+`, batchID, fmt.Sprintf("batch-key-%d", suffix), accountID)
+	require.NoError(t, err)
+
+	var observationID int64
+	require.NoError(t, tx.QueryRowContext(context.Background(), `
+INSERT INTO model_observations (account_id, upstream_model_id, first_seen_at, last_seen_at)
+VALUES ($1, $2, NOW(), NOW())
+RETURNING id
+`, accountID, fmt.Sprintf("model-%d", suffix)).Scan(&observationID))
+
+	var eventID int64
+	require.NoError(t, tx.QueryRowContext(context.Background(), `
+INSERT INTO model_observation_events (
+	observation_id, batch_id, event_type, classification, classification_reason, upstream_presence
+)
+VALUES ($1, $2, 'discovered', 'discovered', 'awaiting_registry_classification', 'present')
+RETURNING id
+`, observationID, batchID).Scan(&eventID))
+
+	_, err = tx.ExecContext(context.Background(), "DELETE FROM accounts WHERE id = $1", accountID)
+	require.NoError(t, err, "existing account deletion must not mutate append-only governance events")
+
+	var storedObservationID int64
+	var storedBatchID string
+	require.NoError(t, tx.QueryRowContext(context.Background(), `
+SELECT observation_id, batch_id FROM model_observation_events WHERE id = $1
+`, eventID).Scan(&storedObservationID, &storedBatchID))
+	require.Equal(t, observationID, storedObservationID)
+	require.Equal(t, batchID, storedBatchID)
+}
+
+func TestMigrationsRunner_ModelGovernanceFoundationEventsRejectActualMutations(t *testing.T) {
+	tx := testTx(t)
+	suffix := time.Now().UnixNano()
+
+	var registryEventID int64
+	require.NoError(t, tx.QueryRowContext(context.Background(), `
+INSERT INTO model_registry_events (idempotency_key, event_type, registry_version, actor_id)
+VALUES ($1, 'created', 1, 'integration-test')
+RETURNING id
+`, fmt.Sprintf("registry-event-%d", suffix)).Scan(&registryEventID))
+
+	var observationEventID int64
+	require.NoError(t, tx.QueryRowContext(context.Background(), `
+INSERT INTO model_observation_events (
+	observation_id, event_type, classification, classification_reason, upstream_presence
+)
+VALUES ($1, 'discovered', 'discovered', 'integration_test', 'present')
+RETURNING id
+`, suffix).Scan(&observationEventID))
+
+	for _, mutation := range []struct {
+		name string
+		sql  string
+		id   int64
+	}{
+		{name: "update registry event", sql: "UPDATE model_registry_events SET actor_id = 'changed' WHERE id = $1", id: registryEventID},
+		{name: "delete registry event", sql: "DELETE FROM model_registry_events WHERE id = $1", id: registryEventID},
+		{name: "update observation event", sql: "UPDATE model_observation_events SET classification_reason = 'changed' WHERE id = $1", id: observationEventID},
+		{name: "delete observation event", sql: "DELETE FROM model_observation_events WHERE id = $1", id: observationEventID},
+	} {
+		t.Run(mutation.name, func(t *testing.T) {
+			_, err := tx.ExecContext(context.Background(), "SAVEPOINT append_only_mutation")
+			require.NoError(t, err)
+			_, err = tx.ExecContext(context.Background(), mutation.sql, mutation.id)
+			require.ErrorContains(t, err, "append-only")
+			_, rollbackErr := tx.ExecContext(context.Background(), "ROLLBACK TO SAVEPOINT append_only_mutation")
+			require.NoError(t, rollbackErr)
+		})
+	}
+}
+
+func TestMigrationsRunner_ModelGovernanceFoundationInventoryUniquenessTreatsNullsAsEqual(t *testing.T) {
+	tx := testTx(t)
+	suffix := time.Now().UnixNano()
+
+	var accountID int64
+	require.NoError(t, tx.QueryRowContext(context.Background(), `
+INSERT INTO accounts (name, platform, type)
+VALUES ($1, 'anthropic', 'apikey')
+RETURNING id
+`, fmt.Sprintf("governance-inventory-%d", suffix)).Scan(&accountID))
+
+	runID := fmt.Sprintf("inventory-%d", suffix)
+	_, err := tx.ExecContext(context.Background(), `
+INSERT INTO model_inventory_runs (run_id, cutoff_7d, cutoff_30d)
+VALUES ($1, NOW() - INTERVAL '7 days', NOW() - INTERVAL '30 days')
+`, runID)
+	require.NoError(t, err)
+
+	insert := `
+INSERT INTO model_inventory_items (
+	run_id, account_id, group_id, channel_id, upstream_model_id, classification, billing_currency
+)
+VALUES ($1, $2, NULL, NULL, 'claude-test', 'approved', 'USD')
+`
+	_, err = tx.ExecContext(context.Background(), insert, runID, accountID)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(context.Background(), insert, runID, accountID)
+	require.Error(t, err, "duplicate account-level inventory rows with NULL group/channel must be rejected")
+}
+
+func TestMigrationsRunner_ModelGovernanceFoundationSQLRerunsDirectly(t *testing.T) {
+	raw, err := os.ReadFile("../../migrations/200_model_governance_foundation.sql")
+	require.NoError(t, err)
+
+	_, err = integrationDB.ExecContext(context.Background(), string(raw))
+	require.NoError(t, err, "first direct SQL rerun on an already migrated schema")
+	_, err = integrationDB.ExecContext(context.Background(), string(raw))
+	require.NoError(t, err, "second direct SQL rerun on the same schema")
 }
 
 func requireTable(t *testing.T, tx *sql.Tx, table string) {
@@ -281,6 +431,125 @@ SELECT EXISTS (
 `, table, pq.Array(columns)).Scan(&exists)
 	require.NoError(t, err, "query unique constraint on %s", table)
 	require.True(t, exists, "expected unique constraint on %s(%v)", table, columns)
+}
+
+func requireNullsNotDistinctUniqueConstraint(t *testing.T, tx *sql.Tx, table string, columns ...string) {
+	t.Helper()
+
+	var exists bool
+	err := tx.QueryRowContext(context.Background(), `
+SELECT EXISTS (
+	SELECT 1
+	FROM pg_constraint c
+	JOIN pg_class tbl ON tbl.oid = c.conrelid
+	JOIN pg_namespace ns ON ns.oid = tbl.relnamespace
+	JOIN pg_index idx ON idx.indexrelid = c.conindid
+	WHERE ns.nspname = 'public'
+	  AND tbl.relname = $1
+	  AND c.contype = 'u'
+	  AND idx.indnullsnotdistinct
+	  AND ARRAY(
+		SELECT attr.attname::text
+		FROM unnest(c.conkey) WITH ORDINALITY AS key(attnum, ord)
+		JOIN pg_attribute attr ON attr.attrelid = tbl.oid AND attr.attnum = key.attnum
+		ORDER BY key.ord
+	  ) = $2::text[]
+)
+`, table, pq.Array(columns)).Scan(&exists)
+	require.NoError(t, err, "query NULLS NOT DISTINCT unique constraint on %s", table)
+	require.True(t, exists, "expected NULLS NOT DISTINCT unique constraint on %s(%v)", table, columns)
+}
+
+func requireNoForeignKey(t *testing.T, tx *sql.Tx, table, column string) {
+	t.Helper()
+
+	var exists bool
+	err := tx.QueryRowContext(context.Background(), `
+SELECT EXISTS (
+	SELECT 1
+	FROM pg_constraint c
+	JOIN pg_class tbl ON tbl.oid = c.conrelid
+	JOIN pg_namespace ns ON ns.oid = tbl.relnamespace
+	JOIN pg_attribute attr ON attr.attrelid = tbl.oid AND attr.attnum = ANY(c.conkey)
+	WHERE ns.nspname = 'public'
+	  AND tbl.relname = $1
+	  AND attr.attname = $2
+	  AND c.contype = 'f'
+)
+`, table, column).Scan(&exists)
+	require.NoError(t, err, "query foreign key on %s.%s", table, column)
+	require.False(t, exists, "append-only lineage %s.%s must remain scalar evidence", table, column)
+}
+
+func requireExactModelTables(t *testing.T, tx *sql.Tx) {
+	t.Helper()
+
+	rows, err := tx.QueryContext(context.Background(), `
+SELECT tablename
+FROM pg_tables
+WHERE schemaname = 'public'
+  AND tablename LIKE 'model_%'
+ORDER BY tablename
+`)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	var tables []string
+	for rows.Next() {
+		var table string
+		require.NoError(t, rows.Scan(&table))
+		tables = append(tables, table)
+	}
+	require.NoError(t, rows.Err())
+	require.Equal(t, []string{
+		"model_classification_batches",
+		"model_inventory_items",
+		"model_inventory_runs",
+		"model_observation_events",
+		"model_observations",
+		"model_registry",
+		"model_registry_aliases",
+		"model_registry_events",
+	}, tables)
+}
+
+func requireNoActivationTables(t *testing.T, tx *sql.Tx) {
+	t.Helper()
+
+	var count int
+	err := tx.QueryRowContext(context.Background(), `
+SELECT COUNT(*)
+FROM pg_tables
+WHERE schemaname = 'public'
+  AND tablename LIKE '%activation%'
+`).Scan(&count)
+	require.NoError(t, err, "query activation tables")
+	require.Zero(t, count, "migration 200 must not add activation infrastructure")
+}
+
+func requireCheckValues(t *testing.T, tx *sql.Tx, table, constraint string, expected []string) {
+	t.Helper()
+
+	var definition string
+	err := tx.QueryRowContext(context.Background(), `
+SELECT pg_get_constraintdef(c.oid)
+FROM pg_constraint c
+JOIN pg_class tbl ON tbl.oid = c.conrelid
+JOIN pg_namespace ns ON ns.oid = tbl.relnamespace
+WHERE ns.nspname = 'public'
+  AND tbl.relname = $1
+  AND c.conname = $2
+  AND c.contype = 'c'
+`, table, constraint).Scan(&definition)
+	require.NoError(t, err, "query check constraint %s.%s", table, constraint)
+
+	matches := regexp.MustCompile(`'([^']+)'`).FindAllStringSubmatch(definition, -1)
+	actual := make([]string, 0, len(matches))
+	for _, match := range matches {
+		actual = append(actual, match[1])
+	}
+	sort.Strings(actual)
+	require.Equal(t, expected, actual, "exact allowed values mismatch for %s.%s", table, constraint)
 }
 
 func requireAppendOnlyTable(t *testing.T, tx *sql.Tx, table string) {

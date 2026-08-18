@@ -2,6 +2,7 @@ package migrations
 
 import (
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -13,7 +14,7 @@ func TestModelGovernanceFoundationMigrationContract(t *testing.T) {
 	require.NoError(t, err)
 	sql := strings.ToUpper(string(raw))
 
-	for _, table := range []string{
+	expectedTables := []string{
 		"MODEL_REGISTRY",
 		"MODEL_REGISTRY_ALIASES",
 		"MODEL_REGISTRY_EVENTS",
@@ -22,9 +23,17 @@ func TestModelGovernanceFoundationMigrationContract(t *testing.T) {
 		"MODEL_OBSERVATION_EVENTS",
 		"MODEL_INVENTORY_RUNS",
 		"MODEL_INVENTORY_ITEMS",
-	} {
+	}
+	for _, table := range expectedTables {
 		require.Contains(t, sql, "CREATE TABLE IF NOT EXISTS "+table)
 	}
+	tablePattern := regexp.MustCompile(`CREATE TABLE IF NOT EXISTS (MODEL_[A-Z0-9_]+)`)
+	tableMatches := tablePattern.FindAllStringSubmatch(sql, -1)
+	createdTables := make([]string, 0, len(tableMatches))
+	for _, match := range tableMatches {
+		createdTables = append(createdTables, match[1])
+	}
+	require.ElementsMatch(t, expectedTables, createdTables, "migration 200 must create exactly the eight approved model tables")
 
 	for _, value := range []string{"'ANTHROPIC'", "'OPENAI'", "'GEMINI'", "'GROK'"} {
 		require.Contains(t, sql, value)
@@ -47,6 +56,11 @@ func TestModelGovernanceFoundationMigrationContract(t *testing.T) {
 	require.NotContains(t, sql, "CONNECTION_ID BIGINT NOT NULL")
 	require.Contains(t, sql, "BEFORE UPDATE OR DELETE ON MODEL_REGISTRY_EVENTS")
 	require.Contains(t, sql, "BEFORE UPDATE OR DELETE ON MODEL_OBSERVATION_EVENTS")
+	require.NotRegexp(t, regexp.MustCompile(`(?s)MODEL_REGISTRY_EVENTS\s*\([^;]*REGISTRY_ID\s+BIGINT\s+REFERENCES`), sql)
+	require.NotRegexp(t, regexp.MustCompile(`(?s)MODEL_OBSERVATION_EVENTS\s*\([^;]*OBSERVATION_ID\s+BIGINT[^,]*REFERENCES`), sql)
+	require.NotRegexp(t, regexp.MustCompile(`(?s)MODEL_OBSERVATION_EVENTS\s*\([^;]*BATCH_ID\s+VARCHAR\([^)]*\)[^,]*REFERENCES`), sql)
+	require.Contains(t, sql, "UNIQUE NULLS NOT DISTINCT (RUN_ID, ACCOUNT_ID, GROUP_ID, CHANNEL_ID, UPSTREAM_MODEL_ID)")
+	require.NotRegexp(t, regexp.MustCompile(`CREATE TABLE IF NOT EXISTS [A-Z0-9_]*ACTIVATION[A-Z0-9_]*`), sql)
 	require.NotContains(t, sql, "DROP TABLE")
 	require.NotContains(t, sql, "DELETE FROM")
 }
