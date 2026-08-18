@@ -398,8 +398,11 @@ func TestAccountHandlerSyncUpstreamModelsPersistsLatestSnapshot(t *testing.T) {
 	}
 	upstream := &syncUpstreamHTTPUpstream{resp: &http.Response{
 		StatusCode: http.StatusOK,
-		Header:     http.Header{"Content-Type": []string{"application/json"}},
-		Body:       io.NopCloser(strings.NewReader(`{"data":[{"id":"gpt-5.6-terra"},{"id":"gpt-5.6-sol"}]}`)),
+		Header: http.Header{
+			"Content-Type": []string{"application/json"},
+			"Etag":         []string{`W/"handler-etag"`},
+		},
+		Body: io.NopCloser(strings.NewReader(`{"object":"list","data":[{"id":" gpt-5.6-terra "},{"id":"gpt-5.6-sol"},{"id":" gpt-5.6-terra "}],"metadata":{"cursor":"next"}}`)),
 	}}
 	store := &syncUpstreamModelDiscoveryStore{}
 	observations := &syncUpstreamObservationStore{}
@@ -411,6 +414,10 @@ func TestAccountHandlerSyncUpstreamModelsPersistsLatestSnapshot(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Len(t, observations.inputs, 1)
+	require.Equal(t, []string{" gpt-5.6-terra ", "gpt-5.6-sol"}, observations.inputs[0].ModelIDs)
+	var snapshot map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(observations.inputs[0].RawSnapshot, &snapshot))
+	require.JSONEq(t, `{"object":"list","data":[{"id":" gpt-5.6-terra "},{"id":"gpt-5.6-sol"},{"id":" gpt-5.6-terra "}],"metadata":{"cursor":"next"}}`, string(snapshot["payload"]))
 	require.Equal(t, int64(46), store.accountID)
 	require.Equal(t, map[string]any{
 		"alias":         "upstream-target",
@@ -419,4 +426,36 @@ func TestAccountHandlerSyncUpstreamModelsPersistsLatestSnapshot(t *testing.T) {
 	}, store.mapping)
 	require.NotNil(t, store.discovery)
 	require.NotContains(t, store.mapping, "old-auto")
+	require.JSONEq(t, `{"code":0,"message":"success","data":{"models":["gpt-5.6-sol","gpt-5.6-terra"],"synced_at":"`+store.discovery["synced_at"].(string)+`"}}`, rec.Body.String())
+}
+
+func TestAccountHandlerSyncUpstreamModelsRecordsEmptyEvidenceBeforeLegacyFailure(t *testing.T) {
+	svc := &availableModelsAdminService{
+		stubAdminService: newStubAdminService(),
+		account: service.Account{
+			ID: 47, Name: "openai-empty", Platform: service.PlatformOpenAI,
+			Type: service.AccountTypeAPIKey, Status: service.StatusActive,
+			Credentials: map[string]any{"api_key": "openai-key"},
+		},
+	}
+	upstream := &syncUpstreamHTTPUpstream{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"object":"list","data":[],"metadata":{"cursor":null}}`)),
+	}}
+	store := &syncUpstreamModelDiscoveryStore{}
+	observations := &syncUpstreamObservationStore{}
+	router := setupSyncUpstreamModelsRouter(svc, upstream, observations, store)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/accounts/47/models/sync-upstream", nil)
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusBadGateway, rec.Code)
+	require.Len(t, observations.inputs, 1)
+	require.Empty(t, observations.inputs[0].ModelIDs)
+	var snapshot map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(observations.inputs[0].RawSnapshot, &snapshot))
+	require.JSONEq(t, `{"object":"list","data":[],"metadata":{"cursor":null}}`, string(snapshot["payload"]))
+	require.Zero(t, store.accountID)
 }

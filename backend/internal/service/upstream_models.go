@@ -1,9 +1,11 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -85,99 +87,138 @@ func newUpstreamModelSyncUpstreamError(message string, err error) error {
 	return &UpstreamModelSyncError{Kind: UpstreamModelSyncErrorUpstream, Message: message, Err: err}
 }
 
-// FetchUpstreamSupportedModels fetches the live model list from the account's upstream API format.
+// FetchUpstreamSupportedModels returns the legacy normalized model list.
 func (s *AccountTestService) FetchUpstreamSupportedModels(ctx context.Context, account *Account) ([]string, error) {
+	discovery, err := s.FetchUpstreamModelDiscovery(ctx, account)
+	if err != nil {
+		return nil, err
+	}
+	if len(discovery.Models) == 0 {
+		return nil, newUpstreamModelSyncUpstreamError("Upstream returned no supported models", nil)
+	}
+	return discovery.Models, nil
+}
+
+// FetchUpstreamModelDiscovery fetches both the legacy normalized catalog and
+// the original accepted payload used only as governance evidence.
+func (s *AccountTestService) FetchUpstreamModelDiscovery(ctx context.Context, account *Account) (UpstreamModelDiscovery, error) {
 	if s == nil {
-		return nil, newUpstreamModelSyncConfigError("Account test service is not configured", nil)
+		return UpstreamModelDiscovery{}, newUpstreamModelSyncConfigError("Account test service is not configured", nil)
 	}
 	if account == nil {
-		return nil, newUpstreamModelSyncConfigError("Account is required", nil)
+		return UpstreamModelDiscovery{}, newUpstreamModelSyncConfigError("Account is required", nil)
 	}
 	if account.IsCredentialShadow() {
-		return nil, newUpstreamModelSyncUnsupportedError(
+		return UpstreamModelDiscovery{}, newUpstreamModelSyncUnsupportedError(
 			"Model discovery must be run on the parent account", nil,
 		)
 	}
 	if account.IsOpenAIOAuth() {
-		return s.fetchOpenAIOAuthUpstreamModels(ctx, account)
+		return s.fetchOpenAIOAuthUpstreamModelDiscovery(ctx, account)
 	}
 
 	if account.Platform == PlatformAntigravity && account.Type != AccountTypeAPIKey {
-		return s.fetchAntigravityOAuthUpstreamModels(ctx, account)
+		return s.fetchAntigravityOAuthUpstreamModelDiscovery(ctx, account)
 	}
 
 	if s.httpUpstream == nil {
-		return nil, newUpstreamModelSyncConfigError("Upstream HTTP client is not configured", nil)
+		return UpstreamModelDiscovery{}, newUpstreamModelSyncConfigError("Upstream HTTP client is not configured", nil)
 	}
 
 	req, err := s.buildUpstreamModelsRequest(ctx, account)
 	if err != nil {
-		return nil, err
+		return UpstreamModelDiscovery{}, err
 	}
 
 	proxyURL := upstreamModelsProxyURL(account)
 	resp, err := s.doUpstreamModelsRequest(req, proxyURL, account)
 	if err != nil {
-		return nil, newUpstreamModelSyncUpstreamError("Failed to request upstream model list", err)
+		return UpstreamModelDiscovery{}, newUpstreamModelSyncUpstreamError("Failed to request upstream model list", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, upstreamModelsBodyLimit+1))
 	if err != nil {
-		return nil, newUpstreamModelSyncUpstreamError("Failed to read upstream model list", err)
+		return UpstreamModelDiscovery{}, newUpstreamModelSyncUpstreamError("Failed to read upstream model list", err)
 	}
 	if int64(len(body)) > upstreamModelsBodyLimit {
-		return nil, newUpstreamModelSyncUpstreamError("Upstream model list response is too large", fmt.Errorf("response exceeds %d bytes", upstreamModelsBodyLimit))
+		return UpstreamModelDiscovery{}, newUpstreamModelSyncUpstreamError("Upstream model list response is too large", fmt.Errorf("response exceeds %d bytes", upstreamModelsBodyLimit))
 	}
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, newUpstreamModelSyncUpstreamError(
+		return UpstreamModelDiscovery{}, newUpstreamModelSyncUpstreamError(
 			fmt.Sprintf("Upstream model list request failed with HTTP %d", resp.StatusCode),
 			fmt.Errorf("upstream model list returned HTTP %d", resp.StatusCode),
 		)
 	}
 
-	extractModels := extractUpstreamModelIDs
+	extractModels := extractUpstreamModelIDViews
 	if account.IsGrok() {
-		extractModels = extractGrokUpstreamModelIDs
+		extractModels = extractGrokUpstreamModelIDViews
 	}
-	models, err := extractModels(body)
+	models, evidenceModelIDs, err := extractModels(body)
 	if err != nil {
-		return nil, newUpstreamModelSyncUpstreamError("Upstream model list response was not valid JSON", err)
+		return UpstreamModelDiscovery{}, newUpstreamModelSyncUpstreamError("Upstream model list response was not valid JSON", err)
 	}
-	if len(models) == 0 {
-		return nil, newUpstreamModelSyncUpstreamError("Upstream returned no supported models", nil)
+	rawSnapshot, err := marshalUpstreamRawSnapshot(body, map[string]any{
+		"source":       "http",
+		"status_code":  resp.StatusCode,
+		"content_type": resp.Header.Get("Content-Type"),
+		"etag":         resp.Header.Get("ETag"),
+	})
+	if err != nil {
+		return UpstreamModelDiscovery{}, newUpstreamModelSyncUpstreamError("Upstream model list response was not valid JSON", err)
 	}
-
-	return models, nil
+	return UpstreamModelDiscovery{Models: models, EvidenceModelIDs: evidenceModelIDs, RawSnapshot: rawSnapshot}, nil
 }
 
 func (s *AccountTestService) fetchOpenAIOAuthUpstreamModels(ctx context.Context, account *Account) ([]string, error) {
+	discovery, err := s.fetchOpenAIOAuthUpstreamModelDiscovery(ctx, account)
+	if err != nil {
+		return nil, err
+	}
+	if len(discovery.Models) == 0 {
+		return nil, newUpstreamModelSyncUpstreamError("Upstream returned no supported models", nil)
+	}
+	return discovery.Models, nil
+}
+
+func (s *AccountTestService) fetchOpenAIOAuthUpstreamModelDiscovery(ctx context.Context, account *Account) (UpstreamModelDiscovery, error) {
 	if s.codexModelsFetcher == nil {
-		return nil, newUpstreamModelSyncConfigError("OpenAI Codex model discovery is not configured", nil)
+		return UpstreamModelDiscovery{}, newUpstreamModelSyncConfigError("OpenAI Codex model discovery is not configured", nil)
 	}
 
 	manifest, err := s.codexModelsFetcher.FetchCodexModelsManifest(ctx, account, "", "")
 	if err != nil {
-		return nil, newUpstreamModelSyncUpstreamError("Failed to request upstream model list", err)
+		return UpstreamModelDiscovery{}, newUpstreamModelSyncUpstreamError("Failed to request upstream model list", err)
 	}
 	if manifest == nil || manifest.NotModified || len(manifest.Body) == 0 {
-		return nil, newUpstreamModelSyncUpstreamError("Upstream returned no supported models", nil)
+		return UpstreamModelDiscovery{}, newUpstreamModelSyncUpstreamError("Upstream returned no supported models", nil)
 	}
 
-	models, err := extractUpstreamModelIDs(manifest.Body)
+	models, evidenceModelIDs, err := extractUpstreamModelIDViews(manifest.Body)
 	if err != nil {
-		return nil, newUpstreamModelSyncUpstreamError("Upstream model list response was not valid JSON", err)
+		return UpstreamModelDiscovery{}, newUpstreamModelSyncUpstreamError("Upstream model list response was not valid JSON", err)
 	}
-	if len(models) == 0 {
-		return nil, newUpstreamModelSyncUpstreamError("Upstream returned no supported models", nil)
+	rawSnapshot, err := marshalUpstreamRawSnapshot(manifest.Body, map[string]any{
+		"source": "manifest",
+		"etag":   manifest.ETag,
+	})
+	if err != nil {
+		return UpstreamModelDiscovery{}, newUpstreamModelSyncUpstreamError("Upstream model list response was not valid JSON", err)
 	}
-	return models, nil
+	return UpstreamModelDiscovery{Models: models, EvidenceModelIDs: evidenceModelIDs, RawSnapshot: rawSnapshot}, nil
 }
 
-// PersistDiscoveredModels stores the latest upstream snapshot as the account's
-// identity mapping while preserving administrator-owned aliases and wildcards.
+// PersistDiscoveredModels preserves the legacy direct-call behavior while
+// routing production syncs through PersistUpstreamModelDiscovery.
 func (s *AccountTestService) PersistDiscoveredModels(ctx context.Context, account *Account, models []string, syncedAt time.Time) error {
+	return s.PersistUpstreamModelDiscovery(ctx, account, newSynthesizedUpstreamModelDiscovery(models, "legacy_call"), syncedAt)
+}
+
+// PersistUpstreamModelDiscovery records non-authoritative evidence before
+// applying the pre-existing runtime mapping update.
+func (s *AccountTestService) PersistUpstreamModelDiscovery(ctx context.Context, account *Account, discoveryInput UpstreamModelDiscovery, syncedAt time.Time) error {
 	if s == nil || s.modelDiscoveryStore == nil {
 		return newUpstreamModelSyncConfigError("Account model discovery store is not configured", nil)
 	}
@@ -189,23 +230,15 @@ func (s *AccountTestService) PersistDiscoveredModels(ctx context.Context, accoun
 			"Model discovery must be run on the parent account", nil,
 		)
 	}
-	models = dedupeAndSortModelIDs(models)
-	if len(models) == 0 {
-		return newUpstreamModelSyncUpstreamError("Upstream returned no supported models", nil)
-	}
+	models := dedupeAndSortModelIDs(discoveryInput.Models)
 	if s.modelObservationRepository == nil {
 		return newUpstreamModelSyncConfigError("Model observation repository is not configured", nil)
 	}
 
 	provider := governanceProviderForPlatform(account.Platform)
-	rawSnapshot, err := json.Marshal(map[string]any{
-		"models":           models,
-		"routing_platform": account.Platform,
-		"source":           "upstream",
-		"observed_at":      syncedAt.UTC().Format(time.RFC3339Nano),
-	})
-	if err != nil {
-		return fmt.Errorf("encode accepted upstream model snapshot: %w", err)
+	rawSnapshot := discoveryInput.RawSnapshot
+	if len(rawSnapshot) == 0 {
+		return newUpstreamModelSyncUpstreamError("Upstream model evidence snapshot is empty", nil)
 	}
 	idempotencySeed := fmt.Sprintf("%d\n%s\n%s", account.ID, syncedAt.UTC().Format(time.RFC3339Nano), rawSnapshot)
 	idempotencyKey := fmt.Sprintf("model-discovery:%x", sha256.Sum256([]byte(idempotencySeed)))
@@ -214,11 +247,14 @@ func (s *AccountTestService) PersistDiscoveredModels(ctx context.Context, accoun
 		AccountID:       account.ID,
 		AccountProvider: provider,
 		RoutingPlatform: account.Platform,
-		ModelIDs:        models,
+		ModelIDs:        dedupeExactModelIDs(discoveryInput.EvidenceModelIDs),
 		RawSnapshot:     rawSnapshot,
 		ObservedAt:      syncedAt.UTC(),
 	}); err != nil {
 		return fmt.Errorf("record upstream model observation: %w", err)
+	}
+	if len(models) == 0 {
+		return newUpstreamModelSyncUpstreamError("Upstream returned no supported models", nil)
 	}
 
 	mapping := make(map[string]any, len(models))
@@ -537,36 +573,55 @@ func (s *AccountTestService) buildGeminiUpstreamModelsRequest(ctx context.Contex
 }
 
 func (s *AccountTestService) fetchAntigravityOAuthUpstreamModels(ctx context.Context, account *Account) ([]string, error) {
+	discovery, err := s.fetchAntigravityOAuthUpstreamModelDiscovery(ctx, account)
+	if err != nil {
+		return nil, err
+	}
+	if len(discovery.Models) == 0 {
+		return nil, newUpstreamModelSyncUpstreamError("Upstream returned no supported models", nil)
+	}
+	return discovery.Models, nil
+}
+
+func (s *AccountTestService) fetchAntigravityOAuthUpstreamModelDiscovery(ctx context.Context, account *Account) (UpstreamModelDiscovery, error) {
 	if s.antigravityGatewayService == nil || s.antigravityGatewayService.GetTokenProvider() == nil {
-		return nil, newUpstreamModelSyncConfigError("Antigravity token provider is not configured", nil)
+		return UpstreamModelDiscovery{}, newUpstreamModelSyncConfigError("Antigravity token provider is not configured", nil)
 	}
 
 	accessToken, err := s.antigravityGatewayService.GetTokenProvider().GetAccessToken(ctx, account)
 	if err != nil {
-		return nil, newUpstreamModelSyncUpstreamError("Failed to get Antigravity access token", err)
+		return UpstreamModelDiscovery{}, newUpstreamModelSyncUpstreamError("Failed to get Antigravity access token", err)
 	}
 	accessToken = strings.TrimSpace(accessToken)
 	if accessToken == "" {
-		return nil, newUpstreamModelSyncConfigError("No Antigravity access token is available", nil)
+		return UpstreamModelDiscovery{}, newUpstreamModelSyncConfigError("No Antigravity access token is available", nil)
 	}
 
 	client, err := antigravity.NewClient(upstreamModelsProxyURL(account))
 	if err != nil {
-		return nil, newUpstreamModelSyncConfigError("Failed to configure Antigravity client", err)
+		return UpstreamModelDiscovery{}, newUpstreamModelSyncConfigError("Failed to configure Antigravity client", err)
 	}
-	modelsResp, _, err := client.FetchAvailableModels(ctx, accessToken, strings.TrimSpace(account.GetCredential("project_id")))
+	modelsResp, _, rawPayload, err := client.FetchAvailableModelsWithRawBytes(ctx, accessToken, strings.TrimSpace(account.GetCredential("project_id")))
 	if err != nil {
-		return nil, newUpstreamModelSyncUpstreamError("Failed to fetch Antigravity available models", err)
+		return UpstreamModelDiscovery{}, newUpstreamModelSyncUpstreamError("Failed to fetch Antigravity available models", err)
 	}
-	if modelsResp == nil || len(modelsResp.Models) == 0 {
-		return nil, newUpstreamModelSyncUpstreamError("Upstream returned no supported models", nil)
+	if modelsResp == nil {
+		return UpstreamModelDiscovery{}, newUpstreamModelSyncUpstreamError("Upstream returned no supported models", nil)
 	}
 
-	models := make([]string, 0, len(modelsResp.Models))
-	for modelID := range modelsResp.Models {
-		models = append(models, strings.TrimSpace(modelID))
+	evidenceModelIDs, err := extractJSONObjectKeysInOrder(rawPayload, "models")
+	if err != nil {
+		return UpstreamModelDiscovery{}, newUpstreamModelSyncUpstreamError("Upstream model list response was not valid JSON", err)
 	}
-	return dedupeAndSortModelIDs(models), nil
+	rawSnapshot, err := marshalUpstreamRawSnapshot(rawPayload, map[string]any{"source": "antigravity_oauth"})
+	if err != nil {
+		return UpstreamModelDiscovery{}, newUpstreamModelSyncUpstreamError("Upstream model list response was not valid JSON", err)
+	}
+	return UpstreamModelDiscovery{
+		Models:           dedupeAndSortModelIDs(evidenceModelIDs),
+		EvidenceModelIDs: dedupeExactModelIDs(evidenceModelIDs),
+		RawSnapshot:      rawSnapshot,
+	}, nil
 }
 
 func (s *AccountTestService) doUpstreamModelsRequest(req *http.Request, proxyURL string, account *Account) (*http.Response, error) {
@@ -631,11 +686,37 @@ func extractUpstreamModelIDs(body []byte) ([]string, error) {
 	return extractUpstreamModelIDsWithSelector(body, upstreamModelEntryID)
 }
 
+func extractUpstreamModelIDViews(body []byte) ([]string, []string, error) {
+	legacy, err := extractUpstreamModelIDsWithSelector(body, upstreamModelEntryID)
+	if err != nil {
+		return nil, nil, err
+	}
+	exact, err := extractUpstreamModelIDsInOrder(body, upstreamModelEntryExactID)
+	return legacy, exact, err
+}
+
 func extractGrokUpstreamModelIDs(body []byte) ([]string, error) {
 	return extractUpstreamModelIDsWithSelector(body, grokUpstreamModelEntryID)
 }
 
+func extractGrokUpstreamModelIDViews(body []byte) ([]string, []string, error) {
+	legacy, err := extractUpstreamModelIDsWithSelector(body, grokUpstreamModelEntryID)
+	if err != nil {
+		return nil, nil, err
+	}
+	exact, err := extractUpstreamModelIDsInOrder(body, grokUpstreamModelEntryExactID)
+	return legacy, exact, err
+}
+
 func extractUpstreamModelIDsWithSelector(body []byte, selectID func(upstreamModelEntry) string) ([]string, error) {
+	models, err := extractUpstreamModelIDsInOrder(body, selectID)
+	if err != nil {
+		return nil, err
+	}
+	return dedupeAndSortModelIDs(models), nil
+}
+
+func extractUpstreamModelIDsInOrder(body []byte, selectID func(upstreamModelEntry) string) ([]string, error) {
 	var response struct {
 		Data   []upstreamModelEntry `json:"data"`
 		Models []upstreamModelEntry `json:"models"`
@@ -650,7 +731,7 @@ func extractUpstreamModelIDsWithSelector(body []byte, selectID func(upstreamMode
 		for _, entry := range arrayResponse {
 			models = append(models, selectID(entry))
 		}
-		return dedupeAndSortModelIDs(models), nil
+		return models, nil
 	}
 
 	models := make([]string, 0, len(response.Data)+len(response.Models))
@@ -670,7 +751,7 @@ func extractUpstreamModelIDsWithSelector(body []byte, selectID func(upstreamMode
 		}
 	}
 
-	return dedupeAndSortModelIDs(models), nil
+	return models, nil
 }
 
 func upstreamModelEntryID(entry upstreamModelEntry) string {
@@ -684,7 +765,20 @@ func upstreamModelEntryID(entry upstreamModelEntry) string {
 	return strings.TrimPrefix(modelID, "models/")
 }
 
+func upstreamModelEntryExactID(entry upstreamModelEntry) string {
+	for _, candidate := range []string{entry.ID, entry.Slug, entry.Name} {
+		if strings.TrimSpace(candidate) != "" {
+			return candidate
+		}
+	}
+	return ""
+}
+
 func grokUpstreamModelEntryID(entry upstreamModelEntry) string {
+	return strings.TrimPrefix(strings.TrimSpace(grokUpstreamModelEntryExactID(entry)), "models/")
+}
+
+func grokUpstreamModelEntryExactID(entry upstreamModelEntry) string {
 	candidates := []string{
 		entry.Model,
 		entry.ModelID,
@@ -707,15 +801,32 @@ func grokUpstreamModelEntryID(entry upstreamModelEntry) string {
 	// compatibility fallback rather than preferring it over protocol model IDs.
 	candidates = append(candidates, entry.Name)
 	for _, candidate := range candidates {
-		modelID := strings.TrimSpace(candidate)
-		if modelID != "" {
-			return strings.TrimPrefix(modelID, "models/")
+		if strings.TrimSpace(candidate) != "" {
+			return candidate
 		}
 	}
 	return ""
 }
 
 func dedupeAndSortModelIDs(models []string) []string {
+	seen := make(map[string]struct{}, len(models))
+	result := make([]string, 0, len(models))
+	for _, model := range models {
+		model = strings.TrimSpace(model)
+		if model == "" {
+			continue
+		}
+		if _, exists := seen[model]; exists {
+			continue
+		}
+		seen[model] = struct{}{}
+		result = append(result, model)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func dedupeExactModelIDs(models []string) []string {
 	seen := make(map[string]struct{}, len(models))
 	result := make([]string, 0, len(models))
 	for _, model := range models {
@@ -728,6 +839,70 @@ func dedupeAndSortModelIDs(models []string) []string {
 		seen[model] = struct{}{}
 		result = append(result, model)
 	}
-	sort.Strings(result)
 	return result
+}
+
+func marshalUpstreamRawSnapshot(payload []byte, responseMetadata map[string]any) ([]byte, error) {
+	if !json.Valid(payload) {
+		return nil, errors.New("payload is not valid JSON")
+	}
+	metadata, err := json.Marshal(responseMetadata)
+	if err != nil {
+		return nil, err
+	}
+	snapshot := make([]byte, 0, len(payload)+len(metadata)+26)
+	snapshot = append(snapshot, `{"payload":`...)
+	snapshot = append(snapshot, payload...)
+	snapshot = append(snapshot, `,"response":`...)
+	snapshot = append(snapshot, metadata...)
+	snapshot = append(snapshot, '}')
+	return snapshot, nil
+}
+
+func extractJSONObjectKeysInOrder(payload []byte, field string) ([]string, error) {
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &document); err != nil {
+		return nil, err
+	}
+	object, ok := document[field]
+	if !ok {
+		return nil, nil
+	}
+	decoder := json.NewDecoder(bytes.NewReader(object))
+	start, err := decoder.Token()
+	if err != nil {
+		return nil, err
+	}
+	if delimiter, ok := start.(json.Delim); !ok || delimiter != '{' {
+		return nil, fmt.Errorf("%s must be a JSON object", field)
+	}
+	keys := make([]string, 0)
+	for decoder.More() {
+		key, err := decoder.Token()
+		if err != nil {
+			return nil, err
+		}
+		keys = append(keys, key.(string))
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return nil, err
+		}
+	}
+	if _, err := decoder.Token(); err != nil {
+		return nil, err
+	}
+	return dedupeExactModelIDs(keys), nil
+}
+
+func newSynthesizedUpstreamModelDiscovery(models []string, source string) UpstreamModelDiscovery {
+	legacyModels := dedupeAndSortModelIDs(models)
+	rawSnapshot, _ := json.Marshal(map[string]any{
+		"payload":  map[string]any{"models": models},
+		"response": map[string]any{"source": source},
+	})
+	return UpstreamModelDiscovery{
+		Models:           legacyModels,
+		EvidenceModelIDs: append([]string(nil), models...),
+		RawSnapshot:      rawSnapshot,
+	}
 }

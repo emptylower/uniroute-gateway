@@ -1,16 +1,19 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/stretchr/testify/require"
 )
 
@@ -342,8 +345,12 @@ func TestPersistDiscoveredModelsRecordsAcceptedObservationBeforeExistingCredenti
 
 	var snapshot map[string]any
 	require.NoError(t, json.Unmarshal(input.RawSnapshot, &snapshot))
-	require.Equal(t, []any{"Vendor/Model:Latest", "gpt-5.6-sol"}, snapshot["models"])
-	require.Equal(t, PlatformOpenAI, snapshot["routing_platform"])
+	payload, ok := snapshot["payload"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, []any{"Vendor/Model:Latest", "gpt-5.6-sol"}, payload["models"])
+	responseMetadata, ok := snapshot["response"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "legacy_call", responseMetadata["source"])
 }
 
 func TestPersistDiscoveredModelsPreservesExactNonEmptyUpstreamModelIDs(t *testing.T) {
@@ -356,12 +363,114 @@ func TestPersistDiscoveredModelsPreservesExactNonEmptyUpstreamModelIDs(t *testin
 		modelObservationRepository: observations,
 	}
 
-	err := svc.PersistDiscoveredModels(context.Background(), &Account{
+	rawSnapshot := []byte(`{"payload":{"data":[{"id":" Vendor/Model:Latest "},{"id":"Vendor/Model:Latest"},{"id":" Vendor/Model:Latest "}]},"response":{"source":"http","status_code":200}}`)
+	err := svc.PersistUpstreamModelDiscovery(context.Background(), &Account{
 		ID:       43,
 		Platform: PlatformOpenAI,
-	}, []string{" Vendor/Model:Latest ", "Vendor/Model:Latest", " Vendor/Model:Latest "}, time.Date(2026, time.August, 18, 9, 30, 0, 0, time.UTC))
+	}, UpstreamModelDiscovery{
+		Models:           []string{"Vendor/Model:Latest"},
+		EvidenceModelIDs: []string{" Vendor/Model:Latest ", "Vendor/Model:Latest", " Vendor/Model:Latest "},
+		RawSnapshot:      rawSnapshot,
+	}, time.Date(2026, time.August, 18, 9, 30, 0, 0, time.UTC))
 	require.NoError(t, err)
 	require.Equal(t, []string{" Vendor/Model:Latest ", "Vendor/Model:Latest"}, observations.inputs[0].ModelIDs)
+	require.Equal(t, rawSnapshot, observations.inputs[0].RawSnapshot)
+	require.Equal(t, map[string]any{"Vendor/Model:Latest": "Vendor/Model:Latest"}, store.mapping,
+		"evidence exactness must not change legacy mapping normalization")
+}
+
+func TestFetchUpstreamModelDiscoveryPreservesHTTPPayloadMetadataAndExactIDs(t *testing.T) {
+	t.Parallel()
+
+	body := []byte(`{"object":"list","data":[{"id":" model/A "},{"id":"model/A"},{"id":" model/A "}],"metadata":{"cursor":"next"}}`)
+	svc := &AccountTestService{
+		httpUpstream: &httpUpstreamStub{resp: &http.Response{
+			StatusCode: http.StatusOK,
+			Header: http.Header{
+				"Content-Type": []string{"application/json"},
+				"Etag":         []string{`W/"http-etag"`},
+			},
+			Body: io.NopCloser(strings.NewReader(string(body))),
+		}},
+		cfg: upstreamModelSyncTestConfig(),
+	}
+
+	discovery, err := svc.FetchUpstreamModelDiscovery(context.Background(), &Account{
+		ID:       44,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"api_key": "key",
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"model/A"}, discovery.Models)
+	require.Equal(t, []string{" model/A ", "model/A", " model/A "}, discovery.EvidenceModelIDs)
+
+	var snapshot struct {
+		Payload  json.RawMessage `json:"payload"`
+		Response struct {
+			Source      string `json:"source"`
+			StatusCode  int    `json:"status_code"`
+			ContentType string `json:"content_type"`
+			ETag        string `json:"etag"`
+		} `json:"response"`
+	}
+	require.NoError(t, json.Unmarshal(discovery.RawSnapshot, &snapshot))
+	require.JSONEq(t, string(body), string(snapshot.Payload))
+	require.Equal(t, "http", snapshot.Response.Source)
+	require.Equal(t, http.StatusOK, snapshot.Response.StatusCode)
+	require.Equal(t, "application/json", snapshot.Response.ContentType)
+	require.Equal(t, `W/"http-etag"`, snapshot.Response.ETag)
+}
+
+func TestFetchUpstreamModelDiscoveryPreservesManifestPayloadMetadataAndExactIDs(t *testing.T) {
+	t.Parallel()
+
+	body := []byte(`{"models":[{"slug":" gpt-exact "},{"slug":"gpt-exact"},{"slug":" gpt-exact "}],"metadata":{"source":"codex"}}`)
+	fetcher := &codexModelsManifestFetcherStub{manifest: &CodexModelsManifest{Body: body, ETag: `W/"manifest-etag"`}}
+	svc := &AccountTestService{codexModelsFetcher: fetcher}
+
+	discovery, err := svc.FetchUpstreamModelDiscovery(context.Background(), &Account{
+		ID:       45,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"gpt-exact"}, discovery.Models)
+	require.Equal(t, []string{" gpt-exact ", "gpt-exact", " gpt-exact "}, discovery.EvidenceModelIDs)
+
+	var snapshot map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(discovery.RawSnapshot, &snapshot))
+	require.JSONEq(t, string(body), string(snapshot["payload"]))
+	var metadata map[string]any
+	require.NoError(t, json.Unmarshal(snapshot["response"], &metadata))
+	require.Equal(t, "manifest", metadata["source"])
+	require.Equal(t, `W/"manifest-etag"`, metadata["etag"])
+}
+
+func TestPersistUpstreamModelDiscoveryRecordsEmptyCatalogBeforeLegacyFailure(t *testing.T) {
+	t.Parallel()
+
+	callOrder := []string{}
+	store := &orderedAccountModelDiscoveryStoreStub{callOrder: &callOrder}
+	observations := &modelObservationRepositoryStub{batchID: "empty-batch", callOrder: &callOrder}
+	svc := &AccountTestService{modelDiscoveryStore: store, modelObservationRepository: observations}
+	rawSnapshot := []byte(`{"payload":{"data":[]},"response":{"source":"http","status_code":200}}`)
+
+	err := svc.PersistUpstreamModelDiscovery(context.Background(), &Account{
+		ID:       46,
+		Platform: PlatformOpenAI,
+	}, UpstreamModelDiscovery{RawSnapshot: rawSnapshot}, time.Date(2026, time.August, 18, 10, 0, 0, 0, time.UTC))
+	require.Error(t, err)
+	var syncErr *UpstreamModelSyncError
+	require.True(t, errors.As(err, &syncErr))
+	require.Equal(t, UpstreamModelSyncErrorUpstream, syncErr.Kind)
+	require.Equal(t, []string{"observation"}, callOrder)
+	require.Len(t, observations.inputs, 1)
+	require.Empty(t, observations.inputs[0].ModelIDs)
+	require.Equal(t, rawSnapshot, observations.inputs[0].RawSnapshot)
+	require.Zero(t, store.accountID, "empty legacy catalog must not modify mappings")
 }
 
 func TestPersistDiscoveredModelsRecordsRoutingOnlyPlatformsWithoutInferringProvider(t *testing.T) {
@@ -543,6 +652,40 @@ func TestBuildUpstreamModelsRequestSupportsGrokOAuth(t *testing.T) {
 	require.Equal(t, "grok-user-id", req.Header.Get("X-UserID"))
 	require.Equal(t, "grok-user@example.com", req.Header.Get("X-Email"))
 	require.NotContains(t, req.Header.Get("Authorization"), "oauth-refresh-token")
+}
+
+func TestFetchUpstreamModelDiscoveryPreservesAntigravityOAuthPayload(t *testing.T) {
+	originalBaseURLs := append([]string(nil), antigravity.BaseURLs...)
+	originalAvailability := antigravity.DefaultURLAvailability
+	t.Cleanup(func() {
+		antigravity.BaseURLs = originalBaseURLs
+		antigravity.DefaultURLAvailability = originalAvailability
+	})
+
+	payload := []byte("{\n  \"models\": {\n    \" z-model \" : {},\n    \"a-model\": {},\n    \" z-model \" : {\"duplicate\": true}\n  }\n}")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(payload)
+	}))
+	t.Cleanup(server.Close)
+	antigravity.BaseURLs = []string{server.URL}
+	antigravity.DefaultURLAvailability = antigravity.NewURLAvailability(time.Minute)
+
+	svc := &AccountTestService{
+		antigravityGatewayService: newAntigravityCompatService(config.GatewayConfig{}, nil),
+	}
+	discovery, err := svc.FetchUpstreamModelDiscovery(context.Background(), newAntigravityCompatAccount(AccountTypeOAuth))
+	require.NoError(t, err)
+	require.Equal(t, []string{"a-model", "z-model"}, discovery.Models)
+	require.Equal(t, []string{" z-model ", "a-model"}, discovery.EvidenceModelIDs)
+
+	var snapshot struct {
+		Payload  json.RawMessage `json:"payload"`
+		Response map[string]any  `json:"response"`
+	}
+	require.NoError(t, json.Unmarshal(discovery.RawSnapshot, &snapshot))
+	require.True(t, bytes.Equal(payload, snapshot.Payload), "accepted payload must not be synthesized from model IDs")
+	require.Equal(t, "antigravity_oauth", snapshot.Response["source"])
 }
 
 func TestBuildUpstreamModelsRequestGrokOAuthRequiresTokenProvider(t *testing.T) {

@@ -7,6 +7,14 @@ import (
 
 type GovernanceProvider string
 
+// UpstreamModelDiscovery keeps governance evidence separate from the legacy
+// normalized model list consumed by runtime credential mappings.
+type UpstreamModelDiscovery struct {
+	Models           []string
+	EvidenceModelIDs []string
+	RawSnapshot      []byte
+}
+
 type DiscoveryBatchInput struct {
 	IdempotencyKey  string
 	ConnectionID    *int64

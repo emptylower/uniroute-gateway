@@ -2560,7 +2560,7 @@ func (h *AccountHandler) SyncUpstreamModels(c *gin.Context) {
 		return
 	}
 
-	models, err := h.accountTestService.FetchUpstreamSupportedModels(c.Request.Context(), account)
+	discovery, err := h.accountTestService.FetchUpstreamModelDiscovery(c.Request.Context(), account)
 	if err != nil {
 		var syncErr *service.UpstreamModelSyncError
 		if errors.As(err, &syncErr) {
@@ -2580,14 +2580,24 @@ func (h *AccountHandler) SyncUpstreamModels(c *gin.Context) {
 	}
 
 	syncedAt := time.Now().UTC()
-	if err := h.accountTestService.PersistDiscoveredModels(c.Request.Context(), account, models, syncedAt); err != nil {
+	if err := h.accountTestService.PersistUpstreamModelDiscovery(c.Request.Context(), account, discovery, syncedAt); err != nil {
 		slog.Warn("sync_upstream_models_persist_failed", "account_id", accountID)
+		var syncErr *service.UpstreamModelSyncError
+		if errors.As(err, &syncErr) {
+			switch syncErr.Kind {
+			case service.UpstreamModelSyncErrorConfiguration, service.UpstreamModelSyncErrorUnsupported:
+				response.BadRequest(c, syncErr.SafeMessage())
+			default:
+				response.Error(c, http.StatusBadGateway, syncErr.SafeMessage())
+			}
+			return
+		}
 		response.ErrorFrom(c, err)
 		return
 	}
 
 	response.Success(c, gin.H{
-		"models":    models,
+		"models":    discovery.Models,
 		"synced_at": syncedAt.Format(time.RFC3339),
 	})
 }

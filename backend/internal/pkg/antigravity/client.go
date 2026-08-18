@@ -657,14 +657,20 @@ type FetchAvailableModelsResponse struct {
 // FetchAvailableModels 获取可用模型和配额信息，返回解析后的结构体和原始 JSON
 // 支持 URL fallback：sandbox → daily → prod
 func (c *Client) FetchAvailableModels(ctx context.Context, accessToken, projectID string) (*FetchAvailableModelsResponse, map[string]any, error) {
+	models, raw, _, err := c.FetchAvailableModelsWithRawBytes(ctx, accessToken, projectID)
+	return models, raw, err
+}
+
+// FetchAvailableModelsWithRawBytes also returns the accepted response bytes without re-encoding them.
+func (c *Client) FetchAvailableModelsWithRawBytes(ctx context.Context, accessToken, projectID string) (*FetchAvailableModelsResponse, map[string]any, []byte, error) {
 	if c == nil || c.httpClient == nil {
-		return nil, nil, errors.New("antigravity client is not configured")
+		return nil, nil, nil, errors.New("antigravity client is not configured")
 	}
 
 	reqBody := FetchAvailableModelsRequest{Project: projectID}
 	bodyBytes, err := json.Marshal(reqBody)
 	if err != nil {
-		return nil, nil, fmt.Errorf("序列化请求失败: %w", err)
+		return nil, nil, nil, fmt.Errorf("序列化请求失败: %w", err)
 	}
 
 	// 固定顺序：prod -> daily
@@ -690,16 +696,16 @@ func (c *Client) FetchAvailableModels(ctx context.Context, accessToken, projectI
 				log.Printf("[antigravity] fetchAvailableModels URL fallback: %s -> %s", baseURL, availableURLs[urlIdx+1])
 				continue
 			}
-			return nil, nil, lastErr
+			return nil, nil, nil, lastErr
 		}
 
 		respBodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, fetchAvailableModelsBodyLimit+1))
 		_ = resp.Body.Close() // 立即关闭，避免循环内 defer 导致的资源泄漏
 		if err != nil {
-			return nil, nil, fmt.Errorf("读取响应失败: %w", err)
+			return nil, nil, nil, fmt.Errorf("读取响应失败: %w", err)
 		}
 		if int64(len(respBodyBytes)) > fetchAvailableModelsBodyLimit {
-			return nil, nil, fmt.Errorf("响应超过 %d 字节", fetchAvailableModelsBodyLimit)
+			return nil, nil, nil, fmt.Errorf("响应超过 %d 字节", fetchAvailableModelsBodyLimit)
 		}
 
 		// 检查是否需要 URL 降级
@@ -709,19 +715,19 @@ func (c *Client) FetchAvailableModels(ctx context.Context, accessToken, projectI
 		}
 
 		if resp.StatusCode == http.StatusForbidden {
-			return nil, nil, &ForbiddenError{
+			return nil, nil, nil, &ForbiddenError{
 				StatusCode: resp.StatusCode,
 				Body:       string(respBodyBytes),
 			}
 		}
 
 		if resp.StatusCode != http.StatusOK {
-			return nil, nil, fmt.Errorf("fetchAvailableModels 失败 (HTTP %d): %s", resp.StatusCode, string(respBodyBytes))
+			return nil, nil, nil, fmt.Errorf("fetchAvailableModels 失败 (HTTP %d): %s", resp.StatusCode, string(respBodyBytes))
 		}
 
 		var modelsResp FetchAvailableModelsResponse
 		if err := json.Unmarshal(respBodyBytes, &modelsResp); err != nil {
-			return nil, nil, fmt.Errorf("响应解析失败: %w", err)
+			return nil, nil, nil, fmt.Errorf("响应解析失败: %w", err)
 		}
 
 		// 解析原始 JSON 为 map
@@ -730,10 +736,10 @@ func (c *Client) FetchAvailableModels(ctx context.Context, accessToken, projectI
 
 		// 标记成功的 URL，下次优先使用
 		DefaultURLAvailability.MarkSuccess(baseURL)
-		return &modelsResp, rawResp, nil
+		return &modelsResp, rawResp, respBodyBytes, nil
 	}
 
-	return nil, nil, lastErr
+	return nil, nil, nil, lastErr
 }
 
 func (c *Client) fetchAvailableModelsHTTPClient() *http.Client {

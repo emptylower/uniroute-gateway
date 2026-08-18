@@ -3,6 +3,7 @@
 package antigravity
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -1517,12 +1518,15 @@ func TestClient_FetchAvailableModels_Success_RealCall(t *testing.T) {
 	withMockBaseURLs(t, []string{server.URL})
 
 	client := mustNewClient(t, "")
-	resp, rawResp, err := client.FetchAvailableModels(context.Background(), "test-token", "project-abc")
+	resp, rawResp, rawBytes, err := client.FetchAvailableModelsWithRawBytes(context.Background(), "test-token", "project-abc")
 	if err != nil {
 		t.Fatalf("FetchAvailableModels 失败: %v", err)
 	}
 	if resp.Models == nil {
 		t.Fatal("Models 不应为 nil")
+	}
+	if !bytes.Contains(rawBytes, []byte(`"gemini-2.0-flash"`)) {
+		t.Fatalf("原始响应字节未保留: %s", rawBytes)
 	}
 	if len(resp.Models) != 2 {
 		t.Errorf("Models 数量不匹配: got %d, want 2", len(resp.Models))

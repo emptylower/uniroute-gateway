@@ -4,6 +4,7 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"testing"
 	"time"
@@ -20,6 +21,12 @@ type observationProjection struct {
 	MissStreak     int
 	FirstSeenAt    time.Time
 	LastSeenAt     time.Time
+}
+
+type observationProjectionDetails struct {
+	observationProjection
+	ConnectionID sql.NullInt64
+	RawSnapshot  string
 }
 
 func TestModelGovernanceRepository_RecordDiscoveryPreservesIDsAndIsIdempotent(t *testing.T) {
@@ -155,6 +162,109 @@ func TestModelGovernanceRepository_RecordDiscoveryKeepsRoutingOnlyPlatformsIgnor
 	}
 }
 
+func TestModelGovernanceRepository_RecordDiscoveryStaleBatchPersistsEvidenceOnly(t *testing.T) {
+	ctx := context.Background()
+	accountID := createGovernanceObservationAccount(t, "openai", `{}`)
+	repo := NewModelObservationRepository(integrationDB)
+	provider := service.GovernanceProvider("openai")
+	newerAt := time.Date(2026, time.August, 18, 15, 0, 0, 0, time.UTC)
+	olderAt := newerAt.Add(-time.Hour)
+	connectionNew := int64(901)
+	connectionOld := int64(900)
+
+	_, err := repo.RecordDiscovery(ctx, service.DiscoveryBatchInput{
+		IdempotencyKey: "newer-" + fmt.Sprint(accountID), AccountID: accountID,
+		AccountProvider: &provider, RoutingPlatform: "openai", ConnectionID: &connectionNew,
+		ModelIDs: []string{"new-model"}, RawSnapshot: []byte(`{"payload":{"data":[{"id":"new-model"}]}}`), ObservedAt: newerAt,
+	})
+	require.NoError(t, err)
+	before := loadObservationProjectionDetails(t, accountID, "new-model")
+	eventsBefore := countObservationEvents(t, accountID)
+
+	staleSnapshot := []byte(`{"payload":{"data":[{"id":"old-model"}]},"metadata":{"stale":true}}`)
+	staleBatchID, err := repo.RecordDiscovery(ctx, service.DiscoveryBatchInput{
+		IdempotencyKey: "older-" + fmt.Sprint(accountID), AccountID: accountID,
+		AccountProvider: &provider, RoutingPlatform: "openai", ConnectionID: &connectionOld,
+		ModelIDs: []string{"old-model"}, RawSnapshot: staleSnapshot, ObservedAt: olderAt,
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, staleBatchID)
+	require.Equal(t, before, loadObservationProjectionDetails(t, accountID, "new-model"))
+	require.Empty(t, loadObservationProjectionsByID(t, accountID, "old-model"))
+	require.Equal(t, eventsBefore, countObservationEvents(t, accountID))
+	require.JSONEq(t, string(staleSnapshot), loadBatchRawSnapshot(t, staleBatchID))
+}
+
+func TestModelGovernanceRepository_RecordDiscoveryRejectsInvalidProviderAndNonObjectSnapshot(t *testing.T) {
+	ctx := context.Background()
+	accountID := createGovernanceObservationAccount(t, "openai", `{}`)
+	repo := NewModelObservationRepository(integrationDB)
+	invalidProvider := service.GovernanceProvider("azure-openai")
+
+	_, err := repo.RecordDiscovery(ctx, service.DiscoveryBatchInput{
+		IdempotencyKey: "invalid-provider-" + fmt.Sprint(accountID), AccountID: accountID,
+		AccountProvider: &invalidProvider, RoutingPlatform: "openai", ModelIDs: []string{"model"},
+		RawSnapshot: []byte(`{"payload":{}}`), ObservedAt: time.Now().UTC(),
+	})
+	require.ErrorContains(t, err, "account provider")
+
+	provider := service.GovernanceProvider("openai")
+	_, err = repo.RecordDiscovery(ctx, service.DiscoveryBatchInput{
+		IdempotencyKey: "array-snapshot-" + fmt.Sprint(accountID), AccountID: accountID,
+		AccountProvider: &provider, RoutingPlatform: "openai", ModelIDs: []string{"model"},
+		RawSnapshot: []byte(`[{"id":"model"}]`), ObservedAt: time.Now().UTC(),
+	})
+	require.ErrorContains(t, err, "JSON object")
+}
+
+func TestModelGovernanceRepository_RecordDiscoveryRejectsIdempotencyCollisionAcrossOwners(t *testing.T) {
+	ctx := context.Background()
+	firstAccountID := createGovernanceObservationAccount(t, "openai", `{}`)
+	secondAccountID := createGovernanceObservationAccount(t, "openai", `{}`)
+	repo := NewModelObservationRepository(integrationDB)
+	provider := service.GovernanceProvider("openai")
+	key := fmt.Sprintf("collision-%d-%d", firstAccountID, secondAccountID)
+	observedAt := time.Date(2026, time.August, 18, 16, 0, 0, 0, time.UTC)
+
+	firstBatchID, err := repo.RecordDiscovery(ctx, service.DiscoveryBatchInput{
+		IdempotencyKey: key, AccountID: firstAccountID, AccountProvider: &provider,
+		RoutingPlatform: "openai", ModelIDs: []string{"first"},
+		RawSnapshot: []byte(`{"payload":{"data":[{"id":"first"}]}}`), ObservedAt: observedAt,
+	})
+	require.NoError(t, err)
+
+	_, err = repo.RecordDiscovery(ctx, service.DiscoveryBatchInput{
+		IdempotencyKey: key, AccountID: secondAccountID, AccountProvider: &provider,
+		RoutingPlatform: "openai", ModelIDs: []string{"second"},
+		RawSnapshot: []byte(`{"payload":{"data":[{"id":"second"}]}}`), ObservedAt: observedAt,
+	})
+	require.ErrorContains(t, err, "idempotency key collision")
+	require.Empty(t, loadObservationProjections(t, secondAccountID))
+	require.Equal(t, firstAccountID, loadBatchAccountID(t, firstBatchID))
+}
+
+func TestModelGovernanceRepository_RecordDiscoveryAppendsMissingEventsDeterministically(t *testing.T) {
+	ctx := context.Background()
+	accountID := createGovernanceObservationAccount(t, "openai", `{}`)
+	repo := NewModelObservationRepository(integrationDB)
+	provider := service.GovernanceProvider("openai")
+	base := time.Date(2026, time.August, 18, 17, 0, 0, 0, time.UTC)
+
+	_, err := repo.RecordDiscovery(ctx, service.DiscoveryBatchInput{
+		IdempotencyKey: "deterministic-present-" + fmt.Sprint(accountID), AccountID: accountID,
+		AccountProvider: &provider, RoutingPlatform: "openai", ModelIDs: []string{"z-model", "a-model", "m-model"},
+		RawSnapshot: []byte(`{"payload":{"data":[]}}`), ObservedAt: base,
+	})
+	require.NoError(t, err)
+	batchID, err := repo.RecordDiscovery(ctx, service.DiscoveryBatchInput{
+		IdempotencyKey: "deterministic-missing-" + fmt.Sprint(accountID), AccountID: accountID,
+		AccountProvider: &provider, RoutingPlatform: "openai", ModelIDs: nil,
+		RawSnapshot: []byte(`{"payload":{"data":[]}}`), ObservedAt: base.Add(time.Hour),
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"a-model", "m-model", "z-model"}, loadBatchEventModelIDs(t, batchID))
+}
+
 func createGovernanceObservationAccount(t *testing.T, platform, credentials string) int64 {
 	t.Helper()
 	var accountID int64
@@ -194,6 +304,78 @@ func loadObservationProjection(t *testing.T, accountID int64, modelID string) ob
 		FROM model_observations WHERE account_id = $1 AND upstream_model_id = $2
 	`, accountID, modelID).Scan(&item.ModelID, &item.Classification, &item.Reason, &item.Presence, &item.MissStreak, &item.FirstSeenAt, &item.LastSeenAt))
 	return item
+}
+
+func loadObservationProjectionDetails(t *testing.T, accountID int64, modelID string) observationProjectionDetails {
+	t.Helper()
+	var item observationProjectionDetails
+	require.NoError(t, integrationDB.QueryRowContext(context.Background(), `
+		SELECT upstream_model_id, classification, classification_reason, upstream_presence,
+		       miss_streak, first_seen_at, last_seen_at, connection_id, raw_snapshot::text
+		FROM model_observations WHERE account_id = $1 AND upstream_model_id = $2
+	`, accountID, modelID).Scan(
+		&item.ModelID, &item.Classification, &item.Reason, &item.Presence,
+		&item.MissStreak, &item.FirstSeenAt, &item.LastSeenAt, &item.ConnectionID, &item.RawSnapshot,
+	))
+	return item
+}
+
+func loadObservationProjectionsByID(t *testing.T, accountID int64, modelID string) []observationProjection {
+	t.Helper()
+	rows, err := integrationDB.QueryContext(context.Background(), `
+		SELECT upstream_model_id, classification, classification_reason, upstream_presence,
+		       miss_streak, first_seen_at, last_seen_at
+		FROM model_observations WHERE account_id = $1 AND upstream_model_id = $2
+	`, accountID, modelID)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, rows.Close()) }()
+	var result []observationProjection
+	for rows.Next() {
+		var item observationProjection
+		require.NoError(t, rows.Scan(&item.ModelID, &item.Classification, &item.Reason, &item.Presence, &item.MissStreak, &item.FirstSeenAt, &item.LastSeenAt))
+		result = append(result, item)
+	}
+	require.NoError(t, rows.Err())
+	return result
+}
+
+func loadBatchRawSnapshot(t *testing.T, batchID string) string {
+	t.Helper()
+	var snapshot string
+	require.NoError(t, integrationDB.QueryRowContext(context.Background(), `
+		SELECT raw_snapshot::text FROM model_classification_batches WHERE batch_id = $1
+	`, batchID).Scan(&snapshot))
+	return snapshot
+}
+
+func loadBatchAccountID(t *testing.T, batchID string) int64 {
+	t.Helper()
+	var accountID int64
+	require.NoError(t, integrationDB.QueryRowContext(context.Background(), `
+		SELECT account_id FROM model_classification_batches WHERE batch_id = $1
+	`, batchID).Scan(&accountID))
+	return accountID
+}
+
+func loadBatchEventModelIDs(t *testing.T, batchID string) []string {
+	t.Helper()
+	rows, err := integrationDB.QueryContext(context.Background(), `
+		SELECT o.upstream_model_id
+		FROM model_observation_events e
+		JOIN model_observations o ON o.id = e.observation_id
+		WHERE e.batch_id = $1
+		ORDER BY e.id
+	`, batchID)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, rows.Close()) }()
+	var result []string
+	for rows.Next() {
+		var modelID string
+		require.NoError(t, rows.Scan(&modelID))
+		result = append(result, modelID)
+	}
+	require.NoError(t, rows.Err())
+	return result
 }
 
 func countObservationEvents(t *testing.T, accountID int64) int {

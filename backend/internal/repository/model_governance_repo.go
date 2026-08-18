@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -41,8 +42,12 @@ func (r *modelObservationRepository) RecordDiscovery(ctx context.Context, input 
 	if input.ObservedAt.IsZero() {
 		return "", errors.New("discovery observation time is required")
 	}
-	if !json.Valid(input.RawSnapshot) {
-		return "", errors.New("discovery raw snapshot must be valid JSON")
+	if input.AccountProvider != nil && !validGovernanceProvider(*input.AccountProvider) {
+		return "", fmt.Errorf("invalid account provider %q", *input.AccountProvider)
+	}
+	var rawSnapshotObject map[string]json.RawMessage
+	if err := json.Unmarshal(input.RawSnapshot, &rawSnapshotObject); err != nil || rawSnapshotObject == nil {
+		return "", errors.New("discovery raw snapshot must be a JSON object")
 	}
 
 	tx, err := r.db.BeginTx(ctx, nil)
@@ -71,10 +76,16 @@ func (r *modelObservationRepository) RecordDiscovery(ctx context.Context, input 
 		return "", err
 	}
 	if inserted == 0 {
+		var existingAccountID int64
+		var samePayload bool
 		if err = tx.QueryRowContext(ctx, `
-			SELECT batch_id FROM model_classification_batches WHERE idempotency_key = $1
-		`, input.IdempotencyKey).Scan(&batchID); err != nil {
+			SELECT batch_id, account_id, raw_snapshot = $2::jsonb
+			FROM model_classification_batches WHERE idempotency_key = $1
+		`, input.IdempotencyKey, string(input.RawSnapshot)).Scan(&batchID, &existingAccountID, &samePayload); err != nil {
 			return "", err
+		}
+		if existingAccountID != input.AccountID || !samePayload {
+			return "", errors.New("discovery idempotency key collision")
 		}
 		if err = tx.Commit(); err != nil {
 			return "", err
@@ -86,6 +97,20 @@ func (r *modelObservationRepository) RecordDiscovery(ctx context.Context, input 
 		SELECT id FROM accounts WHERE id = $1 FOR UPDATE
 	`, input.AccountID).Scan(&lockedAccountID); err != nil {
 		return "", err
+	}
+	var projectionWatermark sql.NullTime
+	if err = tx.QueryRowContext(ctx, `
+		SELECT MAX(observed_at)
+		FROM model_classification_batches
+		WHERE account_id = $1 AND batch_id <> $2
+	`, input.AccountID, batchID).Scan(&projectionWatermark); err != nil {
+		return "", err
+	}
+	if projectionWatermark.Valid && input.ObservedAt.Before(projectionWatermark.Time) {
+		if err = tx.Commit(); err != nil {
+			return "", err
+		}
+		return batchID, nil
 	}
 
 	existing, err := lockModelObservations(ctx, tx, input.AccountID)
@@ -150,10 +175,16 @@ func (r *modelObservationRepository) RecordDiscovery(ctx context.Context, input 
 		}
 	}
 
-	for modelID, observation := range existing {
+	missingModelIDs := make([]string, 0, len(existing))
+	for modelID := range existing {
 		if _, present := seen[modelID]; present {
 			continue
 		}
+		missingModelIDs = append(missingModelIDs, modelID)
+	}
+	sort.Strings(missingModelIDs)
+	for _, modelID := range missingModelIDs {
+		observation := existing[modelID]
 		observation.presence = "missing"
 		observation.missStreak++
 		_, err = tx.ExecContext(ctx, `
@@ -173,6 +204,15 @@ func (r *modelObservationRepository) RecordDiscovery(ctx context.Context, input 
 		return "", err
 	}
 	return batchID, nil
+}
+
+func validGovernanceProvider(provider service.GovernanceProvider) bool {
+	switch provider {
+	case "anthropic", "openai", "gemini", "grok":
+		return true
+	default:
+		return false
+	}
 }
 
 func lockModelObservations(ctx context.Context, tx *sql.Tx, accountID int64) (map[string]storedModelObservation, error) {
