@@ -99,6 +99,7 @@ func registerDelegatedGatewayAdminRoutes(
 	accounts.GET("", h.Admin.Account.List)
 	accounts.GET("/antigravity/default-model-mapping", h.Admin.Account.GetAntigravityDefaultModelMapping)
 	accounts.POST("/models/sync-upstream-preview", h.Admin.Account.SyncUpstreamModelsPreview)
+	accounts.POST("/check-mixed-channel", h.Admin.Account.CheckMixedChannel)
 	accounts.GET("/:id", h.Admin.Account.GetByID)
 	accounts.POST("", h.Admin.Account.Create)
 	accounts.PUT("/:id", h.Admin.Account.Update)
