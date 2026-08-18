@@ -60,6 +60,15 @@ type syncUpstreamModelDiscoveryStore struct {
 	err       error
 }
 
+type syncUpstreamObservationStore struct {
+	inputs []service.DiscoveryBatchInput
+}
+
+func (s *syncUpstreamObservationStore) RecordDiscovery(_ context.Context, input service.DiscoveryBatchInput) (string, error) {
+	s.inputs = append(s.inputs, input)
+	return "handler-test-batch", nil
+}
+
 func (s *syncUpstreamModelDiscoveryStore) UpdateModelDiscovery(_ context.Context, accountID int64, mapping map[string]any, discovery map[string]any) error {
 	s.accountID = accountID
 	s.mapping = mapping
@@ -67,7 +76,12 @@ func (s *syncUpstreamModelDiscoveryStore) UpdateModelDiscovery(_ context.Context
 	return s.err
 }
 
-func setupSyncUpstreamModelsRouter(adminSvc service.AdminService, upstream service.HTTPUpstream, stores ...service.AccountModelDiscoveryStore) *gin.Engine {
+func setupSyncUpstreamModelsRouter(
+	adminSvc service.AdminService,
+	upstream service.HTTPUpstream,
+	observationStore service.ModelObservationRepository,
+	stores ...service.AccountModelDiscoveryStore,
+) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	accountTestSvc := service.NewAccountTestService(
@@ -83,6 +97,10 @@ func setupSyncUpstreamModelsRouter(adminSvc service.AdminService, upstream servi
 	if len(stores) > 0 {
 		accountTestSvc.SetModelDiscoveryStore(stores[0])
 	}
+	if observationStore == nil {
+		observationStore = &syncUpstreamObservationStore{}
+	}
+	accountTestSvc.SetModelObservationRepository(observationStore)
 	handler := NewAccountHandler(adminSvc, nil, nil, nil, nil, nil, nil, nil, accountTestSvc, nil, nil, nil, nil, nil)
 	router.POST("/api/v1/admin/accounts/:id/models/sync-upstream", handler.SyncUpstreamModels)
 	return router
@@ -318,7 +336,7 @@ func TestAccountHandlerSyncUpstreamModels_ConfigErrorReturnsBadRequest(t *testin
 			},
 		},
 	}
-	router := setupSyncUpstreamModelsRouter(svc, &syncUpstreamHTTPUpstream{})
+	router := setupSyncUpstreamModelsRouter(svc, &syncUpstreamHTTPUpstream{}, nil)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/accounts/44/models/sync-upstream", nil)
@@ -348,7 +366,7 @@ func TestAccountHandlerSyncUpstreamModels_UpstreamErrorDoesNotExposeBody(t *test
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
 		Body:       io.NopCloser(strings.NewReader(`{"error":"SECRET_TOKEN should not be exposed"}`)),
 	}}
-	router := setupSyncUpstreamModelsRouter(svc, upstream)
+	router := setupSyncUpstreamModelsRouter(svc, upstream, nil)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/accounts/45/models/sync-upstream", nil)
@@ -384,13 +402,15 @@ func TestAccountHandlerSyncUpstreamModelsPersistsLatestSnapshot(t *testing.T) {
 		Body:       io.NopCloser(strings.NewReader(`{"data":[{"id":"gpt-5.6-terra"},{"id":"gpt-5.6-sol"}]}`)),
 	}}
 	store := &syncUpstreamModelDiscoveryStore{}
-	router := setupSyncUpstreamModelsRouter(svc, upstream, store)
+	observations := &syncUpstreamObservationStore{}
+	router := setupSyncUpstreamModelsRouter(svc, upstream, observations, store)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/accounts/46/models/sync-upstream", nil)
 	router.ServeHTTP(rec, req)
 
 	require.Equal(t, http.StatusOK, rec.Code)
+	require.Len(t, observations.inputs, 1)
 	require.Equal(t, int64(46), store.accountID)
 	require.Equal(t, map[string]any{
 		"alias":         "upstream-target",

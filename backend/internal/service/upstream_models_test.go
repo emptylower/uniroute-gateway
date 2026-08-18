@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -24,6 +25,33 @@ type accountModelDiscoveryStoreStub struct {
 	mapping   map[string]any
 	discovery map[string]any
 	err       error
+}
+
+type modelObservationRepositoryStub struct {
+	inputs    []DiscoveryBatchInput
+	err       error
+	batchID   string
+	callOrder *[]string
+}
+
+func (s *modelObservationRepositoryStub) RecordDiscovery(_ context.Context, input DiscoveryBatchInput) (string, error) {
+	s.inputs = append(s.inputs, input)
+	if s.callOrder != nil {
+		*s.callOrder = append(*s.callOrder, "observation")
+	}
+	return s.batchID, s.err
+}
+
+type orderedAccountModelDiscoveryStoreStub struct {
+	accountModelDiscoveryStoreStub
+	callOrder *[]string
+}
+
+func (s *orderedAccountModelDiscoveryStoreStub) UpdateModelDiscovery(ctx context.Context, accountID int64, mapping map[string]any, discovery map[string]any) error {
+	if s.callOrder != nil {
+		*s.callOrder = append(*s.callOrder, "credentials")
+	}
+	return s.accountModelDiscoveryStoreStub.UpdateModelDiscovery(ctx, accountID, mapping, discovery)
 }
 
 func (s *accountModelDiscoveryStoreStub) UpdateModelDiscovery(_ context.Context, accountID int64, mapping map[string]any, discovery map[string]any) error {
@@ -251,7 +279,10 @@ func TestPersistDiscoveredModelsReplacesAutomaticSnapshotAndPreservesAliases(t *
 	t.Parallel()
 
 	store := &accountModelDiscoveryStoreStub{}
-	svc := &AccountTestService{modelDiscoveryStore: store}
+	svc := &AccountTestService{
+		modelDiscoveryStore:        store,
+		modelObservationRepository: &modelObservationRepositoryStub{batchID: "batch-existing-behavior"},
+	}
 	account := &Account{
 		ID: 19,
 		Credentials: map[string]any{
@@ -279,6 +310,102 @@ func TestPersistDiscoveredModelsReplacesAutomaticSnapshotAndPreservesAliases(t *
 		"synced_at": "2026-08-17T12:30:00Z",
 	}, store.discovery)
 	require.Contains(t, account.GetModelMapping(), "old-auto", "persistence must not mutate the loaded account")
+}
+
+func TestPersistDiscoveredModelsRecordsAcceptedObservationBeforeExistingCredentialSync(t *testing.T) {
+	t.Parallel()
+
+	callOrder := []string{}
+	store := &orderedAccountModelDiscoveryStoreStub{callOrder: &callOrder}
+	observations := &modelObservationRepositoryStub{batchID: "batch-accepted", callOrder: &callOrder}
+	svc := &AccountTestService{
+		modelDiscoveryStore:        store,
+		modelObservationRepository: observations,
+	}
+	syncedAt := time.Date(2026, time.August, 18, 9, 10, 11, 0, time.FixedZone("offset", 2*60*60))
+	account := &Account{ID: 41, Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
+
+	err := svc.PersistDiscoveredModels(context.Background(), account, []string{"Vendor/Model:Latest", "gpt-5.6-sol"}, syncedAt)
+	require.NoError(t, err)
+	require.Equal(t, []string{"observation", "credentials"}, callOrder)
+	require.Len(t, observations.inputs, 1)
+
+	input := observations.inputs[0]
+	require.Equal(t, int64(41), input.AccountID)
+	require.Nil(t, input.ConnectionID)
+	require.NotNil(t, input.AccountProvider)
+	require.Equal(t, GovernanceProvider("openai"), *input.AccountProvider)
+	require.Equal(t, PlatformOpenAI, input.RoutingPlatform)
+	require.Equal(t, []string{"Vendor/Model:Latest", "gpt-5.6-sol"}, input.ModelIDs)
+	require.Equal(t, syncedAt.UTC(), input.ObservedAt)
+	require.NotEmpty(t, input.IdempotencyKey)
+
+	var snapshot map[string]any
+	require.NoError(t, json.Unmarshal(input.RawSnapshot, &snapshot))
+	require.Equal(t, []any{"Vendor/Model:Latest", "gpt-5.6-sol"}, snapshot["models"])
+	require.Equal(t, PlatformOpenAI, snapshot["routing_platform"])
+}
+
+func TestPersistDiscoveredModelsPreservesExactNonEmptyUpstreamModelIDs(t *testing.T) {
+	t.Parallel()
+
+	store := &accountModelDiscoveryStoreStub{}
+	observations := &modelObservationRepositoryStub{batchID: "batch-exact-ids"}
+	svc := &AccountTestService{
+		modelDiscoveryStore:        store,
+		modelObservationRepository: observations,
+	}
+
+	err := svc.PersistDiscoveredModels(context.Background(), &Account{
+		ID:       43,
+		Platform: PlatformOpenAI,
+	}, []string{" Vendor/Model:Latest ", "Vendor/Model:Latest", " Vendor/Model:Latest "}, time.Date(2026, time.August, 18, 9, 30, 0, 0, time.UTC))
+	require.NoError(t, err)
+	require.Equal(t, []string{" Vendor/Model:Latest ", "Vendor/Model:Latest"}, observations.inputs[0].ModelIDs)
+}
+
+func TestPersistDiscoveredModelsRecordsRoutingOnlyPlatformsWithoutInferringProvider(t *testing.T) {
+	t.Parallel()
+
+	for _, platform := range []string{PlatformAntigravity, PlatformComposite, "future-router"} {
+		platform := platform
+		t.Run(platform, func(t *testing.T) {
+			t.Parallel()
+
+			store := &accountModelDiscoveryStoreStub{}
+			observations := &modelObservationRepositoryStub{batchID: "batch-routing-only"}
+			svc := &AccountTestService{
+				modelDiscoveryStore:        store,
+				modelObservationRepository: observations,
+			}
+			err := svc.PersistDiscoveredModels(context.Background(), &Account{
+				ID:       50,
+				Platform: platform,
+			}, []string{"claude-through-router"}, time.Date(2026, time.August, 18, 10, 0, 0, 0, time.UTC))
+			require.NoError(t, err)
+			require.Len(t, observations.inputs, 1)
+			require.Nil(t, observations.inputs[0].AccountProvider)
+			require.Equal(t, platform, observations.inputs[0].RoutingPlatform)
+		})
+	}
+}
+
+func TestPersistDiscoveredModelsDoesNotReportSuccessWhenObservationPersistenceFails(t *testing.T) {
+	t.Parallel()
+
+	store := &accountModelDiscoveryStoreStub{}
+	observations := &modelObservationRepositoryStub{err: errors.New("evidence write failed")}
+	svc := &AccountTestService{
+		modelDiscoveryStore:        store,
+		modelObservationRepository: observations,
+	}
+
+	err := svc.PersistDiscoveredModels(context.Background(), &Account{
+		ID:       42,
+		Platform: PlatformAnthropic,
+	}, []string{"claude-sonnet-4-6"}, time.Now())
+	require.ErrorContains(t, err, "evidence write failed")
+	require.Zero(t, store.accountID, "credential sync must not run after evidence persistence fails")
 }
 
 func TestPersistDiscoveredModelsRejectsCredentialShadow(t *testing.T) {

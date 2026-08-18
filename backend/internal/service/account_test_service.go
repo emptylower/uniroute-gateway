@@ -65,18 +65,19 @@ func isOpenAIImageModel(model string) bool {
 
 // AccountTestService handles account testing operations
 type AccountTestService struct {
-	accountRepo               AccountRepository
-	geminiTokenProvider       *GeminiTokenProvider
-	claudeTokenProvider       *ClaudeTokenProvider
-	grokTokenProvider         *GrokTokenProvider
-	antigravityGatewayService *AntigravityGatewayService
-	httpUpstream              HTTPUpstream
-	cfg                       *config.Config
-	tlsFPProfileService       *TLSFingerprintProfileService
-	codexModelsFetcher        codexModelsManifestFetcher
-	modelDiscoveryStore       AccountModelDiscoveryStore
-	agentIdentityTaskMu       sync.Mutex
-	agentIdentityWS           agentIdentityWSConnectionInvalidator
+	accountRepo                AccountRepository
+	geminiTokenProvider        *GeminiTokenProvider
+	claudeTokenProvider        *ClaudeTokenProvider
+	grokTokenProvider          *GrokTokenProvider
+	antigravityGatewayService  *AntigravityGatewayService
+	httpUpstream               HTTPUpstream
+	cfg                        *config.Config
+	tlsFPProfileService        *TLSFingerprintProfileService
+	codexModelsFetcher         codexModelsManifestFetcher
+	modelDiscoveryStore        AccountModelDiscoveryStore
+	modelObservationRepository ModelObservationRepository
+	agentIdentityTaskMu        sync.Mutex
+	agentIdentityWS            agentIdentityWSConnectionInvalidator
 }
 
 // NewAccountTestService creates a new AccountTestService
@@ -112,6 +113,13 @@ func NewAccountTestService(
 func (s *AccountTestService) SetModelDiscoveryStore(store AccountModelDiscoveryStore) {
 	if s != nil {
 		s.modelDiscoveryStore = store
+	}
+}
+
+// SetModelObservationRepository replaces the evidence persistence boundary.
+func (s *AccountTestService) SetModelObservationRepository(repo ModelObservationRepository) {
+	if s != nil {
+		s.modelObservationRepository = repo
 	}
 }
 

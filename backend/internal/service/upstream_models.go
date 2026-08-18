@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -192,6 +193,33 @@ func (s *AccountTestService) PersistDiscoveredModels(ctx context.Context, accoun
 	if len(models) == 0 {
 		return newUpstreamModelSyncUpstreamError("Upstream returned no supported models", nil)
 	}
+	if s.modelObservationRepository == nil {
+		return newUpstreamModelSyncConfigError("Model observation repository is not configured", nil)
+	}
+
+	provider := governanceProviderForPlatform(account.Platform)
+	rawSnapshot, err := json.Marshal(map[string]any{
+		"models":           models,
+		"routing_platform": account.Platform,
+		"source":           "upstream",
+		"observed_at":      syncedAt.UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		return fmt.Errorf("encode accepted upstream model snapshot: %w", err)
+	}
+	idempotencySeed := fmt.Sprintf("%d\n%s\n%s", account.ID, syncedAt.UTC().Format(time.RFC3339Nano), rawSnapshot)
+	idempotencyKey := fmt.Sprintf("model-discovery:%x", sha256.Sum256([]byte(idempotencySeed)))
+	if _, err := s.modelObservationRepository.RecordDiscovery(ctx, DiscoveryBatchInput{
+		IdempotencyKey:  idempotencyKey,
+		AccountID:       account.ID,
+		AccountProvider: provider,
+		RoutingPlatform: account.Platform,
+		ModelIDs:        models,
+		RawSnapshot:     rawSnapshot,
+		ObservedAt:      syncedAt.UTC(),
+	}); err != nil {
+		return fmt.Errorf("record upstream model observation: %w", err)
+	}
 
 	mapping := make(map[string]any, len(models))
 	for requestedModel, upstreamModel := range account.GetModelMapping() {
@@ -211,6 +239,16 @@ func (s *AccountTestService) PersistDiscoveredModels(ctx context.Context, accoun
 		"synced_at": syncedAt.UTC().Format(time.RFC3339),
 	}
 	return s.modelDiscoveryStore.UpdateModelDiscovery(ctx, account.ID, mapping, discovery)
+}
+
+func governanceProviderForPlatform(platform string) *GovernanceProvider {
+	switch platform {
+	case PlatformAnthropic, PlatformOpenAI, PlatformGemini, PlatformGrok:
+		provider := GovernanceProvider(platform)
+		return &provider
+	default:
+		return nil
+	}
 }
 
 func (s *AccountTestService) buildUpstreamModelsRequest(ctx context.Context, account *Account) (*http.Request, error) {
@@ -681,8 +719,7 @@ func dedupeAndSortModelIDs(models []string) []string {
 	seen := make(map[string]struct{}, len(models))
 	result := make([]string, 0, len(models))
 	for _, model := range models {
-		model = strings.TrimSpace(model)
-		if model == "" {
+		if strings.TrimSpace(model) == "" {
 			continue
 		}
 		if _, exists := seen[model]; exists {

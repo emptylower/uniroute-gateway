@@ -180,6 +180,7 @@ func ProvideAccountTestService(
 	cfg *config.Config,
 	tlsFPProfileService *TLSFingerprintProfileService,
 	openAIGatewayService *OpenAIGatewayService,
+	modelObservationRepository ModelObservationRepository,
 ) *AccountTestService {
 	service := NewAccountTestService(
 		accountRepo,
@@ -193,6 +194,7 @@ func ProvideAccountTestService(
 	)
 	service.codexModelsFetcher = openAIGatewayService
 	service.agentIdentityWS = openAIGatewayService
+	service.modelObservationRepository = modelObservationRepository
 	return service
 }
 
