@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lib/pq"
 	"github.com/stretchr/testify/require"
 )
 
@@ -219,6 +220,87 @@ func TestMigrationsRunner_AuthIdentityAndPaymentSchemaStayAligned(t *testing.T) 
 	requireIndex(t, tx, "payment_orders", "paymentorder_out_trade_no")
 	requirePartialUniqueIndexDefinition(t, tx, "payment_orders", "paymentorder_out_trade_no", "out_trade_no", "WHERE")
 	requireIndexAbsent(t, tx, "payment_orders", "paymentorder_out_trade_no_unique")
+}
+
+func TestMigrationsRunner_ModelGovernanceFoundationSchema(t *testing.T) {
+	tx := testTx(t)
+
+	for _, table := range []string{
+		"model_registry",
+		"model_registry_aliases",
+		"model_registry_events",
+		"model_classification_batches",
+		"model_observations",
+		"model_observation_events",
+		"model_inventory_runs",
+		"model_inventory_items",
+	} {
+		requireTable(t, tx, table)
+	}
+
+	requireColumn(t, tx, "model_observations", "connection_id", "bigint", 0, true)
+	requireConstraintDefinitionContains(t, tx, "model_registry", "chk_model_registry_provider", "anthropic", "openai", "gemini", "grok")
+	requireConstraintDefinitionContains(t, tx, "model_registry", "chk_model_registry_modality", "text", "image", "audio", "video", "embedding", "other")
+	requireConstraintDefinitionContains(t, tx, "model_registry", "chk_model_registry_lifecycle", "active", "deprecated", "retired")
+	requireConstraintDefinitionContains(t, tx, "model_observations", "chk_model_observations_classification", "discovered", "approved", "cross_provider", "unknown", "ignored")
+	requireConstraintDefinitionContains(t, tx, "model_observations", "chk_model_observations_presence", "present", "missing")
+	requireUniqueConstraint(t, tx, "model_observations", "account_id", "upstream_model_id")
+	requireAppendOnlyTable(t, tx, "model_registry_events")
+	requireAppendOnlyTable(t, tx, "model_observation_events")
+}
+
+func requireTable(t *testing.T, tx *sql.Tx, table string) {
+	t.Helper()
+
+	var exists bool
+	err := tx.QueryRowContext(context.Background(), "SELECT to_regclass('public.' || $1) IS NOT NULL", table).Scan(&exists)
+	require.NoError(t, err, "query table %s", table)
+	require.True(t, exists, "expected table %s to exist", table)
+}
+
+func requireUniqueConstraint(t *testing.T, tx *sql.Tx, table string, columns ...string) {
+	t.Helper()
+
+	var exists bool
+	err := tx.QueryRowContext(context.Background(), `
+SELECT EXISTS (
+	SELECT 1
+	FROM pg_constraint c
+	JOIN pg_class tbl ON tbl.oid = c.conrelid
+	JOIN pg_namespace ns ON ns.oid = tbl.relnamespace
+	WHERE ns.nspname = 'public'
+	  AND tbl.relname = $1
+	  AND c.contype = 'u'
+	  AND ARRAY(
+		SELECT attr.attname::text
+		FROM unnest(c.conkey) WITH ORDINALITY AS key(attnum, ord)
+		JOIN pg_attribute attr ON attr.attrelid = tbl.oid AND attr.attnum = key.attnum
+		ORDER BY key.ord
+	  ) = $2::text[]
+)
+`, table, pq.Array(columns)).Scan(&exists)
+	require.NoError(t, err, "query unique constraint on %s", table)
+	require.True(t, exists, "expected unique constraint on %s(%v)", table, columns)
+}
+
+func requireAppendOnlyTable(t *testing.T, tx *sql.Tx, table string) {
+	t.Helper()
+
+	var triggerCount int
+	err := tx.QueryRowContext(context.Background(), `
+SELECT COUNT(*)
+FROM pg_trigger trigger
+JOIN pg_class tbl ON tbl.oid = trigger.tgrelid
+JOIN pg_namespace ns ON ns.oid = tbl.relnamespace
+WHERE ns.nspname = 'public'
+  AND tbl.relname = $1
+  AND NOT trigger.tgisinternal
+  AND (trigger.tgtype & 2) = 2
+  AND (trigger.tgtype & 16) = 16
+  AND (trigger.tgtype & 8) = 8
+`, table).Scan(&triggerCount)
+	require.NoError(t, err, "query append-only trigger on %s", table)
+	require.Equal(t, 1, triggerCount, "expected one UPDATE/DELETE trigger on %s", table)
 }
 
 func requireIndex(t *testing.T, tx *sql.Tx, table, index string) {
