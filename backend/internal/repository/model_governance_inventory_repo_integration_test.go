@@ -54,6 +54,48 @@ func TestModelGovernanceInventoryIncludesAllSourcesAndAggregatesUsageWithoutWrit
 	}, byModel["used-model"])
 }
 
+func TestModelGovernanceInventoryExcludesWildcardCapabilityNamespacesWithoutWriting(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
+	fixture := createModelGovernanceInventoryFixture(t, "USD")
+
+	_, err := integrationDB.ExecContext(ctx, `
+		UPDATE channels
+		SET model_mapping = '{"openai":{"wildcard-request-*":"wildcard-target-*","concrete-request":"exact channel target","concrete-from-wildcard-*":"concrete-from-wildcard"}}'::jsonb
+		WHERE id = $1
+	`, fixture.channelID)
+	require.NoError(t, err)
+	_, err = integrationDB.ExecContext(ctx, `
+		UPDATE channel_model_pricing
+		SET models = '["pricing-*","exact pricing model"]'::jsonb
+		WHERE channel_id = $1 AND platform = 'openai'
+	`, fixture.channelID)
+	require.NoError(t, err)
+	_, err = integrationDB.ExecContext(ctx, `
+		UPDATE composite_model_routes SET upstream_model = 'routed-*exact' WHERE group_id = $1
+	`, fixture.groupID)
+	require.NoError(t, err)
+	insertInventoryObservation(t, fixture.accountID, "observed-*exact", "approved", now.Add(-time.Hour))
+	insertInventoryUsage(t, fixture, "used-*exact", "USD", "inventory-wildcard-evidence", fixture.apiKey1, "1", now.Add(-time.Hour))
+
+	businessBefore := inventoryBusinessState(t, fixture)
+	before := inventoryChannelCapabilityState(t, fixture.channelID)
+	items, err := listModelGovernanceInventory(ctx, now.Add(-7*24*time.Hour), now.Add(-30*24*time.Hour), now)
+	require.NoError(t, err)
+	require.Equal(t, businessBefore, inventoryBusinessState(t, fixture), "inventory query must not mutate business or governance state")
+	require.Equal(t, before, inventoryChannelCapabilityState(t, fixture.channelID), "inventory query must not mutate channel capability state")
+
+	byModel := inventoryItemsForAccount(items, fixture.accountID)
+	require.NotContains(t, byModel, "wildcard-target-*")
+	require.NotContains(t, byModel, "pricing-*")
+	require.Contains(t, byModel, "concrete-from-wildcard")
+	require.Contains(t, byModel, "exact channel target")
+	require.Contains(t, byModel, "exact pricing model")
+	require.Contains(t, byModel, "observed-*exact")
+	require.Contains(t, byModel, "used-*exact")
+	require.Contains(t, byModel, "routed-*exact")
+}
+
 func TestModelGovernanceInventoryUsesHalfOpenUsageWindows(t *testing.T) {
 	ctx := context.Background()
 	windowEnd := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
@@ -588,6 +630,18 @@ func inventoryAccountState(t *testing.T, accountID int64) string {
 		SELECT status || ':' || schedulable::text || ':' || credentials::text
 		FROM accounts WHERE id = $1
 	`, accountID).Scan(&state))
+	return state
+}
+
+func inventoryChannelCapabilityState(t *testing.T, channelID int64) string {
+	t.Helper()
+	var state string
+	require.NoError(t, integrationDB.QueryRowContext(context.Background(), `
+		SELECT c.model_mapping::text || ':' || cmp.models::text
+		FROM channels c
+		JOIN channel_model_pricing cmp ON cmp.channel_id = c.id AND cmp.platform = 'openai'
+		WHERE c.id = $1
+	`, channelID).Scan(&state))
 	return state
 }
 

@@ -190,6 +190,7 @@ channel_mapping_models AS (
              THEN er.model_mapping->er.platform ELSE '{}'::jsonb END
     ) mapping
     WHERE er.channel_id IS NOT NULL
+      AND mapping.value <> '' AND strpos(mapping.value, '*') = 0
 ),
 channel_pricing_models AS (
     SELECT er.account_id, er.platform, er.group_id, er.channel_id, model.value AS upstream_model_id
@@ -198,6 +199,7 @@ channel_pricing_models AS (
     CROSS JOIN LATERAL jsonb_array_elements_text(
         CASE WHEN jsonb_typeof(cmp.models) = 'array' THEN cmp.models ELSE '[]'::jsonb END
     ) model
+    WHERE model.value <> '' AND strpos(model.value, '*') = 0
 ),
 composite_route_models AS (
     SELECT er.account_id, er.platform, er.group_id, er.channel_id,
