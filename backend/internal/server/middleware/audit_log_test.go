@@ -130,6 +130,44 @@ func TestPromptAuditAdminOperationsUseOmittedBodiesAndAllowlistedDetails(t *test
 	require.Equal(t, true, probe.Extra["token_applied"])
 }
 
+func TestModelGovernanceInventorySensitiveReadPersistsDelegatedActorContext(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repository := &auditCaptureRepository{}
+	auditService := service.NewAuditLogService(repository, nil)
+	auditService.Start()
+
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set(string(ContextKeyUser), AuthSubject{UserID: 77})
+		c.Set(string(ContextKeyUserRole), service.RoleAdmin)
+		c.Set(ContextKeyAuthEmail, "delegated@example.invalid")
+		c.Next()
+	})
+	router.Use(gin.HandlerFunc(NewAuditLogMiddleware(auditService)))
+	router.GET("/api/internal/v1/gateway-admin/:platform_user_id/model-governance/inventory", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"items": []any{}})
+	})
+
+	request := httptest.NewRequest(http.MethodGet, "/api/internal/v1/gateway-admin/shipany-user-77/model-governance/inventory", nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	require.Equal(t, http.StatusOK, recorder.Code)
+	auditService.Stop()
+
+	repository.mu.Lock()
+	logs := append([]*service.AuditLog(nil), repository.logs...)
+	repository.mu.Unlock()
+	require.Len(t, logs, 1)
+	require.Equal(t, "admin.model_governance.inventory.read", logs[0].Action)
+	require.Equal(t, "/api/internal/v1/gateway-admin/:platform_user_id/model-governance/inventory", logs[0].Path)
+	require.NotNil(t, logs[0].ActorUserID)
+	require.Equal(t, int64(77), *logs[0].ActorUserID)
+	require.Equal(t, service.RoleAdmin, logs[0].ActorRole)
+	require.Equal(t, "delegated@example.invalid", logs[0].ActorEmail)
+	require.Equal(t, service.AuditAuthMethodJWT, logs[0].AuthMethod)
+	require.Equal(t, map[string]string{"platform_user_id": "shipany-user-77"}, logs[0].Extra["params"])
+}
+
 func TestPromptAuditMutationAuditRoutesHaveStableActionsAndOmitBodies(t *testing.T) {
 	expected := map[string]string{
 		"PUT /api/v1/admin/prompt-audit/config":                   "admin.prompt_audit.config.update",

@@ -4,9 +4,25 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
+	"strconv"
 	"time"
 
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/shopspring/decimal"
+)
+
+var (
+	errModelGovernanceInventoryMixedCurrency = infraerrors.InternalServer(
+		"MODEL_GOVERNANCE_INVENTORY_MIXED_CURRENCY", "inventory dimension has mixed settlement currencies",
+	)
+	errModelGovernanceInventoryNegativeRevenue = infraerrors.InternalServer(
+		"MODEL_GOVERNANCE_INVENTORY_NEGATIVE_REVENUE", "inventory dimension has negative revenue",
+	)
+	errModelGovernanceInventoryRevenueOverflow = infraerrors.InternalServer(
+		"MODEL_GOVERNANCE_INVENTORY_REVENUE_OVERFLOW", "inventory dimension revenue exceeds integer micros range",
+	)
 )
 
 type modelGovernanceInventoryRepository struct {
@@ -28,18 +44,24 @@ func (r *modelGovernanceInventoryRepository) List(ctx context.Context, cutoff7d,
 	for rows.Next() {
 		var item service.InventoryItem
 		var currencyCount int
+		var revenue7d, revenue30d decimal.Decimal
 		if err := rows.Scan(
 			&item.AccountID, &item.GroupID, &item.ChannelID, &item.UpstreamModelID, &item.Classification,
-			&item.Requests7d, &item.Requests30d, &item.Revenue7dBillingMicros, &item.Revenue30dBillingMicros,
-			&item.BillingCurrency, &item.AffectedAPIKeys7d, &item.AffectedAPIKeys30d, &currencyCount,
+			&item.Requests7d, &item.Requests30d, &revenue7d, &revenue30d, &item.BillingCurrency,
+			&item.AffectedAPIKeys7d, &item.AffectedAPIKeys30d, &currencyCount,
 		); err != nil {
 			return nil, fmt.Errorf("scan model governance inventory: %w", err)
 		}
 		if currencyCount > 1 {
-			return nil, fmt.Errorf(
-				"mixed settlement currencies for account %d group %v channel %v model %q",
-				item.AccountID, item.GroupID, item.ChannelID, item.UpstreamModelID,
-			)
+			return nil, inventoryDimensionError(errModelGovernanceInventoryMixedCurrency, item)
+		}
+		item.Revenue7dBillingMicros, err = inventoryRevenueMicros(revenue7d, item)
+		if err != nil {
+			return nil, err
+		}
+		item.Revenue30dBillingMicros, err = inventoryRevenueMicros(revenue30d, item)
+		if err != nil {
+			return nil, err
 		}
 		items = append(items, item)
 	}
@@ -47,6 +69,33 @@ func (r *modelGovernanceInventoryRepository) List(ctx context.Context, cutoff7d,
 		return nil, fmt.Errorf("iterate model governance inventory: %w", err)
 	}
 	return items, nil
+}
+
+func inventoryRevenueMicros(revenue decimal.Decimal, item service.InventoryItem) (int64, error) {
+	if revenue.IsNegative() {
+		return 0, inventoryDimensionError(errModelGovernanceInventoryNegativeRevenue, item)
+	}
+	micros := revenue.Mul(decimal.NewFromInt(1_000_000)).Round(0)
+	if micros.GreaterThan(decimal.NewFromInt(math.MaxInt64)) {
+		return 0, inventoryDimensionError(errModelGovernanceInventoryRevenueOverflow, item)
+	}
+	return micros.IntPart(), nil
+}
+
+func inventoryDimensionError(base *infraerrors.ApplicationError, item service.InventoryItem) error {
+	metadata := map[string]string{
+		"account_id":        strconv.FormatInt(item.AccountID, 10),
+		"group_id":          "",
+		"channel_id":        "",
+		"upstream_model_id": item.UpstreamModelID,
+	}
+	if item.GroupID != nil {
+		metadata["group_id"] = strconv.FormatInt(*item.GroupID, 10)
+	}
+	if item.ChannelID != nil {
+		metadata["channel_id"] = strconv.FormatInt(*item.ChannelID, 10)
+	}
+	return base.WithMetadata(metadata)
 }
 
 const modelGovernanceInventoryQuery = `
@@ -62,7 +111,7 @@ WITH enabled_routes AS (
       AND (ag.group_id IS NULL OR g.id IS NOT NULL)
 ),
 account_mapping_models AS (
-    SELECT er.account_id, er.group_id, er.channel_id, mapping.value AS upstream_model_id
+    SELECT er.account_id, er.platform, er.group_id, er.channel_id, mapping.value AS upstream_model_id
     FROM enabled_routes er
     CROSS JOIN LATERAL jsonb_each_text(
         CASE WHEN jsonb_typeof(er.credentials->'model_mapping') = 'object'
@@ -70,7 +119,7 @@ account_mapping_models AS (
     ) mapping
 ),
 channel_mapping_models AS (
-    SELECT er.account_id, er.group_id, er.channel_id, mapping.value AS upstream_model_id
+    SELECT er.account_id, er.platform, er.group_id, er.channel_id, mapping.value AS upstream_model_id
     FROM enabled_routes er
     CROSS JOIN LATERAL jsonb_each_text(
         CASE WHEN jsonb_typeof(er.model_mapping->er.platform) = 'object'
@@ -79,7 +128,7 @@ channel_mapping_models AS (
     WHERE er.channel_id IS NOT NULL
 ),
 channel_pricing_models AS (
-    SELECT er.account_id, er.group_id, er.channel_id, model.value AS upstream_model_id
+    SELECT er.account_id, er.platform, er.group_id, er.channel_id, model.value AS upstream_model_id
     FROM enabled_routes er
     JOIN channel_model_pricing cmp ON cmp.channel_id = er.channel_id AND cmp.platform = er.platform
     CROSS JOIN LATERAL jsonb_array_elements_text(
@@ -87,7 +136,7 @@ channel_pricing_models AS (
     ) model
 ),
 composite_route_models AS (
-    SELECT er.account_id, er.group_id, er.channel_id,
+    SELECT er.account_id, er.platform, er.group_id, er.channel_id,
            COALESCE(NULLIF(cmr.upstream_model, ''), cmr.public_model) AS upstream_model_id
     FROM enabled_routes er
     JOIN composite_model_routes cmr
@@ -95,36 +144,37 @@ composite_route_models AS (
      AND cmr.enabled = TRUE AND cmr.deleted_at IS NULL
 ),
 observation_models AS (
-    SELECT mo.account_id, er.group_id, er.channel_id, mo.upstream_model_id
+    SELECT mo.account_id, er.platform, er.group_id, er.channel_id, mo.upstream_model_id
     FROM model_observations mo
-    LEFT JOIN enabled_routes er ON er.account_id = mo.account_id
+    JOIN enabled_routes er ON er.account_id = mo.account_id
 ),
 usage_rows AS (
-    SELECT ul.account_id, ul.group_id, ul.channel_id,
+    SELECT ul.account_id, a.platform, ul.group_id, ul.channel_id,
            COALESCE(NULLIF(ul.upstream_model, ''), ul.model) AS upstream_model_id,
            ul.api_key_id, ul.actual_cost, ul.settlement_currency, ul.created_at
     FROM usage_logs ul
+    JOIN accounts a ON a.id = ul.account_id
     WHERE ul.created_at >= $2
 ),
 inventory_keys AS (
-    SELECT account_id, group_id, channel_id, upstream_model_id FROM account_mapping_models
+    SELECT account_id, platform, group_id, channel_id, upstream_model_id FROM account_mapping_models
     UNION
-    SELECT account_id, group_id, channel_id, upstream_model_id FROM channel_mapping_models
+    SELECT account_id, platform, group_id, channel_id, upstream_model_id FROM channel_mapping_models
     UNION
-    SELECT account_id, group_id, channel_id, upstream_model_id FROM channel_pricing_models
+    SELECT account_id, platform, group_id, channel_id, upstream_model_id FROM channel_pricing_models
     UNION
-    SELECT account_id, group_id, channel_id, upstream_model_id FROM composite_route_models
+    SELECT account_id, platform, group_id, channel_id, upstream_model_id FROM composite_route_models
     UNION
-    SELECT account_id, group_id, channel_id, upstream_model_id FROM observation_models
+    SELECT account_id, platform, group_id, channel_id, upstream_model_id FROM observation_models
     UNION
-    SELECT account_id, group_id, channel_id, upstream_model_id FROM usage_rows
+    SELECT account_id, platform, group_id, channel_id, upstream_model_id FROM usage_rows
 ),
 usage_summary AS (
     SELECT account_id, group_id, channel_id, upstream_model_id,
            COUNT(*) FILTER (WHERE created_at >= $1)::bigint AS requests_7d,
            COUNT(*)::bigint AS requests_30d,
-           ROUND(COALESCE(SUM(actual_cost) FILTER (WHERE created_at >= $1), 0) * 1000000)::bigint AS revenue_7d,
-           ROUND(COALESCE(SUM(actual_cost), 0) * 1000000)::bigint AS revenue_30d,
+           COALESCE(SUM(actual_cost) FILTER (WHERE created_at >= $1), 0) AS revenue_7d,
+           COALESCE(SUM(actual_cost), 0) AS revenue_30d,
            MIN(settlement_currency) AS billing_currency,
            COUNT(DISTINCT api_key_id) FILTER (WHERE created_at >= $1)::bigint AS api_keys_7d,
            COUNT(DISTINCT api_key_id)::bigint AS api_keys_30d,
@@ -133,15 +183,17 @@ usage_summary AS (
     GROUP BY account_id, group_id, channel_id, upstream_model_id
 )
 SELECT k.account_id, k.group_id, k.channel_id, k.upstream_model_id,
-       COALESCE(mo.classification, 'unknown') AS classification,
+       COALESCE(mo.classification,
+                CASE WHEN k.platform IN ('anthropic', 'openai', 'gemini', 'grok') THEN 'unknown' ELSE 'ignored' END) AS classification,
        COALESCE(us.requests_7d, 0), COALESCE(us.requests_30d, 0),
        COALESCE(us.revenue_7d, 0), COALESCE(us.revenue_30d, 0),
-       COALESCE(us.billing_currency, 'USD') AS billing_currency,
+       COALESCE(us.billing_currency, 'CNY') AS billing_currency,
        COALESCE(us.api_keys_7d, 0), COALESCE(us.api_keys_30d, 0),
        COALESCE(us.currency_count, 0)
 FROM inventory_keys k
 LEFT JOIN model_observations mo
   ON mo.account_id = k.account_id AND mo.upstream_model_id = k.upstream_model_id
+ AND EXISTS (SELECT 1 FROM enabled_routes er WHERE er.account_id = mo.account_id)
 LEFT JOIN usage_summary us
   ON us.account_id = k.account_id
  AND us.group_id IS NOT DISTINCT FROM k.group_id

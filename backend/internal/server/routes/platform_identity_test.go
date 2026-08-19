@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -61,6 +62,39 @@ type delegatedUserReaderStub struct {
 
 func (s delegatedUserReaderStub) GetByID(context.Context, int64) (*service.User, error) {
 	return s.user, nil
+}
+
+type delegatedAuditCaptureRepository struct {
+	mu   sync.Mutex
+	logs []*service.AuditLog
+}
+
+func (r *delegatedAuditCaptureRepository) BatchInsert(_ context.Context, logs []*service.AuditLog) (int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.logs = append(r.logs, logs...)
+	return int64(len(logs)), nil
+}
+
+func (r *delegatedAuditCaptureRepository) Insert(_ context.Context, log *service.AuditLog) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.logs = append(r.logs, log)
+	return nil
+}
+
+func (r *delegatedAuditCaptureRepository) List(context.Context, *service.AuditLogFilter) (*service.AuditLogList, error) {
+	return &service.AuditLogList{}, nil
+}
+
+func (r *delegatedAuditCaptureRepository) GetByID(context.Context, int64) (*service.AuditLog, error) {
+	return nil, service.ErrAuditLogNotFound
+}
+
+func (r *delegatedAuditCaptureRepository) Count(context.Context) (int64, error) { return 0, nil }
+func (r *delegatedAuditCaptureRepository) TruncateAll(context.Context) error    { return nil }
+func (r *delegatedAuditCaptureRepository) DeleteBefore(context.Context, time.Time, int) (int64, error) {
+	return 0, nil
 }
 
 func delegatedTestConfig() config.PlatformIdentityConfig {
@@ -281,37 +315,46 @@ func TestModelGovernanceInventoryRouteRequiresSignedGatewayAdminAssertionAndAudi
 	identityService := service.NewPlatformIdentityService(delegatedIdentityRepoStub{identity: &service.PlatformIdentity{
 		GatewayUserID: 77, PlatformUserID: "shipany-user-77", Status: service.StatusActive,
 	}})
-	userReader := delegatedUserReaderStub{user: &service.User{ID: 77, Role: service.RoleUser, Status: service.StatusActive}}
+	userReader := delegatedUserReaderStub{user: &service.User{ID: 77, Email: "delegated@example.invalid", Role: service.RoleUser, Status: service.StatusActive}}
 	handlers := delegatedRouteContractHandlers(identityService, nil)
 	handlers.Admin.ModelInventory = adminhandler.NewModelGovernanceInventoryHandler(
 		service.NewModelGovernanceInventoryService(inventoryListerRouteStub{}),
 	)
-	auditCalls := 0
+	auditRepository := &delegatedAuditCaptureRepository{}
+	auditService := service.NewAuditLogService(auditRepository, nil)
+	auditService.Start()
 	router := gin.New()
-	registerDelegatedGatewayAdminRoutes(router, handlers, identityService, userReader, middleware.AuditLogMiddleware(func(c *gin.Context) {
-		auditCalls++
-		c.Next()
-	}), cfg, redisClient)
+	registerDelegatedGatewayAdminRoutes(router, handlers, identityService, userReader, middleware.NewAuditLogMiddleware(auditService), cfg, redisClient)
 
 	path := "/api/internal/v1/gateway-admin/shipany-user-77/model-governance/inventory"
 	unsigned := httptest.NewRecorder()
 	router.ServeHTTP(unsigned, httptest.NewRequest(http.MethodGet, path, nil))
 	require.Equal(t, http.StatusUnauthorized, unsigned.Code)
-	require.Zero(t, auditCalls)
 
 	writable := httptest.NewRecorder()
 	writeRequest := httptest.NewRequest(http.MethodPost, path, nil)
 	writeRequest.Header.Set("Authorization", "Bearer "+signDelegatedAssertion(t, cfg, "shipany-user-77", service.PlatformGatewayAdminScope, "inventory-write"))
 	router.ServeHTTP(writable, writeRequest)
 	require.Equal(t, http.StatusNotFound, writable.Code)
-	require.Zero(t, auditCalls)
 
 	request := httptest.NewRequest(http.MethodGet, path, nil)
 	request.Header.Set("Authorization", "Bearer "+signDelegatedAssertion(t, cfg, "shipany-user-77", service.PlatformGatewayAdminScope, "inventory-read"))
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, request)
 	require.Equal(t, http.StatusOK, recorder.Code)
-	require.Equal(t, 1, auditCalls)
+	auditService.Stop()
+
+	auditRepository.mu.Lock()
+	logs := append([]*service.AuditLog(nil), auditRepository.logs...)
+	auditRepository.mu.Unlock()
+	require.Len(t, logs, 1)
+	require.Equal(t, "admin.model_governance.inventory.read", logs[0].Action)
+	require.Equal(t, "/api/internal/v1/gateway-admin/:platform_user_id/model-governance/inventory", logs[0].Path)
+	require.NotNil(t, logs[0].ActorUserID)
+	require.Equal(t, int64(77), *logs[0].ActorUserID)
+	require.Equal(t, service.RoleAdmin, logs[0].ActorRole)
+	require.Equal(t, "delegated@example.invalid", logs[0].ActorEmail)
+	require.Equal(t, map[string]string{"platform_user_id": "shipany-user-77"}, logs[0].Extra["params"])
 }
 
 type inventoryListerRouteStub struct{}
