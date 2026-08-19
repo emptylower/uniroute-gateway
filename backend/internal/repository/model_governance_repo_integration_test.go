@@ -5,6 +5,8 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -55,8 +57,6 @@ func TestModelGovernanceRepository_RecordDiscoveryPreservesIDsAndIsIdempotent(t 
 	require.Equal(t, 2, countObservationEvents(t, accountID))
 
 	replay := firstInput
-	replay.ModelIDs = []string{"replacement-must-not-apply"}
-	replay.ObservedAt = firstObservedAt.Add(time.Hour)
 	replayedBatchID, err := repo.RecordDiscovery(ctx, replay)
 	require.NoError(t, err)
 	require.Equal(t, batchID, replayedBatchID)
@@ -66,6 +66,84 @@ func TestModelGovernanceRepository_RecordDiscoveryPreservesIDsAndIsIdempotent(t 
 	var mappingText string
 	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT credentials->'model_mapping' FROM accounts WHERE id = $1`, accountID).Scan(&mappingText))
 	require.JSONEq(t, `{"admin-alias":"upstream-target"}`, mappingText)
+}
+
+func TestModelGovernanceRepository_RecordDiscoveryPreservesPayloadBytesThroughJSONBRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	accountID := createGovernanceObservationAccount(t, "openai", `{}`)
+	repo := NewModelObservationRepository(integrationDB)
+	provider := service.GovernanceProvider("openai")
+	payload := []byte("{\n  \"duplicate\": 1, \"duplicate\": 2, \"number\": 1.00e+02\n}")
+	snapshot, err := json.Marshal(map[string]any{
+		"payload_base64": base64.StdEncoding.EncodeToString(payload),
+		"response":       map[string]any{"source": "test"},
+	})
+	require.NoError(t, err)
+
+	batchID, err := repo.RecordDiscovery(ctx, service.DiscoveryBatchInput{
+		IdempotencyKey: "lossless-payload-" + fmt.Sprint(accountID), AccountID: accountID,
+		AccountProvider: &provider, RoutingPlatform: "openai", ModelIDs: []string{"model"},
+		RawSnapshot: snapshot, ObservedAt: time.Date(2026, time.August, 18, 9, 0, 0, 0, time.UTC),
+	})
+	require.NoError(t, err)
+
+	var stored struct {
+		Evidence struct {
+			PayloadBase64 string `json:"payload_base64"`
+		} `json:"evidence"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(loadBatchRawSnapshot(t, batchID)), &stored))
+	roundTripped, err := base64.StdEncoding.DecodeString(stored.Evidence.PayloadBase64)
+	require.NoError(t, err)
+	require.Equal(t, payload, roundTripped)
+}
+
+func TestModelGovernanceRepository_RecordDiscoveryReplayRequiresEquivalentProvenance(t *testing.T) {
+	ctx := context.Background()
+	accountID := createGovernanceObservationAccount(t, "openai", `{}`)
+	repo := NewModelObservationRepository(integrationDB)
+	provider := service.GovernanceProvider("openai")
+	connectionID := int64(101)
+	observedAt := time.Date(2026, time.August, 18, 10, 0, 0, 0, time.UTC)
+	input := service.DiscoveryBatchInput{
+		IdempotencyKey: "complete-provenance-" + fmt.Sprint(accountID), AccountID: accountID,
+		ConnectionID: &connectionID, AccountProvider: &provider, RoutingPlatform: "openai",
+		ModelIDs:    []string{"z-model", "a-model", "z-model"},
+		RawSnapshot: []byte(`{"payload_base64":"e30=","response":{"source":"test"}}`), ObservedAt: observedAt,
+	}
+	firstBatchID, err := repo.RecordDiscovery(ctx, input)
+	require.NoError(t, err)
+
+	equivalent := input
+	equivalent.ModelIDs = []string{"z-model", "a-model"}
+	replayedBatchID, err := repo.RecordDiscovery(ctx, equivalent)
+	require.NoError(t, err)
+	require.Equal(t, firstBatchID, replayedBatchID)
+
+	otherConnection := int64(102)
+	otherProvider := service.GovernanceProvider("gemini")
+	tests := []struct {
+		name   string
+		mutate func(*service.DiscoveryBatchInput)
+	}{
+		{name: "connection", mutate: func(got *service.DiscoveryBatchInput) { got.ConnectionID = &otherConnection }},
+		{name: "provider", mutate: func(got *service.DiscoveryBatchInput) { got.AccountProvider = &otherProvider }},
+		{name: "routing platform", mutate: func(got *service.DiscoveryBatchInput) { got.RoutingPlatform = "gemini" }},
+		{name: "model order", mutate: func(got *service.DiscoveryBatchInput) { got.ModelIDs = []string{"a-model", "z-model"} }},
+		{name: "model set", mutate: func(got *service.DiscoveryBatchInput) { got.ModelIDs = []string{"z-model"} }},
+		{name: "observed at", mutate: func(got *service.DiscoveryBatchInput) { got.ObservedAt = observedAt.Add(time.Second) }},
+		{name: "raw payload", mutate: func(got *service.DiscoveryBatchInput) {
+			got.RawSnapshot = []byte(`{"payload_base64":"eyJ4IjoxfQ==","response":{"source":"test"}}`)
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mismatch := input
+			tt.mutate(&mismatch)
+			_, err := repo.RecordDiscovery(ctx, mismatch)
+			require.ErrorContains(t, err, "idempotency key collision")
+		})
+	}
 }
 
 func TestModelGovernanceRepository_RecordDiscoveryTracksMissingAndReappearanceWithoutReclassification(t *testing.T) {
@@ -192,7 +270,11 @@ func TestModelGovernanceRepository_RecordDiscoveryStaleBatchPersistsEvidenceOnly
 	require.Equal(t, before, loadObservationProjectionDetails(t, accountID, "new-model"))
 	require.Empty(t, loadObservationProjectionsByID(t, accountID, "old-model"))
 	require.Equal(t, eventsBefore, countObservationEvents(t, accountID))
-	require.JSONEq(t, string(staleSnapshot), loadBatchRawSnapshot(t, staleBatchID))
+	var stored struct {
+		Evidence json.RawMessage `json:"evidence"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(loadBatchRawSnapshot(t, staleBatchID)), &stored))
+	require.JSONEq(t, string(staleSnapshot), string(stored.Evidence))
 }
 
 func TestModelGovernanceRepository_RecordDiscoveryRejectsInvalidProviderAndNonObjectSnapshot(t *testing.T) {

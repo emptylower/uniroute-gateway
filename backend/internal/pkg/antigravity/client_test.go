@@ -1638,6 +1638,40 @@ func TestClient_FetchAvailableModels_URLFallback_RealCall(t *testing.T) {
 	}
 }
 
+func TestClient_FetchAvailableModelsWithEvidenceReportsAcceptedFallbackResponse(t *testing.T) {
+	server1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer server1.Close()
+	server2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("ETag", `"accepted-etag"`)
+		w.Header().Set("X-Goog-Request-Id", "accepted-request")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"models":{"accepted-model":{}}}`))
+	}))
+	defer server2.Close()
+	withMockBaseURLs(t, []string{server1.URL, server2.URL})
+
+	client := mustNewClient(t, "")
+	resp, _, evidence, err := client.FetchAvailableModelsWithEvidence(context.Background(), "token", "project")
+	if err != nil {
+		t.Fatalf("FetchAvailableModelsWithEvidence fallback failed: %v", err)
+	}
+	if _, ok := resp.Models["accepted-model"]; !ok {
+		t.Fatal("accepted fallback model missing")
+	}
+	if evidence.Endpoint != server2.URL+"/v1internal:fetchAvailableModels" {
+		t.Fatalf("accepted endpoint mismatch: %s", evidence.Endpoint)
+	}
+	if evidence.StatusCode != http.StatusOK || evidence.ContentType != "application/json; charset=utf-8" {
+		t.Fatalf("accepted response metadata mismatch: %+v", evidence)
+	}
+	if evidence.ETag != `"accepted-etag"` || evidence.RequestID != "accepted-request" {
+		t.Fatalf("accepted headers mismatch: %+v", evidence)
+	}
+}
+
 func TestClient_FetchAvailableModels_AllURLsFail_RealCall(t *testing.T) {
 	server1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)

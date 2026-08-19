@@ -654,23 +654,39 @@ type FetchAvailableModelsResponse struct {
 	DeprecatedModelIDs map[string]DeprecatedModelInfo `json:"deprecatedModelIds,omitempty"`
 }
 
+// FetchAvailableModelsEvidence captures the accepted response without changing legacy callers.
+type FetchAvailableModelsEvidence struct {
+	Body        []byte
+	Endpoint    string
+	StatusCode  int
+	ContentType string
+	ETag        string
+	RequestID   string
+}
+
 // FetchAvailableModels 获取可用模型和配额信息，返回解析后的结构体和原始 JSON
 // 支持 URL fallback：sandbox → daily → prod
 func (c *Client) FetchAvailableModels(ctx context.Context, accessToken, projectID string) (*FetchAvailableModelsResponse, map[string]any, error) {
-	models, raw, _, err := c.FetchAvailableModelsWithRawBytes(ctx, accessToken, projectID)
+	models, raw, _, err := c.FetchAvailableModelsWithEvidence(ctx, accessToken, projectID)
 	return models, raw, err
 }
 
 // FetchAvailableModelsWithRawBytes also returns the accepted response bytes without re-encoding them.
 func (c *Client) FetchAvailableModelsWithRawBytes(ctx context.Context, accessToken, projectID string) (*FetchAvailableModelsResponse, map[string]any, []byte, error) {
+	models, raw, evidence, err := c.FetchAvailableModelsWithEvidence(ctx, accessToken, projectID)
+	return models, raw, evidence.Body, err
+}
+
+// FetchAvailableModelsWithEvidence returns the body and metadata of the response that was accepted after fallback.
+func (c *Client) FetchAvailableModelsWithEvidence(ctx context.Context, accessToken, projectID string) (*FetchAvailableModelsResponse, map[string]any, FetchAvailableModelsEvidence, error) {
 	if c == nil || c.httpClient == nil {
-		return nil, nil, nil, errors.New("antigravity client is not configured")
+		return nil, nil, FetchAvailableModelsEvidence{}, errors.New("antigravity client is not configured")
 	}
 
 	reqBody := FetchAvailableModelsRequest{Project: projectID}
 	bodyBytes, err := json.Marshal(reqBody)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("序列化请求失败: %w", err)
+		return nil, nil, FetchAvailableModelsEvidence{}, fmt.Errorf("序列化请求失败: %w", err)
 	}
 
 	// 固定顺序：prod -> daily
@@ -696,16 +712,16 @@ func (c *Client) FetchAvailableModelsWithRawBytes(ctx context.Context, accessTok
 				log.Printf("[antigravity] fetchAvailableModels URL fallback: %s -> %s", baseURL, availableURLs[urlIdx+1])
 				continue
 			}
-			return nil, nil, nil, lastErr
+			return nil, nil, FetchAvailableModelsEvidence{}, lastErr
 		}
 
 		respBodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, fetchAvailableModelsBodyLimit+1))
 		_ = resp.Body.Close() // 立即关闭，避免循环内 defer 导致的资源泄漏
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("读取响应失败: %w", err)
+			return nil, nil, FetchAvailableModelsEvidence{}, fmt.Errorf("读取响应失败: %w", err)
 		}
 		if int64(len(respBodyBytes)) > fetchAvailableModelsBodyLimit {
-			return nil, nil, nil, fmt.Errorf("响应超过 %d 字节", fetchAvailableModelsBodyLimit)
+			return nil, nil, FetchAvailableModelsEvidence{}, fmt.Errorf("响应超过 %d 字节", fetchAvailableModelsBodyLimit)
 		}
 
 		// 检查是否需要 URL 降级
@@ -715,19 +731,19 @@ func (c *Client) FetchAvailableModelsWithRawBytes(ctx context.Context, accessTok
 		}
 
 		if resp.StatusCode == http.StatusForbidden {
-			return nil, nil, nil, &ForbiddenError{
+			return nil, nil, FetchAvailableModelsEvidence{}, &ForbiddenError{
 				StatusCode: resp.StatusCode,
 				Body:       string(respBodyBytes),
 			}
 		}
 
 		if resp.StatusCode != http.StatusOK {
-			return nil, nil, nil, fmt.Errorf("fetchAvailableModels 失败 (HTTP %d): %s", resp.StatusCode, string(respBodyBytes))
+			return nil, nil, FetchAvailableModelsEvidence{}, fmt.Errorf("fetchAvailableModels 失败 (HTTP %d): %s", resp.StatusCode, string(respBodyBytes))
 		}
 
 		var modelsResp FetchAvailableModelsResponse
 		if err := json.Unmarshal(respBodyBytes, &modelsResp); err != nil {
-			return nil, nil, nil, fmt.Errorf("响应解析失败: %w", err)
+			return nil, nil, FetchAvailableModelsEvidence{}, fmt.Errorf("响应解析失败: %w", err)
 		}
 
 		// 解析原始 JSON 为 map
@@ -736,10 +752,21 @@ func (c *Client) FetchAvailableModelsWithRawBytes(ctx context.Context, accessTok
 
 		// 标记成功的 URL，下次优先使用
 		DefaultURLAvailability.MarkSuccess(baseURL)
-		return &modelsResp, rawResp, respBodyBytes, nil
+		acceptedEndpoint := apiURL
+		if resp.Request != nil && resp.Request.URL != nil {
+			acceptedEndpoint = resp.Request.URL.String()
+		}
+		return &modelsResp, rawResp, FetchAvailableModelsEvidence{
+			Body:        respBodyBytes,
+			Endpoint:    acceptedEndpoint,
+			StatusCode:  resp.StatusCode,
+			ContentType: resp.Header.Get("Content-Type"),
+			ETag:        resp.Header.Get("ETag"),
+			RequestID:   resp.Header.Get("X-Goog-Request-Id"),
+		}, nil
 	}
 
-	return nil, nil, nil, lastErr
+	return nil, nil, FetchAvailableModelsEvidence{}, lastErr
 }
 
 func (c *Client) fetchAvailableModelsHTTPClient() *http.Client {

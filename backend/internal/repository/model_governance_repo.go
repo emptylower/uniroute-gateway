@@ -2,12 +2,15 @@ package repository
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/google/uuid"
@@ -49,6 +52,10 @@ func (r *modelObservationRepository) RecordDiscovery(ctx context.Context, input 
 	if err := json.Unmarshal(input.RawSnapshot, &rawSnapshotObject); err != nil || rawSnapshotObject == nil {
 		return "", errors.New("discovery raw snapshot must be a JSON object")
 	}
+	persistedSnapshot, provenanceDigest, err := discoveryPersistenceEnvelope(input)
+	if err != nil {
+		return "", err
+	}
 
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -67,7 +74,7 @@ func (r *modelObservationRepository) RecordDiscovery(ctx context.Context, input 
 		)
 		VALUES ($1, $2, $3, $4, $5::jsonb, $6)
 		ON CONFLICT (idempotency_key) DO NOTHING
-	`, batchID, input.IdempotencyKey, input.AccountID, input.ConnectionID, string(input.RawSnapshot), input.ObservedAt.UTC())
+	`, batchID, input.IdempotencyKey, input.AccountID, input.ConnectionID, string(persistedSnapshot), input.ObservedAt.UTC())
 	if err != nil {
 		return "", err
 	}
@@ -76,15 +83,14 @@ func (r *modelObservationRepository) RecordDiscovery(ctx context.Context, input 
 		return "", err
 	}
 	if inserted == 0 {
-		var existingAccountID int64
-		var samePayload bool
+		var existingDigest string
 		if err = tx.QueryRowContext(ctx, `
-			SELECT batch_id, account_id, raw_snapshot = $2::jsonb
+			SELECT batch_id, raw_snapshot->'provenance'->>'digest'
 			FROM model_classification_batches WHERE idempotency_key = $1
-		`, input.IdempotencyKey, string(input.RawSnapshot)).Scan(&batchID, &existingAccountID, &samePayload); err != nil {
+		`, input.IdempotencyKey).Scan(&batchID, &existingDigest); err != nil {
 			return "", err
 		}
-		if existingAccountID != input.AccountID || !samePayload {
+		if existingDigest != provenanceDigest {
 			return "", errors.New("discovery idempotency key collision")
 		}
 		if err = tx.Commit(); err != nil {
@@ -140,7 +146,7 @@ func (r *modelObservationRepository) RecordDiscovery(ctx context.Context, input 
 				)
 				VALUES ($1, $2, $3, $4, $5, 'present', 0, $6, $6, $7::jsonb)
 				RETURNING id
-			`, input.ConnectionID, input.AccountID, modelID, classification, reason, input.ObservedAt.UTC(), string(input.RawSnapshot)).Scan(&observation.id)
+			`, input.ConnectionID, input.AccountID, modelID, classification, reason, input.ObservedAt.UTC(), string(persistedSnapshot)).Scan(&observation.id)
 			if err != nil {
 				return "", err
 			}
@@ -166,7 +172,7 @@ func (r *modelObservationRepository) RecordDiscovery(ctx context.Context, input 
 			    last_seen_at = GREATEST(last_seen_at, $2), raw_snapshot = $3::jsonb,
 			    updated_at = NOW()
 			WHERE id = $4
-		`, input.ConnectionID, input.ObservedAt.UTC(), string(input.RawSnapshot), observation.id)
+		`, input.ConnectionID, input.ObservedAt.UTC(), string(persistedSnapshot), observation.id)
 		if err != nil {
 			return "", err
 		}
@@ -204,6 +210,60 @@ func (r *modelObservationRepository) RecordDiscovery(ctx context.Context, input 
 		return "", err
 	}
 	return batchID, nil
+}
+
+func discoveryPersistenceEnvelope(input service.DiscoveryBatchInput) ([]byte, string, error) {
+	modelIDs := dedupeModelIDsInOrder(input.ModelIDs)
+	canonicalInput := struct {
+		AccountID       int64                       `json:"account_id"`
+		ConnectionID    *int64                      `json:"connection_id"`
+		AccountProvider *service.GovernanceProvider `json:"account_provider"`
+		RoutingPlatform string                      `json:"routing_platform"`
+		ModelIDs        []string                    `json:"model_ids"`
+		ObservedAt      string                      `json:"observed_at"`
+		RawSnapshot     string                      `json:"raw_snapshot_base64"`
+	}{
+		AccountID:       input.AccountID,
+		ConnectionID:    input.ConnectionID,
+		AccountProvider: input.AccountProvider,
+		RoutingPlatform: input.RoutingPlatform,
+		ModelIDs:        modelIDs,
+		ObservedAt:      input.ObservedAt.UTC().Format(time.RFC3339Nano),
+		RawSnapshot:     base64.StdEncoding.EncodeToString(input.RawSnapshot),
+	}
+	canonicalJSON, err := json.Marshal(canonicalInput)
+	if err != nil {
+		return nil, "", fmt.Errorf("marshal discovery provenance: %w", err)
+	}
+	digest := fmt.Sprintf("sha256:%x", sha256.Sum256(canonicalJSON))
+
+	var evidence map[string]json.RawMessage
+	if err := json.Unmarshal(input.RawSnapshot, &evidence); err != nil {
+		return nil, "", fmt.Errorf("decode discovery evidence: %w", err)
+	}
+	envelope, err := json.Marshal(map[string]any{
+		"evidence": evidence,
+		"provenance": map[string]any{
+			"digest": digest,
+		},
+	})
+	if err != nil {
+		return nil, "", fmt.Errorf("marshal discovery persistence envelope: %w", err)
+	}
+	return envelope, digest, nil
+}
+
+func dedupeModelIDsInOrder(modelIDs []string) []string {
+	seen := make(map[string]struct{}, len(modelIDs))
+	result := make([]string, 0, len(modelIDs))
+	for _, modelID := range modelIDs {
+		if _, exists := seen[modelID]; exists {
+			continue
+		}
+		seen[modelID] = struct{}{}
+		result = append(result, modelID)
+	}
+	return result
 }
 
 func validGovernanceProvider(provider service.GovernanceProvider) bool {

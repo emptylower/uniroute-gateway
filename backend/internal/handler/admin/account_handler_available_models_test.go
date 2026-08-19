@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -415,9 +416,13 @@ func TestAccountHandlerSyncUpstreamModelsPersistsLatestSnapshot(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Len(t, observations.inputs, 1)
 	require.Equal(t, []string{" gpt-5.6-terra ", "gpt-5.6-sol"}, observations.inputs[0].ModelIDs)
-	var snapshot map[string]json.RawMessage
+	var snapshot struct {
+		PayloadBase64 string `json:"payload_base64"`
+	}
 	require.NoError(t, json.Unmarshal(observations.inputs[0].RawSnapshot, &snapshot))
-	require.JSONEq(t, `{"object":"list","data":[{"id":" gpt-5.6-terra "},{"id":"gpt-5.6-sol"},{"id":" gpt-5.6-terra "}],"metadata":{"cursor":"next"}}`, string(snapshot["payload"]))
+	payload, err := base64.StdEncoding.DecodeString(snapshot.PayloadBase64)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"object":"list","data":[{"id":" gpt-5.6-terra "},{"id":"gpt-5.6-sol"},{"id":" gpt-5.6-terra "}],"metadata":{"cursor":"next"}}`, string(payload))
 	require.Equal(t, int64(46), store.accountID)
 	require.Equal(t, map[string]any{
 		"alias":         "upstream-target",
@@ -454,8 +459,12 @@ func TestAccountHandlerSyncUpstreamModelsRecordsEmptyEvidenceBeforeLegacyFailure
 	require.Equal(t, http.StatusBadGateway, rec.Code)
 	require.Len(t, observations.inputs, 1)
 	require.Empty(t, observations.inputs[0].ModelIDs)
-	var snapshot map[string]json.RawMessage
+	var snapshot struct {
+		PayloadBase64 string `json:"payload_base64"`
+	}
 	require.NoError(t, json.Unmarshal(observations.inputs[0].RawSnapshot, &snapshot))
-	require.JSONEq(t, `{"object":"list","data":[],"metadata":{"cursor":null}}`, string(snapshot["payload"]))
+	payload, err := base64.StdEncoding.DecodeString(snapshot.PayloadBase64)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"object":"list","data":[],"metadata":{"cursor":null}}`, string(payload))
 	require.Zero(t, store.accountID)
 }

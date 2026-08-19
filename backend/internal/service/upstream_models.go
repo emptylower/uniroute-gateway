@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -601,7 +602,7 @@ func (s *AccountTestService) fetchAntigravityOAuthUpstreamModelDiscovery(ctx con
 	if err != nil {
 		return UpstreamModelDiscovery{}, newUpstreamModelSyncConfigError("Failed to configure Antigravity client", err)
 	}
-	modelsResp, _, rawPayload, err := client.FetchAvailableModelsWithRawBytes(ctx, accessToken, strings.TrimSpace(account.GetCredential("project_id")))
+	modelsResp, _, acceptedResponse, err := client.FetchAvailableModelsWithEvidence(ctx, accessToken, strings.TrimSpace(account.GetCredential("project_id")))
 	if err != nil {
 		return UpstreamModelDiscovery{}, newUpstreamModelSyncUpstreamError("Failed to fetch Antigravity available models", err)
 	}
@@ -609,11 +610,18 @@ func (s *AccountTestService) fetchAntigravityOAuthUpstreamModelDiscovery(ctx con
 		return UpstreamModelDiscovery{}, newUpstreamModelSyncUpstreamError("Upstream returned no supported models", nil)
 	}
 
-	evidenceModelIDs, err := extractJSONObjectKeysInOrder(rawPayload, "models")
+	evidenceModelIDs, err := extractJSONObjectKeysInOrder(acceptedResponse.Body, "models")
 	if err != nil {
 		return UpstreamModelDiscovery{}, newUpstreamModelSyncUpstreamError("Upstream model list response was not valid JSON", err)
 	}
-	rawSnapshot, err := marshalUpstreamRawSnapshot(rawPayload, map[string]any{"source": "antigravity_oauth"})
+	rawSnapshot, err := marshalUpstreamRawSnapshot(acceptedResponse.Body, map[string]any{
+		"source":       "antigravity_oauth",
+		"endpoint":     acceptedResponse.Endpoint,
+		"status_code":  acceptedResponse.StatusCode,
+		"content_type": acceptedResponse.ContentType,
+		"etag":         acceptedResponse.ETag,
+		"request_id":   acceptedResponse.RequestID,
+	})
 	if err != nil {
 		return UpstreamModelDiscovery{}, newUpstreamModelSyncUpstreamError("Upstream model list response was not valid JSON", err)
 	}
@@ -846,17 +854,11 @@ func marshalUpstreamRawSnapshot(payload []byte, responseMetadata map[string]any)
 	if !json.Valid(payload) {
 		return nil, errors.New("payload is not valid JSON")
 	}
-	metadata, err := json.Marshal(responseMetadata)
-	if err != nil {
-		return nil, err
-	}
-	snapshot := make([]byte, 0, len(payload)+len(metadata)+26)
-	snapshot = append(snapshot, `{"payload":`...)
-	snapshot = append(snapshot, payload...)
-	snapshot = append(snapshot, `,"response":`...)
-	snapshot = append(snapshot, metadata...)
-	snapshot = append(snapshot, '}')
-	return snapshot, nil
+	return json.Marshal(map[string]any{
+		// JSONB may canonicalize parsed JSON; base64 preserves the accepted bytes exactly.
+		"payload_base64": base64.StdEncoding.EncodeToString(payload),
+		"response":       responseMetadata,
+	})
 }
 
 func extractJSONObjectKeysInOrder(payload []byte, field string) ([]string, error) {

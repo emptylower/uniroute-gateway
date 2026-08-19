@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -408,8 +409,8 @@ func TestFetchUpstreamModelDiscoveryPreservesHTTPPayloadMetadataAndExactIDs(t *t
 	require.Equal(t, []string{" model/A ", "model/A", " model/A "}, discovery.EvidenceModelIDs)
 
 	var snapshot struct {
-		Payload  json.RawMessage `json:"payload"`
-		Response struct {
+		PayloadBase64 string `json:"payload_base64"`
+		Response      struct {
 			Source      string `json:"source"`
 			StatusCode  int    `json:"status_code"`
 			ContentType string `json:"content_type"`
@@ -417,7 +418,9 @@ func TestFetchUpstreamModelDiscoveryPreservesHTTPPayloadMetadataAndExactIDs(t *t
 		} `json:"response"`
 	}
 	require.NoError(t, json.Unmarshal(discovery.RawSnapshot, &snapshot))
-	require.JSONEq(t, string(body), string(snapshot.Payload))
+	decodedPayload, err := base64.StdEncoding.DecodeString(snapshot.PayloadBase64)
+	require.NoError(t, err)
+	require.Equal(t, body, decodedPayload)
 	require.Equal(t, "http", snapshot.Response.Source)
 	require.Equal(t, http.StatusOK, snapshot.Response.StatusCode)
 	require.Equal(t, "application/json", snapshot.Response.ContentType)
@@ -440,11 +443,16 @@ func TestFetchUpstreamModelDiscoveryPreservesManifestPayloadMetadataAndExactIDs(
 	require.Equal(t, []string{"gpt-exact"}, discovery.Models)
 	require.Equal(t, []string{" gpt-exact ", "gpt-exact", " gpt-exact "}, discovery.EvidenceModelIDs)
 
-	var snapshot map[string]json.RawMessage
+	var snapshot struct {
+		PayloadBase64 string          `json:"payload_base64"`
+		Response      json.RawMessage `json:"response"`
+	}
 	require.NoError(t, json.Unmarshal(discovery.RawSnapshot, &snapshot))
-	require.JSONEq(t, string(body), string(snapshot["payload"]))
+	decodedPayload, err := base64.StdEncoding.DecodeString(snapshot.PayloadBase64)
+	require.NoError(t, err)
+	require.Equal(t, body, decodedPayload)
 	var metadata map[string]any
-	require.NoError(t, json.Unmarshal(snapshot["response"], &metadata))
+	require.NoError(t, json.Unmarshal(snapshot.Response, &metadata))
 	require.Equal(t, "manifest", metadata["source"])
 	require.Equal(t, `W/"manifest-etag"`, metadata["etag"])
 }
@@ -664,7 +672,9 @@ func TestFetchUpstreamModelDiscoveryPreservesAntigravityOAuthPayload(t *testing.
 
 	payload := []byte("{\n  \"models\": {\n    \" z-model \" : {},\n    \"a-model\": {},\n    \" z-model \" : {\"duplicate\": true}\n  }\n}")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("ETag", `"antigravity-etag"`)
+		w.Header().Set("X-Goog-Request-Id", "antigravity-request")
 		_, _ = w.Write(payload)
 	}))
 	t.Cleanup(server.Close)
@@ -680,12 +690,19 @@ func TestFetchUpstreamModelDiscoveryPreservesAntigravityOAuthPayload(t *testing.
 	require.Equal(t, []string{" z-model ", "a-model"}, discovery.EvidenceModelIDs)
 
 	var snapshot struct {
-		Payload  json.RawMessage `json:"payload"`
-		Response map[string]any  `json:"response"`
+		PayloadBase64 string         `json:"payload_base64"`
+		Response      map[string]any `json:"response"`
 	}
 	require.NoError(t, json.Unmarshal(discovery.RawSnapshot, &snapshot))
-	require.True(t, bytes.Equal(payload, snapshot.Payload), "accepted payload must not be synthesized from model IDs")
+	decodedPayload, err := base64.StdEncoding.DecodeString(snapshot.PayloadBase64)
+	require.NoError(t, err)
+	require.True(t, bytes.Equal(payload, decodedPayload), "accepted payload bytes must not be synthesized from model IDs")
 	require.Equal(t, "antigravity_oauth", snapshot.Response["source"])
+	require.Equal(t, server.URL+"/v1internal:fetchAvailableModels", snapshot.Response["endpoint"])
+	require.Equal(t, float64(http.StatusOK), snapshot.Response["status_code"])
+	require.Equal(t, "application/json; charset=utf-8", snapshot.Response["content_type"])
+	require.Equal(t, `"antigravity-etag"`, snapshot.Response["etag"])
+	require.Equal(t, "antigravity-request", snapshot.Response["request_id"])
 }
 
 func TestBuildUpstreamModelsRequestGrokOAuthRequiresTokenProvider(t *testing.T) {
