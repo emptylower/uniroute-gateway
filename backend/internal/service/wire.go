@@ -679,6 +679,7 @@ func ProvideAPIKeyService(
 var ProviderSet = wire.NewSet(
 	NewPlatformIdentityService,
 	NewPlatformAPIKeyService,
+	NewModelGovernanceInventoryService,
 	// Core services
 	NewAuthService,
 	NewUserService,

@@ -272,6 +272,54 @@ func TestDelegatedGatewayAdminScopeSetsAdminRoleAndFailsClosed(t *testing.T) {
 	}
 }
 
+func TestModelGovernanceInventoryRouteRequiresSignedGatewayAdminAssertionAndAudit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	mr := miniredis.RunT(t)
+	redisClient := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = redisClient.Close() })
+	cfg := delegatedTestConfig()
+	identityService := service.NewPlatformIdentityService(delegatedIdentityRepoStub{identity: &service.PlatformIdentity{
+		GatewayUserID: 77, PlatformUserID: "shipany-user-77", Status: service.StatusActive,
+	}})
+	userReader := delegatedUserReaderStub{user: &service.User{ID: 77, Role: service.RoleUser, Status: service.StatusActive}}
+	handlers := delegatedRouteContractHandlers(identityService, nil)
+	handlers.Admin.ModelInventory = adminhandler.NewModelGovernanceInventoryHandler(
+		service.NewModelGovernanceInventoryService(inventoryListerRouteStub{}),
+	)
+	auditCalls := 0
+	router := gin.New()
+	registerDelegatedGatewayAdminRoutes(router, handlers, identityService, userReader, middleware.AuditLogMiddleware(func(c *gin.Context) {
+		auditCalls++
+		c.Next()
+	}), cfg, redisClient)
+
+	path := "/api/internal/v1/gateway-admin/shipany-user-77/model-governance/inventory"
+	unsigned := httptest.NewRecorder()
+	router.ServeHTTP(unsigned, httptest.NewRequest(http.MethodGet, path, nil))
+	require.Equal(t, http.StatusUnauthorized, unsigned.Code)
+	require.Zero(t, auditCalls)
+
+	writable := httptest.NewRecorder()
+	writeRequest := httptest.NewRequest(http.MethodPost, path, nil)
+	writeRequest.Header.Set("Authorization", "Bearer "+signDelegatedAssertion(t, cfg, "shipany-user-77", service.PlatformGatewayAdminScope, "inventory-write"))
+	router.ServeHTTP(writable, writeRequest)
+	require.Equal(t, http.StatusNotFound, writable.Code)
+	require.Zero(t, auditCalls)
+
+	request := httptest.NewRequest(http.MethodGet, path, nil)
+	request.Header.Set("Authorization", "Bearer "+signDelegatedAssertion(t, cfg, "shipany-user-77", service.PlatformGatewayAdminScope, "inventory-read"))
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Equal(t, 1, auditCalls)
+}
+
+type inventoryListerRouteStub struct{}
+
+func (inventoryListerRouteStub) List(context.Context, time.Time, time.Time) ([]service.InventoryItem, error) {
+	return []service.InventoryItem{}, nil
+}
+
 func TestDelegatedPlatformUserResolutionFailsClosedOnScopeSubjectAndReplay(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	mr := miniredis.RunT(t)
@@ -362,6 +410,7 @@ func TestPlatformIdentityRouteContractIsExplicitAllowlist(t *testing.T) {
 		"POST /api/internal/v1/users/:platform_user_id/keys",
 		"POST /api/internal/v1/users/:platform_user_id/keys/:platform_key_id/revoke",
 		"GET /api/internal/v1/gateway-admin/:platform_user_id/accounts",
+		"GET /api/internal/v1/gateway-admin/:platform_user_id/model-governance/inventory",
 		"POST /api/internal/v1/gateway-admin/:platform_user_id/accounts",
 		"POST /api/internal/v1/gateway-admin/:platform_user_id/accounts/check-mixed-channel",
 		"PUT /api/internal/v1/gateway-admin/:platform_user_id/accounts/:id/upstream-billing-probe",
@@ -462,6 +511,9 @@ func delegatedRouteContractHandlers(
 			Proxy:                  &adminhandler.ProxyHandler{},
 			Ops:                    &adminhandler.OpsHandler{},
 			Usage:                  adminUsage,
+			ModelInventory: adminhandler.NewModelGovernanceInventoryHandler(
+				service.NewModelGovernanceInventoryService(inventoryListerRouteStub{}),
+			),
 		},
 	}
 }

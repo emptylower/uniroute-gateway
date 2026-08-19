@@ -94,6 +94,9 @@ func registerDelegatedGatewayAdminRoutes(
 		resolveDelegatedPlatformUserAs(identityService, userService, service.RoleAdmin),
 		gin.HandlerFunc(auditLog),
 	)
+	if h.Admin.ModelInventory != nil {
+		admin.GET("/model-governance/inventory", h.Admin.ModelInventory.List)
+	}
 
 	accounts := admin.Group("/accounts")
 	accounts.GET("", h.Admin.Account.List)
