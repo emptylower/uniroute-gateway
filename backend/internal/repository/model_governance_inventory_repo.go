@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"math"
 	"strconv"
@@ -33,8 +34,12 @@ func NewModelGovernanceInventoryRepository(db *sql.DB) service.ModelGovernanceIn
 	return &modelGovernanceInventoryRepository{db: db}
 }
 
-func (r *modelGovernanceInventoryRepository) List(ctx context.Context, cutoff7d, cutoff30d, windowEnd time.Time) ([]service.InventoryItem, error) {
-	rows, err := r.db.QueryContext(ctx, modelGovernanceInventoryQuery, cutoff7d.UTC(), cutoff30d.UTC(), windowEnd.UTC())
+func (r *modelGovernanceInventoryRepository) List(ctx context.Context, projections []service.InventoryAccountProjection, cutoff7d, cutoff30d, windowEnd time.Time) ([]service.InventoryItem, error) {
+	projectionJSON, err := json.Marshal(projections)
+	if err != nil {
+		return nil, fmt.Errorf("encode model governance inventory projections: %w", err)
+	}
+	rows, err := r.db.QueryContext(ctx, modelGovernanceInventoryQuery, cutoff7d.UTC(), cutoff30d.UTC(), windowEnd.UTC(), projectionJSON)
 	if err != nil {
 		return nil, fmt.Errorf("list model governance inventory: %w", err)
 	}
@@ -103,8 +108,8 @@ func inventoryDimensionError(base *infraerrors.ApplicationError, item service.In
 
 const modelGovernanceInventoryQuery = `
 WITH enabled_routes AS (
-    SELECT a.id AS account_id, a.platform, g.id AS group_id, c.id AS channel_id,
-           a.credentials, c.model_mapping
+	SELECT a.id AS account_id, a.platform, g.id AS group_id, c.id AS channel_id,
+	       c.model_mapping
     FROM accounts a
     LEFT JOIN account_groups ag ON ag.account_id = a.id
     LEFT JOIN groups g ON g.id = ag.group_id AND g.status = 'active' AND g.deleted_at IS NULL
@@ -114,12 +119,10 @@ WITH enabled_routes AS (
       AND (ag.group_id IS NULL OR g.id IS NOT NULL)
 ),
 account_mapping_models AS (
-    SELECT er.account_id, er.platform, er.group_id, er.channel_id, mapping.value AS upstream_model_id
-    FROM enabled_routes er
-    CROSS JOIN LATERAL jsonb_each_text(
-        CASE WHEN jsonb_typeof(er.credentials->'model_mapping') = 'object'
-             THEN er.credentials->'model_mapping' ELSE '{}'::jsonb END
-    ) mapping
+	SELECT er.account_id, er.platform, er.group_id, er.channel_id, model.value AS upstream_model_id
+	FROM jsonb_to_recordset($4::jsonb) AS projection(account_id bigint, upstream_model_ids jsonb)
+	JOIN enabled_routes er ON er.account_id = projection.account_id
+	CROSS JOIN LATERAL jsonb_array_elements_text(projection.upstream_model_ids) model
 ),
 channel_mapping_models AS (
     SELECT er.account_id, er.platform, er.group_id, er.channel_id, mapping.value AS upstream_model_id

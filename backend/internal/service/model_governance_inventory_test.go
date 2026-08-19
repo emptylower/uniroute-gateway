@@ -9,23 +9,39 @@ import (
 )
 
 type inventoryRepositoryStub struct {
-	cutoff7d  time.Time
-	cutoff30d time.Time
-	windowEnd time.Time
-	items     []InventoryItem
-	err       error
+	cutoff7d    time.Time
+	cutoff30d   time.Time
+	windowEnd   time.Time
+	projections []InventoryAccountProjection
+	items       []InventoryItem
+	err         error
 }
 
-func (s *inventoryRepositoryStub) List(_ context.Context, cutoff7d, cutoff30d, windowEnd time.Time) ([]InventoryItem, error) {
+func (s *inventoryRepositoryStub) List(_ context.Context, projections []InventoryAccountProjection, cutoff7d, cutoff30d, windowEnd time.Time) ([]InventoryItem, error) {
+	s.projections = projections
 	s.cutoff7d = cutoff7d
 	s.cutoff30d = cutoff30d
 	s.windowEnd = windowEnd
 	return s.items, s.err
 }
 
+type inventoryAccountSourceStub struct {
+	accounts []Account
+	err      error
+}
+
+func (s *inventoryAccountSourceStub) ListInventoryAccounts(context.Context) ([]Account, error) {
+	return s.accounts, s.err
+}
+
 func TestModelGovernanceInventoryUsesOneUTCWindowPerRequest(t *testing.T) {
 	repo := &inventoryRepositoryStub{items: []InventoryItem{{AccountID: 1, UpstreamModelID: "model", BillingCurrency: "USD"}}}
-	svc := NewModelGovernanceInventoryService(repo)
+	accounts := &inventoryAccountSourceStub{accounts: []Account{{
+		ID: 42, Platform: PlatformOpenAI, Credentials: map[string]any{
+			"model_mapping": map[string]any{"public": "effective-upstream"},
+		},
+	}}}
+	svc := NewModelGovernanceInventoryService(repo, accounts)
 	now := time.Date(2026, time.August, 19, 7, 8, 9, 123, time.FixedZone("offset", 8*60*60))
 	clockCalls := 0
 	svc.now = func() time.Time {
@@ -40,6 +56,7 @@ func TestModelGovernanceInventoryUsesOneUTCWindowPerRequest(t *testing.T) {
 	require.Equal(t, now.UTC().Add(-7*24*time.Hour), repo.cutoff7d)
 	require.Equal(t, now.UTC().Add(-30*24*time.Hour), repo.cutoff30d)
 	require.Equal(t, now.UTC(), repo.windowEnd)
+	require.Equal(t, []InventoryAccountProjection{{AccountID: 42, UpstreamModelIDs: []string{"effective-upstream"}}}, repo.projections)
 	require.Equal(t, time.UTC, repo.cutoff7d.Location())
 	require.Equal(t, time.UTC, repo.cutoff30d.Location())
 	require.Equal(t, time.UTC, repo.windowEnd.Location())

@@ -318,7 +318,7 @@ func TestModelGovernanceInventoryRouteRequiresSignedGatewayAdminAssertionAndAudi
 	userReader := delegatedUserReaderStub{user: &service.User{ID: 77, Email: "delegated@example.invalid", Role: service.RoleUser, Status: service.StatusActive}}
 	handlers := delegatedRouteContractHandlers(identityService, nil)
 	handlers.Admin.ModelInventory = adminhandler.NewModelGovernanceInventoryHandler(
-		service.NewModelGovernanceInventoryService(inventoryListerRouteStub{}),
+		service.NewModelGovernanceInventoryService(inventoryListerRouteStub{}, inventoryAccountSourceRouteStub{}),
 	)
 	auditRepository := &delegatedAuditCaptureRepository{}
 	auditService := service.NewAuditLogService(auditRepository, nil)
@@ -359,8 +359,14 @@ func TestModelGovernanceInventoryRouteRequiresSignedGatewayAdminAssertionAndAudi
 
 type inventoryListerRouteStub struct{}
 
-func (inventoryListerRouteStub) List(context.Context, time.Time, time.Time, time.Time) ([]service.InventoryItem, error) {
+func (inventoryListerRouteStub) List(context.Context, []service.InventoryAccountProjection, time.Time, time.Time, time.Time) ([]service.InventoryItem, error) {
 	return []service.InventoryItem{}, nil
+}
+
+type inventoryAccountSourceRouteStub struct{}
+
+func (inventoryAccountSourceRouteStub) ListInventoryAccounts(context.Context) ([]service.Account, error) {
+	return nil, nil
 }
 
 func TestDelegatedPlatformUserResolutionFailsClosedOnScopeSubjectAndReplay(t *testing.T) {
@@ -555,7 +561,7 @@ func delegatedRouteContractHandlers(
 			Ops:                    &adminhandler.OpsHandler{},
 			Usage:                  adminUsage,
 			ModelInventory: adminhandler.NewModelGovernanceInventoryHandler(
-				service.NewModelGovernanceInventoryService(inventoryListerRouteStub{}),
+				service.NewModelGovernanceInventoryService(inventoryListerRouteStub{}, inventoryAccountSourceRouteStub{}),
 			),
 		},
 	}

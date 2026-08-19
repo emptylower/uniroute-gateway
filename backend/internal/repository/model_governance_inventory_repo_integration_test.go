@@ -26,7 +26,7 @@ func TestModelGovernanceInventoryIncludesAllSourcesAndAggregatesUsageWithoutWrit
 	insertInventoryUsage(t, fixture, "outside-window", "USD", "inventory-request-old", fixture.apiKey1, "99", now.Add(-31*24*time.Hour))
 
 	before := inventoryBusinessState(t, fixture)
-	items, err := NewModelGovernanceInventoryRepository(integrationDB).List(ctx, now.Add(-7*24*time.Hour), now.Add(-30*24*time.Hour), now)
+	items, err := listModelGovernanceInventory(ctx, now.Add(-7*24*time.Hour), now.Add(-30*24*time.Hour), now)
 	require.NoError(t, err)
 	require.Equal(t, before, inventoryBusinessState(t, fixture), "inventory query must not mutate business or governance state")
 
@@ -68,7 +68,7 @@ func TestModelGovernanceInventoryUsesHalfOpenUsageWindows(t *testing.T) {
 	insertInventoryUsage(t, fixture, "bounded-model", "USD", "inventory-after-end", fixture.apiKey2, "16", windowEnd.Add(time.Hour))
 	insertInventoryUsage(t, fixture, "future-only-model", "USD", "inventory-future-only", fixture.apiKey2, "1", windowEnd.Add(time.Hour))
 
-	items, err := NewModelGovernanceInventoryRepository(integrationDB).List(ctx, cutoff7d, cutoff30d, windowEnd)
+	items, err := listModelGovernanceInventory(ctx, cutoff7d, cutoff30d, windowEnd)
 	require.NoError(t, err)
 	byModel := inventoryItemsForAccount(items, fixture.accountID)
 	require.NotContains(t, byModel, "future-only-model")
@@ -90,7 +90,7 @@ func TestModelGovernanceInventoryFutureRowsCannotAffectValidationOrAggregates(t 
 	insertInventoryUsage(t, fixture, "safe-model", "CNY", "inventory-future-mixed-negative", fixture.apiKey2, "-1", windowEnd)
 	insertInventoryUsageSeries(t, fixture, "future-overflow-model", "USD", fixture.apiKey2, "9999999999.9999999999", windowEnd.Add(time.Hour), 1000)
 
-	items, err := NewModelGovernanceInventoryRepository(integrationDB).List(
+	items, err := listModelGovernanceInventory(
 		ctx, windowEnd.Add(-7*24*time.Hour), windowEnd.Add(-30*24*time.Hour), windowEnd,
 	)
 	require.NoError(t, err)
@@ -111,11 +111,118 @@ func TestModelGovernanceInventoryIncludesEnabledAccountWithoutGroup(t *testing.T
 	accountID := insertInventoryAccount(t, `{"model_mapping":{"public":"ungrouped-model"}}`)
 	t.Cleanup(func() { _, _ = integrationDB.ExecContext(ctx, `DELETE FROM accounts WHERE id = $1`, accountID) })
 
-	items, err := NewModelGovernanceInventoryRepository(integrationDB).List(ctx, now.Add(-7*24*time.Hour), now.Add(-30*24*time.Hour), now)
+	items, err := listModelGovernanceInventory(ctx, now.Add(-7*24*time.Hour), now.Add(-30*24*time.Hour), now)
 	require.NoError(t, err)
 	require.Contains(t, items, service.InventoryItem{
 		AccountID: accountID, UpstreamModelID: "ungrouped-model", Classification: "unknown", BillingCurrency: "CNY",
 	})
+}
+
+func TestModelGovernanceInventoryIncludesFiniteEffectiveRuntimeMappings(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name        string
+		platform    string
+		accountType string
+		credentials string
+		wantModel   string
+	}{
+		{
+			name: "antigravity default", platform: service.PlatformAntigravity, accountType: service.AccountTypeAPIKey,
+			credentials: `{}`, wantModel: "gemini-3-flash",
+		},
+		{
+			name: "grok default", platform: service.PlatformGrok, accountType: service.AccountTypeAPIKey,
+			credentials: `{}`, wantModel: "grok-4.5",
+		},
+		{
+			name: "openai compact only", platform: service.PlatformOpenAI, accountType: service.AccountTypeAPIKey,
+			credentials: `{"compact_model_mapping":{"gpt-5.4":"gpt-5.4-compact-integration"}}`, wantModel: "gpt-5.4-compact-integration",
+		},
+		{
+			name: "bedrock regional default", platform: service.PlatformAnthropic, accountType: service.AccountTypeBedrock,
+			credentials: `{"aws_region":"eu-west-1"}`, wantModel: "eu.anthropic.claude-sonnet-4-5-20250929-v1:0",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			accountID := insertInventoryAccountWithType(t, test.platform, test.accountType, test.credentials)
+			t.Cleanup(func() { _, _ = integrationDB.ExecContext(ctx, `DELETE FROM accounts WHERE id = $1`, accountID) })
+
+			before := inventoryAccountState(t, accountID)
+			items, err := listModelGovernanceInventory(ctx, now.Add(-7*24*time.Hour), now.Add(-30*24*time.Hour), now)
+			require.NoError(t, err)
+			require.Equal(t, before, inventoryAccountState(t, accountID), "inventory must remain read-only")
+			require.Contains(t, inventoryItemsForAccount(items, accountID), test.wantModel)
+		})
+	}
+}
+
+func TestModelGovernanceInventoryEffectiveMappingsUseStableConfigurationScope(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
+	for _, state := range []struct {
+		name        string
+		status      string
+		schedulable bool
+	}{
+		{name: "disabled", status: "disabled", schedulable: true},
+		{name: "unschedulable", status: "active", schedulable: false},
+	} {
+		t.Run(state.name, func(t *testing.T) {
+			accountID := insertInventoryAccountWithType(t, service.PlatformAntigravity, service.AccountTypeAPIKey, `{}`)
+			_, err := integrationDB.ExecContext(ctx, `UPDATE accounts SET status = $2, schedulable = $3 WHERE id = $1`, accountID, state.status, state.schedulable)
+			require.NoError(t, err)
+			t.Cleanup(func() { _, _ = integrationDB.ExecContext(ctx, `DELETE FROM accounts WHERE id = $1`, accountID) })
+
+			items, err := listModelGovernanceInventory(ctx, now.Add(-7*24*time.Hour), now.Add(-30*24*time.Hour), now)
+			require.NoError(t, err)
+			require.Empty(t, inventoryItemsForAccount(items, accountID))
+		})
+	}
+}
+
+func TestModelGovernanceInventoryEffectiveMappingsUseEnabledRouteDimensionsAndIgnoreTransientExclusions(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
+	suffix := fmt.Sprint(time.Now().UnixNano())
+	accountID := insertInventoryAccountWithType(t, service.PlatformAntigravity, service.AccountTypeAPIKey, `{}`)
+	var groupID, channelID int64
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		INSERT INTO groups (name, status, platform) VALUES ($1, 'active', $2) RETURNING id
+	`, "inventory-effective-group-"+suffix, service.PlatformAntigravity).Scan(&groupID))
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		INSERT INTO channels (name, status, model_mapping) VALUES ($1, 'active', '{}'::jsonb) RETURNING id
+	`, "inventory-effective-channel-"+suffix).Scan(&channelID))
+	_, err := integrationDB.ExecContext(ctx, `INSERT INTO account_groups (account_id, group_id) VALUES ($1, $2)`, accountID, groupID)
+	require.NoError(t, err)
+	_, err = integrationDB.ExecContext(ctx, `INSERT INTO channel_groups (channel_id, group_id) VALUES ($1, $2)`, channelID, groupID)
+	require.NoError(t, err)
+	_, err = integrationDB.ExecContext(ctx, `
+		UPDATE accounts
+		SET rate_limit_reset_at = $2, overload_until = $2, temp_unschedulable_until = $2
+		WHERE id = $1
+	`, accountID, now.Add(time.Hour))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = integrationDB.ExecContext(ctx, `DELETE FROM channels WHERE id = $1`, channelID)
+		_, _ = integrationDB.ExecContext(ctx, `DELETE FROM groups WHERE id = $1`, groupID)
+		_, _ = integrationDB.ExecContext(ctx, `DELETE FROM accounts WHERE id = $1`, accountID)
+	})
+
+	items, err := listModelGovernanceInventory(ctx, now.Add(-7*24*time.Hour), now.Add(-30*24*time.Hour), now)
+	require.NoError(t, err)
+	var found bool
+	for _, item := range items {
+		if item.AccountID == accountID && item.UpstreamModelID == "gemini-3-flash" {
+			require.Equal(t, &groupID, item.GroupID)
+			require.Equal(t, &channelID, item.ChannelID)
+			found = true
+		}
+	}
+	require.True(t, found, "configuration-enabled account must remain inventoried during transient scheduler exclusion")
 }
 
 func TestModelGovernanceInventoryUsesExactPlatformClassificationAllowlistUnlessObserved(t *testing.T) {
@@ -137,7 +244,7 @@ func TestModelGovernanceInventoryUsesExactPlatformClassificationAllowlistUnlessO
 			insertInventoryObservation(t, accountID, "observed-model", "approved", now.Add(-time.Hour))
 			t.Cleanup(func() { _, _ = integrationDB.ExecContext(ctx, `DELETE FROM accounts WHERE id = $1`, accountID) })
 
-			items, err := NewModelGovernanceInventoryRepository(integrationDB).List(ctx, now.Add(-7*24*time.Hour), now.Add(-30*24*time.Hour), now)
+			items, err := listModelGovernanceInventory(ctx, now.Add(-7*24*time.Hour), now.Add(-30*24*time.Hour), now)
 			require.NoError(t, err)
 			byModel := inventoryItemsForAccount(items, accountID)
 			require.Equal(t, testCase.want, byModel["mapped-model"].Classification)
@@ -164,7 +271,7 @@ func TestModelGovernanceInventoryExcludesCurrentEvidenceForInactiveOrUnschedulab
 			require.NoError(t, err)
 			t.Cleanup(func() { _, _ = integrationDB.ExecContext(ctx, `DELETE FROM accounts WHERE id = $1`, accountID) })
 
-			items, err := NewModelGovernanceInventoryRepository(integrationDB).List(ctx, now.Add(-7*24*time.Hour), now.Add(-30*24*time.Hour), now)
+			items, err := listModelGovernanceInventory(ctx, now.Add(-7*24*time.Hour), now.Add(-30*24*time.Hour), now)
 			require.NoError(t, err)
 			require.Empty(t, inventoryItemsForAccount(items, accountID))
 		})
@@ -181,7 +288,7 @@ func TestModelGovernanceInventoryRetainsHistoricalUsageForDisabledAccount(t *tes
 	_, err := integrationDB.ExecContext(ctx, `UPDATE accounts SET status = 'disabled' WHERE id = $1`, fixture.accountID)
 	require.NoError(t, err)
 
-	items, err := NewModelGovernanceInventoryRepository(integrationDB).List(ctx, now.Add(-7*24*time.Hour), now.Add(-30*24*time.Hour), now)
+	items, err := listModelGovernanceInventory(ctx, now.Add(-7*24*time.Hour), now.Add(-30*24*time.Hour), now)
 	require.NoError(t, err)
 	byModel := inventoryItemsForAccount(items, fixture.accountID)
 	require.Equal(t, service.InventoryItem{
@@ -203,7 +310,7 @@ func TestModelGovernanceInventoryRejectsMixedCurrencyBeforeRevenueConversion(t *
 	insertInventoryUsageSeries(t, fixture, "mixed-model", "USD", fixture.apiKey1, "9999999999.9999999999", now.Add(-time.Hour), 1000)
 	insertInventoryUsage(t, fixture, "mixed-model", "CNY", "inventory-mixed-cny", fixture.apiKey2, "-1", now.Add(-2*time.Hour))
 
-	_, err := NewModelGovernanceInventoryRepository(integrationDB).List(ctx, now.Add(-7*24*time.Hour), now.Add(-30*24*time.Hour), now)
+	_, err := listModelGovernanceInventory(ctx, now.Add(-7*24*time.Hour), now.Add(-30*24*time.Hour), now)
 	requireInventoryError(t, err, "MODEL_GOVERNANCE_INVENTORY_MIXED_CURRENCY", fixture, "mixed-model")
 }
 
@@ -213,7 +320,7 @@ func TestModelGovernanceInventoryRejectsNegativeRevenueWithTypedDimensions(t *te
 	fixture := createModelGovernanceInventoryFixture(t, "USD")
 	insertInventoryUsage(t, fixture, "negative-model", "USD", "inventory-negative", fixture.apiKey1, "-0.000001", now.Add(-time.Hour))
 
-	_, err := NewModelGovernanceInventoryRepository(integrationDB).List(ctx, now.Add(-7*24*time.Hour), now.Add(-30*24*time.Hour), now)
+	_, err := listModelGovernanceInventory(ctx, now.Add(-7*24*time.Hour), now.Add(-30*24*time.Hour), now)
 	requireInventoryError(t, err, "MODEL_GOVERNANCE_INVENTORY_NEGATIVE_REVENUE", fixture, "negative-model")
 }
 
@@ -224,7 +331,7 @@ func TestModelGovernanceInventoryRejectsNegativeSourceRevenueWhenDimensionNetsPo
 	insertInventoryUsage(t, fixture, "offset-model", "USD", "inventory-offset-negative", fixture.apiKey1, "-1", now.Add(-time.Hour))
 	insertInventoryUsage(t, fixture, "offset-model", "USD", "inventory-offset-positive", fixture.apiKey2, "2", now.Add(-2*time.Hour))
 
-	_, err := NewModelGovernanceInventoryRepository(integrationDB).List(ctx, now.Add(-7*24*time.Hour), now.Add(-30*24*time.Hour), now)
+	_, err := listModelGovernanceInventory(ctx, now.Add(-7*24*time.Hour), now.Add(-30*24*time.Hour), now)
 	requireInventoryError(t, err, "MODEL_GOVERNANCE_INVENTORY_NEGATIVE_REVENUE", fixture, "offset-model")
 }
 
@@ -234,7 +341,7 @@ func TestModelGovernanceInventoryRejectsTinyNegativeSourceThatRoundsToZero(t *te
 	fixture := createModelGovernanceInventoryFixture(t, "USD")
 	insertInventoryUsage(t, fixture, "tiny-negative-model", "USD", "inventory-tiny-negative", fixture.apiKey1, "-0.0000000001", now.Add(-time.Hour))
 
-	_, err := NewModelGovernanceInventoryRepository(integrationDB).List(ctx, now.Add(-7*24*time.Hour), now.Add(-30*24*time.Hour), now)
+	_, err := listModelGovernanceInventory(ctx, now.Add(-7*24*time.Hour), now.Add(-30*24*time.Hour), now)
 	requireInventoryError(t, err, "MODEL_GOVERNANCE_INVENTORY_NEGATIVE_REVENUE", fixture, "tiny-negative-model")
 }
 
@@ -275,7 +382,7 @@ func TestModelGovernanceInventoryRoundsAggregateRevenueAtExactMicrosBoundaries(t
 				insertInventoryUsage(t, fixture, model, "USD", fmt.Sprintf("inventory-boundary-%d", index), fixture.apiKey2, cost, now.Add(-time.Hour))
 			}
 
-			items, err := NewModelGovernanceInventoryRepository(integrationDB).List(ctx, now.Add(-7*24*time.Hour), now.Add(-30*24*time.Hour), now)
+			items, err := listModelGovernanceInventory(ctx, now.Add(-7*24*time.Hour), now.Add(-30*24*time.Hour), now)
 			if testCase.wantError != "" {
 				requireInventoryError(t, err, testCase.wantError, fixture, model)
 				return
@@ -314,7 +421,7 @@ func TestModelGovernanceInventoryTypedErrorPreservesNullDimensions(t *testing.T)
 		_, _ = integrationDB.ExecContext(ctx, `DELETE FROM accounts WHERE id = $1`, accountID)
 	})
 
-	_, err = NewModelGovernanceInventoryRepository(integrationDB).List(ctx, now.Add(-7*24*time.Hour), now.Add(-30*24*time.Hour), now)
+	_, err = listModelGovernanceInventory(ctx, now.Add(-7*24*time.Hour), now.Add(-30*24*time.Hour), now)
 	require.Equal(t, "MODEL_GOVERNANCE_INVENTORY_NEGATIVE_REVENUE", infraerrors.Reason(err))
 	metadata := infraerrors.FromError(err).Metadata
 	require.Equal(t, strconv.FormatInt(accountID, 10), metadata["account_id"])
@@ -329,7 +436,7 @@ func TestModelGovernanceInventoryRejectsRevenueOverflowWithTypedDimensions(t *te
 	fixture := createModelGovernanceInventoryFixture(t, "USD")
 	insertInventoryUsageSeries(t, fixture, "overflow-model", "USD", fixture.apiKey1, "9999999999.9999999999", now.Add(-time.Hour), 1000)
 
-	_, err := NewModelGovernanceInventoryRepository(integrationDB).List(ctx, now.Add(-7*24*time.Hour), now.Add(-30*24*time.Hour), now)
+	_, err := listModelGovernanceInventory(ctx, now.Add(-7*24*time.Hour), now.Add(-30*24*time.Hour), now)
 	requireInventoryError(t, err, "MODEL_GOVERNANCE_INVENTORY_REVENUE_OVERFLOW", fixture, "overflow-model")
 }
 
@@ -388,13 +495,39 @@ func insertInventoryAccount(t *testing.T, credentials string) int64 {
 }
 
 func insertInventoryAccountForPlatform(t *testing.T, platform, credentials string) int64 {
+	return insertInventoryAccountWithType(t, platform, service.AccountTypeAPIKey, credentials)
+}
+
+func insertInventoryAccountWithType(t *testing.T, platform, accountType, credentials string) int64 {
 	t.Helper()
 	var id int64
 	require.NoError(t, integrationDB.QueryRowContext(context.Background(), `
 		INSERT INTO accounts (name, platform, type, credentials, status, schedulable)
-		VALUES ($1, $2, 'apikey', $3::jsonb, 'active', TRUE) RETURNING id
-	`, fmt.Sprintf("inventory-account-%d", time.Now().UnixNano()), platform, credentials).Scan(&id))
+		VALUES ($1, $2, $3, $4::jsonb, 'active', TRUE) RETURNING id
+	`, fmt.Sprintf("inventory-account-%d", time.Now().UnixNano()), platform, accountType, credentials).Scan(&id))
 	return id
+}
+
+func listModelGovernanceInventory(ctx context.Context, cutoff7d, cutoff30d, windowEnd time.Time) ([]service.InventoryItem, error) {
+	accounts, err := NewModelGovernanceInventoryAccountSource(integrationDB).ListInventoryAccounts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	projections := make([]service.InventoryAccountProjection, 0, len(accounts))
+	for i := range accounts {
+		projections = append(projections, service.ProjectInventoryAccountMappings(&accounts[i]))
+	}
+	return NewModelGovernanceInventoryRepository(integrationDB).List(ctx, projections, cutoff7d, cutoff30d, windowEnd)
+}
+
+func inventoryAccountState(t *testing.T, accountID int64) string {
+	t.Helper()
+	var state string
+	require.NoError(t, integrationDB.QueryRowContext(context.Background(), `
+		SELECT status || ':' || schedulable::text || ':' || credentials::text
+		FROM accounts WHERE id = $1
+	`, accountID).Scan(&state))
+	return state
 }
 
 func insertInventoryObservation(t *testing.T, accountID int64, model, classification string, observedAt time.Time) {
