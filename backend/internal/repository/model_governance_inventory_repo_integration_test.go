@@ -166,6 +166,78 @@ func TestModelGovernanceInventoryRejectsNegativeRevenueWithTypedDimensions(t *te
 	requireInventoryError(t, err, "MODEL_GOVERNANCE_INVENTORY_NEGATIVE_REVENUE", fixture, "negative-model")
 }
 
+func TestModelGovernanceInventoryRejectsNegativeSourceRevenueWhenDimensionNetsPositive(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
+	fixture := createModelGovernanceInventoryFixture(t, "USD")
+	insertInventoryUsage(t, fixture, "offset-model", "USD", "inventory-offset-negative", fixture.apiKey1, "-1", now.Add(-time.Hour))
+	insertInventoryUsage(t, fixture, "offset-model", "USD", "inventory-offset-positive", fixture.apiKey2, "2", now.Add(-2*time.Hour))
+
+	_, err := NewModelGovernanceInventoryRepository(integrationDB).List(ctx, now.Add(-7*24*time.Hour), now.Add(-30*24*time.Hour))
+	requireInventoryError(t, err, "MODEL_GOVERNANCE_INVENTORY_NEGATIVE_REVENUE", fixture, "offset-model")
+}
+
+func TestModelGovernanceInventoryRejectsTinyNegativeSourceThatRoundsToZero(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
+	fixture := createModelGovernanceInventoryFixture(t, "USD")
+	insertInventoryUsage(t, fixture, "tiny-negative-model", "USD", "inventory-tiny-negative", fixture.apiKey1, "-0.0000000001", now.Add(-time.Hour))
+
+	_, err := NewModelGovernanceInventoryRepository(integrationDB).List(ctx, now.Add(-7*24*time.Hour), now.Add(-30*24*time.Hour))
+	requireInventoryError(t, err, "MODEL_GOVERNANCE_INVENTORY_NEGATIVE_REVENUE", fixture, "tiny-negative-model")
+}
+
+func TestModelGovernanceInventoryRoundsAggregateRevenueAtExactMicrosBoundaries(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
+	for _, testCase := range []struct {
+		name        string
+		costs       []string
+		wantMicros  int64
+		wantError   string
+		seriesCost  string
+		seriesCount int
+	}{
+		{name: "below-half-micro", costs: []string{"0.0000004999"}, wantMicros: 0},
+		{name: "half-micro-rounds-up", costs: []string{"0.0000005000"}, wantMicros: 1},
+		{name: "split-fractions-round-after-aggregate", costs: []string{"0.0000003000", "0.0000003000"}, wantMicros: 1},
+		{
+			name: "exact-rounded-max-int64", seriesCost: "9999999999.0000000000", seriesCount: 922,
+			costs: []string{"3372037776.7758070000"}, wantMicros: int64(9223372036854775807),
+		},
+		{
+			name: "raw-above-max-but-rounded-max-int64", seriesCost: "9999999999.0000000000", seriesCount: 922,
+			costs: []string{"3372037776.7758074999"}, wantMicros: int64(9223372036854775807),
+		},
+		{
+			name: "first-rounded-overflow-at-positive-half-micro", seriesCost: "9999999999.0000000000", seriesCount: 922,
+			costs: []string{"3372037776.7758075000"}, wantError: "MODEL_GOVERNANCE_INVENTORY_REVENUE_OVERFLOW",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			fixture := createModelGovernanceInventoryFixture(t, "USD")
+			model := "boundary-" + testCase.name
+			if testCase.seriesCount > 0 {
+				insertInventoryUsageSeries(t, fixture, model, "USD", fixture.apiKey1, testCase.seriesCost, now.Add(-time.Hour), testCase.seriesCount)
+			}
+			for index, cost := range testCase.costs {
+				insertInventoryUsage(t, fixture, model, "USD", fmt.Sprintf("inventory-boundary-%d", index), fixture.apiKey2, cost, now.Add(-time.Hour))
+			}
+
+			items, err := NewModelGovernanceInventoryRepository(integrationDB).List(ctx, now.Add(-7*24*time.Hour), now.Add(-30*24*time.Hour))
+			if testCase.wantError != "" {
+				requireInventoryError(t, err, testCase.wantError, fixture, model)
+				return
+			}
+			require.NoError(t, err)
+			item, ok := inventoryItemsForAccount(items, fixture.accountID)[model]
+			require.True(t, ok, "boundary inventory row must be present")
+			require.Equal(t, testCase.wantMicros, item.Revenue7dBillingMicros)
+			require.Equal(t, testCase.wantMicros, item.Revenue30dBillingMicros)
+		})
+	}
+}
+
 func TestModelGovernanceInventoryTypedErrorPreservesNullDimensions(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)

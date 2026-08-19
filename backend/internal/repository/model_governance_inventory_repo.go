@@ -43,17 +43,20 @@ func (r *modelGovernanceInventoryRepository) List(ctx context.Context, cutoff7d,
 	items := make([]service.InventoryItem, 0)
 	for rows.Next() {
 		var item service.InventoryItem
-		var currencyCount int
+		var currencyCount, negativeRevenueCount int
 		var revenue7d, revenue30d decimal.Decimal
 		if err := rows.Scan(
 			&item.AccountID, &item.GroupID, &item.ChannelID, &item.UpstreamModelID, &item.Classification,
 			&item.Requests7d, &item.Requests30d, &revenue7d, &revenue30d, &item.BillingCurrency,
-			&item.AffectedAPIKeys7d, &item.AffectedAPIKeys30d, &currencyCount,
+			&item.AffectedAPIKeys7d, &item.AffectedAPIKeys30d, &currencyCount, &negativeRevenueCount,
 		); err != nil {
 			return nil, fmt.Errorf("scan model governance inventory: %w", err)
 		}
 		if currencyCount > 1 {
 			return nil, inventoryDimensionError(errModelGovernanceInventoryMixedCurrency, item)
+		}
+		if negativeRevenueCount > 0 {
+			return nil, inventoryDimensionError(errModelGovernanceInventoryNegativeRevenue, item)
 		}
 		item.Revenue7dBillingMicros, err = inventoryRevenueMicros(revenue7d, item)
 		if err != nil {
@@ -178,7 +181,8 @@ usage_summary AS (
            MIN(settlement_currency) AS billing_currency,
            COUNT(DISTINCT api_key_id) FILTER (WHERE created_at >= $1)::bigint AS api_keys_7d,
            COUNT(DISTINCT api_key_id)::bigint AS api_keys_30d,
-           COUNT(DISTINCT settlement_currency)::int AS currency_count
+           COUNT(DISTINCT settlement_currency)::int AS currency_count,
+           COUNT(*) FILTER (WHERE actual_cost < 0)::int AS negative_revenue_count
     FROM usage_rows
     GROUP BY account_id, group_id, channel_id, upstream_model_id
 )
@@ -189,7 +193,7 @@ SELECT k.account_id, k.group_id, k.channel_id, k.upstream_model_id,
        COALESCE(us.revenue_7d, 0), COALESCE(us.revenue_30d, 0),
        COALESCE(us.billing_currency, 'CNY') AS billing_currency,
        COALESCE(us.api_keys_7d, 0), COALESCE(us.api_keys_30d, 0),
-       COALESCE(us.currency_count, 0)
+       COALESCE(us.currency_count, 0), COALESCE(us.negative_revenue_count, 0)
 FROM inventory_keys k
 LEFT JOIN model_observations mo
   ON mo.account_id = k.account_id AND mo.upstream_model_id = k.upstream_model_id
