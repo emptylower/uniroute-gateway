@@ -29,6 +29,12 @@ type storedModelObservation struct {
 	missStreak     int
 }
 
+type discoveryProjectionWinner struct {
+	batchID    string
+	digest     string
+	observedAt time.Time
+}
+
 func NewModelObservationRepository(db *sql.DB) service.ModelObservationRepository {
 	return &modelObservationRepository{db: db}
 }
@@ -105,19 +111,30 @@ func (r *modelObservationRepository) RecordDiscovery(ctx context.Context, input 
 		}
 		return batchID, nil
 	}
-	var projectionWatermark sql.NullTime
-	if err = tx.QueryRowContext(ctx, `
-		SELECT MAX(observed_at)
+	var currentWinner discoveryProjectionWinner
+	err = tx.QueryRowContext(ctx, `
+		SELECT batch_id, observed_at, COALESCE(raw_snapshot->'provenance'->>'digest', '')
 		FROM model_classification_batches
 		WHERE account_id = $1 AND batch_id <> $2
-	`, input.AccountID, batchID).Scan(&projectionWatermark); err != nil {
+		ORDER BY observed_at DESC, COALESCE(raw_snapshot->'provenance'->>'digest', '') DESC
+		LIMIT 1
+	`, input.AccountID, batchID).Scan(&currentWinner.batchID, &currentWinner.observedAt, &currentWinner.digest)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return "", err
 	}
-	if projectionWatermark.Valid && input.ObservedAt.Before(projectionWatermark.Time) {
+	hasCurrentWinner := err == nil
+	if hasCurrentWinner && (input.ObservedAt.Before(currentWinner.observedAt) ||
+		(input.ObservedAt.Equal(currentWinner.observedAt) && provenanceDigest < currentWinner.digest)) {
 		if err = tx.Commit(); err != nil {
 			return "", err
 		}
 		return batchID, nil
+	}
+	replacesEqualWatermarkWinner := hasCurrentWinner && input.ObservedAt.Equal(currentWinner.observedAt) && provenanceDigest > currentWinner.digest
+	if replacesEqualWatermarkWinner {
+		if err = rollbackDiscoveryProjection(ctx, tx, currentWinner.batchID, batchID, input); err != nil {
+			return "", err
+		}
 	}
 
 	existing, err := lockModelObservations(ctx, tx, input.AccountID)
@@ -156,7 +173,7 @@ func (r *modelObservationRepository) RecordDiscovery(ctx context.Context, input 
 			observation.reason = reason
 			observation.presence = "present"
 			observation.missStreak = 0
-			if err = appendObservationEvent(ctx, tx, observation, batchID, "discovered", input); err != nil {
+			if err = appendObservationEvent(ctx, tx, observation, batchID, projectionEventType("discovered", replacesEqualWatermarkWinner), "discovered", input); err != nil {
 				return "", err
 			}
 			continue
@@ -178,7 +195,7 @@ func (r *modelObservationRepository) RecordDiscovery(ctx context.Context, input 
 		if err != nil {
 			return "", err
 		}
-		if err = appendObservationEvent(ctx, tx, observation, batchID, eventType, input); err != nil {
+		if err = appendObservationEvent(ctx, tx, observation, batchID, projectionEventType(eventType, replacesEqualWatermarkWinner), eventType, input); err != nil {
 			return "", err
 		}
 	}
@@ -203,7 +220,7 @@ func (r *modelObservationRepository) RecordDiscovery(ctx context.Context, input 
 		if err != nil {
 			return "", err
 		}
-		if err = appendObservationEvent(ctx, tx, observation, batchID, "missing", input); err != nil {
+		if err = appendObservationEvent(ctx, tx, observation, batchID, projectionEventType("missing", replacesEqualWatermarkWinner), "missing", input); err != nil {
 			return "", err
 		}
 	}
@@ -212,6 +229,124 @@ func (r *modelObservationRepository) RecordDiscovery(ctx context.Context, input 
 		return "", err
 	}
 	return batchID, nil
+}
+
+// Equal-watermark replacement first restores the projection that existed before
+// the superseded batch, then applies the higher-digest catalog. Prior events stay
+// append-only and continue to describe the projection history that actually ran.
+func rollbackDiscoveryProjection(
+	ctx context.Context,
+	tx *sql.Tx,
+	supersededBatchID string,
+	replacementBatchID string,
+	input service.DiscoveryBatchInput,
+) error {
+	seen := make(map[string]struct{}, len(input.ModelIDs))
+	for _, modelID := range input.ModelIDs {
+		seen[modelID] = struct{}{}
+	}
+	rows, err := tx.QueryContext(ctx, `
+		SELECT id, observation_id, upstream_model_id, classification,
+		       classification_reason, upstream_presence, miss_streak,
+		       COALESCE(payload->>'transition', '')
+		FROM model_observation_events
+		WHERE batch_id = $1
+		ORDER BY id
+	`, supersededBatchID)
+	if err != nil {
+		return err
+	}
+	type supersededEvent struct {
+		id          int64
+		transition  string
+		observation storedModelObservation
+	}
+	var events []supersededEvent
+	for rows.Next() {
+		var event supersededEvent
+		if err := rows.Scan(
+			&event.id, &event.observation.id, &event.observation.modelID,
+			&event.observation.classification, &event.observation.reason,
+			&event.observation.presence, &event.observation.missStreak, &event.transition,
+		); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+
+	for _, event := range events {
+		if event.transition == "removed" {
+			continue
+		}
+		var previous storedModelObservation
+		err := tx.QueryRowContext(ctx, `
+			SELECT e.observation_id, e.upstream_model_id, e.classification,
+			       e.classification_reason, e.upstream_presence, e.miss_streak
+			FROM model_observation_events e
+			JOIN model_classification_batches b ON b.batch_id = e.batch_id
+			WHERE e.account_id = $1 AND e.upstream_model_id = $2 AND b.observed_at < $3
+			ORDER BY b.observed_at DESC, e.id DESC
+			LIMIT 1
+		`, input.AccountID, event.observation.modelID, input.ObservedAt.UTC()).Scan(
+			&previous.id, &previous.modelID, &previous.classification,
+			&previous.reason, &previous.presence, &previous.missStreak,
+		)
+		if errors.Is(err, sql.ErrNoRows) {
+			if _, remainsPresent := seen[event.observation.modelID]; !remainsPresent {
+				removed := event.observation
+				removed.presence = "missing"
+				if err := appendObservationEvent(ctx, tx, removed, replacementBatchID, "projection_replaced", "removed", input); err != nil {
+					return err
+				}
+			}
+			if _, err := tx.ExecContext(ctx, `DELETE FROM model_observations WHERE id = $1`, event.observation.id); err != nil {
+				return err
+			}
+			continue
+		}
+		if err != nil {
+			return err
+		}
+
+		var connectionID sql.NullInt64
+		var lastSeenAt time.Time
+		var rawSnapshot string
+		if err := tx.QueryRowContext(ctx, `
+			SELECT b.connection_id, b.observed_at, b.raw_snapshot::text
+			FROM model_observation_events e
+			JOIN model_classification_batches b ON b.batch_id = e.batch_id
+			WHERE e.account_id = $1 AND e.upstream_model_id = $2
+			  AND b.observed_at < $3 AND e.upstream_presence = 'present'
+			ORDER BY b.observed_at DESC, e.id DESC
+			LIMIT 1
+		`, input.AccountID, event.observation.modelID, input.ObservedAt.UTC()).Scan(&connectionID, &lastSeenAt, &rawSnapshot); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE model_observations
+			SET connection_id = $1, upstream_presence = $2, miss_streak = $3,
+			    last_seen_at = $4, raw_snapshot = $5::jsonb, updated_at = NOW()
+			WHERE id = $6
+		`, connectionID, previous.presence, previous.missStreak, lastSeenAt, rawSnapshot, event.observation.id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func projectionEventType(transition string, replacesEqualWatermarkWinner bool) string {
+	if replacesEqualWatermarkWinner {
+		return "projection_replaced"
+	}
+	return transition
 }
 
 func discoveryPersistenceEnvelope(input service.DiscoveryBatchInput) ([]byte, string, error) {
@@ -319,13 +454,18 @@ func appendObservationEvent(
 	observation storedModelObservation,
 	batchID string,
 	eventType string,
+	transition string,
 	input service.DiscoveryBatchInput,
 ) error {
-	payload, err := json.Marshal(map[string]any{
+	payloadValues := map[string]any{
 		"account_provider": input.AccountProvider,
 		"routing_platform": input.RoutingPlatform,
 		"observed_at":      input.ObservedAt.UTC(),
-	})
+	}
+	if eventType == "projection_replaced" {
+		payloadValues["transition"] = transition
+	}
+	payload, err := json.Marshal(payloadValues)
 	if err != nil {
 		return fmt.Errorf("marshal observation event payload: %w", err)
 	}

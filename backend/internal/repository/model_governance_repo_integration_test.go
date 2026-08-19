@@ -278,6 +278,145 @@ func TestModelGovernanceRepository_RecordDiscoveryStaleBatchPersistsEvidenceOnly
 	require.JSONEq(t, string(staleSnapshot), string(stored.Evidence))
 }
 
+func TestModelGovernanceRepository_RecordDiscoveryEqualWatermarkUsesHighestProvenanceDigest(t *testing.T) {
+	ctx := context.Background()
+	repo := NewModelObservationRepository(integrationDB)
+	provider := service.GovernanceProvider("openai")
+	observedAt := time.Date(2026, time.August, 18, 15, 30, 0, 0, time.UTC)
+	connectionA, connectionB := int64(910), int64(920)
+	accountID := createGovernanceObservationAccount(t, "openai", `{}`)
+	inputA := func(accountID int64) service.DiscoveryBatchInput {
+		return service.DiscoveryBatchInput{
+			AccountID: accountID, AccountProvider: &provider, RoutingPlatform: "openai", ConnectionID: &connectionA,
+			ModelIDs: []string{"model-a"}, RawSnapshot: []byte(`{"catalog":"a"}`), ObservedAt: observedAt,
+		}
+	}
+	inputB := func(accountID int64, rawSnapshot []byte) service.DiscoveryBatchInput {
+		return service.DiscoveryBatchInput{
+			AccountID: accountID, AccountProvider: &provider, RoutingPlatform: "openai", ConnectionID: &connectionB,
+			ModelIDs: []string{"model-b"}, RawSnapshot: rawSnapshot, ObservedAt: observedAt,
+		}
+	}
+	var winningSnapshot []byte
+	for nonce := 0; ; nonce++ {
+		candidate := []byte(fmt.Sprintf(`{"catalog":"b","nonce":%d}`, nonce))
+		if discoveryInputDigest(t, inputB(accountID, candidate)) > discoveryInputDigest(t, inputA(accountID)) {
+			winningSnapshot = candidate
+			break
+		}
+	}
+
+	run := func(label string, accountID int64, first, second service.DiscoveryBatchInput) ([]observationProjectionDetails, map[string][]string) {
+		t.Helper()
+		first.IdempotencyKey = fmt.Sprintf("equal-watermark-%s-first-%d", label, accountID)
+		second.IdempotencyKey = fmt.Sprintf("equal-watermark-%s-second-%d", label, accountID)
+		firstBatchID, err := repo.RecordDiscovery(ctx, first)
+		require.NoError(t, err)
+		secondBatchID, err := repo.RecordDiscovery(ctx, second)
+		require.NoError(t, err)
+		require.Equal(t, 2, countDiscoveryBatches(t, accountID), "both conflicting batches remain durable evidence")
+		return loadObservationProjectionDetailsForAccount(t, accountID), map[string][]string{
+			"first":  loadBatchEventTypes(t, firstBatchID),
+			"second": loadBatchEventTypes(t, secondBatchID),
+		}
+	}
+
+	lowThenHighProjection, lowThenHighEvents := run(
+		"low-high", accountID, inputA(accountID), inputB(accountID, winningSnapshot),
+	)
+	require.NotEmpty(t, lowThenHighEvents["first"], "the initial lower digest truthfully projects on arrival")
+	require.Contains(t, lowThenHighEvents["second"], "projection_replaced", "the later winner records replacement history")
+	recreateGovernanceObservationAccount(t, accountID, "openai", `{}`)
+
+	highThenLowProjection, highThenLowEvents := run(
+		"high-low", accountID, inputB(accountID, winningSnapshot), inputA(accountID),
+	)
+	require.NotEmpty(t, highThenLowEvents["first"])
+	require.Empty(t, highThenLowEvents["second"], "a losing batch arriving after the winner is evidence-only")
+	require.Equal(t, highThenLowProjection, lowThenHighProjection,
+		"presence, miss streak, timestamps, snapshots, and connections must follow the tuple winner")
+}
+
+func TestModelGovernanceRepository_RecordDiscoveryEqualWatermarkEmptyWinnerClearsProjection(t *testing.T) {
+	ctx := context.Background()
+	accountID := createGovernanceObservationAccount(t, "openai", `{}`)
+	repo := NewModelObservationRepository(integrationDB)
+	provider := service.GovernanceProvider("openai")
+	observedAt := time.Date(2026, time.August, 18, 15, 45, 0, 0, time.UTC)
+	populated := service.DiscoveryBatchInput{
+		IdempotencyKey: "equal-empty-populated-" + fmt.Sprint(accountID), AccountID: accountID,
+		AccountProvider: &provider, RoutingPlatform: "openai", ModelIDs: []string{"temporary-model"},
+		RawSnapshot: []byte(`{"catalog":"populated"}`), ObservedAt: observedAt,
+	}
+	empty := service.DiscoveryBatchInput{
+		IdempotencyKey: "equal-empty-winner-" + fmt.Sprint(accountID), AccountID: accountID,
+		AccountProvider: &provider, RoutingPlatform: "openai", RawSnapshot: []byte(`{"catalog":"empty"}`), ObservedAt: observedAt,
+	}
+	for nonce := 0; ; nonce++ {
+		_, populatedDigest, err := discoveryPersistenceEnvelope(populated)
+		require.NoError(t, err)
+		_, emptyDigest, err := discoveryPersistenceEnvelope(empty)
+		require.NoError(t, err)
+		if emptyDigest > populatedDigest {
+			break
+		}
+		empty.RawSnapshot = []byte(fmt.Sprintf(`{"catalog":"empty","nonce":%d}`, nonce))
+	}
+
+	_, err := repo.RecordDiscovery(ctx, populated)
+	require.NoError(t, err)
+	emptyBatchID, err := repo.RecordDiscovery(ctx, empty)
+	require.NoError(t, err)
+	require.Empty(t, loadObservationProjections(t, accountID), "an empty higher-digest winner owns an empty projection")
+	require.Contains(t, loadBatchEventTypes(t, emptyBatchID), "projection_replaced")
+	require.Equal(t, 2, countDiscoveryBatches(t, accountID))
+}
+
+func TestModelGovernanceRepository_RecordDiscoveryEqualWatermarkReplacementAlwaysRestoresPreWatermarkBaseline(t *testing.T) {
+	ctx := context.Background()
+	accountID := createGovernanceObservationAccount(t, "openai", `{}`)
+	repo := NewModelObservationRepository(integrationDB)
+	provider := service.GovernanceProvider("openai")
+	baselineAt := time.Date(2026, time.August, 18, 15, 50, 0, 0, time.UTC)
+	watermark := baselineAt.Add(time.Hour)
+	_, err := repo.RecordDiscovery(ctx, service.DiscoveryBatchInput{
+		IdempotencyKey: "equal-chain-baseline-" + fmt.Sprint(accountID), AccountID: accountID,
+		AccountProvider: &provider, RoutingPlatform: "openai", ModelIDs: []string{"baseline-model"},
+		RawSnapshot: []byte(`{"catalog":"baseline"}`), ObservedAt: baselineAt,
+	})
+	require.NoError(t, err)
+
+	inputs := make([]service.DiscoveryBatchInput, 3)
+	for index := range inputs {
+		inputs[index] = service.DiscoveryBatchInput{
+			IdempotencyKey: fmt.Sprintf("equal-chain-%d-%d", index, accountID), AccountID: accountID,
+			AccountProvider: &provider, RoutingPlatform: "openai", ModelIDs: []string{fmt.Sprintf("winner-%d", index)},
+			RawSnapshot: []byte(fmt.Sprintf(`{"catalog":"winner-%d"}`, index)), ObservedAt: watermark,
+		}
+	}
+	for nonce := 0; ; nonce++ {
+		inputs[1].RawSnapshot = []byte(fmt.Sprintf(`{"catalog":"winner-1","nonce":%d}`, nonce))
+		if discoveryInputDigest(t, inputs[1]) > discoveryInputDigest(t, inputs[0]) {
+			break
+		}
+	}
+	for nonce := 0; ; nonce++ {
+		inputs[2].RawSnapshot = []byte(fmt.Sprintf(`{"catalog":"winner-2","nonce":%d}`, nonce))
+		if discoveryInputDigest(t, inputs[2]) > discoveryInputDigest(t, inputs[1]) {
+			break
+		}
+	}
+	for _, input := range inputs {
+		_, err := repo.RecordDiscovery(ctx, input)
+		require.NoError(t, err)
+	}
+
+	baseline := loadObservationProjection(t, accountID, "baseline-model")
+	require.Equal(t, "missing", baseline.Presence)
+	require.Equal(t, 1, baseline.MissStreak, "only the final winning complete catalog may advance the baseline miss streak")
+	require.Equal(t, []string{"winner-2"}, loadPresentObservationModelIDs(t, accountID))
+}
+
 func TestModelGovernanceRepository_RecordDiscoveryRejectsInvalidProviderAndNonObjectSnapshot(t *testing.T) {
 	ctx := context.Background()
 	accountID := createGovernanceObservationAccount(t, "openai", `{}`)
@@ -449,6 +588,18 @@ func createGovernanceObservationAccount(t *testing.T, platform, credentials stri
 	return accountID
 }
 
+func recreateGovernanceObservationAccount(t *testing.T, accountID int64, platform, credentials string) {
+	t.Helper()
+	ctx := context.Background()
+	_, err := integrationDB.ExecContext(ctx, `DELETE FROM accounts WHERE id = $1`, accountID)
+	require.NoError(t, err)
+	_, err = integrationDB.ExecContext(ctx, `
+		INSERT INTO accounts (id, name, platform, type, credentials)
+		VALUES ($1, $2, $3, 'apikey', $4::jsonb)
+	`, accountID, fmt.Sprintf("governance-observation-%s-recreated-%d", platform, time.Now().UnixNano()), platform, credentials)
+	require.NoError(t, err)
+}
+
 func loadObservationProjections(t *testing.T, accountID int64) []observationProjection {
 	t.Helper()
 	rows, err := integrationDB.QueryContext(context.Background(), `
@@ -493,6 +644,28 @@ func loadObservationProjectionDetails(t *testing.T, accountID int64, modelID str
 	return item
 }
 
+func loadObservationProjectionDetailsForAccount(t *testing.T, accountID int64) []observationProjectionDetails {
+	t.Helper()
+	rows, err := integrationDB.QueryContext(context.Background(), `
+		SELECT upstream_model_id, classification, classification_reason, upstream_presence,
+		       miss_streak, first_seen_at, last_seen_at, connection_id, raw_snapshot::text
+		FROM model_observations WHERE account_id = $1 ORDER BY upstream_model_id
+	`, accountID)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, rows.Close()) }()
+	var result []observationProjectionDetails
+	for rows.Next() {
+		var item observationProjectionDetails
+		require.NoError(t, rows.Scan(
+			&item.ModelID, &item.Classification, &item.Reason, &item.Presence,
+			&item.MissStreak, &item.FirstSeenAt, &item.LastSeenAt, &item.ConnectionID, &item.RawSnapshot,
+		))
+		result = append(result, item)
+	}
+	require.NoError(t, rows.Err())
+	return result
+}
+
 func loadObservationProjectionsByID(t *testing.T, accountID int64, modelID string) []observationProjection {
 	t.Helper()
 	rows, err := integrationDB.QueryContext(context.Background(), `
@@ -507,6 +680,25 @@ func loadObservationProjectionsByID(t *testing.T, accountID int64, modelID strin
 		var item observationProjection
 		require.NoError(t, rows.Scan(&item.ModelID, &item.Classification, &item.Reason, &item.Presence, &item.MissStreak, &item.FirstSeenAt, &item.LastSeenAt))
 		result = append(result, item)
+	}
+	require.NoError(t, rows.Err())
+	return result
+}
+
+func loadPresentObservationModelIDs(t *testing.T, accountID int64) []string {
+	t.Helper()
+	rows, err := integrationDB.QueryContext(context.Background(), `
+		SELECT upstream_model_id FROM model_observations
+		WHERE account_id = $1 AND upstream_presence = 'present'
+		ORDER BY upstream_model_id
+	`, accountID)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, rows.Close()) }()
+	var result []string
+	for rows.Next() {
+		var modelID string
+		require.NoError(t, rows.Scan(&modelID))
+		result = append(result, modelID)
 	}
 	require.NoError(t, rows.Err())
 	return result
@@ -549,6 +741,39 @@ func loadBatchEventModelIDs(t *testing.T, batchID string) []string {
 	}
 	require.NoError(t, rows.Err())
 	return result
+}
+
+func loadBatchEventTypes(t *testing.T, batchID string) []string {
+	t.Helper()
+	rows, err := integrationDB.QueryContext(context.Background(), `
+		SELECT event_type FROM model_observation_events WHERE batch_id = $1 ORDER BY id
+	`, batchID)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, rows.Close()) }()
+	var result []string
+	for rows.Next() {
+		var eventType string
+		require.NoError(t, rows.Scan(&eventType))
+		result = append(result, eventType)
+	}
+	require.NoError(t, rows.Err())
+	return result
+}
+
+func countDiscoveryBatches(t *testing.T, accountID int64) int {
+	t.Helper()
+	var count int
+	require.NoError(t, integrationDB.QueryRowContext(context.Background(), `
+		SELECT COUNT(*) FROM model_classification_batches WHERE account_id = $1
+	`, accountID).Scan(&count))
+	return count
+}
+
+func discoveryInputDigest(t *testing.T, input service.DiscoveryBatchInput) string {
+	t.Helper()
+	_, digest, err := discoveryPersistenceEnvelope(input)
+	require.NoError(t, err)
+	return digest
 }
 
 func countObservationEvents(t *testing.T, accountID int64) int {
