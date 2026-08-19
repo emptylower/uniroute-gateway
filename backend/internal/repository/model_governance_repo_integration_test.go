@@ -604,6 +604,154 @@ func TestModelGovernanceRepository_RecordDiscoveryStrictlyOlderAfterNewerNeverRe
 	require.Equal(t, 2, countDiscoveryBatches(t, accountID), "strictly older input remains durable evidence without retroactive replay")
 }
 
+func TestModelGovernanceRepository_ObservationEventsSnapshotCompleteCommittedPostState(t *testing.T) {
+	ctx := context.Background()
+	accountID := createGovernanceObservationAccount(t, "openai", `{}`)
+	repo := NewModelObservationRepository(integrationDB)
+	provider := service.GovernanceProvider("openai")
+	firstAt := time.Date(2026, time.August, 18, 18, 15, 0, 0, time.UTC)
+	connectionID := int64(701)
+	first := service.DiscoveryBatchInput{
+		IdempotencyKey: "post-state-first-" + fmt.Sprint(accountID), AccountID: accountID,
+		ConnectionID: &connectionID, AccountProvider: &provider, RoutingPlatform: "openai",
+		ModelIDs: []string{"retained-model"}, RawSnapshot: []byte(`{"catalog":"post-state-first"}`), ObservedAt: firstAt,
+	}
+	_, err := repo.RecordDiscovery(ctx, first)
+	require.NoError(t, err)
+
+	secondAt := firstAt.Add(time.Hour)
+	second := service.DiscoveryBatchInput{
+		IdempotencyKey: "post-state-second-" + fmt.Sprint(accountID), AccountID: accountID,
+		AccountProvider: &provider, RoutingPlatform: "openai", ModelIDs: []string{"retained-model", "removed-model"},
+		RawSnapshot: []byte(`{"catalog":"post-state-second"}`), ObservedAt: secondAt,
+	}
+	_, err = repo.RecordDiscovery(ctx, second)
+	require.NoError(t, err)
+	registryID := createGovernanceRegistryModel(t, "removed-post-state")
+	require.NoError(t, setObservationAdminState(t, accountID, "removed-model", "approved", "admin_reviewed", registryID))
+	third := service.DiscoveryBatchInput{
+		IdempotencyKey: "post-state-third-" + fmt.Sprint(accountID), AccountID: accountID,
+		AccountProvider: &provider, RoutingPlatform: "openai", ModelIDs: []string{"retained-model"}, ObservedAt: secondAt,
+	}
+	third = forceHigherDigest(t, second, third, "post-state-third")
+	thirdBatchID, err := repo.RecordDiscovery(ctx, third)
+	require.NoError(t, err)
+	require.Empty(t, loadObservationProjectionsByID(t, accountID, "removed-model"))
+
+	events := loadDirectObservationEventPostStates(t, accountID)
+	require.NotEmpty(t, events)
+	for _, event := range events {
+		require.True(t, event.HasConnectionID, "%s/%s must snapshot connection_id, including null", event.ModelID, event.Transition)
+		require.True(t, event.HasResolvedRegistryID, "%s/%s must snapshot resolved_registry_id, including null", event.ModelID, event.Transition)
+		require.True(t, event.FirstSeenAt.Valid)
+		require.True(t, event.LastSeenAt.Valid)
+		require.True(t, event.RawSnapshot.Valid)
+		require.NotEmpty(t, event.RawSnapshot.String)
+		require.False(t, event.LastSeenAt.Time.Before(event.FirstSeenAt.Time))
+	}
+	removed := loadDirectBatchEventPostState(t, thirdBatchID, "removed-model")
+	require.Equal(t, "removed", removed.Transition)
+	require.Equal(t, "approved", removed.Classification)
+	require.Equal(t, "admin_reviewed", removed.Reason)
+	require.Equal(t, sql.NullInt64{Int64: registryID, Valid: true}, removed.ResolvedRegistryID)
+}
+
+func TestModelGovernanceRepository_RecordDiscoveryLaterReplacementConvergesMetadataAcrossPriorWatermarkOrders(t *testing.T) {
+	ctx := context.Background()
+	accountID := createGovernanceObservationAccount(t, "openai", `{}`)
+	repo := NewModelObservationRepository(integrationDB)
+	provider := service.GovernanceProvider("openai")
+	firstAt := time.Date(2026, time.August, 18, 18, 30, 0, 0, time.UTC)
+	priorAt := firstAt.Add(time.Hour)
+	laterAt := priorAt.Add(time.Hour)
+	baseConnection, lowConnection := int64(800), int64(801)
+	base := service.DiscoveryBatchInput{
+		AccountID: accountID, ConnectionID: &baseConnection, AccountProvider: &provider, RoutingPlatform: "openai",
+		ModelIDs: []string{"shared-model"}, RawSnapshot: []byte(`{"catalog":"base"}`), ObservedAt: firstAt,
+	}
+	priorLow := service.DiscoveryBatchInput{
+		AccountID: accountID, ConnectionID: &lowConnection, AccountProvider: &provider, RoutingPlatform: "openai",
+		ModelIDs: []string{"shared-model"}, RawSnapshot: []byte(`{"catalog":"prior-low"}`), ObservedAt: priorAt,
+	}
+	priorHigh := service.DiscoveryBatchInput{
+		AccountID: accountID, AccountProvider: &provider, RoutingPlatform: "openai", ObservedAt: priorAt,
+	}
+	priorHigh = forceHigherDigest(t, priorLow, priorHigh, "prior-high")
+	laterLow := service.DiscoveryBatchInput{
+		AccountID: accountID, AccountProvider: &provider, RoutingPlatform: "openai",
+		ModelIDs: []string{"shared-model", "later-low-only"}, RawSnapshot: []byte(`{"catalog":"later-low"}`), ObservedAt: laterAt,
+	}
+	laterHigh := service.DiscoveryBatchInput{
+		AccountID: accountID, AccountProvider: &provider, RoutingPlatform: "openai",
+		ModelIDs: []string{"later-high-only"}, ObservedAt: laterAt,
+	}
+	laterHigh = forceHigherDigest(t, laterLow, laterHigh, "later-high")
+
+	run := func(label string, firstPrior, secondPrior service.DiscoveryBatchInput) observationProjectionDetails {
+		t.Helper()
+		initial := base
+		initial.IdempotencyKey = fmt.Sprintf("metadata-%s-base-%d", label, accountID)
+		firstPrior.IdempotencyKey = fmt.Sprintf("metadata-%s-prior-first-%d", label, accountID)
+		secondPrior.IdempotencyKey = fmt.Sprintf("metadata-%s-prior-second-%d", label, accountID)
+		low := laterLow
+		low.IdempotencyKey = fmt.Sprintf("metadata-%s-later-low-%d", label, accountID)
+		high := laterHigh
+		high.IdempotencyKey = fmt.Sprintf("metadata-%s-later-high-%d", label, accountID)
+		_, err := repo.RecordDiscovery(ctx, initial)
+		require.NoError(t, err)
+		_, err = repo.RecordDiscovery(ctx, firstPrior)
+		require.NoError(t, err)
+		_, err = repo.RecordDiscovery(ctx, secondPrior)
+		require.NoError(t, err)
+		_, err = repo.RecordDiscovery(ctx, low)
+		require.NoError(t, err)
+		_, err = repo.RecordDiscovery(ctx, high)
+		require.NoError(t, err)
+		return loadObservationProjectionDetails(t, accountID, "shared-model")
+	}
+
+	lowThenHigh := run("low-high", priorLow, priorHigh)
+	recreateGovernanceObservationAccount(t, accountID, "openai", `{}`)
+	highThenLow := run("high-low", priorHigh, priorLow)
+	require.Equal(t, highThenLow, lowThenHigh,
+		"connection, first/last seen, raw snapshot, registry, classification, presence, and miss state must use the prior canonical final event")
+	require.Equal(t, "missing", lowThenHigh.Presence)
+	require.Equal(t, sql.NullInt64{Int64: baseConnection, Valid: true}, lowThenHigh.ConnectionID)
+}
+
+func TestModelGovernanceRepository_RecordDiscoveryConcurrentConflictingCatalogsConvergeToDigestWinner(t *testing.T) {
+	ctx := context.Background()
+	accountID := createGovernanceObservationAccount(t, "openai", `{}`)
+	provider := service.GovernanceProvider("openai")
+	observedAt := time.Date(2026, time.August, 18, 20, 0, 0, 0, time.UTC)
+	lower := service.DiscoveryBatchInput{
+		IdempotencyKey: "concurrent-conflict-low-" + fmt.Sprint(accountID), AccountID: accountID,
+		AccountProvider: &provider, RoutingPlatform: "openai", ModelIDs: []string{"low-model"},
+		RawSnapshot: []byte(`{"catalog":"concurrent-low"}`), ObservedAt: observedAt,
+	}
+	higher := service.DiscoveryBatchInput{
+		IdempotencyKey: "concurrent-conflict-high-" + fmt.Sprint(accountID), AccountID: accountID,
+		AccountProvider: &provider, RoutingPlatform: "openai", ModelIDs: []string{"high-model"}, ObservedAt: observedAt,
+	}
+	higher = forceHigherDigest(t, lower, higher, "concurrent-high")
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	for _, input := range []service.DiscoveryBatchInput{lower, higher} {
+		input := input
+		go func() {
+			<-start
+			_, err := NewModelObservationRepository(integrationDB).RecordDiscovery(ctx, input)
+			errs <- err
+		}()
+	}
+	close(start)
+	for range 2 {
+		require.NoError(t, <-errs)
+	}
+	require.Equal(t, []string{"high-model"}, loadPresentObservationModelIDs(t, accountID))
+	require.Equal(t, 2, countDiscoveryBatches(t, accountID))
+}
+
 func TestModelGovernanceRepository_RecordDiscoveryRejectsInvalidProviderAndNonObjectSnapshot(t *testing.T) {
 	ctx := context.Background()
 	accountID := createGovernanceObservationAccount(t, "openai", `{}`)
@@ -1014,6 +1162,67 @@ func setObservationAdminState(t *testing.T, accountID int64, modelID, classifica
 		WHERE account_id = $1 AND upstream_model_id = $2
 	`, accountID, modelID, classification, reason, registryID)
 	return err
+}
+
+type directObservationEventPostState struct {
+	ModelID               string
+	Transition            string
+	Classification        string
+	Reason                string
+	ConnectionID          sql.NullInt64
+	ResolvedRegistryID    sql.NullInt64
+	FirstSeenAt           sql.NullTime
+	LastSeenAt            sql.NullTime
+	RawSnapshot           sql.NullString
+	HasConnectionID       bool
+	HasResolvedRegistryID bool
+}
+
+func loadDirectObservationEventPostStates(t *testing.T, accountID int64) []directObservationEventPostState {
+	t.Helper()
+	rows, err := integrationDB.QueryContext(context.Background(), `
+		SELECT upstream_model_id, COALESCE(payload->>'transition', event_type), classification, classification_reason,
+		       (payload ? 'connection_id'), NULLIF(payload->>'connection_id', '')::bigint,
+		       (payload ? 'resolved_registry_id'), NULLIF(payload->>'resolved_registry_id', '')::bigint,
+		       (payload->>'first_seen_at')::timestamptz, (payload->>'last_seen_at')::timestamptz,
+		       payload->'raw_snapshot'::text
+		FROM model_observation_events
+		WHERE account_id = $1
+		ORDER BY id
+	`, accountID)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, rows.Close()) }()
+	var result []directObservationEventPostState
+	for rows.Next() {
+		var event directObservationEventPostState
+		require.NoError(t, rows.Scan(
+			&event.ModelID, &event.Transition, &event.Classification, &event.Reason,
+			&event.HasConnectionID, &event.ConnectionID, &event.HasResolvedRegistryID, &event.ResolvedRegistryID,
+			&event.FirstSeenAt, &event.LastSeenAt, &event.RawSnapshot,
+		))
+		result = append(result, event)
+	}
+	require.NoError(t, rows.Err())
+	return result
+}
+
+func loadDirectBatchEventPostState(t *testing.T, batchID, modelID string) directObservationEventPostState {
+	t.Helper()
+	var event directObservationEventPostState
+	require.NoError(t, integrationDB.QueryRowContext(context.Background(), `
+		SELECT upstream_model_id, COALESCE(payload->>'transition', event_type), classification, classification_reason,
+		       (payload ? 'connection_id'), NULLIF(payload->>'connection_id', '')::bigint,
+		       (payload ? 'resolved_registry_id'), NULLIF(payload->>'resolved_registry_id', '')::bigint,
+		       (payload->>'first_seen_at')::timestamptz, (payload->>'last_seen_at')::timestamptz,
+		       payload->'raw_snapshot'::text
+		FROM model_observation_events
+		WHERE batch_id = $1 AND upstream_model_id = $2
+	`, batchID, modelID).Scan(
+		&event.ModelID, &event.Transition, &event.Classification, &event.Reason,
+		&event.HasConnectionID, &event.ConnectionID, &event.HasResolvedRegistryID, &event.ResolvedRegistryID,
+		&event.FirstSeenAt, &event.LastSeenAt, &event.RawSnapshot,
+	))
+	return event
 }
 
 func countObservationEvents(t *testing.T, accountID int64) int {

@@ -23,11 +23,15 @@ type modelObservationRepository struct {
 type storedModelObservation struct {
 	id                 int64
 	modelID            string
+	connectionID       sql.NullInt64
 	resolvedRegistryID sql.NullInt64
 	classification     string
 	reason             string
 	presence           string
 	missStreak         int
+	firstSeenAt        time.Time
+	lastSeenAt         time.Time
+	rawSnapshot        json.RawMessage
 }
 
 type discoveryProjectionWinner struct {
@@ -312,15 +316,24 @@ func rollbackDiscoveryProjection(
 		err := tx.QueryRowContext(ctx, `
 			SELECT e.observation_id, e.upstream_model_id, e.classification,
 			       e.classification_reason, e.upstream_presence, e.miss_streak,
-			       COALESCE(e.payload->>'transition', '')
+			       COALESCE(e.payload->>'transition', ''),
+			       NULLIF(e.payload->>'connection_id', '')::bigint,
+			       mr.id,
+			       (e.payload->>'first_seen_at')::timestamptz,
+			       (e.payload->>'last_seen_at')::timestamptz,
+			       e.payload->'raw_snapshot'
 			FROM model_observation_events e
 			JOIN model_classification_batches b ON b.batch_id = e.batch_id
+			LEFT JOIN model_registry mr
+			  ON mr.id = NULLIF(e.payload->>'resolved_registry_id', '')::bigint
 			WHERE e.account_id = $1 AND e.upstream_model_id = $2 AND b.observed_at < $3
 			ORDER BY b.observed_at DESC, e.id DESC
 			LIMIT 1
 		`, input.AccountID, event.observation.modelID, input.ObservedAt.UTC()).Scan(
 			&previous.id, &previous.modelID, &previous.classification,
 			&previous.reason, &previous.presence, &previous.missStreak, &previousTransition,
+			&previous.connectionID, &previous.resolvedRegistryID, &previous.firstSeenAt,
+			&previous.lastSeenAt, &previous.rawSnapshot,
 		)
 		if err == nil && previousTransition == "removed" {
 			err = sql.ErrNoRows
@@ -343,26 +356,16 @@ func rollbackDiscoveryProjection(
 			return err
 		}
 
-		var connectionID sql.NullInt64
-		var lastSeenAt time.Time
-		var rawSnapshot string
-		if err := tx.QueryRowContext(ctx, `
-			SELECT b.connection_id, b.observed_at, b.raw_snapshot::text
-			FROM model_observation_events e
-			JOIN model_classification_batches b ON b.batch_id = e.batch_id
-			WHERE e.account_id = $1 AND e.upstream_model_id = $2
-			  AND b.observed_at < $3 AND e.upstream_presence = 'present'
-			ORDER BY b.observed_at DESC, e.id DESC
-			LIMIT 1
-		`, input.AccountID, event.observation.modelID, input.ObservedAt.UTC()).Scan(&connectionID, &lastSeenAt, &rawSnapshot); err != nil {
-			return err
-		}
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE model_observations
-			SET connection_id = $1, upstream_presence = $2, miss_streak = $3,
-			    last_seen_at = $4, raw_snapshot = $5::jsonb, updated_at = NOW()
-			WHERE id = $6
-		`, connectionID, previous.presence, previous.missStreak, lastSeenAt, rawSnapshot, event.observation.id); err != nil {
+			SET connection_id = $1, resolved_registry_id = $2, classification = $3,
+			    classification_reason = $4, upstream_presence = $5, miss_streak = $6,
+			    first_seen_at = $7, last_seen_at = $8, raw_snapshot = $9::jsonb,
+			    updated_at = NOW()
+			WHERE id = $10
+		`, previous.connectionID, previous.resolvedRegistryID, previous.classification,
+			previous.reason, previous.presence, previous.missStreak, previous.firstSeenAt,
+			previous.lastSeenAt, string(previous.rawSnapshot), event.observation.id); err != nil {
 			return err
 		}
 	}
@@ -480,8 +483,9 @@ func validGovernanceProvider(provider service.GovernanceProvider) bool {
 
 func lockModelObservations(ctx context.Context, tx *sql.Tx, accountID int64) (map[string]storedModelObservation, error) {
 	rows, err := tx.QueryContext(ctx, `
-		SELECT id, upstream_model_id, resolved_registry_id, classification, classification_reason,
-		       upstream_presence, miss_streak
+		SELECT id, upstream_model_id, connection_id, resolved_registry_id,
+		       classification, classification_reason, upstream_presence, miss_streak,
+		       first_seen_at, last_seen_at, raw_snapshot
 		FROM model_observations
 		WHERE account_id = $1
 		FOR UPDATE
@@ -498,11 +502,15 @@ func lockModelObservations(ctx context.Context, tx *sql.Tx, accountID int64) (ma
 		if err := rows.Scan(
 			&observation.id,
 			&modelID,
+			&observation.connectionID,
 			&observation.resolvedRegistryID,
 			&observation.classification,
 			&observation.reason,
 			&observation.presence,
 			&observation.missStreak,
+			&observation.firstSeenAt,
+			&observation.lastSeenAt,
+			&observation.rawSnapshot,
 		); err != nil {
 			return nil, err
 		}
@@ -524,16 +532,38 @@ func appendObservationEvent(
 	transition string,
 	input service.DiscoveryBatchInput,
 ) error {
+	postState := observation
+	err := tx.QueryRowContext(ctx, `
+		SELECT connection_id, resolved_registry_id, classification, classification_reason,
+		       upstream_presence, miss_streak, first_seen_at, last_seen_at, raw_snapshot
+		FROM model_observations
+		WHERE id = $1
+	`, observation.id).Scan(
+		&postState.connectionID, &postState.resolvedRegistryID, &postState.classification,
+		&postState.reason, &postState.presence, &postState.missStreak,
+		&postState.firstSeenAt, &postState.lastSeenAt, &postState.rawSnapshot,
+	)
+	if err != nil {
+		return err
+	}
+	postState.id = observation.id
+	postState.modelID = observation.modelID
+	if transition == "removed" {
+		postState.presence = "missing"
+		postState.missStreak = observation.missStreak
+	}
 	payloadValues := map[string]any{
-		"account_provider": input.AccountProvider,
-		"routing_platform": input.RoutingPlatform,
-		"observed_at":      input.ObservedAt.UTC(),
+		"account_provider":     input.AccountProvider,
+		"routing_platform":     input.RoutingPlatform,
+		"observed_at":          input.ObservedAt.UTC(),
+		"connection_id":        nullInt64Value(postState.connectionID),
+		"resolved_registry_id": nullInt64Value(postState.resolvedRegistryID),
+		"first_seen_at":        postState.firstSeenAt.UTC(),
+		"last_seen_at":         postState.lastSeenAt.UTC(),
+		"raw_snapshot":         postState.rawSnapshot,
 	}
 	if eventType == "projection_replaced" {
 		payloadValues["transition"] = transition
-		if transition == "removed" && observation.resolvedRegistryID.Valid {
-			payloadValues["resolved_registry_id"] = observation.resolvedRegistryID.Int64
-		}
 	}
 	payload, err := json.Marshal(payloadValues)
 	if err != nil {
@@ -545,7 +575,14 @@ func appendObservationEvent(
 			classification_reason, upstream_presence, miss_streak, payload
 		)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)
-	`, observation.id, batchID, input.AccountID, observation.modelID, eventType, observation.classification,
-		observation.reason, observation.presence, observation.missStreak, string(payload))
+	`, postState.id, batchID, input.AccountID, postState.modelID, eventType, postState.classification,
+		postState.reason, postState.presence, postState.missStreak, string(payload))
 	return err
+}
+
+func nullInt64Value(value sql.NullInt64) any {
+	if !value.Valid {
+		return nil
+	}
+	return value.Int64
 }
