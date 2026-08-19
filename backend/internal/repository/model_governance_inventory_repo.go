@@ -183,23 +183,25 @@ account_mapping_models AS (
 	CROSS JOIN LATERAL jsonb_array_elements_text(projection.upstream_model_ids) model
 ),
 channel_mapping_models AS (
-    SELECT er.account_id, er.platform, er.group_id, er.channel_id, mapping.value AS upstream_model_id
+    SELECT er.account_id, er.platform, er.group_id, er.channel_id, mapping.value #>> '{}' AS upstream_model_id
     FROM enabled_routes er
-    CROSS JOIN LATERAL jsonb_each_text(
+    CROSS JOIN LATERAL jsonb_each(
         CASE WHEN jsonb_typeof(er.model_mapping->er.platform) = 'object'
              THEN er.model_mapping->er.platform ELSE '{}'::jsonb END
     ) mapping
     WHERE er.channel_id IS NOT NULL
-      AND mapping.value <> '' AND strpos(mapping.value, '*') = 0
+      AND jsonb_typeof(mapping.value) = 'string'
+      AND mapping.value #>> '{}' <> '' AND strpos(mapping.value #>> '{}', '*') = 0
 ),
 channel_pricing_models AS (
-    SELECT er.account_id, er.platform, er.group_id, er.channel_id, model.value AS upstream_model_id
+    SELECT er.account_id, er.platform, er.group_id, er.channel_id, model.value #>> '{}' AS upstream_model_id
     FROM enabled_routes er
     JOIN channel_model_pricing cmp ON cmp.channel_id = er.channel_id AND cmp.platform = er.platform
-    CROSS JOIN LATERAL jsonb_array_elements_text(
+    CROSS JOIN LATERAL jsonb_array_elements(
         CASE WHEN jsonb_typeof(cmp.models) = 'array' THEN cmp.models ELSE '[]'::jsonb END
     ) model
-    WHERE model.value <> '' AND strpos(model.value, '*') = 0
+    WHERE jsonb_typeof(model.value) = 'string'
+      AND model.value #>> '{}' <> '' AND strpos(model.value #>> '{}', '*') = 0
 ),
 composite_route_models AS (
     SELECT er.account_id, er.platform, er.group_id, er.channel_id,

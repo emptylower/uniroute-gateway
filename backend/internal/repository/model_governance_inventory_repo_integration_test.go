@@ -61,13 +61,13 @@ func TestModelGovernanceInventoryExcludesWildcardCapabilityNamespacesWithoutWrit
 
 	_, err := integrationDB.ExecContext(ctx, `
 		UPDATE channels
-		SET model_mapping = '{"openai":{"wildcard-request-*":"wildcard-target-*","concrete-request":"exact channel target","concrete-from-wildcard-*":"concrete-from-wildcard"}}'::jsonb
+		SET model_mapping = '{"openai":{"wildcard-request-*":"wildcard-target-*","concrete-request":"exact channel target","concrete-from-wildcard-*":"concrete-from-wildcard","mapping-number":42,"mapping-bool":true,"mapping-null":null,"mapping-array":["fake-mapping-array"],"mapping-object":{"model":"fake-mapping-object"}}}'::jsonb
 		WHERE id = $1
 	`, fixture.channelID)
 	require.NoError(t, err)
 	_, err = integrationDB.ExecContext(ctx, `
 		UPDATE channel_model_pricing
-		SET models = '["pricing-*","exact pricing model"]'::jsonb
+		SET models = '["pricing-*","exact pricing model",42,true,null,["fake-pricing-array"],{"model":"fake-pricing-object"}]'::jsonb
 		WHERE channel_id = $1 AND platform = 'openai'
 	`, fixture.channelID)
 	require.NoError(t, err)
@@ -88,12 +88,36 @@ func TestModelGovernanceInventoryExcludesWildcardCapabilityNamespacesWithoutWrit
 	byModel := inventoryItemsForAccount(items, fixture.accountID)
 	require.NotContains(t, byModel, "wildcard-target-*")
 	require.NotContains(t, byModel, "pricing-*")
+	for _, fakeModel := range []string{
+		"42", "true", "null", `["fake-mapping-array"]`, `{"model": "fake-mapping-object"}`,
+		`["fake-pricing-array"]`, `{"model": "fake-pricing-object"}`,
+	} {
+		require.NotContains(t, byModel, fakeModel)
+	}
 	require.Contains(t, byModel, "concrete-from-wildcard")
 	require.Contains(t, byModel, "exact channel target")
 	require.Contains(t, byModel, "exact pricing model")
 	require.Contains(t, byModel, "observed-*exact")
 	require.Contains(t, byModel, "used-*exact")
 	require.Contains(t, byModel, "routed-*exact")
+
+	_, err = integrationDB.ExecContext(ctx, `
+		UPDATE channels SET model_mapping = '{"openai":["wrong-outer-mapping"]}'::jsonb WHERE id = $1
+	`, fixture.channelID)
+	require.NoError(t, err)
+	_, err = integrationDB.ExecContext(ctx, `
+		UPDATE channel_model_pricing SET models = '{"model":"wrong-outer-pricing"}'::jsonb
+		WHERE channel_id = $1 AND platform = 'openai'
+	`, fixture.channelID)
+	require.NoError(t, err)
+
+	wrongOuterBefore := inventoryChannelCapabilityState(t, fixture.channelID)
+	items, err = listModelGovernanceInventory(ctx, now.Add(-7*24*time.Hour), now.Add(-30*24*time.Hour), now)
+	require.NoError(t, err)
+	require.Equal(t, wrongOuterBefore, inventoryChannelCapabilityState(t, fixture.channelID), "inventory query must not mutate wrong-typed channel capability state")
+	byModel = inventoryItemsForAccount(items, fixture.accountID)
+	require.NotContains(t, byModel, "wrong-outer-mapping")
+	require.NotContains(t, byModel, "wrong-outer-pricing")
 }
 
 func TestModelGovernanceInventoryUsesHalfOpenUsageWindows(t *testing.T) {
