@@ -243,13 +243,17 @@ func TestMigrationsRunner_ModelGovernanceFoundationSchema(t *testing.T) {
 	}
 
 	requireColumn(t, tx, "model_observations", "connection_id", "bigint", 0, true)
+	requireColumn(t, tx, "model_observation_events", "account_id", "bigint", 0, false)
+	requireColumn(t, tx, "model_observation_events", "upstream_model_id", "character varying", 255, false)
 	requireConstraintDefinitionContains(t, tx, "model_registry", "chk_model_registry_provider", "anthropic", "openai", "gemini", "grok")
 	requireConstraintDefinitionContains(t, tx, "model_registry", "chk_model_registry_modality", "text", "image", "audio", "video", "embedding", "other")
 	requireConstraintDefinitionContains(t, tx, "model_registry", "chk_model_registry_lifecycle", "active", "deprecated", "retired")
 	requireConstraintDefinitionContains(t, tx, "model_observations", "chk_model_observations_classification", "discovered", "approved", "cross_provider", "unknown", "ignored")
 	requireConstraintDefinitionContains(t, tx, "model_observations", "chk_model_observations_presence", "present", "missing")
 	requireUniqueConstraint(t, tx, "model_observations", "account_id", "upstream_model_id")
-	requireNullsNotDistinctUniqueConstraint(t, tx, "model_inventory_items", "run_id", "account_id", "group_id", "channel_id", "upstream_model_id")
+	requirePartialUniqueIndexDefinition(t, tx, "model_inventory_items", "uq_model_inventory_items_dimensions",
+		"UNIQUE", "run_id", "account_id", "(group_id IS NULL)", "COALESCE(group_id, (0)::bigint)",
+		"(channel_id IS NULL)", "COALESCE(channel_id, (0)::bigint)", "upstream_model_id")
 	requireAppendOnlyTable(t, tx, "model_registry_events")
 	requireAppendOnlyTable(t, tx, "model_observation_events")
 	requireNoForeignKey(t, tx, "model_registry_events", "registry_id")
@@ -300,22 +304,28 @@ RETURNING id
 	var eventID int64
 	require.NoError(t, tx.QueryRowContext(context.Background(), `
 INSERT INTO model_observation_events (
-	observation_id, batch_id, event_type, classification, classification_reason, upstream_presence
+	observation_id, batch_id, account_id, upstream_model_id,
+	event_type, classification, classification_reason, upstream_presence
 )
-VALUES ($1, $2, 'discovered', 'discovered', 'awaiting_registry_classification', 'present')
+VALUES ($1, $2, $3, 'immutable-model', 'discovered', 'discovered', 'awaiting_registry_classification', 'present')
 RETURNING id
-`, observationID, batchID).Scan(&eventID))
+`, observationID, batchID, accountID).Scan(&eventID))
 
 	_, err = tx.ExecContext(context.Background(), "DELETE FROM accounts WHERE id = $1", accountID)
 	require.NoError(t, err, "existing account deletion must not mutate append-only governance events")
 
 	var storedObservationID int64
 	var storedBatchID string
+	var storedAccountID int64
+	var storedModelID string
 	require.NoError(t, tx.QueryRowContext(context.Background(), `
-SELECT observation_id, batch_id FROM model_observation_events WHERE id = $1
-`, eventID).Scan(&storedObservationID, &storedBatchID))
+SELECT observation_id, batch_id, account_id, upstream_model_id
+FROM model_observation_events WHERE id = $1
+`, eventID).Scan(&storedObservationID, &storedBatchID, &storedAccountID, &storedModelID))
 	require.Equal(t, observationID, storedObservationID)
 	require.Equal(t, batchID, storedBatchID)
+	require.Equal(t, accountID, storedAccountID)
+	require.Equal(t, "immutable-model", storedModelID)
 }
 
 func TestMigrationsRunner_ModelGovernanceFoundationEventsRejectActualMutations(t *testing.T) {
@@ -332,9 +342,10 @@ RETURNING id
 	var observationEventID int64
 	require.NoError(t, tx.QueryRowContext(context.Background(), `
 INSERT INTO model_observation_events (
-	observation_id, event_type, classification, classification_reason, upstream_presence
+	observation_id, account_id, upstream_model_id,
+	event_type, classification, classification_reason, upstream_presence
 )
-VALUES ($1, 'discovered', 'discovered', 'integration_test', 'present')
+VALUES ($1, $1, 'mutation-model', 'discovered', 'discovered', 'integration_test', 'present')
 RETURNING id
 `, suffix).Scan(&observationEventID))
 
@@ -385,8 +396,28 @@ VALUES ($1, $2, NULL, NULL, 'claude-test', 'approved', 'USD')
 `
 	_, err = tx.ExecContext(context.Background(), insert, runID, accountID)
 	require.NoError(t, err)
+	_, err = tx.ExecContext(context.Background(), "SAVEPOINT duplicate_inventory_item")
+	require.NoError(t, err)
 	_, err = tx.ExecContext(context.Background(), insert, runID, accountID)
 	require.Error(t, err, "duplicate account-level inventory rows with NULL group/channel must be rejected")
+	_, rollbackErr := tx.ExecContext(context.Background(), "ROLLBACK TO SAVEPOINT duplicate_inventory_item")
+	require.NoError(t, rollbackErr)
+
+	_, err = tx.ExecContext(context.Background(), `
+INSERT INTO groups (id, name, status) VALUES (0, $1, 'active')
+`, fmt.Sprintf("governance-zero-group-%d", suffix))
+	require.NoError(t, err)
+	_, err = tx.ExecContext(context.Background(), `
+INSERT INTO channels (id, name, status) VALUES (0, $1, 'active')
+`, fmt.Sprintf("governance-zero-channel-%d", suffix))
+	require.NoError(t, err)
+	_, err = tx.ExecContext(context.Background(), `
+INSERT INTO model_inventory_items (
+	run_id, account_id, group_id, channel_id, upstream_model_id, classification, billing_currency
+)
+VALUES ($1, $2, 0, 0, 'claude-test', 'approved', 'USD')
+`, runID, accountID)
+	require.NoError(t, err, "real zero dimensions must not collide with NULL dimensions")
 }
 
 func TestMigrationsRunner_ModelGovernanceFoundationSQLRerunsDirectly(t *testing.T) {

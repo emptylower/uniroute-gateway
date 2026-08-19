@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -345,6 +346,96 @@ func TestModelGovernanceRepository_RecordDiscoveryAppendsMissingEventsDeterminis
 	})
 	require.NoError(t, err)
 	require.Equal(t, []string{"a-model", "m-model", "z-model"}, loadBatchEventModelIDs(t, batchID))
+}
+
+func TestModelGovernanceRepository_RecordDiscoveryConcurrentSameAccountCompletesDeterministically(t *testing.T) {
+	ctx := context.Background()
+	accountID := createGovernanceObservationAccount(t, "openai", `{}`)
+	provider := service.GovernanceProvider("openai")
+	observedAt := time.Date(2026, time.August, 18, 18, 0, 0, 0, time.UTC)
+
+	_, err := integrationDB.ExecContext(ctx, `
+		CREATE OR REPLACE FUNCTION delay_governance_batch_insert() RETURNS TRIGGER AS $$
+		BEGIN
+			PERFORM pg_sleep(0.5);
+			RETURN NEW;
+		END;
+		$$ LANGUAGE plpgsql;
+		CREATE TRIGGER trg_delay_governance_batch_insert
+		AFTER INSERT ON model_classification_batches
+		FOR EACH ROW EXECUTE FUNCTION delay_governance_batch_insert();
+	`)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = integrationDB.ExecContext(context.Background(), `DROP TRIGGER IF EXISTS trg_delay_governance_batch_insert ON model_classification_batches`)
+		_, _ = integrationDB.ExecContext(context.Background(), `DROP FUNCTION IF EXISTS delay_governance_batch_insert()`)
+	})
+
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	batchIDs := make(chan string, 2)
+	var wg sync.WaitGroup
+	for index := 0; index < 2; index++ {
+		index := index
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			batchID, recordErr := NewModelObservationRepository(integrationDB).RecordDiscovery(callCtx, service.DiscoveryBatchInput{
+				IdempotencyKey: fmt.Sprintf("concurrent-%d-%d", accountID, index), AccountID: accountID,
+				AccountProvider: &provider, RoutingPlatform: "openai", ModelIDs: []string{"shared-model"},
+				RawSnapshot: []byte(`{"source":"concurrent-test"}`), ObservedAt: observedAt,
+			})
+			if recordErr == nil {
+				batchIDs <- batchID
+			}
+			errs <- recordErr
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	close(batchIDs)
+
+	for recordErr := range errs {
+		require.NoError(t, recordErr)
+	}
+	require.Len(t, batchIDs, 2)
+	require.Equal(t, observationProjection{
+		ModelID: "shared-model", Classification: "discovered", Reason: "awaiting_registry_classification",
+		Presence: "present", FirstSeenAt: observedAt, LastSeenAt: observedAt,
+	}, loadObservationProjection(t, accountID, "shared-model"))
+	require.Equal(t, []string{"discovered", "observed"}, loadObservationEventTypes(t, accountID, "shared-model"))
+}
+
+func TestModelGovernanceRepository_ObservationEventsRetainIdentityAfterAccountDeletion(t *testing.T) {
+	ctx := context.Background()
+	accountID := createGovernanceObservationAccount(t, "openai", `{}`)
+	provider := service.GovernanceProvider("openai")
+	modelID := "reconstructable-model"
+
+	_, err := NewModelObservationRepository(integrationDB).RecordDiscovery(ctx, service.DiscoveryBatchInput{
+		IdempotencyKey: "reconstructable-" + fmt.Sprint(accountID), AccountID: accountID,
+		AccountProvider: &provider, RoutingPlatform: "openai", ModelIDs: []string{modelID},
+		RawSnapshot: []byte(`{"source":"deletion-test"}`), ObservedAt: time.Date(2026, time.August, 18, 19, 0, 0, 0, time.UTC),
+	})
+	require.NoError(t, err)
+
+	_, err = integrationDB.ExecContext(ctx, `DELETE FROM accounts WHERE id = $1`, accountID)
+	require.NoError(t, err)
+
+	var storedAccountID int64
+	var storedModelID, eventType string
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		SELECT account_id, upstream_model_id, event_type
+		FROM model_observation_events
+		WHERE account_id = $1 AND upstream_model_id = $2
+	`, accountID, modelID).Scan(&storedAccountID, &storedModelID, &eventType))
+	require.Equal(t, accountID, storedAccountID)
+	require.Equal(t, modelID, storedModelID)
+	require.Equal(t, "discovered", eventType)
 }
 
 func createGovernanceObservationAccount(t *testing.T, platform, credentials string) int64 {

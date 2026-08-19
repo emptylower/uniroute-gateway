@@ -85,6 +85,8 @@ CREATE TABLE IF NOT EXISTS model_observation_events (
     id BIGSERIAL PRIMARY KEY,
     observation_id BIGINT NOT NULL,
     batch_id VARCHAR(64),
+    account_id BIGINT NOT NULL,
+    upstream_model_id VARCHAR(255) NOT NULL,
     event_type VARCHAR(64) NOT NULL,
     classification VARCHAR(32) NOT NULL,
     classification_reason VARCHAR(128) NOT NULL,
@@ -138,8 +140,7 @@ CREATE TABLE IF NOT EXISTS model_inventory_items (
             requests_7d >= 0 AND requests_30d >= 0 AND
             revenue_7d_billing_micros >= 0 AND revenue_30d_billing_micros >= 0 AND
             affected_api_keys_7d >= 0 AND affected_api_keys_30d >= 0
-        ),
-    UNIQUE NULLS NOT DISTINCT (run_id, account_id, group_id, channel_id, upstream_model_id)
+        )
 );
 
 CREATE INDEX IF NOT EXISTS idx_model_registry_provider_lifecycle
@@ -156,6 +157,16 @@ CREATE INDEX IF NOT EXISTS idx_model_observation_events_observation_created
     ON model_observation_events(observation_id, created_at, id);
 CREATE INDEX IF NOT EXISTS idx_model_inventory_items_run_classification
     ON model_inventory_items(run_id, classification);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_model_inventory_items_dimensions
+    ON model_inventory_items(
+        run_id,
+        account_id,
+        (group_id IS NULL),
+        COALESCE(group_id, 0),
+        (channel_id IS NULL),
+        COALESCE(channel_id, 0),
+        upstream_model_id
+    );
 
 CREATE OR REPLACE FUNCTION reject_append_only_event_mutation()
 RETURNS TRIGGER AS $$

@@ -22,6 +22,7 @@ type modelObservationRepository struct {
 
 type storedModelObservation struct {
 	id             int64
+	modelID        string
 	classification string
 	reason         string
 	presence       string
@@ -68,6 +69,12 @@ func (r *modelObservationRepository) RecordDiscovery(ctx context.Context, input 
 	}()
 
 	batchID = uuid.NewString()
+	var lockedAccountID int64
+	if err = tx.QueryRowContext(ctx, `
+		SELECT id FROM accounts WHERE id = $1 FOR UPDATE
+	`, input.AccountID).Scan(&lockedAccountID); err != nil {
+		return "", err
+	}
 	result, err := tx.ExecContext(ctx, `
 		INSERT INTO model_classification_batches (
 			batch_id, idempotency_key, account_id, connection_id, raw_snapshot, observed_at
@@ -97,12 +104,6 @@ func (r *modelObservationRepository) RecordDiscovery(ctx context.Context, input 
 			return "", err
 		}
 		return batchID, nil
-	}
-	var lockedAccountID int64
-	if err = tx.QueryRowContext(ctx, `
-		SELECT id FROM accounts WHERE id = $1 FOR UPDATE
-	`, input.AccountID).Scan(&lockedAccountID); err != nil {
-		return "", err
 	}
 	var projectionWatermark sql.NullTime
 	if err = tx.QueryRowContext(ctx, `
@@ -151,6 +152,7 @@ func (r *modelObservationRepository) RecordDiscovery(ctx context.Context, input 
 				return "", err
 			}
 			observation.classification = classification
+			observation.modelID = modelID
 			observation.reason = reason
 			observation.presence = "present"
 			observation.missStreak = 0
@@ -302,6 +304,7 @@ func lockModelObservations(ctx context.Context, tx *sql.Tx, accountID int64) (ma
 		); err != nil {
 			return nil, err
 		}
+		observation.modelID = modelID
 		result[modelID] = observation
 	}
 	if err := rows.Err(); err != nil {
@@ -328,11 +331,11 @@ func appendObservationEvent(
 	}
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO model_observation_events (
-			observation_id, batch_id, event_type, classification,
+			observation_id, batch_id, account_id, upstream_model_id, event_type, classification,
 			classification_reason, upstream_presence, miss_streak, payload
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
-	`, observation.id, batchID, eventType, observation.classification,
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)
+	`, observation.id, batchID, input.AccountID, observation.modelID, eventType, observation.classification,
 		observation.reason, observation.presence, observation.missStreak, string(payload))
 	return err
 }
