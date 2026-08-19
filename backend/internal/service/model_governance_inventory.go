@@ -25,11 +25,7 @@ type InventoryItem struct {
 }
 
 type ModelGovernanceInventoryRepository interface {
-	List(ctx context.Context, projections []InventoryAccountProjection, cutoff7d, cutoff30d, windowEnd time.Time) ([]InventoryItem, error)
-}
-
-type ModelGovernanceInventoryAccountSource interface {
-	ListInventoryAccounts(ctx context.Context) ([]Account, error)
+	List(ctx context.Context, projector InventoryAccountProjector, cutoff7d, cutoff30d, windowEnd time.Time) ([]InventoryItem, error)
 }
 
 type InventoryAccountProjection struct {
@@ -37,27 +33,31 @@ type InventoryAccountProjection struct {
 	UpstreamModelIDs []string `json:"upstream_model_ids"`
 }
 
+// InventoryAccountProjector keeps runtime mapping semantics in the service layer
+// while allowing the repository to own the consistent database snapshot.
+type InventoryAccountProjector func(accounts []Account) []InventoryAccountProjection
+
 type ModelGovernanceInventoryService struct {
-	repo     ModelGovernanceInventoryRepository
-	accounts ModelGovernanceInventoryAccountSource
-	now      func() time.Time
+	repo ModelGovernanceInventoryRepository
+	now  func() time.Time
 }
 
-func NewModelGovernanceInventoryService(repo ModelGovernanceInventoryRepository, accounts ModelGovernanceInventoryAccountSource) *ModelGovernanceInventoryService {
-	return &ModelGovernanceInventoryService{repo: repo, accounts: accounts, now: time.Now}
+func NewModelGovernanceInventoryService(repo ModelGovernanceInventoryRepository) *ModelGovernanceInventoryService {
+	return &ModelGovernanceInventoryService{repo: repo, now: time.Now}
 }
 
 func (s *ModelGovernanceInventoryService) List(ctx context.Context) ([]InventoryItem, error) {
 	windowEnd := s.now().UTC()
-	accounts, err := s.accounts.ListInventoryAccounts(ctx)
-	if err != nil {
-		return nil, err
-	}
+	return s.repo.List(ctx, ProjectInventoryAccountMappingsForAccounts, windowEnd.Add(-7*24*time.Hour), windowEnd.Add(-30*24*time.Hour), windowEnd)
+}
+
+// ProjectInventoryAccountMappingsForAccounts derives finite runtime mappings for a repository snapshot.
+func ProjectInventoryAccountMappingsForAccounts(accounts []Account) []InventoryAccountProjection {
 	projections := make([]InventoryAccountProjection, 0, len(accounts))
 	for i := range accounts {
 		projections = append(projections, ProjectInventoryAccountMappings(&accounts[i]))
 	}
-	return s.repo.List(ctx, projections, windowEnd.Add(-7*24*time.Hour), windowEnd.Add(-30*24*time.Hour), windowEnd)
+	return projections
 }
 
 // ProjectInventoryAccountMappings enumerates finite effective upstream IDs only.
@@ -87,10 +87,15 @@ func ProjectInventoryAccountMappings(account *Account) InventoryAccountProjectio
 			}
 			continue
 		}
+		if account.Platform == PlatformOpenAI {
+			upstream = normalizeOpenAIModelForUpstream(account, upstream)
+		}
 		add(upstream)
 	}
-	for _, upstream := range account.GetCompactModelMapping() {
-		add(upstream)
+	if account.AllowsOpenAICompact() {
+		for _, upstream := range account.GetCompactModelMapping() {
+			add(strings.TrimSpace(upstream))
+		}
 	}
 	if account.IsBedrock() {
 		for requested := range domain.DefaultBedrockModelMapping {

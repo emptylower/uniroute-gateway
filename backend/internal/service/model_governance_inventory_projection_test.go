@@ -30,20 +30,20 @@ func TestProjectInventoryAccountMappingsUsesFiniteRuntimeMappings(t *testing.T) 
 			want:    inventoryMappingValues((&Account{Platform: PlatformGrok}).GetModelMapping()),
 		},
 		{
-			name: "openai includes compact-only concrete target",
+			name: "eligible openai includes trimmed compact-only concrete target",
 			account: Account{ID: 4, Platform: PlatformOpenAI, Credentials: map[string]any{
-				"compact_model_mapping": map[string]any{"gpt-5.4": "gpt-5.4-compact-upstream"},
+				"compact_model_mapping": map[string]any{"gpt-5.4": " gpt-5.4-compact-upstream "},
 			}},
 			want: []string{"gpt-5.4-compact-upstream"},
 		},
 		{
-			name: "normal mapping preserves exact values and deduplicates exact matches",
+			name: "openai api key trims and deduplicates effective targets",
 			account: Account{ID: 5, Platform: PlatformOpenAI, Credentials: map[string]any{
 				"model_mapping": map[string]any{
 					"one": " exact-upstream ", "two": "exact-upstream", "three": "exact-upstream",
 				},
 			}},
-			want: []string{" exact-upstream ", "exact-upstream"},
+			want: []string{"exact-upstream"},
 		},
 		{
 			name: "wildcard namespace is not fabricated but concrete target is enumerable",
@@ -62,6 +62,36 @@ func TestProjectInventoryAccountMappingsUsesFiniteRuntimeMappings(t *testing.T) 
 			account: Account{ID: 8, Platform: PlatformAnthropic, Type: AccountTypeOAuth},
 			want:    nil,
 		},
+		{
+			name: "force-off openai excludes compact mapping",
+			account: Account{ID: 9, Platform: PlatformOpenAI,
+				Credentials: map[string]any{"compact_model_mapping": map[string]any{"gpt": "compact-target"}},
+				Extra:       map[string]any{"openai_compact_mode": OpenAICompactModeForceOff},
+			},
+			want: nil,
+		},
+		{
+			name: "unsupported openai excludes compact mapping",
+			account: Account{ID: 10, Platform: PlatformOpenAI,
+				Credentials: map[string]any{"compact_model_mapping": map[string]any{"gpt": "compact-target"}},
+				Extra:       map[string]any{"openai_compact_supported": false},
+			},
+			want: nil,
+		},
+		{
+			name: "openai oauth canonicalizes explicit configured target",
+			account: Account{ID: 11, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+				Credentials: map[string]any{"model_mapping": map[string]any{"public": " openai/gpt-5.4-high "}},
+			},
+			want: []string{"gpt-5.4"},
+		},
+		{
+			name: "anthropic api key preserves explicitly configured forwarded target",
+			account: Account{ID: 12, Platform: PlatformAnthropic, Type: AccountTypeAPIKey,
+				Credentials: map[string]any{"model_mapping": map[string]any{"public": " claude-sonnet-4-5 "}},
+			},
+			want: []string{" claude-sonnet-4-5 "},
+		},
 	}
 
 	for _, test := range tests {
@@ -75,7 +105,7 @@ func TestProjectInventoryAccountMappingsUsesFiniteRuntimeMappings(t *testing.T) 
 
 func TestProjectInventoryAccountMappingsResolvesBedrockDefaultsForAccountRegion(t *testing.T) {
 	account := &Account{
-		ID: 9, Platform: PlatformAnthropic, Type: AccountTypeBedrock,
+		ID: 13, Platform: PlatformAnthropic, Type: AccountTypeBedrock,
 		Credentials: map[string]any{"aws_region": "eu-west-1"},
 	}
 

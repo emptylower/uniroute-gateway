@@ -27,19 +27,38 @@ var (
 )
 
 type modelGovernanceInventoryRepository struct {
-	db *sql.DB
+	db                  *sql.DB
+	afterAccountsLoaded func() error
 }
 
 func NewModelGovernanceInventoryRepository(db *sql.DB) service.ModelGovernanceInventoryRepository {
 	return &modelGovernanceInventoryRepository{db: db}
 }
 
-func (r *modelGovernanceInventoryRepository) List(ctx context.Context, projections []service.InventoryAccountProjection, cutoff7d, cutoff30d, windowEnd time.Time) ([]service.InventoryItem, error) {
+// List uses one read-only repeatable-read transaction for the account source
+// SELECT and the single inventory aggregation statement. It performs no writes.
+func (r *modelGovernanceInventoryRepository) List(ctx context.Context, projector service.InventoryAccountProjector, cutoff7d, cutoff30d, windowEnd time.Time) ([]service.InventoryItem, error) {
+	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	if err != nil {
+		return nil, fmt.Errorf("begin model governance inventory snapshot: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	accounts, err := listModelGovernanceInventoryAccounts(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	if r.afterAccountsLoaded != nil {
+		if err := r.afterAccountsLoaded(); err != nil {
+			return nil, fmt.Errorf("after model governance inventory accounts loaded: %w", err)
+		}
+	}
+	projections := projector(accounts)
 	projectionJSON, err := json.Marshal(projections)
 	if err != nil {
 		return nil, fmt.Errorf("encode model governance inventory projections: %w", err)
 	}
-	rows, err := r.db.QueryContext(ctx, modelGovernanceInventoryQuery, cutoff7d.UTC(), cutoff30d.UTC(), windowEnd.UTC(), projectionJSON)
+	rows, err := tx.QueryContext(ctx, modelGovernanceInventoryQuery, cutoff7d.UTC(), cutoff30d.UTC(), windowEnd.UTC(), projectionJSON)
 	if err != nil {
 		return nil, fmt.Errorf("list model governance inventory: %w", err)
 	}
@@ -76,7 +95,46 @@ func (r *modelGovernanceInventoryRepository) List(ctx context.Context, projectio
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate model governance inventory: %w", err)
 	}
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("close model governance inventory rows: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit model governance inventory snapshot: %w", err)
+	}
 	return items, nil
+}
+
+func listModelGovernanceInventoryAccounts(ctx context.Context, tx *sql.Tx) ([]service.Account, error) {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT id, platform, type, credentials, extra
+		FROM accounts
+		WHERE status = 'active' AND schedulable = TRUE AND deleted_at IS NULL
+		ORDER BY id
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("list model governance inventory accounts: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	accounts := make([]service.Account, 0)
+	for rows.Next() {
+		var account service.Account
+		var credentials, extra []byte
+		if err := rows.Scan(&account.ID, &account.Platform, &account.Type, &credentials, &extra); err != nil {
+			return nil, fmt.Errorf("scan model governance inventory account: %w", err)
+		}
+		if err := json.Unmarshal(credentials, &account.Credentials); err != nil {
+			return nil, fmt.Errorf("decode model governance inventory account %d credentials: %w", account.ID, err)
+		}
+		if err := json.Unmarshal(extra, &account.Extra); err != nil {
+			return nil, fmt.Errorf("decode model governance inventory account %d extra: %w", account.ID, err)
+		}
+		accounts = append(accounts, account)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate model governance inventory accounts: %w", err)
+	}
+	return accounts, nil
 }
 
 func inventoryRevenueMicros(revenue decimal.Decimal, item service.InventoryItem) (int64, error) {

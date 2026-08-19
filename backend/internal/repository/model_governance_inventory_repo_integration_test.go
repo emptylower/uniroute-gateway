@@ -160,6 +160,34 @@ func TestModelGovernanceInventoryIncludesFiniteEffectiveRuntimeMappings(t *testi
 	}
 }
 
+func TestModelGovernanceInventoryCompactMappingsFollowRuntimeEligibilityFromAccountExtra(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name       string
+		extra      string
+		wantMapped bool
+	}{
+		{name: "supported", extra: `{"openai_compact_supported":true}`, wantMapped: true},
+		{name: "force off", extra: `{"openai_compact_mode":"force_off"}`},
+		{name: "unsupported", extra: `{"openai_compact_supported":false}`},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			accountID := insertInventoryAccount(t, `{"compact_model_mapping":{"gpt":"compact-eligibility-target"}}`)
+			_, err := integrationDB.ExecContext(ctx, `UPDATE accounts SET extra = $2::jsonb WHERE id = $1`, accountID, test.extra)
+			require.NoError(t, err)
+			t.Cleanup(func() { _, _ = integrationDB.ExecContext(ctx, `DELETE FROM accounts WHERE id = $1`, accountID) })
+
+			items, err := listModelGovernanceInventory(ctx, now.Add(-7*24*time.Hour), now.Add(-30*24*time.Hour), now)
+			require.NoError(t, err)
+			_, mapped := inventoryItemsForAccount(items, accountID)["compact-eligibility-target"]
+			require.Equal(t, test.wantMapped, mapped)
+		})
+	}
+}
+
 func TestModelGovernanceInventoryEffectiveMappingsUseStableConfigurationScope(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
@@ -223,6 +251,45 @@ func TestModelGovernanceInventoryEffectiveMappingsUseEnabledRouteDimensionsAndIg
 		}
 	}
 	require.True(t, found, "configuration-enabled account must remain inventoried during transient scheduler exclusion")
+}
+
+func TestModelGovernanceInventoryUsesOneRepeatableReadSnapshotAcrossProjectionAndAggregation(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
+	suffix := fmt.Sprint(time.Now().UnixNano())
+	accountID := insertInventoryAccount(t, `{"model_mapping":{"public":"snapshot-old-model"}}`)
+	var groupID int64
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		INSERT INTO groups (name, status, platform) VALUES ($1, 'active', 'openai') RETURNING id
+	`, "inventory-snapshot-group-"+suffix).Scan(&groupID))
+	t.Cleanup(func() {
+		_, _ = integrationDB.ExecContext(ctx, `DELETE FROM groups WHERE id = $1`, groupID)
+		_, _ = integrationDB.ExecContext(ctx, `DELETE FROM accounts WHERE id = $1`, accountID)
+	})
+
+	repo := &modelGovernanceInventoryRepository{db: integrationDB}
+	repo.afterAccountsLoaded = func() error {
+		if _, err := integrationDB.ExecContext(ctx, `
+			UPDATE accounts
+			SET credentials = '{"model_mapping":{"public":"snapshot-new-model"}}'::jsonb,
+			    status = 'disabled'
+			WHERE id = $1
+		`, accountID); err != nil {
+			return err
+		}
+		_, err := integrationDB.ExecContext(ctx, `INSERT INTO account_groups (account_id, group_id) VALUES ($1, $2)`, accountID, groupID)
+		return err
+	}
+
+	items, err := repo.List(
+		ctx, service.ProjectInventoryAccountMappingsForAccounts,
+		now.Add(-7*24*time.Hour), now.Add(-30*24*time.Hour), now,
+	)
+	require.NoError(t, err)
+	byModel := inventoryItemsForAccount(items, accountID)
+	require.Contains(t, byModel, "snapshot-old-model")
+	require.Nil(t, byModel["snapshot-old-model"].GroupID)
+	require.NotContains(t, byModel, "snapshot-new-model")
 }
 
 func TestModelGovernanceInventoryUsesExactPlatformClassificationAllowlistUnlessObserved(t *testing.T) {
@@ -509,15 +576,9 @@ func insertInventoryAccountWithType(t *testing.T, platform, accountType, credent
 }
 
 func listModelGovernanceInventory(ctx context.Context, cutoff7d, cutoff30d, windowEnd time.Time) ([]service.InventoryItem, error) {
-	accounts, err := NewModelGovernanceInventoryAccountSource(integrationDB).ListInventoryAccounts(ctx)
-	if err != nil {
-		return nil, err
-	}
-	projections := make([]service.InventoryAccountProjection, 0, len(accounts))
-	for i := range accounts {
-		projections = append(projections, service.ProjectInventoryAccountMappings(&accounts[i]))
-	}
-	return NewModelGovernanceInventoryRepository(integrationDB).List(ctx, projections, cutoff7d, cutoff30d, windowEnd)
+	return NewModelGovernanceInventoryRepository(integrationDB).List(
+		ctx, service.ProjectInventoryAccountMappingsForAccounts, cutoff7d, cutoff30d, windowEnd,
+	)
 }
 
 func inventoryAccountState(t *testing.T, accountID int64) string {

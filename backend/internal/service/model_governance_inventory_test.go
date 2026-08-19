@@ -17,31 +17,21 @@ type inventoryRepositoryStub struct {
 	err         error
 }
 
-func (s *inventoryRepositoryStub) List(_ context.Context, projections []InventoryAccountProjection, cutoff7d, cutoff30d, windowEnd time.Time) ([]InventoryItem, error) {
-	s.projections = projections
+func (s *inventoryRepositoryStub) List(_ context.Context, projector InventoryAccountProjector, cutoff7d, cutoff30d, windowEnd time.Time) ([]InventoryItem, error) {
+	s.projections = projector([]Account{{
+		ID: 42, Platform: PlatformOpenAI, Credentials: map[string]any{
+			"model_mapping": map[string]any{"public": "effective-upstream"},
+		},
+	}})
 	s.cutoff7d = cutoff7d
 	s.cutoff30d = cutoff30d
 	s.windowEnd = windowEnd
 	return s.items, s.err
 }
 
-type inventoryAccountSourceStub struct {
-	accounts []Account
-	err      error
-}
-
-func (s *inventoryAccountSourceStub) ListInventoryAccounts(context.Context) ([]Account, error) {
-	return s.accounts, s.err
-}
-
 func TestModelGovernanceInventoryUsesOneUTCWindowPerRequest(t *testing.T) {
 	repo := &inventoryRepositoryStub{items: []InventoryItem{{AccountID: 1, UpstreamModelID: "model", BillingCurrency: "USD"}}}
-	accounts := &inventoryAccountSourceStub{accounts: []Account{{
-		ID: 42, Platform: PlatformOpenAI, Credentials: map[string]any{
-			"model_mapping": map[string]any{"public": "effective-upstream"},
-		},
-	}}}
-	svc := NewModelGovernanceInventoryService(repo, accounts)
+	svc := NewModelGovernanceInventoryService(repo)
 	now := time.Date(2026, time.August, 19, 7, 8, 9, 123, time.FixedZone("offset", 8*60*60))
 	clockCalls := 0
 	svc.now = func() time.Time {
