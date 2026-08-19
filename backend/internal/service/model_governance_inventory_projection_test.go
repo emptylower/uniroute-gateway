@@ -103,6 +103,26 @@ func TestProjectInventoryAccountMappingsUsesFiniteRuntimeMappings(t *testing.T) 
 	}
 }
 
+func TestProjectInventoryAccountMappingsIncludesAntigravityThinkingTarget(t *testing.T) {
+	account := &Account{
+		ID:       13,
+		Platform: PlatformAntigravity,
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{"custom": "claude-sonnet-4-5"},
+		},
+	}
+
+	projection := ProjectInventoryAccountMappings(account)
+
+	require.Equal(t, []string{
+		"claude-sonnet-4-5",
+		"claude-sonnet-4-5-thinking",
+		"gemini-3-flash",
+		"gemini-3.1-pro-high",
+		"gemini-3.1-pro-low",
+	}, projection.UpstreamModelIDs)
+}
+
 func TestProjectInventoryAccountMappingsResolvesBedrockDefaultsForAccountRegion(t *testing.T) {
 	account := &Account{
 		ID: 13, Platform: PlatformAnthropic, Type: AccountTypeBedrock,

@@ -90,6 +90,11 @@ func ProjectInventoryAccountMappings(account *Account) InventoryAccountProjectio
 		if account.Platform == PlatformOpenAI {
 			upstream = normalizeOpenAIModelForUpstream(account, upstream)
 		}
+		if account.Platform == PlatformAntigravity {
+			add(applyThinkingModelSuffix(upstream, false))
+			add(applyThinkingModelSuffix(upstream, true))
+			continue
+		}
 		add(upstream)
 	}
 	if account.AllowsOpenAICompact() {
