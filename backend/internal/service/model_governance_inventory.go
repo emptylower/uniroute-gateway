@@ -62,7 +62,7 @@ func ProjectInventoryAccountMappingsForAccounts(accounts []Account) []InventoryA
 
 // ProjectInventoryAccountMappings enumerates finite effective upstream IDs only.
 // Generic allow-all behavior and wildcard namespaces are intentionally absent;
-// concrete wildcard targets remain finite values and are included.
+// wildcard requested keys may still contribute concrete, wildcard-free targets.
 func ProjectInventoryAccountMappings(account *Account) InventoryAccountProjection {
 	if account == nil {
 		return InventoryAccountProjection{}
@@ -91,8 +91,12 @@ func ProjectInventoryAccountMappings(account *Account) InventoryAccountProjectio
 			upstream = normalizeOpenAIModelForUpstream(account, upstream)
 		}
 		if account.Platform == PlatformAntigravity {
-			add(applyThinkingModelSuffix(upstream, false))
-			add(applyThinkingModelSuffix(upstream, true))
+			nonThinking := applyThinkingModelSuffix(upstream, false)
+			add(nonThinking)
+			thinking := applyThinkingModelSuffix(upstream, true)
+			if thinking != nonThinking && account.IsModelSupported(thinking) {
+				add(thinking)
+			}
 			continue
 		}
 		add(upstream)

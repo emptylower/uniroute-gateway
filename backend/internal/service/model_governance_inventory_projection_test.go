@@ -103,24 +103,65 @@ func TestProjectInventoryAccountMappingsUsesFiniteRuntimeMappings(t *testing.T) 
 	}
 }
 
-func TestProjectInventoryAccountMappingsIncludesAntigravityThinkingTarget(t *testing.T) {
-	account := &Account{
-		ID:       13,
-		Platform: PlatformAntigravity,
-		Credentials: map[string]any{
-			"model_mapping": map[string]any{"custom": "claude-sonnet-4-5"},
+func TestProjectInventoryAccountMappingsMatchesAntigravityThinkingReachability(t *testing.T) {
+	tests := []struct {
+		name       string
+		mapping    map[string]any
+		requestKey string
+	}{
+		{
+			name:       "base target alone cannot reach thinking target",
+			mapping:    map[string]any{"custom": "claude-sonnet-4-5"},
+			requestKey: "custom",
+		},
+		{
+			name: "exact support key permits thinking target",
+			mapping: map[string]any{
+				"claude-sonnet-4-5":          "claude-sonnet-4-5",
+				"claude-sonnet-4-5-thinking": "claude-sonnet-4-5",
+			},
+			requestKey: "claude-sonnet-4-5",
+		},
+		{
+			name: "wildcard support key permits thinking target",
+			mapping: map[string]any{
+				"claude-sonnet-4-5": "claude-sonnet-4-5",
+				"claude-*":          "claude-sonnet-4-5",
+			},
+			requestKey: "claude-sonnet-4-5",
+		},
+		{
+			name:       "non-transform target remains deduplicated",
+			mapping:    map[string]any{"custom": "upstream-custom"},
+			requestKey: "custom",
 		},
 	}
 
-	projection := ProjectInventoryAccountMappings(account)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			account := &Account{
+				ID:          13,
+				Platform:    PlatformAntigravity,
+				Credentials: map[string]any{"model_mapping": test.mapping},
+			}
+			mapped := mapAntigravityModel(account, test.requestKey)
+			expected := []string{mapped}
+			transformed := applyThinkingModelSuffix(mapped, true)
+			if transformed != mapped && account.IsModelSupported(transformed) {
+				expected = append(expected, transformed)
+			}
 
-	require.Equal(t, []string{
-		"claude-sonnet-4-5",
-		"claude-sonnet-4-5-thinking",
-		"gemini-3-flash",
-		"gemini-3.1-pro-high",
-		"gemini-3.1-pro-low",
-	}, projection.UpstreamModelIDs)
+			projection := ProjectInventoryAccountMappings(account)
+
+			for _, model := range expected {
+				require.Contains(t, projection.UpstreamModelIDs, model)
+			}
+			if transformed != mapped && !account.IsModelSupported(transformed) {
+				require.NotContains(t, projection.UpstreamModelIDs, transformed)
+			}
+			require.Equal(t, 1, countInventoryModel(projection.UpstreamModelIDs, mapped))
+		})
+	}
 }
 
 func TestProjectInventoryAccountMappingsResolvesBedrockDefaultsForAccountRegion(t *testing.T) {
@@ -177,4 +218,14 @@ func slicesSort(values []string) {
 			values[j], values[j-1] = values[j-1], values[j]
 		}
 	}
+}
+
+func countInventoryModel(models []string, target string) int {
+	count := 0
+	for _, model := range models {
+		if model == target {
+			count++
+		}
+	}
+	return count
 }
