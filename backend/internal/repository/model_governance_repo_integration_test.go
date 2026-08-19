@@ -442,6 +442,66 @@ func TestModelGovernanceRepository_RecordDiscoveryEqualTupleDuplicateIsEvidenceO
 	require.Zero(t, loadObservationProjection(t, accountID, "same-model").MissStreak)
 }
 
+func TestModelGovernanceRepository_RecordDiscoveryEqualTupleDuplicateCannotOwnLaterReplacement(t *testing.T) {
+	ctx := context.Background()
+	accountID := createGovernanceObservationAccount(t, "openai", `{}`)
+	repo := NewModelObservationRepository(integrationDB)
+	provider := service.GovernanceProvider("openai")
+	baselineAt := time.Date(2026, time.August, 18, 17, 5, 0, 0, time.UTC)
+	watermark := baselineAt.Add(time.Hour)
+	baseline := service.DiscoveryBatchInput{
+		AccountID: accountID, AccountProvider: &provider, RoutingPlatform: "openai",
+		ModelIDs: []string{"baseline-model"}, RawSnapshot: []byte(`{"catalog":"baseline"}`), ObservedAt: baselineAt,
+	}
+	projecting := service.DiscoveryBatchInput{
+		AccountID: accountID, AccountProvider: &provider, RoutingPlatform: "openai",
+		ModelIDs: []string{"projecting-model"}, RawSnapshot: []byte(`{"catalog":"projecting"}`), ObservedAt: watermark,
+	}
+	higher := service.DiscoveryBatchInput{
+		AccountID: accountID, AccountProvider: &provider, RoutingPlatform: "openai",
+		ModelIDs: []string{"final-model"}, ObservedAt: watermark,
+	}
+	higher = forceHigherDigest(t, projecting, higher, "final")
+
+	run := func(label string, withDuplicate bool) []observationProjectionDetails {
+		t.Helper()
+		initial := baseline
+		initial.IdempotencyKey = fmt.Sprintf("duplicate-owner-%s-baseline-%d", label, accountID)
+		owner := projecting
+		owner.IdempotencyKey = fmt.Sprintf("duplicate-owner-%s-projecting-%d", label, accountID)
+		winner := higher
+		winner.IdempotencyKey = fmt.Sprintf("duplicate-owner-%s-final-%d", label, accountID)
+
+		_, err := repo.RecordDiscovery(ctx, initial)
+		require.NoError(t, err)
+		ownerBatchID, err := repo.RecordDiscovery(ctx, owner)
+		require.NoError(t, err)
+		if withDuplicate {
+			duplicate := owner
+			duplicate.IdempotencyKey = fmt.Sprintf("duplicate-owner-%s-evidence-%d", label, accountID)
+			duplicateBatchID, duplicateErr := repo.RecordDiscovery(ctx, duplicate)
+			require.NoError(t, duplicateErr)
+			require.Empty(t, loadBatchEventTypes(t, duplicateBatchID))
+			// Move the projecting owner's heap tuple after its duplicate so an
+			// unspecified SQL tie-break can select the evidence-only row.
+			_, err = integrationDB.ExecContext(ctx, `
+				UPDATE model_classification_batches SET raw_snapshot = raw_snapshot WHERE batch_id = $1
+			`, ownerBatchID)
+			require.NoError(t, err)
+		}
+		_, err = repo.RecordDiscovery(ctx, winner)
+		require.NoError(t, err)
+		return loadObservationProjectionDetailsForAccount(t, accountID)
+	}
+
+	withoutDuplicate := run("without", false)
+	recreateGovernanceObservationAccount(t, accountID, "openai", `{}`)
+	withDuplicate := run("with", true)
+	require.Equal(t, withoutDuplicate, withDuplicate,
+		"an evidence-only equal-tuple duplicate must not replace the batch that owns projection events")
+	require.Equal(t, 1, loadObservationProjection(t, accountID, "baseline-model").MissStreak)
+}
+
 func TestModelGovernanceRepository_RecordDiscoveryReplacementEventsDescribeCommittedStateChange(t *testing.T) {
 	ctx := context.Background()
 	accountID := createGovernanceObservationAccount(t, "openai", `{}`)
@@ -576,6 +636,55 @@ func TestModelGovernanceRepository_RecordDiscoveryReplacementPreservesAdminState
 	require.Equal(t, "approved", shared.Classification)
 	require.Equal(t, "admin_reviewed", shared.Reason)
 	require.Equal(t, sql.NullInt64{Int64: registryID, Valid: true}, shared.ResolvedRegistryID)
+}
+
+func TestModelGovernanceRepository_RecordDiscoveryReplacementPreservesCurrentAdminStateForPreWatermarkRows(t *testing.T) {
+	ctx := context.Background()
+	repo := NewModelObservationRepository(integrationDB)
+	provider := service.GovernanceProvider("openai")
+	for _, tt := range []struct {
+		name            string
+		winningModelIDs []string
+		wantPresence    string
+	}{
+		{name: "winner keeps row", winningModelIDs: []string{"shared-model", "higher-only"}, wantPresence: "present"},
+		{name: "winner omits row", winningModelIDs: []string{"higher-only"}, wantPresence: "missing"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			accountID := createGovernanceObservationAccount(t, "openai", `{}`)
+			baselineAt := time.Date(2026, time.August, 18, 17, 55, 0, 0, time.UTC)
+			watermark := baselineAt.Add(time.Hour)
+			_, err := repo.RecordDiscovery(ctx, service.DiscoveryBatchInput{
+				IdempotencyKey: "admin-prewatermark-baseline-" + fmt.Sprint(accountID), AccountID: accountID,
+				AccountProvider: &provider, RoutingPlatform: "openai", ModelIDs: []string{"shared-model"},
+				RawSnapshot: []byte(`{"catalog":"baseline"}`), ObservedAt: baselineAt,
+			})
+			require.NoError(t, err)
+			lower := service.DiscoveryBatchInput{
+				IdempotencyKey: "admin-prewatermark-lower-" + fmt.Sprint(accountID), AccountID: accountID,
+				AccountProvider: &provider, RoutingPlatform: "openai", ModelIDs: []string{"shared-model", "lower-only"},
+				RawSnapshot: []byte(`{"catalog":"lower"}`), ObservedAt: watermark,
+			}
+			_, err = repo.RecordDiscovery(ctx, lower)
+			require.NoError(t, err)
+			registryID := createGovernanceRegistryModel(t, "admin-prewatermark-"+tt.name)
+			require.NoError(t, setObservationAdminState(t, accountID, "shared-model", "approved", "admin_reviewed", registryID))
+
+			higher := service.DiscoveryBatchInput{
+				IdempotencyKey: "admin-prewatermark-higher-" + fmt.Sprint(accountID), AccountID: accountID,
+				AccountProvider: &provider, RoutingPlatform: "openai", ModelIDs: tt.winningModelIDs, ObservedAt: watermark,
+			}
+			higher = forceHigherDigest(t, lower, higher, "admin-prewatermark-higher-"+tt.name)
+			_, err = repo.RecordDiscovery(ctx, higher)
+			require.NoError(t, err)
+
+			shared := loadObservationProjectionDetails(t, accountID, "shared-model")
+			require.Equal(t, "approved", shared.Classification)
+			require.Equal(t, "admin_reviewed", shared.Reason)
+			require.Equal(t, sql.NullInt64{Int64: registryID, Valid: true}, shared.ResolvedRegistryID)
+			require.Equal(t, tt.wantPresence, shared.Presence)
+		})
+	}
 }
 
 func TestModelGovernanceRepository_RecordDiscoveryStrictlyOlderAfterNewerNeverReplays(t *testing.T) {
@@ -1229,9 +1338,7 @@ func countObservationEvents(t *testing.T, accountID int64) int {
 	t.Helper()
 	var count int
 	require.NoError(t, integrationDB.QueryRowContext(context.Background(), `
-		SELECT COUNT(*) FROM model_observation_events e
-		JOIN model_observations o ON o.id = e.observation_id
-		WHERE o.account_id = $1
+		SELECT COUNT(*) FROM model_observation_events WHERE account_id = $1
 	`, accountID).Scan(&count))
 	return count
 }

@@ -118,10 +118,12 @@ func (r *modelObservationRepository) RecordDiscovery(ctx context.Context, input 
 	}
 	var currentWinner discoveryProjectionWinner
 	err = tx.QueryRowContext(ctx, `
-		SELECT batch_id, observed_at, COALESCE(raw_snapshot->'provenance'->>'digest', '')
-		FROM model_classification_batches
-		WHERE account_id = $1 AND batch_id <> $2
-		ORDER BY observed_at DESC, COALESCE(raw_snapshot->'provenance'->>'digest', '') DESC
+		SELECT b.batch_id, b.observed_at, COALESCE(b.raw_snapshot->'provenance'->>'digest', '')
+		FROM model_classification_batches b
+		WHERE b.account_id = $1 AND b.batch_id <> $2
+		ORDER BY b.observed_at DESC, COALESCE(b.raw_snapshot->'provenance'->>'digest', '') DESC,
+		         EXISTS (SELECT 1 FROM model_observation_events e WHERE e.batch_id = b.batch_id) DESC,
+		         b.id ASC
 		LIMIT 1
 	`, input.AccountID, batchID).Scan(&currentWinner.batchID, &currentWinner.observedAt, &currentWinner.digest)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -354,6 +356,11 @@ func rollbackDiscoveryProjection(
 		}
 		if err != nil {
 			return err
+		}
+		if current, existed := committedBefore[event.observation.modelID]; existed {
+			previous.classification = current.classification
+			previous.reason = current.reason
+			previous.resolvedRegistryID = current.resolvedRegistryID
 		}
 
 		if _, err := tx.ExecContext(ctx, `
