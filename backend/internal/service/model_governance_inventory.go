@@ -21,7 +21,7 @@ type InventoryItem struct {
 }
 
 type ModelGovernanceInventoryRepository interface {
-	List(ctx context.Context, cutoff7d, cutoff30d time.Time) ([]InventoryItem, error)
+	List(ctx context.Context, cutoff7d, cutoff30d, windowEnd time.Time) ([]InventoryItem, error)
 }
 
 type ModelGovernanceInventoryService struct {
@@ -34,6 +34,6 @@ func NewModelGovernanceInventoryService(repo ModelGovernanceInventoryRepository)
 }
 
 func (s *ModelGovernanceInventoryService) List(ctx context.Context) ([]InventoryItem, error) {
-	now := s.now().UTC()
-	return s.repo.List(ctx, now.Add(-7*24*time.Hour), now.Add(-30*24*time.Hour))
+	windowEnd := s.now().UTC()
+	return s.repo.List(ctx, windowEnd.Add(-7*24*time.Hour), windowEnd.Add(-30*24*time.Hour), windowEnd)
 }

@@ -33,8 +33,8 @@ func NewModelGovernanceInventoryRepository(db *sql.DB) service.ModelGovernanceIn
 	return &modelGovernanceInventoryRepository{db: db}
 }
 
-func (r *modelGovernanceInventoryRepository) List(ctx context.Context, cutoff7d, cutoff30d time.Time) ([]service.InventoryItem, error) {
-	rows, err := r.db.QueryContext(ctx, modelGovernanceInventoryQuery, cutoff7d.UTC(), cutoff30d.UTC())
+func (r *modelGovernanceInventoryRepository) List(ctx context.Context, cutoff7d, cutoff30d, windowEnd time.Time) ([]service.InventoryItem, error) {
+	rows, err := r.db.QueryContext(ctx, modelGovernanceInventoryQuery, cutoff7d.UTC(), cutoff30d.UTC(), windowEnd.UTC())
 	if err != nil {
 		return nil, fmt.Errorf("list model governance inventory: %w", err)
 	}
@@ -157,7 +157,7 @@ usage_rows AS (
            ul.api_key_id, ul.actual_cost, ul.settlement_currency, ul.created_at
     FROM usage_logs ul
     JOIN accounts a ON a.id = ul.account_id
-    WHERE ul.created_at >= $2
+    WHERE ul.created_at >= $2 AND ul.created_at < $3
 ),
 inventory_keys AS (
     SELECT account_id, platform, group_id, channel_id, upstream_model_id FROM account_mapping_models

@@ -359,7 +359,7 @@ func TestModelGovernanceInventoryRouteRequiresSignedGatewayAdminAssertionAndAudi
 
 type inventoryListerRouteStub struct{}
 
-func (inventoryListerRouteStub) List(context.Context, time.Time, time.Time) ([]service.InventoryItem, error) {
+func (inventoryListerRouteStub) List(context.Context, time.Time, time.Time, time.Time) ([]service.InventoryItem, error) {
 	return []service.InventoryItem{}, nil
 }
 
