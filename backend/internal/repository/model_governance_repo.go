@@ -21,12 +21,13 @@ type modelObservationRepository struct {
 }
 
 type storedModelObservation struct {
-	id             int64
-	modelID        string
-	classification string
-	reason         string
-	presence       string
-	missStreak     int
+	id                 int64
+	modelID            string
+	resolvedRegistryID sql.NullInt64
+	classification     string
+	reason             string
+	presence           string
+	missStreak         int
 }
 
 type discoveryProjectionWinner struct {
@@ -123,16 +124,23 @@ func (r *modelObservationRepository) RecordDiscovery(ctx context.Context, input 
 		return "", err
 	}
 	hasCurrentWinner := err == nil
+	// A strictly older batch is durable evidence only. Projection history is not
+	// retroactively replayed after a newer observation watermark has committed.
 	if hasCurrentWinner && (input.ObservedAt.Before(currentWinner.observedAt) ||
-		(input.ObservedAt.Equal(currentWinner.observedAt) && provenanceDigest < currentWinner.digest)) {
+		(input.ObservedAt.Equal(currentWinner.observedAt) && provenanceDigest <= currentWinner.digest)) {
 		if err = tx.Commit(); err != nil {
 			return "", err
 		}
 		return batchID, nil
 	}
 	replacesEqualWatermarkWinner := hasCurrentWinner && input.ObservedAt.Equal(currentWinner.observedAt) && provenanceDigest > currentWinner.digest
+	var committedBefore map[string]storedModelObservation
 	if replacesEqualWatermarkWinner {
-		if err = rollbackDiscoveryProjection(ctx, tx, currentWinner.batchID, batchID, input); err != nil {
+		committedBefore, err = lockModelObservations(ctx, tx, input.AccountID)
+		if err != nil {
+			return "", err
+		}
+		if err = rollbackDiscoveryProjection(ctx, tx, currentWinner.batchID, batchID, input, committedBefore); err != nil {
 			return "", err
 		}
 	}
@@ -150,30 +158,40 @@ func (r *modelObservationRepository) RecordDiscovery(ctx context.Context, input 
 
 		observation, exists := existing[modelID]
 		if !exists {
-			classification := "discovered"
-			reason := "awaiting_registry_classification"
+			classification, reason := "discovered", "awaiting_registry_classification"
+			var resolvedRegistryID sql.NullInt64
 			if input.AccountProvider == nil {
 				classification = "ignored"
 				reason = "unsupported_routing_platform"
 			}
+			if restored, restoreErr := loadRemovedAdminState(ctx, tx, input.AccountID, modelID); restoreErr != nil {
+				return "", restoreErr
+			} else if restored != nil {
+				classification = restored.classification
+				reason = restored.reason
+				resolvedRegistryID = restored.resolvedRegistryID
+			}
 			err = tx.QueryRowContext(ctx, `
 				INSERT INTO model_observations (
-					connection_id, account_id, upstream_model_id, classification,
+					connection_id, account_id, upstream_model_id, resolved_registry_id, classification,
 					classification_reason, upstream_presence, miss_streak,
 					first_seen_at, last_seen_at, raw_snapshot
 				)
-				VALUES ($1, $2, $3, $4, $5, 'present', 0, $6, $6, $7::jsonb)
+				VALUES ($1, $2, $3, $4, $5, $6, 'present', 0, $7, $7, $8::jsonb)
 				RETURNING id
-			`, input.ConnectionID, input.AccountID, modelID, classification, reason, input.ObservedAt.UTC(), string(persistedSnapshot)).Scan(&observation.id)
+			`, input.ConnectionID, input.AccountID, modelID, resolvedRegistryID, classification, reason,
+				input.ObservedAt.UTC(), string(persistedSnapshot)).Scan(&observation.id)
 			if err != nil {
 				return "", err
 			}
 			observation.classification = classification
 			observation.modelID = modelID
 			observation.reason = reason
+			observation.resolvedRegistryID = resolvedRegistryID
 			observation.presence = "present"
 			observation.missStreak = 0
-			if err = appendObservationEvent(ctx, tx, observation, batchID, projectionEventType("discovered", replacesEqualWatermarkWinner), "discovered", input); err != nil {
+			transition := replacementTransition(committedBefore, modelID, "discovered")
+			if err = appendObservationEvent(ctx, tx, observation, batchID, projectionEventType(transition, replacesEqualWatermarkWinner), transition, input); err != nil {
 				return "", err
 			}
 			continue
@@ -195,7 +213,8 @@ func (r *modelObservationRepository) RecordDiscovery(ctx context.Context, input 
 		if err != nil {
 			return "", err
 		}
-		if err = appendObservationEvent(ctx, tx, observation, batchID, projectionEventType(eventType, replacesEqualWatermarkWinner), eventType, input); err != nil {
+		transition := replacementTransition(committedBefore, modelID, eventType)
+		if err = appendObservationEvent(ctx, tx, observation, batchID, projectionEventType(transition, replacesEqualWatermarkWinner), transition, input); err != nil {
 			return "", err
 		}
 	}
@@ -220,7 +239,8 @@ func (r *modelObservationRepository) RecordDiscovery(ctx context.Context, input 
 		if err != nil {
 			return "", err
 		}
-		if err = appendObservationEvent(ctx, tx, observation, batchID, projectionEventType("missing", replacesEqualWatermarkWinner), "missing", input); err != nil {
+		transition := replacementTransition(committedBefore, modelID, "missing")
+		if err = appendObservationEvent(ctx, tx, observation, batchID, projectionEventType(transition, replacesEqualWatermarkWinner), transition, input); err != nil {
 			return "", err
 		}
 	}
@@ -240,6 +260,7 @@ func rollbackDiscoveryProjection(
 	supersededBatchID string,
 	replacementBatchID string,
 	input service.DiscoveryBatchInput,
+	committedBefore map[string]storedModelObservation,
 ) error {
 	seen := make(map[string]struct{}, len(input.ModelIDs))
 	for _, modelID := range input.ModelIDs {
@@ -287,9 +308,11 @@ func rollbackDiscoveryProjection(
 			continue
 		}
 		var previous storedModelObservation
+		var previousTransition string
 		err := tx.QueryRowContext(ctx, `
 			SELECT e.observation_id, e.upstream_model_id, e.classification,
-			       e.classification_reason, e.upstream_presence, e.miss_streak
+			       e.classification_reason, e.upstream_presence, e.miss_streak,
+			       COALESCE(e.payload->>'transition', '')
 			FROM model_observation_events e
 			JOIN model_classification_batches b ON b.batch_id = e.batch_id
 			WHERE e.account_id = $1 AND e.upstream_model_id = $2 AND b.observed_at < $3
@@ -297,15 +320,19 @@ func rollbackDiscoveryProjection(
 			LIMIT 1
 		`, input.AccountID, event.observation.modelID, input.ObservedAt.UTC()).Scan(
 			&previous.id, &previous.modelID, &previous.classification,
-			&previous.reason, &previous.presence, &previous.missStreak,
+			&previous.reason, &previous.presence, &previous.missStreak, &previousTransition,
 		)
+		if err == nil && previousTransition == "removed" {
+			err = sql.ErrNoRows
+		}
 		if errors.Is(err, sql.ErrNoRows) {
-			if _, remainsPresent := seen[event.observation.modelID]; !remainsPresent {
-				removed := event.observation
-				removed.presence = "missing"
-				if err := appendObservationEvent(ctx, tx, removed, replacementBatchID, "projection_replaced", "removed", input); err != nil {
-					return err
-				}
+			if _, remainsPresent := seen[event.observation.modelID]; remainsPresent {
+				continue
+			}
+			removed := committedBefore[event.observation.modelID]
+			removed.presence = "missing"
+			if err := appendObservationEvent(ctx, tx, removed, replacementBatchID, "projection_replaced", "removed", input); err != nil {
+				return err
 			}
 			if _, err := tx.ExecContext(ctx, `DELETE FROM model_observations WHERE id = $1`, event.observation.id); err != nil {
 				return err
@@ -340,6 +367,45 @@ func rollbackDiscoveryProjection(
 		}
 	}
 	return nil
+}
+
+func replacementTransition(committedBefore map[string]storedModelObservation, modelID, fallback string) string {
+	if committedBefore == nil {
+		return fallback
+	}
+	before, existed := committedBefore[modelID]
+	if !existed {
+		return "discovered"
+	}
+	if fallback != "missing" && before.presence == "missing" {
+		return "reappeared"
+	}
+	if fallback != "missing" {
+		return "observed"
+	}
+	return "missing"
+}
+
+func loadRemovedAdminState(ctx context.Context, tx *sql.Tx, accountID int64, modelID string) (*storedModelObservation, error) {
+	var restored storedModelObservation
+	err := tx.QueryRowContext(ctx, `
+		SELECT e.classification, e.classification_reason, mr.id
+		FROM model_observation_events e
+		LEFT JOIN model_registry mr
+		  ON mr.id = NULLIF(e.payload->>'resolved_registry_id', '')::bigint
+		WHERE e.account_id = $1 AND e.upstream_model_id = $2
+		  AND e.event_type = 'projection_replaced'
+		  AND e.payload->>'transition' = 'removed'
+		ORDER BY e.id DESC
+		LIMIT 1
+	`, accountID, modelID).Scan(&restored.classification, &restored.reason, &restored.resolvedRegistryID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &restored, nil
 }
 
 func projectionEventType(transition string, replacesEqualWatermarkWinner bool) string {
@@ -414,7 +480,7 @@ func validGovernanceProvider(provider service.GovernanceProvider) bool {
 
 func lockModelObservations(ctx context.Context, tx *sql.Tx, accountID int64) (map[string]storedModelObservation, error) {
 	rows, err := tx.QueryContext(ctx, `
-		SELECT id, upstream_model_id, classification, classification_reason,
+		SELECT id, upstream_model_id, resolved_registry_id, classification, classification_reason,
 		       upstream_presence, miss_streak
 		FROM model_observations
 		WHERE account_id = $1
@@ -432,6 +498,7 @@ func lockModelObservations(ctx context.Context, tx *sql.Tx, accountID int64) (ma
 		if err := rows.Scan(
 			&observation.id,
 			&modelID,
+			&observation.resolvedRegistryID,
 			&observation.classification,
 			&observation.reason,
 			&observation.presence,
@@ -464,6 +531,9 @@ func appendObservationEvent(
 	}
 	if eventType == "projection_replaced" {
 		payloadValues["transition"] = transition
+		if transition == "removed" && observation.resolvedRegistryID.Valid {
+			payloadValues["resolved_registry_id"] = observation.resolvedRegistryID.Int64
+		}
 	}
 	payload, err := json.Marshal(payloadValues)
 	if err != nil {
