@@ -115,6 +115,25 @@ func TestProjectInventoryAccountMappingsResolvesBedrockDefaultsForAccountRegion(
 	require.NotContains(t, projection.UpstreamModelIDs, "us.anthropic.claude-sonnet-4-5-20250929-v1:0")
 }
 
+func TestProjectInventoryAccountMappingsMatchesOAuthCompactForwardModel(t *testing.T) {
+	account := &Account{
+		ID:       14,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"compact_model_mapping": map[string]any{"public": " openai/gpt-5.4-high "},
+		},
+		Extra: map[string]any{"openai_compact_supported": true},
+	}
+
+	effectiveModel := resolveOpenAICompactForwardModel(account, "public")
+	projection := ProjectInventoryAccountMappings(account)
+
+	require.Equal(t, "openai/gpt-5.4-high", effectiveModel)
+	require.Equal(t, []string{effectiveModel}, projection.UpstreamModelIDs)
+	require.NotContains(t, projection.UpstreamModelIDs, "gpt-5.4")
+}
+
 func inventoryMappingValues(mapping map[string]string) []string {
 	seen := make(map[string]struct{}, len(mapping))
 	values := make([]string, 0, len(mapping))
