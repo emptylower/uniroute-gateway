@@ -2,7 +2,39 @@
 
 Date: 2026-08-20
 
-Status: **FINAL PASS**
+Status: **CHANGES REQUIRED**
+
+The prior committed-state **FINAL PASS is superseded** by a newly validated
+`P2-R3-002` contract violation. Text-model Responses inventory admitted API-key
+accounts with persisted `openai_responses_supported=false` by checking Chat
+Completions capability. No approved deviation exists, so the formal strict
+contract requires `OpenAIEndpointCapabilityResponses` for every OpenAI Responses
+projection. Runtime text `/responses` fallback through Chat Completions remains
+unchanged. The fix and all five review-document updates must be committed and a
+committed-state gate and independent review rerun. A fresh full gate has passed
+only against the current mutable-worktree overlay and is recorded below; it is
+not committed-state acceptance.
+
+## Current Mutable-Worktree Gate
+
+Fresh current-overlay evidence after the strict-contract `P2-R3-002` correction:
+
+- Focused config, migration, service, handler, admin, middleware, routes, and
+  unit selectors: **PASS**.
+- Default usage-inclusive integration selector: **PASS in 20.834s**.
+- PostgreSQL 14 formal integration selector: **PASS in 19.145s**.
+- Full `go test ./... -count=1`: **PASS**; `internal/service` completed in
+  **105.001s**.
+- `make generate`: **PASS**.
+- `make build`: **PASS**.
+- Runtime no-diff check: **PASS**.
+- Generated no-diff check: **PASS**.
+- `git diff --check`: **PASS**.
+- Production operations: **not performed**.
+
+This is mutable-worktree verification, not committed acceptance. Current status
+remains **CHANGES REQUIRED** pending commit and a committed-state gate and
+independent review.
 
 ## Scope
 
@@ -26,11 +58,13 @@ acceptance scope.
 
 ## Verdict
 
-The committed-state verdict is **FINAL PASS**. The technical range
+The current verdict is **CHANGES REQUIRED**. The historical technical range
 `cad5bc5606bfc059e2da91a54db9479f312b9dd2..557507a18ab31bcf410bc132fb2487cd189440b7`
-is accepted. A fresh independent committed-state review reported Critical 0,
-Important 0, Minor 0 and returned **FINAL PASS**. The remaining documentation
-update is administrative traceability and does not reopen technical acceptance.
+was accepted, and its independent committed-state review reported Critical 0,
+Important 0, Minor 0 and FINAL PASS, but those conclusions are now
+**superseded**. Re-acceptance is blocked on committing the strict-contract
+projection fix and review updates, then rerunning the committed-state gate and
+independent review.
 
 ## Finding Resolution
 
@@ -151,10 +185,10 @@ Status: **Accepted in committed range**
 
 ## Third-Review Resolution Matrix
 
-| Finding | Status and accepted committed-state resolution |
+| Finding | Historical resolution and current status |
 | --- | --- |
 | `P2-R3-001` | Resolved. Shared account-type-aware Anthropic resolution matches Messages forwarding: API-key mapping, the dedicated Service-account mapping path, and OAuth/SetupToken Claude normalization. `count_tokens` remains intentionally separate: API-key mapping, otherwise Claude normalization only. |
-| `P2-R3-002` | Resolved. Stable request-shape and endpoint gates cover embeddings, Responses text/image shape union, OpenAI Images, and positive Grok media eligibility. Transient runtime health is excluded. |
+| `P2-R3-002` | **Reopened.** The historical implementation incorrectly used Chat Completions capability for text Responses. Strict-contract correction requires Responses capability for all OpenAI Responses projections; committed-state re-acceptance remains due. |
 | `P2-R3-003` | Resolved. Grok media normalization precedes support and mapping; image and video text/image-input finite outcomes are represented. |
 | `P2-R3-004` | Resolved. Antigravity thinking applies only to Claude-compatible endpoints, not Gemini-native paths, with account-only/grouped/mixed/forced/composite parity. |
 | `P2-R3-005` | Resolved. All four append-only tables reject statement-level TRUNCATE; direct, `CASCADE`, multi-table, rerun, and PostgreSQL 14 cases pass. |
@@ -256,10 +290,11 @@ verified by focused resolver, forwarding, and inventory-projection tests instead
 
 ## Historical Current-Overlay Independent Technical Review
 
-A fresh independent scoped review of the current post-fixture mutable worktree
-reported Critical 0, Important 0, Minor 0 and returned **ACCEPTED**. All prior
-final-review endpoint/dimension and documentation findings were confirmed
-addressed. Its fresh evidence was:
+At that historical checkpoint, an independent scoped review of the then-current
+post-fixture mutable worktree reported Critical 0, Important 0, Minor 0 and
+returned **ACCEPTED**. It then considered all known final-review findings
+addressed; the later revalidation of `P2-R3-002` superseded that conclusion. Its
+historical evidence was:
 
 - Focused service selector: **PASS in 2.526s**.
 - Full `internal/service`: **PASS in 96.337s**.
@@ -268,14 +303,14 @@ addressed. Its fresh evidence was:
 - PostgreSQL 14 formal integration selector: **PASS in 8.005s**.
 - Diff and scheduler baseline checks: **PASS**.
 
-This focused review supplements rather than replaces the complete coordinator
-gate. The authoritative complete gate remains the run recorded above: default
-formal integration 13.956s, PostgreSQL 14 formal integration 12.367s, and full
-service 102.197s, with the remaining listed checks passing.
+At that historical checkpoint, this focused review supplemented rather than
+replaced the complete coordinator gate at 13.956s / 12.367s / service 102.197s.
+Both records are superseded for current-overlay status by the mutable-worktree
+gate at the top of this document.
 
 ## Final Committed-State Acceptance
 
-Final status: **FINAL PASS**.
+Historical final status: **FINAL PASS (superseded)**.
 
 - Formal base: `cad5bc5606bfc059e2da91a54db9479f312b9dd2`.
 - Accepted implementation HEAD: `557507a18ab31bcf410bc132fb2487cd189440b7`.
@@ -294,8 +329,7 @@ Final status: **FINAL PASS**.
   generation, and diff checks **PASS**; all five review documents tracked.
 - No production migration, deployment, or production operation was performed.
 
-Reviewer verdict: **FINAL PASS**. The technical range is accepted. This
-recording review is administrative traceability only. The SHA of a later
-documentation-only commit, if one is created, is the final documentation HEAD
-and may be filled in after that commit; it is not a self-referential prerequisite
-for this acceptance.
+Historical reviewer verdict: **FINAL PASS (superseded)**. The newly validated
+`P2-R3-002` contract conflict reopens acceptance as **CHANGES REQUIRED**. Runtime
+fallback remains unchanged; commit, committed-state gate, and independent review
+remain required before a new final verdict.

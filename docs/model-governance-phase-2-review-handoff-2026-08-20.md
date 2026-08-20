@@ -2,7 +2,37 @@
 
 日期：2026-08-20
 
-状态：**FINAL PASS；accepted implementation range 已提交并通过独立审查**
+状态：**CHANGES REQUIRED**
+
+此前 committed-state **FINAL PASS 已被 superseded**。新验证的 `P2-R3-002`
+契约冲突表明：text Responses inventory 以 Chat Completions capability 代替
+Responses capability，从而错误纳入 persisted
+`openai_responses_supported=false` 的 API-key account；不存在获批的 plan
+deviation。严格契约要求所有 OpenAI Responses projection 均检查
+`OpenAIEndpointCapabilityResponses`，不区分 request shape。runtime text
+`/responses` 经 Chat Completions fallback 的行为保持不变。当前修复与五份 review
+docs 尚需 commit，并需重新执行 committed-state gate 和 independent review；本文
+记录的 fresh full gate 仅针对当前 mutable-worktree overlay，不构成
+committed-state acceptance。
+
+## 当前 mutable-worktree gate
+
+strict-contract `P2-R3-002` 修复后的 fresh current-overlay evidence：
+
+- focused config、migration、service、handler、admin、middleware、routes、unit
+  selectors：**PASS**。
+- default usage-inclusive integration selector：**PASS 20.834s**。
+- PostgreSQL 14 formal integration selector：**PASS 19.145s**。
+- full `go test ./... -count=1`：**PASS**，`internal/service` 105.001s。
+- `make generate`：**PASS**。
+- `make build`：**PASS**。
+- runtime no-diff：**PASS**。
+- generated no-diff：**PASS**。
+- `git diff --check`：**PASS**。
+- production ops：**未执行**。
+
+以上仅为 mutable-worktree verification。当前总体状态继续为 **CHANGES
+REQUIRED**，仍需 commit 后重跑 committed-state gate 并完成 independent review。
 
 ## 1. 文档用途
 
@@ -407,7 +437,8 @@ git diff --binary fb28063969782037ec7f5a9e2200bc73ecfc7f3a -- backend | shasum -
 
 `P2-R3-001` 至 `P2-R3-008` 已在当前工作区解决：Anthropic resolver 按账户
 类型匹配 Messages forwarding，`count_tokens` 保持独立边界；稳定 endpoint/
-request-shape capability、Grok media normalization、Claude-compatible
+account capability（其中每个 OpenAI Responses witness，包括 text，均要求
+`OpenAIEndpointCapabilityResponses`）、Grok media normalization、Claude-compatible
 Antigravity thinking、四张 append-only 表的 statement-level TRUNCATE guard、
 detached cyber target evidence、dashboard/stats baseline attribution，以及
 `AFTER INSERT` incarnation ledger 均有对应回归覆盖。
@@ -422,16 +453,19 @@ validation，不弱化生产校验。
 全部 PASS；default usage-inclusive formal integration PASS 13.956s；
 PostgreSQL 14 formal integration PASS 12.367s；`go test ./... -count=1` PASS，
 `internal/service` 102.197s；`make generate`、`make build`、`git diff --check`
-均 PASS。未执行生产
-migration 或 deploy。
+均 PASS。该段是已 superseded 的历史 current-overlay evidence；当前 gate 以文档
+开头记录的 20.834s / 19.145s / service 105.001s 为准。未执行生产 migration 或
+deploy。
 
-当前 post-fixture mutable worktree 已完成 fresh independent scoped review：
-结论 **ACCEPTED**，Critical 0、Important 0、Minor 0；所有先前 final-review
-endpoint/dimension 与文档发现均已解决。reviewer fresh focused service PASS
+在该历史 post-fixture mutable-worktree 检查点，independent scoped review 结论为
+**ACCEPTED**，Critical 0、Important 0、Minor 0；当时认为所有已知 final-review
+发现均已解决，但后续重新验证的 `P2-R3-002` 已 supersede 该结论。reviewer
+focused service PASS
 2.526s、full service PASS 96.337s、focused DB PASS 4.114s、default formal
 integration PASS 9.203s、PG14 formal integration PASS 8.005s，diff 与 scheduler
-baseline checks PASS。这组 scoped evidence 不替代上方 authoritative complete
-coordinator gate 的 13.956s / 12.367s / service 102.197s。无限制 repository
+baseline checks PASS。在该历史检查点，这组 scoped evidence 不替代 complete
+coordinator gate 的 13.956s / 12.367s / service 102.197s；两组旧 evidence 均已由
+文档开头的当前 mutable-worktree gate supersede。无限制 repository
 integration 命令仍有 section 16 之外的 API-key `routing_mode` fixture、
 usage-billing wallet currency fixture、shared-row group-count 失败；不将其写成
 通过，也不在本交接中判定为本任务回归。
@@ -452,7 +486,7 @@ integration selector 的当时结果已记录在上方，当时状态仍为 **CH
 
 ## 13. 最终 committed-state acceptance
 
-最终结论：**FINAL PASS**。
+历史最终结论：**FINAL PASS（已 superseded）**。
 
 - formal base：`cad5bc5606bfc059e2da91a54db9479f312b9dd2`。
 - accepted implementation HEAD：`557507a18ab31bcf410bc132fb2487cd189440b7`。
@@ -468,7 +502,8 @@ integration selector 的当时结果已记录在上方，当时状态仍为 **CH
   `internal/service` 105.369s；build/generate/diff checks PASS；五份文档均 tracked。
 - 未执行任何 production ops。
 
-reviewer verdict 为 **FINAL PASS**，技术 range 已接受；本次 recording review
-仅用于 administrative traceability。若之后创建 documentation-only commit，
-其 SHA 即 final docs HEAD，可在 commit 后按需补填，不构成要求文档预知自身 SHA
-的自指前置条件。
+历史 reviewer verdict 为 **FINAL PASS（已 superseded）**。新验证的
+`P2-R3-002` contract-vs-runtime 冲突不存在 approved deviation，inventory 必须
+按 strict contract 对所有 Responses shape 使用 Responses capability；runtime
+fallback 保持不变。当前状态为 **CHANGES REQUIRED**，直至代码和五份文档完成
+commit，并重新通过 committed-state gate 与 independent review。

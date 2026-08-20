@@ -2,7 +2,38 @@
 
 Date: 2026-08-19
 
-Status: **HISTORICAL; SUPERSEDED BY THIRD REVIEW**
+Status: **CHANGES REQUIRED; SECOND-REVIEW BODY IS HISTORICAL**
+
+The later FINAL PASS is **superseded** by the newly validated `P2-R3-002`
+contract violation. No approved deviation allowed text Responses inventory to
+substitute Chat Completions capability for persisted Responses capability.
+Strict-contract resolution requires `OpenAIEndpointCapabilityResponses` for all
+OpenAI Responses projections while leaving runtime text `/responses` fallback
+unchanged. The fix and five review documents require commit, committed-state
+gate, and independent review rerun. A fresh full gate passed only against the
+current mutable-worktree overlay and is recorded below; it is not committed-state
+acceptance.
+
+## Current Mutable-Worktree Gate
+
+Fresh current-overlay evidence after the strict-contract `P2-R3-002` correction:
+
+- Focused config, migration, service, handler, admin, middleware, routes, and
+  unit selectors: **PASS**.
+- Default usage-inclusive integration selector: **PASS in 20.834s**.
+- PostgreSQL 14 formal integration selector: **PASS in 19.145s**.
+- Full `go test ./... -count=1`: **PASS**; `internal/service` completed in
+  **105.001s**.
+- `make generate`: **PASS**.
+- `make build`: **PASS**.
+- Runtime no-diff check: **PASS**.
+- Generated no-diff check: **PASS**.
+- `git diff --check`: **PASS**.
+- Production operations: **not performed**.
+
+This gate is mutable-worktree evidence only. Current overall status remains
+**CHANGES REQUIRED** pending commit and a committed-state gate and independent
+review.
 
 ## 1. Purpose
 
@@ -50,18 +81,19 @@ gate against the resulting committed review range. The current superseding
 status is the pointer below.
 
 Current-status pointer: a third review subsequently raised `P2-R3-001` through
-`P2-R3-008`. Those findings and all later final-review endpoint/dimension and
-documentation findings are resolved in the accepted committed range
-`cad5bc5606bfc059e2da91a54db9479f312b9dd2..557507a18ab31bcf410bc132fb2487cd189440b7`.
-The committed-state coordinator gate passed, and an independent review returned
-**FINAL PASS**, Critical 0, Important 0, Minor 0. See the third-review document
-and acceptance report; this historical body is not the current acceptance
-verdict.
+`P2-R3-008`. The historical accepted committed range recorded those findings as
+resolved, and its coordinator gate and independent review returned FINAL PASS,
+Critical 0, Important 0, Minor 0. That acceptance is **superseded** because
+`P2-R3-002` remained contract-invalid. The strict-contract correction is now
+technically fixed only in the mutable overlay. See the third-review document and
+acceptance report for current **CHANGES REQUIRED** status pending commit,
+committed-state gate, and independent review.
 
-The remediation resolves `P2-R2-001` through `P2-R2-007`. A final independent
-technical review found no Critical, Important, or Minor implementation findings,
-and the complete fresh gate in Section 13 passed on 2026-08-20. The remaining
-blocker is mechanical traceability, not an open code defect.
+Historically, the remediation resolved `P2-R2-001` through `P2-R2-007`, and the
+then-current independent technical review and gate passed. That statement does
+not close reopened `P2-R3-002`: its correction exists only in the mutable overlay.
+The current blockers are commit plus committed-state gate and independent review,
+not merely mechanical traceability.
 
 At the time of the second review, the previous remediation had fixed the
 half-open usage-window behavior, but runtime inventory remained incomplete or
@@ -808,14 +840,17 @@ migration tests must use disposable databases only.
 - [x] Inventory remains signed, audited through the accepted mechanism, and
       read-only.
 - [x] Migration 200 was tested only against disposable PostgreSQL.
-- [x] Full tests, PostgreSQL 14 integration, generation, build, and diff checks
-      pass freshly.
-- [x] All intended code and generated changes are committed before merge.
-- [x] The remediation reports state the exact committed review range and
-      separately identify the user-owned uncommitted `.gitignore` change.
+- [x] Historical R2 full tests, PostgreSQL 14 integration, generation, build, and
+      diff checks passed for the superseded accepted range.
+- [ ] The reopened `P2-R3-002` correction and review-document updates are
+      committed before merge.
+- [ ] The committed-state gate and independent review pass against that new
+      committed range, with the user-owned `.gitignore` separately excluded.
 
-This checklist is now satisfied against the accepted committed range. The
-preceding finding bodies and mutable-worktree checkpoints remain historical.
+The historical R2 items remain satisfied, but the current overall checklist is
+not complete. Reopened `P2-R3-002` is technically fixed only in the mutable
+overlay; Phase 2 remains **CHANGES REQUIRED** pending commit, committed-state
+gate, and independent review.
 
 ## 15. 2026-08-20 Re-Acceptance Addendum
 
@@ -844,23 +879,26 @@ Resolved implementation properties include:
 - Usage windows and target-platform evidence are isolated from future rows and
   from quota/billing behavior.
 
-Latest coordinator current-overlay gate result: focused config, migration,
+Historical coordinator current-overlay gate result: focused config, migration,
 handlers, routes, and unit selectors passed. The default usage-inclusive
 formal integration selector passed in 13.956s and the PostgreSQL 14 formal
 integration selector passed in 12.367s. `go test ./... -count=1` passed with
 `internal/service` completing in 102.197s. `make generate`, `make build`, and
-`git diff --check` passed. No production migration or deployment occurred.
+`git diff --check` passed. This evidence is superseded by the current gate at the
+top of this document. No production migration or deployment occurred.
 
-Latest current-overlay independent scoped technical verdict: **ACCEPTED**, with
-Critical 0, Important 0, Minor 0. Focused service, full service, focused database,
+Historical current-overlay independent scoped technical verdict: **ACCEPTED**,
+with Critical 0, Important 0, Minor 0. It predated the `P2-R3-002` revalidation
+and is superseded for current status. Focused service, full service, focused database,
 default formal integration, and PostgreSQL 14 formal integration passed in
 2.526s, 96.337s, 4.114s, 9.203s, and 8.005s; diff and scheduler baseline checks
-passed. The complete coordinator gate remains authoritative at 13.956s /
-12.367s / service 102.197s.
+passed. At that historical checkpoint, the complete coordinator gate was
+13.956s / 12.367s / service 102.197s. Both records are superseded for current
+overlay status by the gate at the top of this document.
 
 ### Final Committed-State Pointer
 
-Final status: **FINAL PASS**. Formal base is
+Historical final status: **FINAL PASS (superseded)**. Formal base is
 `cad5bc5606bfc059e2da91a54db9479f312b9dd2`; accepted implementation HEAD is
 `557507a18ab31bcf410bc132fb2487cd189440b7`; and the accepted range is
 `cad5bc5606bfc059e2da91a54db9479f312b9dd2..557507a18ab31bcf410bc132fb2487cd189440b7`.
@@ -877,6 +915,7 @@ Important 0, Minor 0 and passed default integration in 17.162s, PostgreSQL 14 in
 checks passed. All five documents are tracked, and no production operation was
 performed.
 
-The technical range is accepted; this addendum is administrative traceability.
-A later documentation-only commit SHA, if created, is the final documentation
-HEAD and may be recorded after commit rather than required self-referentially.
+That technical acceptance and administrative-only characterization are
+historical and superseded. Current status is **CHANGES REQUIRED** until the
+strict-contract projection fix and review updates are committed and the
+committed-state gate and independent review are rerun.

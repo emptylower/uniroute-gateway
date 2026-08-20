@@ -248,11 +248,7 @@ func inventoryEndpointModelVariants(account *Account, candidate InventoryRuntime
 			return nil
 		}
 	case CompositeRouteEndpointResponses:
-		requiredCapability := OpenAIEndpointCapabilityChatCompletions
-		if isOpenAIImageGenerationModel(model) {
-			requiredCapability = OpenAIEndpointCapabilityResponses
-		}
-		if !accountSupportsOpenAICapabilities(account, requiredCapability, "") {
+		if !accountSupportsOpenAICapabilities(account, OpenAIEndpointCapabilityResponses, "") {
 			return nil
 		}
 	case CompositeRouteEndpointImages:

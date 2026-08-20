@@ -2,7 +2,20 @@
 
 Date: 2026-08-20
 
-Status: **FINAL PASS**
+Status: **CHANGES REQUIRED**
+
+The prior committed-state **FINAL PASS is superseded**. A newly validated
+`P2-R3-002` contract violation showed that text-model Responses projection used
+the Chat Completions capability and therefore included API-key accounts with
+persisted `openai_responses_supported=false`. No approved plan deviation permits
+that behavior. The strict contract governs inventory acceptance: every OpenAI
+Responses projection requires `OpenAIEndpointCapabilityResponses`, independent
+of request shape. Runtime text `/responses` fallback through Chat Completions is
+intentionally unchanged. Current status remains **CHANGES REQUIRED** until this
+fix and the five updated review documents are committed and the committed-state
+gate and independent review are rerun. A fresh full gate passed only against the
+current mutable-worktree overlay and is recorded in Section 16.1; it is not
+committed-state acceptance.
 
 ## 1. Purpose
 
@@ -13,9 +26,9 @@ Model Governance Phase 2. It verifies the fixes described in:
 - `docs/model-governance-phase-2-review-handoff-2026-08-20.md`
 - `docs/model-governance-phase-2-acceptance-report.md`
 
-This document now records final committed-state acceptance. Its finding bodies
-retain the historical third-review defects and remediation requirements; the
-current verdict is the committed-state decision in Sections 3 and 17.
+This document retains the historical committed-state acceptance and third-review
+defects, but that acceptance is now superseded by the current status above. The
+current verdict is the reopened decision in Sections 3 and 17.
 
 The fixing agent must treat the formal plan as authoritative:
 
@@ -37,11 +50,18 @@ acceptance was subsequently performed against the committed range above.
 
 ## 3. Verdict
 
-**Phase 2 is FINAL PASS.**
+**Phase 2 is CHANGES REQUIRED.**
 
-`P2-R3-001` through `P2-R3-008` are resolved in the accepted committed range.
-The committed-state coordinator gate and independent review both passed, so the
-earlier technical-overlay acceptance is now final committed-state acceptance.
+The historical FINAL PASS for accepted HEAD `557507a18` is superseded by the
+newly validated `P2-R3-002` contract violation. The projection fix has scoped
+test evidence, but it is uncommitted and has not received a fresh committed-state
+gate or independent review.
+
+Historically, `P2-R3-001` through `P2-R3-008` were recorded as resolved in the
+accepted committed range, and the committed-state coordinator gate and
+independent review passed. That historical acceptance is superseded because
+`P2-R3-002` did not actually satisfy its explicit Responses-disabled regression
+contract.
 
 The prior remediation resolved the originally reported defects in these areas:
 
@@ -57,10 +77,8 @@ The remediation restored runtime parity for the finite inventory, completed the
 database evidence boundary, preserved detached target-platform evidence, and
 kept existing dashboard/statistics attribution at the `fb280639` baseline.
 
-Final prerequisites are satisfied: the intended implementation and five review
-documents were committed at `557507a18ab31bcf410bc132fb2487cd189440b7`, with
-the user-owned `.gitignore` excluded; the committed-state gate passed; and the
-independent committed-state review returned FINAL PASS with no findings.
+Historical prerequisites were recorded as satisfied at `557507a18`, with the
+user-owned `.gitignore` excluded. They do not satisfy the current reopened gate.
 
 ## 4. Required Fixes
 
@@ -159,7 +177,7 @@ Severity: High
 
 Priority: P1 before Phase 2 acceptance
 
-Status: **Accepted in committed range**
+Status: **Reopened; fix pending committed-state acceptance**
 
 #### Contract
 
@@ -220,6 +238,18 @@ platform check even though runtime scheduling cannot select it for embeddings.
 - No projected endpoint dimension contains an account that runtime cannot select
   because of stable endpoint capability state.
 - Platform compatibility and account capability are both required.
+
+#### 2026-08-20 Revalidation
+
+The accepted implementation contradicted the required regression at line 212:
+text Responses inventory selected `OpenAIEndpointCapabilityChatCompletions`, so
+a persisted Responses-disabled API-key remained projected. Runtime text
+`/responses` can genuinely fall back through Chat Completions, but no approved
+plan deviation changed the inventory contract. Strict-contract resolution keeps
+that runtime behavior unchanged and requires
+`OpenAIEndpointCapabilityResponses` for all OpenAI Responses projections,
+including text models. Focused RED/GREEN and neighboring service tests cover the
+correction; commit plus committed-state gate and independent review remain due.
 
 ### P2-R3-003: Grok Media Normalization Is Missing Before Mapping
 
@@ -680,7 +710,7 @@ The fixing agent should preserve these behaviors and avoid unnecessary rewrites.
 | Finding | Current-worktree resolution |
 | --- | --- |
 | `P2-R3-001` | A shared account-type-aware Anthropic resolver now matches Messages forwarding. API-key accounts apply model mapping; Service, OAuth, and SetupToken paths apply their runtime behavior, including Claude normalization where applicable. `count_tokens` intentionally remains separate: API-key mapping is applied, while other account types receive Claude normalization only. |
-| `P2-R3-002` | Projection applies stable request-shape and endpoint capabilities for embeddings, Responses text/image shape union, OpenAI Images, and positive Grok media eligibility. Cooldown, quota, overload, and other transient state are not gates. |
+| `P2-R3-002` | Projection applies stable endpoint/account capabilities for embeddings, OpenAI Images, and positive Grok media eligibility. Every OpenAI Responses witness, including text, requires `OpenAIEndpointCapabilityResponses`. Cooldown, quota, overload, and other transient state are not gates. |
 | `P2-R3-003` | Grok media aliases normalize before support checks and account mapping. Finite projection covers image generation/edit plus video text-only and image-input outcomes. |
 | `P2-R3-004` | Antigravity thinking expansion is limited to Claude-compatible endpoints and is absent from Gemini-native paths. Account-only, grouped, mixed, forced, and composite dimensions use the same complete transform chain. |
 | `P2-R3-005` | Statement-level `BEFORE TRUNCATE` guards protect all four append-only tables. Disposable default and PostgreSQL 14 tests cover direct, `CASCADE`, multi-table, row preservation, and migration-rerun behavior. |
@@ -920,7 +950,8 @@ Avoid tests that use the projector itself as the only runtime oracle.
 ## 15. Re-Acceptance Checklist
 
 - [x] `P2-R3-001` Anthropic account-type forwarding parity is fixed.
-- [x] `P2-R3-002` stable endpoint account capabilities are applied.
+- [ ] `P2-R3-002` strict Responses endpoint account capability is applied in a
+      committed range and re-accepted.
 - [x] `P2-R3-003` Grok media normalization and mapping order match runtime.
 - [x] `P2-R3-004` Antigravity thinking is included only in runtime-compatible dimensions.
 - [x] `P2-R3-005` all append-only evidence tables reject TRUNCATE.
@@ -936,11 +967,14 @@ Avoid tests that use the projector itself as the only runtime oracle.
 - [x] No governance evidence changes runtime routing, scheduling, billing, quota,
       or rate limiting.
 - [x] Migration 200 was tested only on disposable PostgreSQL.
-- [x] Required default and PostgreSQL 14 integration selectors pass.
-- [x] Full Go suite, generation, build, and diff checks pass.
+- [ ] Required default and PostgreSQL 14 integration selectors pass on the new
+      committed range.
+- [ ] Full Go suite, generation, build, and diff checks pass on the new committed
+      range.
 - [x] Owner-approved deviations exist in tracked repository history.
-- [x] All intended implementation changes are committed and the SHA is recorded.
-- [x] Final review is performed against the committed range.
+- [ ] All intended implementation and review-document changes are committed and
+      the SHA is recorded.
+- [ ] Final review is performed against the new committed range.
 
 ## 16. Required Re-Verification Gate
 
@@ -986,33 +1020,41 @@ git status --short --branch
 git status --short --ignored
 ```
 
-The following subsection is retained as historical current-overlay evidence.
-Final committed-state evidence is recorded in Section 17.
+The following subsection records the latest mutable-worktree gate. Historical
+committed-state evidence is retained in Section 17 but is superseded and does not
+accept the current overlay.
 
 ### 16.1 Fresh Current-Overlay Outcome
 
-The coordinator reran this gate from `backend/` on 2026-08-20 against HEAD
-`fb28063969782037ec7f5a9e2200bc73ecfc7f3a` plus the complete uncommitted
-overlay:
+The coordinator reran this gate from `backend/` on 2026-08-20 against the current
+mutable-worktree overlay containing the strict-contract `P2-R3-002` correction:
 
-- Focused config, migration, handlers, routes, and unit selectors: **PASS**.
-- Default usage-inclusive formal integration selector: **PASS in 13.956s**.
-- PostgreSQL 14 formal integration selector: **PASS in 12.367s**.
-- `go test ./... -count=1`: **PASS**; `internal/service` completed in 102.197s.
+- Focused config, migration, service, handler, admin, middleware, routes, and
+  unit selectors: **PASS**.
+- Default usage-inclusive formal integration selector: **PASS in 20.834s**.
+- PostgreSQL 14 formal integration selector: **PASS in 19.145s**.
+- `go test ./... -count=1`: **PASS**; `internal/service` completed in 105.001s.
 - `make generate`: **PASS**.
 - `make build`: **PASS**.
+- Runtime no-diff check: **PASS**.
+- Generated no-diff check: **PASS**.
 - `git diff --check`: **PASS**.
-- Production migration/deploy: **not performed**.
+- Production operations: **not performed**.
 
-A fresh independent scoped review of the current post-fixture mutable worktree
-reported Critical 0, Important 0, Minor 0 and returned **ACCEPTED**. It confirmed
-that all prior final-review endpoint/dimension and documentation findings are
-addressed. Fresh focused service, full service, focused database, default formal
+This is mutable-worktree evidence only. Current status remains **CHANGES
+REQUIRED** pending commit, committed-state gate, and independent review.
+
+At that historical checkpoint, an independent scoped review of the then-current
+post-fixture mutable worktree reported Critical 0, Important 0, Minor 0 and
+returned **ACCEPTED**. It then considered all known final-review findings
+addressed; the later `P2-R3-002` revalidation superseded that conclusion.
+Historical focused service, full service, focused database, default formal
 integration, and PostgreSQL 14 formal integration checks passed in 2.526s,
 96.337s, 4.114s, 9.203s, and 8.005s respectively; diff and scheduler baseline
-checks also passed. This scoped evidence supplements the authoritative complete
-coordinator gate above and does not replace its 13.956s / 12.367s / 102.197s
-results.
+checks also passed. At that historical checkpoint, this scoped evidence
+supplemented rather than replaced the complete coordinator gate at 13.956s /
+12.367s / 102.197s. Both records are superseded for current-overlay status by
+the gate above.
 
 The unrestricted command
 `go test -tags=integration ./internal/repository -count=1` is not a Section 16
@@ -1023,7 +1065,17 @@ classified here as task regressions.
 
 ## 17. Final Review Decision
 
-Current verdict: **FINAL PASS**.
+Current verdict: **CHANGES REQUIRED**.
+
+The FINAL PASS recorded below is historical evidence for accepted HEAD
+`557507a18` and is **superseded**. The newly validated `P2-R3-002` conflict had no
+approved deviation: inventory acceptance must enforce Responses capability for
+all OpenAI Responses request shapes even though runtime text `/responses`
+fallback through Chat Completions remains unchanged. The projection correction
+and review-document updates must be committed, then the committed-state gate and
+independent review must be rerun before FINAL PASS can be reconsidered. The fresh
+full gate in Section 16.1 applies only to the mutable overlay and is not
+committed-state acceptance.
 
 - Formal base: `cad5bc5606bfc059e2da91a54db9479f312b9dd2`.
 - Accepted implementation HEAD: `557507a18ab31bcf410bc132fb2487cd189440b7`.
@@ -1041,10 +1093,9 @@ Current verdict: **FINAL PASS**.
   review documents tracked.
 - No production operation was performed.
 
-The technical range is accepted. This recording review is administrative
-traceability. If a documentation-only follow-up commit is created, its SHA is
-the final documentation HEAD and may be added afterward; acceptance does not
-require the document to predict its own commit SHA.
+Historical outcome, now superseded: the technical range was accepted and this
+recording review was administrative traceability. That conclusion no longer
+describes current acceptance status.
 
 Round 1 integration follow-up preserves provider-specific finite reachability
 without restoring the account-only final-model shortcut: eligible OpenAI

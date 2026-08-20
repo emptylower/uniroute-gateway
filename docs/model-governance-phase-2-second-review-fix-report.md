@@ -2,6 +2,39 @@
 
 Date: 2026-08-19
 
+Current status: **CHANGES REQUIRED**
+
+The later committed-state FINAL PASS is **superseded** by a newly validated
+`P2-R3-002` contract violation. Text Responses projection used Chat Completions
+capability and admitted persisted Responses-disabled API-key accounts without an
+approved plan deviation. The strict contract requires
+`OpenAIEndpointCapabilityResponses` for all OpenAI Responses projections;
+runtime text `/responses` fallback remains unchanged. The correction and all
+five review updates require commit, committed-state gate, and independent review
+rerun. A fresh full gate passed only against the current mutable-worktree overlay
+and is recorded below; it is not committed-state acceptance.
+
+## Current Mutable-Worktree Gate
+
+Fresh current-overlay evidence after the strict-contract `P2-R3-002` correction:
+
+- Focused config, migration, service, handler, admin, middleware, routes, and
+  unit selectors: **PASS**.
+- Default usage-inclusive integration selector: **PASS in 20.834s**.
+- PostgreSQL 14 formal integration selector: **PASS in 19.145s**.
+- Full `go test ./... -count=1`: **PASS**; `internal/service` completed in
+  **105.001s**.
+- `make generate`: **PASS**.
+- `make build`: **PASS**.
+- Runtime no-diff check: **PASS**.
+- Generated no-diff check: **PASS**.
+- `git diff --check`: **PASS**.
+- Production operations: **not performed**.
+
+This evidence applies to the mutable overlay only. Overall status remains
+**CHANGES REQUIRED** pending commit, committed-state gate, and independent
+review.
+
 Scope: `P2-R2-003`, `P2-R2-004`, `P2-R2-005`, and owner-approved
 `P2-R2-006`. This ignored working-evidence report does not modify the Phase 2
 acceptance report or the second-review source.
@@ -1564,9 +1597,10 @@ The third review identified eight remaining gaps in the mutable overlay:
   API-key accounts map; other account types follow Claude normalization where
   runtime does. `count_tokens` intentionally uses its separate API-key-map versus
   non-API-key-normalize contract.
-- Stable endpoint/request-shape gates cover embeddings, Responses text/image
-  union, OpenAI Images, and positive Grok media eligibility without transient
-  cooldown/quota/overload gates.
+- Stable endpoint/account gates cover embeddings, OpenAI Images, and positive
+  Grok media eligibility without transient cooldown/quota/overload gates. Every
+  OpenAI Responses witness, including text, requires
+  `OpenAIEndpointCapabilityResponses`.
 - Grok image and video text/image-input outcomes normalize before support and
   mapping.
 - Antigravity thinking is restricted to Claude-compatible endpoints and is
@@ -1624,10 +1658,10 @@ and regional Bedrock inventory rows while preserving endpoint-specific Anthropic
 resolution, Antigravity `count_tokens` rejection, and Gemini-target thinking
 exclusion.
 
-A fresh independent scoped review of the current post-fixture mutable worktree
-reported Critical 0, Important 0, Minor 0 and returned **ACCEPTED**. It confirmed
-that all prior final-review endpoint/dimension and documentation findings are
-addressed.
+At that historical checkpoint, an independent scoped review of the then-current
+post-fixture mutable worktree reported Critical 0, Important 0, Minor 0 and
+returned **ACCEPTED**. It then considered all known final-review findings
+addressed; the later `P2-R3-002` revalidation superseded that conclusion.
 
 ### Historical Latest Coordinator Current-Overlay Gate
 
@@ -1643,9 +1677,10 @@ account under an Anthropic target, in addition to the provider-specific
 exclusions already recorded above. The fresh reviewer focused service, full
 service, focused database, default formal integration, and PostgreSQL 14 formal
 integration checks passed in 2.526s, 96.337s, 4.114s, 9.203s, and 8.005s;
-diff and scheduler baseline checks passed. This does not replace the complete
-coordinator gate above, which remains authoritative at 13.956s / 12.367s /
-service 102.197s.
+diff and scheduler baseline checks passed. At that historical checkpoint this did
+not replace the complete coordinator gate at 13.956s / 12.367s / service
+102.197s. Both old records are superseded for current-overlay status by the gate
+at the top of this document.
 
 At that historical checkpoint, mutable-worktree technical status was
 **ACCEPTED**, while final merge status remained **BLOCKED / CHANGES REQUIRED**
@@ -1662,7 +1697,7 @@ task regressions. No commit had been created at that checkpoint.
 
 ## Final Committed-State Acceptance Addendum
 
-Final status: **FINAL PASS**.
+Historical final status: **FINAL PASS (superseded)**.
 
 - Formal base: `cad5bc5606bfc059e2da91a54db9479f312b9dd2`.
 - Accepted implementation HEAD: `557507a18ab31bcf410bc132fb2487cd189440b7`.
@@ -1680,7 +1715,7 @@ Final status: **FINAL PASS**.
   review documents tracked.
 - No production operation was performed.
 
-Reviewer verdict: **FINAL PASS**. The technical range is accepted, and this
-recording review is administrative traceability. If these documentation updates
-are committed later, that commit SHA is the final documentation HEAD and may be
-recorded after commit; no impossible self-referential SHA is required.
+Historical reviewer verdict: **FINAL PASS (superseded)**. Current acceptance is
+**CHANGES REQUIRED** because the newly validated `P2-R3-002` conflict lacked an
+approved deviation. The strict-contract projection fix leaves runtime fallback
+unchanged. Commit plus committed-state gate and independent review remain due.

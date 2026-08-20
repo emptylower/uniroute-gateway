@@ -992,8 +992,22 @@ func TestProjectInventoryRuntimeDimensionsUsesStableEndpointCapabilities(t *test
 	}, Extra: map[string]any{"openai_responses_supported": false}}
 	require.True(t, accountSupportsOpenAICapabilities(&responsesDisabled, OpenAIEndpointCapabilityChatCompletions, ""))
 	require.False(t, accountSupportsOpenAICapabilities(&responsesDisabled, OpenAIEndpointCapabilityResponses, ""))
-	require.Equal(t, []string{"gpt-text-final"}, project(responsesDisabled, CompositeRouteEndpointResponses, "gpt-text"),
-		"Responses-disabled accounts remain reachable through the text chat-compatible path")
+	require.Nil(t, project(responsesDisabled, CompositeRouteEndpointResponses, "gpt-text"),
+		"persisted Responses-disabled accounts are excluded from the Responses inventory")
+	require.Equal(t, []string{"gpt-text-final"}, project(responsesDisabled, CompositeRouteEndpointChatCompletions, "gpt-text"),
+		"the same account remains reachable in the Chat Completions inventory")
+
+	responsesUnknown := responsesDisabled
+	responsesUnknown.ID = 1309
+	responsesUnknown.Extra = nil
+	require.True(t, accountSupportsOpenAICapabilities(&responsesUnknown, OpenAIEndpointCapabilityResponses, ""))
+	require.Equal(t, []string{"gpt-text-final"}, project(responsesUnknown, CompositeRouteEndpointResponses, "gpt-text"))
+
+	responsesEnabled := responsesDisabled
+	responsesEnabled.ID = 1310
+	responsesEnabled.Extra = map[string]any{"openai_responses_supported": true}
+	require.True(t, accountSupportsOpenAICapabilities(&responsesEnabled, OpenAIEndpointCapabilityResponses, ""))
+	require.Equal(t, []string{"gpt-text-final"}, project(responsesEnabled, CompositeRouteEndpointResponses, "gpt-text"))
 
 	imageOnly := Account{ID: 1303, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Credentials: map[string]any{
 		"model_mapping":       map[string]any{"gpt-image-2": "gpt-image-2"},
