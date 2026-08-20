@@ -2,44 +2,41 @@
 
 Date: 2026-08-20
 
-Status: **CHANGES REQUIRED**
+Status: **FINAL PASS**
 
 ## Scope
 
 - Repository: `/Users/mac/project/sub2api-unirouter-model-governance-foundation-inventory`
 - Branch: `model-governance-foundation-inventory`
 - Formal base: `cad5bc5606bfc059e2da91a54db9479f312b9dd2`
-- Committed HEAD: `fb28063969782037ec7f5a9e2200bc73ecfc7f3a`
-- Reviewed implementation: the committed range `cad5bc560..fb280639` plus 57
-  current uncommitted backend implementation, migration, generated-source, and
-  test paths, including three untracked backend files.
+- Accepted implementation HEAD: `557507a18ab31bcf410bc132fb2487cd189440b7`
+- Accepted implementation range:
+  `cad5bc5606bfc059e2da91a54db9479f312b9dd2..557507a18ab31bcf410bc132fb2487cd189440b7`.
+- Accepted commit contents: the intended implementation, generated sources,
+  migration, tests, and all five review documents.
 - Excluded user-owned change: `.gitignore`.
 - Acceptance contract:
   `/Users/mac/project/all-model-router/docs/superpowers/plans/2026-08-18-model-governance-foundation-inventory.md`
 - Remediation contracts: `docs/model-governance-phase-2-second-review.md` and
   `docs/model-governance-phase-2-third-review-2026-08-20.md`.
 
-Two status-visible review documents and three ignored review documents accompany
-the backend overlay. The user-owned `.gitignore` change remains excluded. None
-of the overlay may be described as committed behavior.
+All five review documents are tracked. The user-owned `.gitignore` change was
+excluded from the accepted commit and remains uncommitted and outside this
+acceptance scope.
 
 ## Verdict
 
-The current mutable worktree technical verdict is **ACCEPTED**. A fresh,
-independent scoped review reported Critical 0, Important 0, Minor 0. It confirmed
-that all prior final-review endpoint/dimension findings and documentation
-findings are addressed in the current overlay.
-
-Final merge PASS is intentionally withheld because the intended implementation,
-generated files, migration, tests, and review artifacts remain uncommitted. The
-formal second-review checklist requires a committed review range before merge.
-No commit was created because commit authorization was not provided.
+The committed-state verdict is **FINAL PASS**. The technical range
+`cad5bc5606bfc059e2da91a54db9479f312b9dd2..557507a18ab31bcf410bc132fb2487cd189440b7`
+is accepted. A fresh independent committed-state review reported Critical 0,
+Important 0, Minor 0 and returned **FINAL PASS**. The remaining documentation
+update is administrative traceability and does not reopen technical acceptance.
 
 ## Finding Resolution
 
 ### P2-R2-001: Runtime Inventory Reachability
 
-Status: **Resolved in current worktree**
+Status: **Accepted in committed range**
 
 - Account-native platform and effective request target platform are separate
   identities. Mixed Antigravity scheduling uses Anthropic/Gemini channel mapping
@@ -70,7 +67,7 @@ Status: **Resolved in current worktree**
 
 ### P2-R2-002: OpenAI Passthrough
 
-Status: **Resolved in current worktree**
+Status: **Accepted in committed range**
 
 - Actual forwarding uses the endpoint-aware resolver.
 - Normal passthrough preserves the original request model.
@@ -86,7 +83,7 @@ Status: **Resolved in current worktree**
 
 ### P2-R2-003: Canonical Watermarks
 
-Status: **Resolved in current worktree**
+Status: **Accepted in committed range**
 
 `CanonicalGovernanceTime` converts governance timestamps to UTC microsecond
 precision before idempotency material, provenance digest, persistence,
@@ -95,7 +92,7 @@ inputs converge by digest; distinct stored microseconds remain time-ordered.
 
 ### P2-R2-004: Arbitrary-Length Exact IDs
 
-Status: **Resolved in current worktree**
+Status: **Accepted in committed range**
 
 - Exact governance identities use `TEXT` and remain unchanged end to end.
 - Fixed-width digests are lookup/locking buckets only; complete `TEXT` equality
@@ -109,7 +106,7 @@ Status: **Resolved in current worktree**
 
 ### P2-R2-005: Durable Evidence and Account Incarnations
 
-Status: **Resolved in current worktree**
+Status: **Accepted in committed range**
 
 - Classification batches retain scalar account identity without a live account
   foreign key and survive soft or hard account deletion.
@@ -143,7 +140,7 @@ and proves one complete raw copy plus resolving projection/event references.
 
 ### P2-R2-007: Usage Boundaries
 
-Status: **Resolved in current worktree**
+Status: **Accepted in committed range**
 
 - One frozen UTC end bounds all usage-derived effects with `[lower, end)`.
 - Distinct API keys at exact 7-day and 30-day lower bounds prove independent
@@ -154,7 +151,7 @@ Status: **Resolved in current worktree**
 
 ## Third-Review Resolution Matrix
 
-| Finding | Status and accepted resolution in current worktree |
+| Finding | Status and accepted committed-state resolution |
 | --- | --- |
 | `P2-R3-001` | Resolved. Shared account-type-aware Anthropic resolution matches Messages forwarding: API-key mapping, the dedicated Service-account mapping path, and OAuth/SetupToken Claude normalization. `count_tokens` remains intentionally separate: API-key mapping, otherwise Claude normalization only. |
 | `P2-R3-002` | Resolved. Stable request-shape and endpoint gates cover embeddings, Responses text/image shape union, OpenAI Images, and positive Grok media eligibility. Transient runtime health is excluded. |
@@ -191,7 +188,7 @@ Messages-capable mixed account as `count_tokens`-reachable.
   was introduced.
 - Migration 200 was exercised only against disposable Testcontainers databases.
 
-## Fresh Coordinator Gate
+## Historical Current-Overlay Coordinator Gate
 
 Run on 2026-08-20 against committed HEAD `fb28063969782037ec7f5a9e2200bc73ecfc7f3a`
 plus the complete current overlay:
@@ -257,7 +254,7 @@ Result: **PASS**.
 Its baseline behavior and the endpoint-specific `count_tokens` distinction are
 verified by focused resolver, forwarding, and inventory-projection tests instead.
 
-## Independent Technical Review
+## Historical Current-Overlay Independent Technical Review
 
 A fresh independent scoped review of the current post-fixture mutable worktree
 reported Critical 0, Important 0, Minor 0 and returned **ACCEPTED**. All prior
@@ -276,24 +273,29 @@ gate. The authoritative complete gate remains the run recorded above: default
 formal integration 13.956s, PostgreSQL 14 formal integration 12.367s, and full
 service 102.197s, with the remaining listed checks passing.
 
-## Merge Readiness
+## Final Committed-State Acceptance
 
-Current mutable worktree technical status: **ACCEPTED**.
+Final status: **FINAL PASS**.
 
-Mechanical merge status: **BLOCKED ON COMMIT AND COMMITTED-STATE REVIEW**.
+- Formal base: `cad5bc5606bfc059e2da91a54db9479f312b9dd2`.
+- Accepted implementation HEAD: `557507a18ab31bcf410bc132fb2487cd189440b7`.
+- Accepted technical range:
+  `cad5bc5606bfc059e2da91a54db9479f312b9dd2..557507a18ab31bcf410bc132fb2487cd189440b7`.
+- The accepted commit contains the intended implementation, generated sources,
+  migration, tests, and all five review documents. `.gitignore` is excluded and
+  remains a user-owned uncommitted change.
+- Committed coordinator gate: default usage-inclusive integration **PASS in
+  18.952s**; PostgreSQL 14 **PASS in 17.489s**; full suite **PASS**, with
+  `internal/service` completing in **106.031s**; focused suites, generation,
+  build, diff checks, and generated-no-diff check **PASS**.
+- Independent committed-state review: Critical 0, Important 0, Minor 0; default
+  integration **PASS in 17.162s**; PostgreSQL 14 **PASS in 12.094s**; full suite
+  **PASS**, with `internal/service` completing in **105.369s**; build,
+  generation, and diff checks **PASS**; all five review documents tracked.
+- No production migration, deployment, or production operation was performed.
 
-Final status remains **CHANGES REQUIRED** for final merge PASS. The accepted
-overlay is uncommitted, the review documents are not yet tracked or are ignored,
-and the committed-state full gate and independent review remain required. The
-user-owned `.gitignore` change stays excluded from this work.
-
-Before final merge PASS:
-
-1. Commit only the intended Phase 2 implementation, generated sources,
-   migration, tests, and tracked review artifacts; preserve the user-owned
-   `.gitignore` change according to owner intent.
-2. Record the resulting committed HEAD and exact committed review range.
-3. Re-run the required gate against that committed state.
-4. Run an independent review against that committed state.
-5. Update this status to final `PASS` only after the committed-state gate and
-   independent review pass with no findings.
+Reviewer verdict: **FINAL PASS**. The technical range is accepted. This
+recording review is administrative traceability only. The SHA of a later
+documentation-only commit, if one is created, is the final documentation HEAD
+and may be filled in after that commit; it is not a self-referential prerequisite
+for this acceptance.

@@ -51,13 +51,12 @@ status is the pointer below.
 
 Current-status pointer: a third review subsequently raised `P2-R3-001` through
 `P2-R3-008`. Those findings and all later final-review endpoint/dimension and
-documentation findings are resolved in the current mutable overlay. A fresh
-independent scoped review returned **ACCEPTED**, Critical 0, Important 0, Minor
-0. Final merge status remains **BLOCKED / CHANGES REQUIRED** because the overlay
-is uncommitted, review documents are not tracked or are ignored, and the
-committed-state full gate and independent review remain pending. See the
-third-review document and acceptance report; this historical body is not the
-current acceptance verdict.
+documentation findings are resolved in the accepted committed range
+`cad5bc5606bfc059e2da91a54db9479f312b9dd2..557507a18ab31bcf410bc132fb2487cd189440b7`.
+The committed-state coordinator gate passed, and an independent review returned
+**FINAL PASS**, Critical 0, Important 0, Minor 0. See the third-review document
+and acceptance report; this historical body is not the current acceptance
+verdict.
 
 The remediation resolves `P2-R2-001` through `P2-R2-007`. A final independent
 technical review found no Critical, Important, or Minor implementation findings,
@@ -811,13 +810,12 @@ migration tests must use disposable databases only.
 - [x] Migration 200 was tested only against disposable PostgreSQL.
 - [x] Full tests, PostgreSQL 14 integration, generation, build, and diff checks
       pass freshly.
-- [ ] All intended code and generated changes are committed before merge.
-- [ ] The new remediation report states the exact committed review range and
-      separately identifies any remaining uncommitted overlay.
+- [x] All intended code and generated changes are committed before merge.
+- [x] The remediation reports state the exact committed review range and
+      separately identify the user-owned uncommitted `.gitignore` change.
 
-Phase 2 must not be marked final merge `PASS` until this checklist is satisfied
-against a committed review range. The current uncommitted worktree has passed the
-technical review and gate but is not yet the merge artifact.
+This checklist is now satisfied against the accepted committed range. The
+preceding finding bodies and mutable-worktree checkpoints remain historical.
 
 ## 15. 2026-08-20 Re-Acceptance Addendum
 
@@ -860,7 +858,25 @@ default formal integration, and PostgreSQL 14 formal integration passed in
 passed. The complete coordinator gate remains authoritative at 13.956s /
 12.367s / service 102.197s.
 
-Final merge status remains **BLOCKED / CHANGES REQUIRED**. Commit the intended
-overlay and durable review documents, excluding the user-owned `.gitignore`,
-then rerun the full gate and independent review against the committed range
-before changing the status to final `PASS`.
+### Final Committed-State Pointer
+
+Final status: **FINAL PASS**. Formal base is
+`cad5bc5606bfc059e2da91a54db9479f312b9dd2`; accepted implementation HEAD is
+`557507a18ab31bcf410bc132fb2487cd189440b7`; and the accepted range is
+`cad5bc5606bfc059e2da91a54db9479f312b9dd2..557507a18ab31bcf410bc132fb2487cd189440b7`.
+The commit includes the intended implementation, generated sources, migration,
+tests, and all five review documents; `.gitignore` remains user-owned,
+uncommitted, and excluded.
+
+The committed coordinator gate passed: default usage-inclusive integration
+18.952s, PostgreSQL 14 integration 17.489s, and the full suite with service
+106.031s; focused suites, generation, build, diff, and generated-no-diff checks
+also passed. The independent committed-state review reported Critical 0,
+Important 0, Minor 0 and passed default integration in 17.162s, PostgreSQL 14 in
+12.094s, and the full suite with service in 105.369s; build, generation, and diff
+checks passed. All five documents are tracked, and no production operation was
+performed.
+
+The technical range is accepted; this addendum is administrative traceability.
+A later documentation-only commit SHA, if created, is the final documentation
+HEAD and may be recorded after commit rather than required self-referentially.

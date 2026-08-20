@@ -385,11 +385,11 @@ git diff --binary fb28063969782037ec7f5a9e2200bc73ecfc7f3a -- backend | shasum -
 - governance target 是否可能意外改变 quota 或 billing platform？
 - 文档是否错误地把 uncommitted technical acceptance 写成最终 merge PASS？
 
-## 11. 剩余事项
+## 11. 历史 committed-state 前检查点
 
-当前 mutable worktree 技术结论已经是 **ACCEPTED**。当前剩余 acceptance
-blockers 是形成 committed state、在该状态重跑完整门禁并完成独立审查。另有
-非门禁 broad suite 状态需要审查人知情确认：
+以下内容记录提交前检查点。当时 mutable worktree 技术结论是 **ACCEPTED**，
+但 acceptance blockers 仍包括形成 committed state、在该状态重跑完整门禁并
+完成独立审查：
 
 1. 获得明确提交授权。
 2. 明确列出并只提交预期 Phase 2 overlay、`model-governance-phase-2-acceptance-report.md`、`model-governance-phase-2-second-review.md`、本 handoff，以及需要保留的 fix report；不包含用户 `.gitignore`，除非用户另行决定。
@@ -403,7 +403,7 @@ blockers 是形成 committed state、在该状态重跑完整门禁并完成独�
 
 在此之前，不应合并，也不应声称 Phase 2 已最终通过。
 
-## 12. 第三轮审查补充
+## 12. 历史第三轮审查补充
 
 `P2-R3-001` 至 `P2-R3-008` 已在当前工作区解决：Anthropic resolver 按账户
 类型匹配 Messages forwarding，`count_tokens` 保持独立边界；稳定 endpoint/
@@ -436,18 +436,39 @@ integration 命令仍有 section 16 之外的 API-key `routing_mode` fixture、
 usage-billing wallet currency fixture、shared-row group-count 失败；不将其写成
 通过，也不在本交接中判定为本任务回归。
 
-当前 mutable worktree 技术状态为 **ACCEPTED**，但 final merge 状态仍为
-**BLOCKED / CHANGES REQUIRED**。overlay 尚未提交，review docs 未 tracked 或被
-ignore，committed-state full gate 和 independent review 仍是最终 PASS 的必要
-条件；用户自有 `.gitignore` 明确排除。
+在该历史检查点，mutable worktree 技术状态为 **ACCEPTED**，但 final merge
+状态仍为 **BLOCKED / CHANGES REQUIRED**。当时 overlay 尚未提交，review docs
+未 tracked 或被 ignore，committed-state full gate 和 independent review 仍是
+最终 PASS 的必要条件；用户自有 `.gitignore` 明确排除。
 
 Round 1 integration follow-up 未恢复 account-only final-model shortcut。OpenAI
 compact-only mapping key 与 Bedrock default alias 作为 provider-generated request
 witness 进入完整 endpoint-aware chain；Bedrock/Antigravity `count_tokens` 和 Gemini
 target thinking 继续被过滤。Round 2 还明确覆盖 mixed Antigravity account +
 Anthropic target 的 `count_tokens` 排除。default 与 PostgreSQL 14 Section 16
-integration selector 的最新结果已记录在上方，状态仍为 **CHANGES REQUIRED**。
+integration selector 的当时结果已记录在上方，当时状态仍为 **CHANGES REQUIRED**。
 
-当前 next steps：只提交预期 overlay 和 durable review artifacts，不包含用户
-`.gitignore`；记录新 SHA/range；对 committed state 重跑完整门禁；再做一次
-独立审查，之后才可改为最终 PASS。
+这些历史 next steps 已在下方最终 committed-state acceptance 中完成。
+
+## 13. 最终 committed-state acceptance
+
+最终结论：**FINAL PASS**。
+
+- formal base：`cad5bc5606bfc059e2da91a54db9479f312b9dd2`。
+- accepted implementation HEAD：`557507a18ab31bcf410bc132fb2487cd189440b7`。
+- accepted implementation range：
+  `cad5bc5606bfc059e2da91a54db9479f312b9dd2..557507a18ab31bcf410bc132fb2487cd189440b7`。
+- 该 commit 包含预期 implementation、generated source、migration、tests 和全部
+  五份 review docs；`.gitignore` 未包含，继续作为用户自有 uncommitted change。
+- committed coordinator gate：default usage-inclusive integration PASS 18.952s；
+  PG14 PASS 17.489s；full suite PASS，`internal/service` 106.031s；focused
+  suites、generate、build、diff、generated-no-diff 均 PASS。
+- independent committed-state review：Critical 0、Important 0、Minor 0；default
+  integration PASS 17.162s；PG14 PASS 12.094s；full suite PASS，
+  `internal/service` 105.369s；build/generate/diff checks PASS；五份文档均 tracked。
+- 未执行任何 production ops。
+
+reviewer verdict 为 **FINAL PASS**，技术 range 已接受；本次 recording review
+仅用于 administrative traceability。若之后创建 documentation-only commit，
+其 SHA 即 final docs HEAD，可在 commit 后按需补填，不构成要求文档预知自身 SHA
+的自指前置条件。

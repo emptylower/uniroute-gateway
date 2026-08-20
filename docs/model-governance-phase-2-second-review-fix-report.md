@@ -1629,7 +1629,7 @@ reported Critical 0, Important 0, Minor 0 and returned **ACCEPTED**. It confirme
 that all prior final-review endpoint/dimension and documentation findings are
 addressed.
 
-### Latest Coordinator Current-Overlay Gate
+### Historical Latest Coordinator Current-Overlay Gate
 
 The exact last coordinator run passed the focused config, migration, handlers,
 routes, and unit selectors. The default usage-inclusive formal
@@ -1647,14 +1647,40 @@ diff and scheduler baseline checks passed. This does not replace the complete
 coordinator gate above, which remains authoritative at 13.956s / 12.367s /
 service 102.197s.
 
-Current mutable worktree technical status is **ACCEPTED**. Final merge status
-remains **BLOCKED / CHANGES REQUIRED** because the overlay is uncommitted, the
-review documents are not tracked or are ignored, and a committed-state full gate
-and independent review are still required. The user-owned `.gitignore` change is
-excluded, and no final PASS is claimed.
+At that historical checkpoint, mutable-worktree technical status was
+**ACCEPTED**, while final merge status remained **BLOCKED / CHANGES REQUIRED**
+because the overlay was uncommitted, review documents were not tracked or were
+ignored, and a committed-state full gate and independent review were still
+required. The user-owned `.gitignore` change was excluded, and no final PASS was
+claimed at that checkpoint.
 
 The unrestricted `go test -tags=integration ./internal/repository -count=1` is
 outside this gate and has unrelated failures in API-key `routing_mode` fixtures,
 usage-billing wallet currency fixtures, and shared-row group counts. This report
 does not characterize that unrestricted command as passing or those failures as
-task regressions. No commit was created.
+task regressions. No commit had been created at that checkpoint.
+
+## Final Committed-State Acceptance Addendum
+
+Final status: **FINAL PASS**.
+
+- Formal base: `cad5bc5606bfc059e2da91a54db9479f312b9dd2`.
+- Accepted implementation HEAD: `557507a18ab31bcf410bc132fb2487cd189440b7`.
+- Accepted implementation range:
+  `cad5bc5606bfc059e2da91a54db9479f312b9dd2..557507a18ab31bcf410bc132fb2487cd189440b7`.
+- The accepted commit contains the intended implementation, generated sources,
+  migration, tests, and all five review documents. `.gitignore` was excluded and
+  remains a user-owned uncommitted change.
+- Committed coordinator gate: default usage-inclusive integration PASS 18.952s;
+  PostgreSQL 14 PASS 17.489s; full suite PASS with `internal/service` 106.031s;
+  focused suites, generation, build, diff, and generated-no-diff checks PASS.
+- Independent committed-state review: Critical 0, Important 0, Minor 0; default
+  integration PASS 17.162s; PostgreSQL 14 PASS 12.094s; full suite PASS with
+  `internal/service` 105.369s; build, generation, and diff checks PASS; all five
+  review documents tracked.
+- No production operation was performed.
+
+Reviewer verdict: **FINAL PASS**. The technical range is accepted, and this
+recording review is administrative traceability. If these documentation updates
+are committed later, that commit SHA is the final documentation HEAD and may be
+recorded after commit; no impossible self-referential SHA is required.

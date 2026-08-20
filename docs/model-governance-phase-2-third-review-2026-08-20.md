@@ -2,7 +2,7 @@
 
 Date: 2026-08-20
 
-Status: **CHANGES REQUIRED**
+Status: **FINAL PASS**
 
 ## 1. Purpose
 
@@ -13,10 +13,9 @@ Model Governance Phase 2. It verifies the fixes described in:
 - `docs/model-governance-phase-2-review-handoff-2026-08-20.md`
 - `docs/model-governance-phase-2-acceptance-report.md`
 
-It does not approve the current worktree for merge. The implementation remains
-an uncommitted overlay. The defects found by the third review have been resolved
-in the current worktree, but final PASS requires a committed review range, a
-fresh committed-state gate, and a final independent review.
+This document now records final committed-state acceptance. Its finding bodies
+retain the historical third-review defects and remediation requirements; the
+current verdict is the committed-state decision in Sections 3 and 17.
 
 The fixing agent must treat the formal plan as authoritative:
 
@@ -27,24 +26,22 @@ The fixing agent must treat the formal plan as authoritative:
 - Repository: `/Users/mac/project/sub2api-unirouter-model-governance-foundation-inventory`
 - Branch: `model-governance-foundation-inventory`
 - Formal base: `cad5bc5606bfc059e2da91a54db9479f312b9dd2`
-- Committed HEAD at review: `fb28063969782037ec7f5a9e2200bc73ecfc7f3a`
-- Committed range: `cad5bc560..fb280639`
-- Additional scope: the complete current uncommitted implementation,
-  migration, generated-source, test, and review-document overlay
+- Historical committed HEAD at third review: `fb28063969782037ec7f5a9e2200bc73ecfc7f3a`
+- Accepted implementation HEAD: `557507a18ab31bcf410bc132fb2487cd189440b7`
+- Accepted implementation range:
+  `cad5bc5606bfc059e2da91a54db9479f312b9dd2..557507a18ab31bcf410bc132fb2487cd189440b7`
 - Excluded from implementation approval: the user-owned `.gitignore` change
 
-The review was performed against the current mutable worktree. Any subsequent
-edit invalidates this exact technical assessment until the affected findings and
-verification gate are rerun.
+The historical third review was performed against a mutable worktree. Final
+acceptance was subsequently performed against the committed range above.
 
 ## 3. Verdict
 
-**Phase 2 remains CHANGES REQUIRED for merge.**
+**Phase 2 is FINAL PASS.**
 
-The current mutable overlay has completed the third-review technical remediation
-and fresh Section 16 gate. `P2-R3-001` through `P2-R3-008` are resolved in the
-current worktree. This is technical overlay acceptance, not final committed-state
-PASS.
+`P2-R3-001` through `P2-R3-008` are resolved in the accepted committed range.
+The committed-state coordinator gate and independent review both passed, so the
+earlier technical-overlay acceptance is now final committed-state acceptance.
 
 The prior remediation resolved the originally reported defects in these areas:
 
@@ -60,15 +57,10 @@ The remediation restored runtime parity for the finite inventory, completed the
 database evidence boundary, preserved detached target-platform evidence, and
 kept existing dashboard/statistics attribution at the `fb280639` baseline.
 
-Required before final PASS:
-
-1. Commit the intended overlay and durable approval artifacts, excluding the
-   user-owned `.gitignore` change.
-2. Record the resulting SHA and exact committed review range.
-3. Rerun Section 16 against the committed state.
-4. Rerun an independent technical and documentation review. The prior clean
-   technical review occurred before the usage-fixture follow-up and is not a
-   final review of the current post-fixture state.
+Final prerequisites are satisfied: the intended implementation and five review
+documents were committed at `557507a18ab31bcf410bc132fb2487cd189440b7`, with
+the user-owned `.gitignore` excluded; the committed-state gate passed; and the
+independent committed-state review returned FINAL PASS with no findings.
 
 ## 4. Required Fixes
 
@@ -78,7 +70,7 @@ Severity: High
 
 Priority: P1 before Phase 2 acceptance
 
-Status: **Resolved in current worktree**
+Status: **Accepted in committed range**
 
 #### Contract
 
@@ -167,7 +159,7 @@ Severity: High
 
 Priority: P1 before Phase 2 acceptance
 
-Status: **Resolved in current worktree**
+Status: **Accepted in committed range**
 
 #### Contract
 
@@ -235,7 +227,7 @@ Severity: High
 
 Priority: P1 before Phase 2 acceptance
 
-Status: **Resolved in current worktree**
+Status: **Accepted in committed range**
 
 #### Contract
 
@@ -307,7 +299,7 @@ Severity: High
 
 Priority: P1 before Phase 2 acceptance
 
-Status: **Resolved in current worktree**
+Status: **Accepted in committed range**
 
 #### Contract
 
@@ -374,7 +366,7 @@ Severity: High
 
 Priority: P1 before Phase 2 acceptance
 
-Status: **Resolved in current worktree**
+Status: **Accepted in committed range**
 
 #### Contract
 
@@ -433,7 +425,7 @@ Severity: High
 
 Priority: P1 before Phase 2 acceptance
 
-Status: **Resolved in current worktree**
+Status: **Accepted in committed range**
 
 #### Contract
 
@@ -496,7 +488,7 @@ Severity: High
 
 Priority: P1 before Phase 2 acceptance
 
-Status: **Resolved in current worktree**
+Status: **Accepted in committed range**
 
 #### Contract
 
@@ -563,7 +555,7 @@ Severity: Medium
 
 Priority: P1 before claiming the unconditional database invariant
 
-Status: **Resolved in current worktree**
+Status: **Accepted in committed range**
 
 #### Current Behavior
 
@@ -946,9 +938,9 @@ Avoid tests that use the projector itself as the only runtime oracle.
 - [x] Migration 200 was tested only on disposable PostgreSQL.
 - [x] Required default and PostgreSQL 14 integration selectors pass.
 - [x] Full Go suite, generation, build, and diff checks pass.
-- [ ] Owner-approved deviations exist in tracked repository history.
-- [ ] All intended changes are committed and the SHA is recorded.
-- [ ] Final review is performed against the committed range.
+- [x] Owner-approved deviations exist in tracked repository history.
+- [x] All intended implementation changes are committed and the SHA is recorded.
+- [x] Final review is performed against the committed range.
 
 ## 16. Required Re-Verification Gate
 
@@ -994,8 +986,8 @@ git status --short --branch
 git status --short --ignored
 ```
 
-Before final PASS, commit the intended overlay and rerun the same gate against
-the committed state. Record the final SHA and exact review range.
+The following subsection is retained as historical current-overlay evidence.
+Final committed-state evidence is recorded in Section 17.
 
 ### 16.1 Fresh Current-Overlay Outcome
 
@@ -1031,15 +1023,28 @@ classified here as task regressions.
 
 ## 17. Final Review Decision
 
-Current verdict: **CHANGES REQUIRED**.
+Current verdict: **FINAL PASS**.
 
-The current mutable worktree is technically **ACCEPTED**: all eight R3 findings,
-including the prior endpoint/dimension and documentation findings, are resolved;
-Section 16 is green; and the fresh scoped independent review reported Critical
-0, Important 0, Minor 0. It is not final PASS or merge ready because the overlay
-is uncommitted, the review documents are not tracked or are ignored, and the
-committed-state full gate and independent review remain required. The user-owned
-`.gitignore` change is excluded.
+- Formal base: `cad5bc5606bfc059e2da91a54db9479f312b9dd2`.
+- Accepted implementation HEAD: `557507a18ab31bcf410bc132fb2487cd189440b7`.
+- Accepted technical range:
+  `cad5bc5606bfc059e2da91a54db9479f312b9dd2..557507a18ab31bcf410bc132fb2487cd189440b7`.
+- The accepted commit contains the intended implementation, generated sources,
+  migration, tests, and all five review documents. `.gitignore` is excluded and
+  remains user-owned and uncommitted.
+- Committed coordinator gate: default usage-inclusive integration PASS 18.952s;
+  PostgreSQL 14 PASS 17.489s; full suite PASS with `internal/service` 106.031s;
+  focused suites, generation, build, diff, and generated-no-diff checks PASS.
+- Independent committed-state review: Critical 0, Important 0, Minor 0; default
+  integration PASS 17.162s; PostgreSQL 14 PASS 12.094s; full suite PASS with
+  `internal/service` 105.369s; build, generation, and diff checks PASS; all five
+  review documents tracked.
+- No production operation was performed.
+
+The technical range is accepted. This recording review is administrative
+traceability. If a documentation-only follow-up commit is created, its SHA is
+the final documentation HEAD and may be added afterward; acceptance does not
+require the document to predict its own commit SHA.
 
 Round 1 integration follow-up preserves provider-specific finite reachability
 without restoring the account-only final-model shortcut: eligible OpenAI
@@ -1047,6 +1052,5 @@ compact-only mapping keys and Bedrock default aliases seed request witnesses,
 which traverse endpoint compatibility and account forwarding. Bedrock
 `count_tokens` remains excluded, as do Antigravity `count_tokens` and Gemini
 target thinking outcomes. Round 2 additionally proves that `count_tokens` is
-excluded for a mixed Antigravity account under an Anthropic target. The verdict
-remains **CHANGES REQUIRED** pending the committed-state full gate and
-independent review.
+excluded for a mixed Antigravity account under an Anthropic target. Those
+provider-specific boundaries remain accepted in the final committed state.
