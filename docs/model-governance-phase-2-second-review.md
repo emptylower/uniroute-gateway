@@ -2,19 +2,17 @@
 
 Date: 2026-08-19
 
-Status: **CHANGES REQUIRED; SECOND-REVIEW BODY IS HISTORICAL**
+Status: **FINAL PASS; SECOND-REVIEW BODY IS HISTORICAL**
 
-The later FINAL PASS is **superseded** by the newly validated `P2-R3-002`
-contract violation. No approved deviation allowed text Responses inventory to
-substitute Chat Completions capability for persisted Responses capability.
-Strict-contract resolution requires `OpenAIEndpointCapabilityResponses` for all
-OpenAI Responses projections while leaving runtime text `/responses` fallback
-unchanged. The fix and five review documents require commit, committed-state
-gate, and independent review rerun. A fresh full gate passed only against the
-current mutable-worktree overlay and is recorded below; it is not committed-state
-acceptance.
+The historical FINAL PASS at `557507a18` remains superseded. The strict-contract
+`P2-R3-002` correction is now committed and accepted at `c14ad059`: all OpenAI
+Responses witnesses, including text, require Responses capability;
+Responses-disabled accounts are excluded from Responses inventory while the
+same account remains in Chat Completions inventory; runtime fallback is
+unchanged. The committed-state gate and independent review restored **FINAL
+PASS**.
 
-## Current Mutable-Worktree Gate
+## Historical Pre-Commit Mutable-Worktree Gate
 
 Fresh current-overlay evidence after the strict-contract `P2-R3-002` correction:
 
@@ -31,9 +29,8 @@ Fresh current-overlay evidence after the strict-contract `P2-R3-002` correction:
 - `git diff --check`: **PASS**.
 - Production operations: **not performed**.
 
-This gate is mutable-worktree evidence only. Current overall status remains
-**CHANGES REQUIRED** pending commit and a committed-state gate and independent
-review.
+This gate remains pre-commit evidence only and is superseded for the current
+verdict by the final committed-state addendum below.
 
 ## 1. Purpose
 
@@ -86,8 +83,9 @@ resolved, and its coordinator gate and independent review returned FINAL PASS,
 Critical 0, Important 0, Minor 0. That acceptance is **superseded** because
 `P2-R3-002` remained contract-invalid. The strict-contract correction is now
 technically fixed only in the mutable overlay. See the third-review document and
-acceptance report for current **CHANGES REQUIRED** status pending commit,
-committed-state gate, and independent review.
+acceptance report for the then-current **CHANGES REQUIRED** status pending
+commit, committed-state gate, and independent review. Those requirements were
+subsequently satisfied at `c14ad059`.
 
 Historically, the remediation resolved `P2-R2-001` through `P2-R2-007`, and the
 then-current independent technical review and gate passed. That statement does
@@ -842,15 +840,13 @@ migration tests must use disposable databases only.
 - [x] Migration 200 was tested only against disposable PostgreSQL.
 - [x] Historical R2 full tests, PostgreSQL 14 integration, generation, build, and
       diff checks passed for the superseded accepted range.
-- [ ] The reopened `P2-R3-002` correction and review-document updates are
+- [x] The reopened `P2-R3-002` correction and review-document updates are
       committed before merge.
-- [ ] The committed-state gate and independent review pass against that new
+- [x] The committed-state gate and independent review pass against that new
       committed range, with the user-owned `.gitignore` separately excluded.
 
-The historical R2 items remain satisfied, but the current overall checklist is
-not complete. Reopened `P2-R3-002` is technically fixed only in the mutable
-overlay; Phase 2 remains **CHANGES REQUIRED** pending commit, committed-state
-gate, and independent review.
+The historical R2 items remain satisfied and the current checklist is complete.
+Reopened `P2-R3-002` is committed and accepted; Phase 2 is **FINAL PASS**.
 
 ## 15. 2026-08-20 Re-Acceptance Addendum
 
@@ -915,7 +911,37 @@ Important 0, Minor 0 and passed default integration in 17.162s, PostgreSQL 14 in
 checks passed. All five documents are tracked, and no production operation was
 performed.
 
-That technical acceptance and administrative-only characterization are
-historical and superseded. Current status is **CHANGES REQUIRED** until the
-strict-contract projection fix and review updates are committed and the
-committed-state gate and independent review are rerun.
+That technical acceptance remains historical and superseded by the committed
+remediation acceptance below.
+
+## 16. Final Committed-State Remediation Addendum
+
+Current verdict: **FINAL PASS**.
+
+- Formal base: `cad5bc5606bfc059e2da91a54db9479f312b9dd2`.
+- Historical accepted implementation HEAD:
+  `557507a18ab31bcf410bc132fb2487cd189440b7` (historical and superseded).
+- New accepted remediation HEAD: `c14ad059dd8be7e7edc61e674bebe487ba688d58`.
+- New accepted range:
+  `cad5bc5606bfc059e2da91a54db9479f312b9dd2..c14ad059dd8be7e7edc61e674bebe487ba688d58`.
+- Remediation delta:
+  `1041404b61b28cab9d5321ffda54a6df8b2329af..c14ad059dd8be7e7edc61e674bebe487ba688d58`.
+- Strict `P2-R3-002` fix: every OpenAI Responses witness, including text,
+  requires Responses capability; Responses-disabled accounts are excluded from
+  Responses inventory, the same account remains in Chat Completions inventory,
+  and runtime fallback is unchanged.
+- Coordinator committed-state gate at `c14ad059`: focused suites **PASS**;
+  default usage integration **17.404s**; PostgreSQL 14 **16.086s**; full suite
+  **PASS**, `internal/service` **104.765s**; generate, build, range diff, backend
+  generated no-diff, and runtime no-diff **PASS**.
+- Independent committed-state review: Critical 0, Important 0, Minor 0;
+  **FINAL PASS**. Fresh default integration **9.280s**; PostgreSQL 14 **7.901s**;
+  full service **105.100s**; focused suites, generate, build, and integrity
+  checks **PASS**.
+- All five review documents were committed at `c14ad059` before review. The
+  user-owned `.gitignore` remains the sole uncommitted tracked change and is
+  excluded, not a blocker. No production operation was performed.
+
+The follow-up documentation commit is administrative only. Its own SHA is
+necessarily not recorded self-referentially and does not alter the accepted
+implementation range or verdict.

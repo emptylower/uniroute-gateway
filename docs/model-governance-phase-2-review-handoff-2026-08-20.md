@@ -2,20 +2,16 @@
 
 日期：2026-08-20
 
-状态：**CHANGES REQUIRED**
+状态：**FINAL PASS**
 
-此前 committed-state **FINAL PASS 已被 superseded**。新验证的 `P2-R3-002`
-契约冲突表明：text Responses inventory 以 Chat Completions capability 代替
-Responses capability，从而错误纳入 persisted
-`openai_responses_supported=false` 的 API-key account；不存在获批的 plan
-deviation。严格契约要求所有 OpenAI Responses projection 均检查
-`OpenAIEndpointCapabilityResponses`，不区分 request shape。runtime text
-`/responses` 经 Chat Completions fallback 的行为保持不变。当前修复与五份 review
-docs 尚需 commit，并需重新执行 committed-state gate 和 independent review；本文
-记录的 fresh full gate 仅针对当前 mutable-worktree overlay，不构成
-committed-state acceptance。
+`557507a18` 的 committed-state FINAL PASS 保留为历史记录并已 superseded。严格
+契约 `P2-R3-002` 修复已在 `c14ad059` 提交并获接受：所有 OpenAI Responses
+witness（包括 text）均要求 Responses capability；Responses-disabled account 不再
+进入 Responses inventory，同一 account 仍保留在 Chat Completions inventory；
+runtime fallback 保持不变。committed-state gate 与 independent review 均通过，
+恢复 **FINAL PASS**。
 
-## 当前 mutable-worktree gate
+## 历史 pre-commit mutable-worktree gate
 
 strict-contract `P2-R3-002` 修复后的 fresh current-overlay evidence：
 
@@ -31,8 +27,8 @@ strict-contract `P2-R3-002` 修复后的 fresh current-overlay evidence：
 - `git diff --check`：**PASS**。
 - production ops：**未执行**。
 
-以上仅为 mutable-worktree verification。当前总体状态继续为 **CHANGES
-REQUIRED**，仍需 commit 后重跑 committed-state gate 并完成 independent review。
+以上仅为 pre-commit mutable-worktree verification，作为历史证据保留。当前结论
+以文末 committed-state remediation addendum 为准。
 
 ## 1. 文档用途
 
@@ -502,8 +498,33 @@ integration selector 的当时结果已记录在上方，当时状态仍为 **CH
   `internal/service` 105.369s；build/generate/diff checks PASS；五份文档均 tracked。
 - 未执行任何 production ops。
 
-历史 reviewer verdict 为 **FINAL PASS（已 superseded）**。新验证的
-`P2-R3-002` contract-vs-runtime 冲突不存在 approved deviation，inventory 必须
-按 strict contract 对所有 Responses shape 使用 Responses capability；runtime
-fallback 保持不变。当前状态为 **CHANGES REQUIRED**，直至代码和五份文档完成
-commit，并重新通过 committed-state gate 与 independent review。
+历史 reviewer verdict 为 **FINAL PASS（已 superseded）**。当前验收结论记录如下。
+
+## 14. 最终 committed-state remediation addendum
+
+当前 verdict：**FINAL PASS**。
+
+- formal base：`cad5bc5606bfc059e2da91a54db9479f312b9dd2`。
+- 历史 accepted implementation HEAD：
+  `557507a18ab31bcf410bc132fb2487cd189440b7`（historical / superseded）。
+- 新 accepted remediation HEAD：`c14ad059dd8be7e7edc61e674bebe487ba688d58`。
+- 新 accepted range：
+  `cad5bc5606bfc059e2da91a54db9479f312b9dd2..c14ad059dd8be7e7edc61e674bebe487ba688d58`。
+- remediation delta：
+  `1041404b61b28cab9d5321ffda54a6df8b2329af..c14ad059dd8be7e7edc61e674bebe487ba688d58`。
+- strict `P2-R3-002` fix：所有 OpenAI Responses witness（包括 text）均要求
+  Responses capability；Responses-disabled account 排除出 Responses inventory；
+  同一 account 保留在 Chat Completions inventory；runtime fallback 不变。
+- coordinator committed-state gate at `c14ad059`：focused suites **PASS**；
+  default usage integration **17.404s**；PG14 **16.086s**；full suite **PASS**，
+  `internal/service` **104.765s**；generate、build、range diff、backend generated
+  no-diff、runtime no-diff 均 **PASS**；未执行 production ops。
+- independent committed-state review：Critical 0、Important 0、Minor 0；verdict
+  **FINAL PASS**。fresh default integration **9.280s**；PG14 **7.901s**；full
+  service **105.100s**；focused suites、generate、build、integrity 均 **PASS**。
+- 五份 review docs 均已在 review 前提交于 `c14ad059`。用户自有 `.gitignore` 是
+  唯一 uncommitted tracked change，已排除且不构成 blocker。
+
+本次 follow-up documentation commit 仅为 administrative。为避免不可能的
+self-reference，不记录该文档提交自身的 SHA；它不改变上述 accepted implementation
+HEAD、range、evidence 或 FINAL PASS verdict。

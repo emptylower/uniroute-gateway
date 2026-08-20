@@ -2,19 +2,17 @@
 
 Date: 2026-08-19
 
-Current status: **CHANGES REQUIRED**
+Current status: **FINAL PASS**
 
-The later committed-state FINAL PASS is **superseded** by a newly validated
-`P2-R3-002` contract violation. Text Responses projection used Chat Completions
-capability and admitted persisted Responses-disabled API-key accounts without an
-approved plan deviation. The strict contract requires
-`OpenAIEndpointCapabilityResponses` for all OpenAI Responses projections;
-runtime text `/responses` fallback remains unchanged. The correction and all
-five review updates require commit, committed-state gate, and independent review
-rerun. A fresh full gate passed only against the current mutable-worktree overlay
-and is recorded below; it is not committed-state acceptance.
+The earlier committed-state FINAL PASS at `557507a18` remains historical and
+superseded. The strict `P2-R3-002` correction is committed and accepted at
+`c14ad059`: all OpenAI Responses witnesses, including text, require Responses
+capability; Responses-disabled accounts are excluded from Responses inventory,
+the same account remains in Chat Completions inventory, and runtime fallback is
+unchanged. The committed-state gate and independent review restored **FINAL
+PASS**.
 
-## Current Mutable-Worktree Gate
+## Historical Pre-Commit Mutable-Worktree Gate
 
 Fresh current-overlay evidence after the strict-contract `P2-R3-002` correction:
 
@@ -31,9 +29,8 @@ Fresh current-overlay evidence after the strict-contract `P2-R3-002` correction:
 - `git diff --check`: **PASS**.
 - Production operations: **not performed**.
 
-This evidence applies to the mutable overlay only. Overall status remains
-**CHANGES REQUIRED** pending commit, committed-state gate, and independent
-review.
+This evidence applies to the pre-commit mutable overlay only and is preserved as
+historical evidence. The current verdict is established by the addendum below.
 
 Scope: `P2-R2-003`, `P2-R2-004`, `P2-R2-005`, and owner-approved
 `P2-R2-006`. This ignored working-evidence report does not modify the Phase 2
@@ -1715,7 +1712,37 @@ Historical final status: **FINAL PASS (superseded)**.
   review documents tracked.
 - No production operation was performed.
 
-Historical reviewer verdict: **FINAL PASS (superseded)**. Current acceptance is
-**CHANGES REQUIRED** because the newly validated `P2-R3-002` conflict lacked an
-approved deviation. The strict-contract projection fix leaves runtime fallback
-unchanged. Commit plus committed-state gate and independent review remain due.
+Historical reviewer verdict: **FINAL PASS (superseded)**. The current acceptance
+is recorded below.
+
+## Current Committed-State Remediation Addendum
+
+Current verdict: **FINAL PASS**.
+
+- Formal base: `cad5bc5606bfc059e2da91a54db9479f312b9dd2`.
+- Historical accepted implementation HEAD:
+  `557507a18ab31bcf410bc132fb2487cd189440b7` (historical and superseded).
+- New accepted remediation HEAD: `c14ad059dd8be7e7edc61e674bebe487ba688d58`.
+- New accepted range:
+  `cad5bc5606bfc059e2da91a54db9479f312b9dd2..c14ad059dd8be7e7edc61e674bebe487ba688d58`.
+- Remediation delta:
+  `1041404b61b28cab9d5321ffda54a6df8b2329af..c14ad059dd8be7e7edc61e674bebe487ba688d58`.
+- Strict `P2-R3-002` fix: every OpenAI Responses witness, including text,
+  requires Responses capability; Responses-disabled accounts are excluded from
+  Responses inventory while the same account remains in Chat Completions
+  inventory; runtime fallback is unchanged.
+- Coordinator committed-state gate at `c14ad059`: focused suites **PASS**;
+  default usage integration **17.404s**; PostgreSQL 14 **16.086s**; full suite
+  **PASS**, `internal/service` **104.765s**; generate, build, range diff, backend
+  generated no-diff, and runtime no-diff **PASS**; no production operations.
+- Independent committed-state review: Critical 0, Important 0, Minor 0;
+  verdict **FINAL PASS**. Fresh default integration **9.280s**; PostgreSQL 14
+  **7.901s**; full service **105.100s**; focused suites, generate, build, and
+  integrity checks **PASS**.
+- All five review documents were committed at `c14ad059` before review. The
+  user-owned `.gitignore` is the sole uncommitted tracked change, excluded and
+  not a blocker.
+
+The follow-up documentation commit is administrative only. Its own SHA is not
+recorded self-referentially and does not change the accepted implementation
+range or verdict.

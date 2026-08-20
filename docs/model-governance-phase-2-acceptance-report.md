@@ -2,20 +2,16 @@
 
 Date: 2026-08-20
 
-Status: **CHANGES REQUIRED**
+Status: **FINAL PASS**
 
-The prior committed-state **FINAL PASS is superseded** by a newly validated
-`P2-R3-002` contract violation. Text-model Responses inventory admitted API-key
-accounts with persisted `openai_responses_supported=false` by checking Chat
-Completions capability. No approved deviation exists, so the formal strict
-contract requires `OpenAIEndpointCapabilityResponses` for every OpenAI Responses
-projection. Runtime text `/responses` fallback through Chat Completions remains
-unchanged. The fix and all five review-document updates must be committed and a
-committed-state gate and independent review rerun. A fresh full gate has passed
-only against the current mutable-worktree overlay and is recorded below; it is
-not committed-state acceptance.
+The strict-contract `P2-R3-002` remediation is committed and accepted at
+`c14ad059dd8be7e7edc61e674bebe487ba688d58`. Every OpenAI Responses witness,
+including text, now requires Responses capability; Responses-disabled accounts
+are excluded from Responses inventory while the same account remains in Chat
+Completions inventory. Runtime fallback is unchanged. The committed-state gate
+and independent review both passed, restoring **FINAL PASS**.
 
-## Current Mutable-Worktree Gate
+## Historical Pre-Commit Mutable-Worktree Gate
 
 Fresh current-overlay evidence after the strict-contract `P2-R3-002` correction:
 
@@ -32,18 +28,19 @@ Fresh current-overlay evidence after the strict-contract `P2-R3-002` correction:
 - `git diff --check`: **PASS**.
 - Production operations: **not performed**.
 
-This is mutable-worktree verification, not committed acceptance. Current status
-remains **CHANGES REQUIRED** pending commit and a committed-state gate and
-independent review.
+This is preserved pre-commit evidence. It was not committed acceptance and is
+superseded for the current verdict by the final committed-state addendum below.
 
 ## Scope
 
 - Repository: `/Users/mac/project/sub2api-unirouter-model-governance-foundation-inventory`
 - Branch: `model-governance-foundation-inventory`
 - Formal base: `cad5bc5606bfc059e2da91a54db9479f312b9dd2`
-- Accepted implementation HEAD: `557507a18ab31bcf410bc132fb2487cd189440b7`
-- Accepted implementation range:
-  `cad5bc5606bfc059e2da91a54db9479f312b9dd2..557507a18ab31bcf410bc132fb2487cd189440b7`.
+- Historical accepted implementation HEAD: `557507a18ab31bcf410bc132fb2487cd189440b7`
+  (superseded).
+- Current accepted remediation HEAD: `c14ad059dd8be7e7edc61e674bebe487ba688d58`.
+- Current accepted range:
+  `cad5bc5606bfc059e2da91a54db9479f312b9dd2..c14ad059dd8be7e7edc61e674bebe487ba688d58`.
 - Accepted commit contents: the intended implementation, generated sources,
   migration, tests, and all five review documents.
 - Excluded user-owned change: `.gitignore`.
@@ -58,13 +55,10 @@ acceptance scope.
 
 ## Verdict
 
-The current verdict is **CHANGES REQUIRED**. The historical technical range
-`cad5bc5606bfc059e2da91a54db9479f312b9dd2..557507a18ab31bcf410bc132fb2487cd189440b7`
-was accepted, and its independent committed-state review reported Critical 0,
-Important 0, Minor 0 and FINAL PASS, but those conclusions are now
-**superseded**. Re-acceptance is blocked on committing the strict-contract
-projection fix and review updates, then rerunning the committed-state gate and
-independent review.
+The current verdict is **FINAL PASS** for the accepted range
+`cad5bc5606bfc059e2da91a54db9479f312b9dd2..c14ad059dd8be7e7edc61e674bebe487ba688d58`.
+The earlier FINAL PASS at `557507a18ab31bcf410bc132fb2487cd189440b7`
+remains explicitly historical and superseded.
 
 ## Finding Resolution
 
@@ -188,7 +182,7 @@ Status: **Accepted in committed range**
 | Finding | Historical resolution and current status |
 | --- | --- |
 | `P2-R3-001` | Resolved. Shared account-type-aware Anthropic resolution matches Messages forwarding: API-key mapping, the dedicated Service-account mapping path, and OAuth/SetupToken Claude normalization. `count_tokens` remains intentionally separate: API-key mapping, otherwise Claude normalization only. |
-| `P2-R3-002` | **Reopened.** The historical implementation incorrectly used Chat Completions capability for text Responses. Strict-contract correction requires Responses capability for all OpenAI Responses projections; committed-state re-acceptance remains due. |
+| `P2-R3-002` | **Resolved and accepted at `c14ad059`.** Every OpenAI Responses witness, including text, requires Responses capability. Responses-disabled accounts are excluded from Responses inventory, the same account remains in Chat Completions inventory, and runtime fallback is unchanged. |
 | `P2-R3-003` | Resolved. Grok media normalization precedes support and mapping; image and video text/image-input finite outcomes are represented. |
 | `P2-R3-004` | Resolved. Antigravity thinking applies only to Claude-compatible endpoints, not Gemini-native paths, with account-only/grouped/mixed/forced/composite parity. |
 | `P2-R3-005` | Resolved. All four append-only tables reject statement-level TRUNCATE; direct, `CASCADE`, multi-table, rerun, and PostgreSQL 14 cases pass. |
@@ -329,7 +323,39 @@ Historical final status: **FINAL PASS (superseded)**.
   generation, and diff checks **PASS**; all five review documents tracked.
 - No production migration, deployment, or production operation was performed.
 
-Historical reviewer verdict: **FINAL PASS (superseded)**. The newly validated
-`P2-R3-002` contract conflict reopens acceptance as **CHANGES REQUIRED**. Runtime
-fallback remains unchanged; commit, committed-state gate, and independent review
-remain required before a new final verdict.
+Historical reviewer verdict: **FINAL PASS (superseded)**. This subsection records
+the earlier acceptance at `557507a18`; the current acceptance is recorded below.
+
+## Final Committed-State Remediation Addendum
+
+Current verdict: **FINAL PASS**.
+
+- Formal base: `cad5bc5606bfc059e2da91a54db9479f312b9dd2`.
+- Historical accepted implementation HEAD:
+  `557507a18ab31bcf410bc132fb2487cd189440b7` (historical and superseded).
+- New accepted remediation HEAD: `c14ad059dd8be7e7edc61e674bebe487ba688d58`.
+- New accepted range:
+  `cad5bc5606bfc059e2da91a54db9479f312b9dd2..c14ad059dd8be7e7edc61e674bebe487ba688d58`.
+- Remediation delta:
+  `1041404b61b28cab9d5321ffda54a6df8b2329af..c14ad059dd8be7e7edc61e674bebe487ba688d58`.
+- Strict `P2-R3-002` fix: all OpenAI Responses witnesses, including text,
+  require Responses capability. Responses-disabled accounts are excluded from
+  Responses inventory; the same account remains in Chat Completions inventory;
+  runtime fallback is unchanged.
+- Coordinator committed-state gate at `c14ad059`: focused suites **PASS**;
+  default usage integration **PASS in 17.404s**; PostgreSQL 14 **PASS in
+  16.086s**; full suite **PASS**, with `internal/service` **104.765s**;
+  generate, build, range diff, backend generated no-diff, and runtime no-diff
+  **PASS**.
+- Independent committed-state review: Critical 0, Important 0, Minor 0;
+  verdict **FINAL PASS**. Fresh default integration **PASS in 9.280s**;
+  PostgreSQL 14 **PASS in 7.901s**; full service **PASS in 105.100s**; focused
+  suites, generate, build, and integrity checks **PASS**.
+- All five review documents were committed at `c14ad059` before review. The
+  user-owned `.gitignore` is the sole uncommitted tracked change; it is excluded
+  and is not a blocker.
+- No production operation was performed.
+
+This follow-up documentation commit is administrative only. Its own SHA cannot
+be recorded self-referentially and does not change the accepted implementation
+HEAD, range, evidence, or verdict above.
