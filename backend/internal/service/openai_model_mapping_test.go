@@ -222,6 +222,103 @@ func TestResolveOpenAICompactForwardModel(t *testing.T) {
 	}
 }
 
+func TestResolveOpenAIForwardModelForEndpoint(t *testing.T) {
+	tests := []struct {
+		name             string
+		account          Account
+		requestedModel   string
+		compact          bool
+		wantBilling      string
+		wantUpstream     string
+		wantCompactMatch bool
+	}{
+		{
+			name: "non-passthrough normal maps then normalizes oauth model",
+			account: Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{
+				"model_mapping": map[string]any{"public": "openai/gpt-5.4-high"},
+			}},
+			requestedModel: "public",
+			wantBilling:    "openai/gpt-5.4-high",
+			wantUpstream:   "gpt-5.4",
+		},
+		{
+			name: "non-passthrough compact maps normal target before normalization",
+			account: Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{
+				"model_mapping":         map[string]any{"public": "compact-key"},
+				"compact_model_mapping": map[string]any{"compact-key": "openai/gpt-5.4-high"},
+			}},
+			requestedModel:   "public",
+			compact:          true,
+			wantBilling:      "compact-key",
+			wantUpstream:     "openai/gpt-5.4-high",
+			wantCompactMatch: true,
+		},
+		{
+			name: "non-passthrough compact normalizes only unchanged model",
+			account: Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{
+				"model_mapping":         map[string]any{"public": "openai/gpt-5.4-high"},
+				"compact_model_mapping": map[string]any{"public": "unreachable-compact"},
+			}},
+			requestedModel: "public",
+			compact:        true,
+			wantBilling:    "openai/gpt-5.4-high",
+			wantUpstream:   "gpt-5.4",
+		},
+		{
+			name: "api key passthrough normal preserves original request",
+			account: Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Credentials: map[string]any{
+				"model_mapping": map[string]any{"public": "normal-upstream"},
+			}, Extra: map[string]any{"openai_passthrough": true}},
+			requestedModel: "public",
+			wantBilling:    "public",
+			wantUpstream:   "public",
+		},
+		{
+			name: "oauth legacy passthrough compact maps original without normalization",
+			account: Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{
+				"model_mapping":         map[string]any{"public": "normal-upstream"},
+				"compact_model_mapping": map[string]any{"public": "openai/gpt-5.4-high"},
+			}, Extra: map[string]any{"openai_oauth_passthrough": true}},
+			requestedModel:   "public",
+			compact:          true,
+			wantBilling:      "public",
+			wantUpstream:     "openai/gpt-5.4-high",
+			wantCompactMatch: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := resolveOpenAIForwardModelForEndpoint(&test.account, test.requestedModel, "", test.compact)
+			if got.BillingModel != test.wantBilling || got.UpstreamModel != test.wantUpstream || got.CompactMapped != test.wantCompactMatch {
+				t.Fatalf("resolveOpenAIForwardModelForEndpoint(...) = %#v, want billing=%q upstream=%q compact=%v", got, test.wantBilling, test.wantUpstream, test.wantCompactMatch)
+			}
+		})
+	}
+}
+
+func TestResolveOpenAIAccountUpstreamModelForRequestKeepsBaselineSequence(t *testing.T) {
+	account := &Account{
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"model_mapping":         map[string]any{"public": "normal-upstream"},
+			"compact_model_mapping": map[string]any{"public": "compact-upstream"},
+		},
+		Extra: map[string]any{"openai_passthrough": true},
+	}
+
+	if got := resolveOpenAIAccountUpstreamModelForRequest(account, "public", false); got != "normal-upstream" {
+		t.Fatalf("normal scheduler upstream model = %q, want normal-upstream", got)
+	}
+	if got := resolveOpenAIAccountUpstreamModelForRequest(account, "public", true); got != "normal-upstream" {
+		t.Fatalf("compact scheduler upstream model = %q, want normal-upstream", got)
+	}
+	if got := resolveOpenAIForwardModelForEndpoint(account, "public", "", true).UpstreamModel; got != "compact-upstream" {
+		t.Fatalf("compact forwarding upstream model = %q, want compact-upstream", got)
+	}
+}
+
 func TestNormalizeCodexModel(t *testing.T) {
 	cases := map[string]string{
 		"gpt-5.3-codex-spark":       "gpt-5.3-codex-spark",

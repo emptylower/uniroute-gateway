@@ -200,6 +200,198 @@ func TestGatewayServiceRecordUsage_PreservesRequestedAndUpstreamModels(t *testin
 	require.Equal(t, mappedModel, *usageRepo.lastLog.UpstreamModel)
 }
 
+func TestGatewayServiceRecordUsage_PersistsResolvedGovernanceTargetPlatform(t *testing.T) {
+	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+	svc := newGatewayRecordUsageServiceForTest(usageRepo, &openAIRecordUsageUserRepoStub{}, &openAIRecordUsageSubRepoStub{})
+	groupID := int64(801)
+
+	err := svc.RecordUsage(context.Background(), &RecordUsageInput{
+		Result: &ForwardResult{
+			RequestID: "gateway-governance-target",
+			Usage:     ClaudeUsage{InputTokens: 10, OutputTokens: 6},
+			Model:     "claude-sonnet-4",
+			Duration:  time.Second,
+		},
+		APIKey: &APIKey{ID: 501, GroupID: &groupID, Group: &Group{ID: groupID, Platform: PlatformAnthropic}},
+		User:   &User{ID: 601},
+		Account: &Account{
+			ID:       701,
+			Platform: PlatformAntigravity,
+		},
+		QuotaPlatform: PlatformAntigravity,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, usageRepo.lastLog)
+	require.NotNil(t, usageRepo.lastLog.GovernanceTargetPlatform)
+	require.Equal(t, PlatformAntigravity, *usageRepo.lastLog.GovernanceTargetPlatform)
+}
+
+func TestResolvedUsageTargetPlatform_ValidatesRuntimeDecisionAgainstSelectedAccount(t *testing.T) {
+	mixedAntigravity := &Account{
+		Platform: PlatformAntigravity,
+		Extra:    map[string]any{"mixed_scheduling": true},
+	}
+	compositeKey := &APIKey{Group: &Group{Platform: PlatformComposite}}
+
+	tests := []struct {
+		name     string
+		ctx      context.Context
+		snapshot string
+		apiKey   *APIKey
+		account  *Account
+		want     *string
+	}{
+		{
+			name:     "ordinary anthropic mixed scheduling",
+			snapshot: PlatformAnthropic,
+			apiKey:   &APIKey{Group: &Group{Platform: PlatformAnthropic}},
+			account:  mixedAntigravity,
+			want:     stringPointer(PlatformAnthropic),
+		},
+		{
+			name:     "ordinary group ignores conflicting resolved context",
+			ctx:      WithResolvedTargetPlatform(context.Background(), PlatformGemini),
+			snapshot: PlatformGemini,
+			apiKey:   &APIKey{Group: &Group{Platform: PlatformAnthropic}},
+			account:  mixedAntigravity,
+			want:     stringPointer(PlatformAnthropic),
+		},
+		{
+			name:     "forced antigravity requires native account",
+			ctx:      context.WithValue(context.Background(), ctxkey.ForcePlatform, PlatformAntigravity),
+			snapshot: PlatformAntigravity,
+			apiKey:   &APIKey{Group: &Group{Platform: PlatformAnthropic}},
+			account:  mixedAntigravity,
+			want:     stringPointer(PlatformAntigravity),
+		},
+		{
+			name:     "composite mixed target",
+			ctx:      WithResolvedTargetPlatform(context.Background(), PlatformGemini),
+			snapshot: PlatformAnthropic,
+			apiKey:   compositeKey,
+			account:  mixedAntigravity,
+			want:     stringPointer(PlatformGemini),
+		},
+		{
+			name:     "composite native target",
+			ctx:      WithResolvedTargetPlatform(context.Background(), PlatformOpenAI),
+			snapshot: PlatformGemini,
+			apiKey:   compositeKey,
+			account:  &Account{Platform: PlatformOpenAI},
+			want:     stringPointer(PlatformOpenAI),
+		},
+		{
+			name:     "mismatched openai to gemini falls back native",
+			snapshot: PlatformGemini,
+			apiKey:   compositeKey,
+			account:  &Account{Platform: PlatformOpenAI},
+			want:     stringPointer(PlatformOpenAI),
+		},
+		{
+			name:     "force mismatch falls back native",
+			ctx:      context.WithValue(context.Background(), ctxkey.ForcePlatform, PlatformAntigravity),
+			snapshot: PlatformAntigravity,
+			apiKey:   &APIKey{Group: &Group{Platform: PlatformAnthropic}},
+			account:  &Account{Platform: PlatformOpenAI},
+			want:     stringPointer(PlatformOpenAI),
+		},
+		{
+			name:     "unsupported snapshot falls back native",
+			snapshot: "future-router",
+			apiKey:   &APIKey{Group: &Group{Platform: PlatformAnthropic}},
+			account:  &Account{Platform: PlatformGrok},
+			want:     stringPointer(PlatformGrok),
+		},
+		{
+			name:     "account absence cannot persist target",
+			snapshot: PlatformOpenAI,
+			apiKey:   compositeKey,
+			want:     nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := resolvedUsageTargetPlatform(tt.ctx, "", tt.snapshot, tt.apiKey, tt.account)
+			if tt.want == nil {
+				require.Nil(t, got)
+				return
+			}
+			require.NotNil(t, got)
+			require.Equal(t, *tt.want, *got)
+		})
+	}
+}
+
+func TestGatewayServiceRecordUsage_PersistsHandlerResolvedTargetAfterContextDetach(t *testing.T) {
+	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+	svc := newGatewayRecordUsageServiceForTest(usageRepo, &openAIRecordUsageUserRepoStub{}, &openAIRecordUsageSubRepoStub{})
+	groupID := int64(805)
+	apiKey := &APIKey{ID: 501, GroupID: &groupID, Group: &Group{ID: groupID, Platform: PlatformComposite}}
+	requestCtx := WithResolvedTargetPlatform(context.Background(), PlatformGemini)
+	quotaPlatform := QuotaPlatform(requestCtx, apiKey)
+
+	err := svc.RecordUsage(context.Background(), &RecordUsageInput{
+		Result: &ForwardResult{
+			RequestID: "gateway-detached-resolved-target",
+			Usage:     ClaudeUsage{InputTokens: 10, OutputTokens: 6},
+			Model:     "claude-sonnet-4",
+			Duration:  time.Second,
+		},
+		APIKey: apiKey,
+		User:   &User{ID: 601},
+		Account: &Account{
+			ID:       701,
+			Platform: PlatformAntigravity,
+			Extra:    map[string]any{"mixed_scheduling": true},
+		},
+		QuotaPlatform: quotaPlatform,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, PlatformGemini, quotaPlatform)
+	require.NotNil(t, usageRepo.lastLog)
+	require.NotNil(t, usageRepo.lastLog.GovernanceTargetPlatform)
+	require.Equal(t, PlatformGemini, *usageRepo.lastLog.GovernanceTargetPlatform)
+}
+
+func stringPointer(value string) *string {
+	return &value
+}
+
+func TestGatewayServiceRecordUsage_PersistsForcedTargetFromRequestContext(t *testing.T) {
+	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+	svc := newGatewayRecordUsageServiceForTest(usageRepo, &openAIRecordUsageUserRepoStub{}, &openAIRecordUsageSubRepoStub{})
+	groupID := int64(803)
+	ctx := context.WithValue(context.Background(), ctxkey.ForcePlatform, PlatformAntigravity)
+
+	err := svc.RecordUsage(ctx, &RecordUsageInput{
+		Result: &ForwardResult{
+			RequestID: "gateway-forced-governance-target",
+			Usage:     ClaudeUsage{InputTokens: 10, OutputTokens: 6},
+			Model:     "claude-sonnet-4",
+			Duration:  time.Second,
+		},
+		APIKey:        &APIKey{ID: 501, GroupID: &groupID, Group: &Group{ID: groupID, Platform: PlatformAnthropic}},
+		User:          &User{ID: 601},
+		Account:       &Account{ID: 701, Platform: PlatformOpenAI},
+		QuotaPlatform: PlatformGemini,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, usageRepo.lastLog)
+	require.NotNil(t, usageRepo.lastLog.GovernanceTargetPlatform)
+	require.Equal(t, PlatformOpenAI, *usageRepo.lastLog.GovernanceTargetPlatform)
+	require.Equal(t, PlatformGemini, resolveGenericUsageQuotaPlatform(PlatformGemini, &APIKey{Group: &Group{Platform: PlatformAnthropic}}, &Account{Platform: PlatformOpenAI}),
+		"governance evidence must not change postUsageBillingParams.Platform")
+}
+
+func TestResolveGenericUsageQuotaPlatform_PreservesBaselineFallbacks(t *testing.T) {
+	require.Equal(t, PlatformAnthropic, resolveGenericUsageQuotaPlatform("", &APIKey{Group: &Group{Platform: PlatformAnthropic}}, &Account{Platform: PlatformOpenAI}))
+	require.Equal(t, PlatformOpenAI, resolveGenericUsageQuotaPlatform("", &APIKey{Group: &Group{Platform: PlatformComposite}}, &Account{Platform: PlatformOpenAI}))
+}
+
 func TestGatewayServiceRecordUsage_PreservesChannelMappedUpstreamModel(t *testing.T) {
 	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
 	svc := newGatewayRecordUsageServiceForTest(usageRepo, &openAIRecordUsageUserRepoStub{}, &openAIRecordUsageSubRepoStub{})

@@ -116,6 +116,61 @@ func QuotaPlatform(ctx context.Context, apiKey *APIKey) string {
 	return platform
 }
 
+func resolvedUsageTargetPlatform(ctx context.Context, evidenceSnapshot, quotaSnapshot string, apiKey *APIKey, account *Account) *string {
+	if account == nil {
+		return nil
+	}
+
+	groupPlatform := strings.TrimSpace(PlatformFromAPIKey(apiKey))
+	platform := strings.TrimSpace(evidenceSnapshot)
+	forcePlatform := false
+	if platform == "" && ctx != nil {
+		if forced, ok := ctx.Value(ctxkey.ForcePlatform).(string); ok && strings.TrimSpace(forced) != "" {
+			platform = strings.TrimSpace(forced)
+			forcePlatform = true
+		} else if groupPlatform == PlatformComposite {
+			resolved, ok := ResolvedTargetPlatformFromContext(ctx)
+			if ok {
+				platform = resolved
+			}
+		}
+	}
+	if platform == "" {
+		switch {
+		case IsAllowedQuotaPlatform(groupPlatform):
+			platform = groupPlatform
+		case groupPlatform == PlatformComposite:
+			platform = strings.TrimSpace(quotaSnapshot)
+		case groupPlatform == "":
+			platform = strings.TrimSpace(quotaSnapshot)
+		}
+	}
+	if !IsAllowedQuotaPlatform(platform) || !IsStableRuntimePlatformEligible(account, platform, forcePlatform) {
+		platform = strings.TrimSpace(account.Platform)
+	}
+	if !IsAllowedQuotaPlatform(platform) || !IsStableRuntimePlatformEligible(account, platform, false) {
+		return nil
+	}
+	return &platform
+}
+
+func resolveGenericUsageQuotaPlatform(inputPlatform string, apiKey *APIKey, account *Account) string {
+	quotaPlatform := inputQuotaPlatformOrAPIKeyPlatform(inputPlatform, apiKey)
+	if inputPlatform == "" {
+		if quotaPlatform == PlatformComposite && account != nil {
+			quotaPlatform = account.Platform
+		}
+	}
+	return quotaPlatform
+}
+
+func inputQuotaPlatformOrAPIKeyPlatform(inputPlatform string, apiKey *APIKey) string {
+	if inputPlatform != "" {
+		return inputPlatform
+	}
+	return PlatformFromAPIKey(apiKey)
+}
+
 func (p *postUsageBillingParams) shouldDeductAPIKeyQuota() bool {
 	return p.Cost.ActualCost > 0 && p.APIKey.Quota > 0 && p.APIKeyService != nil
 }
@@ -755,6 +810,7 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	usageLog := s.buildRecordUsageLog(ctx, input, result, apiKey, user, account, subscription,
 		requestedModel, multiplier, imageMultiplier, accountRateMultiplier, billingType, cacheTTLOverridden, cost, opts)
 	applySettlementSnapshot(usageLog, settlement)
+	usageLog.GovernanceTargetPlatform = resolvedUsageTargetPlatform(ctx, "", input.QuotaPlatform, apiKey, account)
 
 	// 计算账号统计定价费用（使用最终上游模型匹配自定义规则）
 	if apiKey.GroupID != nil {
@@ -783,13 +839,7 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	// 配额平台由 handler 在请求 ctx 内经 QuotaPlatform() 算定并通过 input 传入；
 	// 后扣运行在 worker 池的 background ctx 上，无法再从 ctx 取 ForcePlatform。
 	// 缺省（未设置）时回退到分组平台，保持对其它调用方的兼容。
-	quotaPlatform := input.QuotaPlatform
-	if quotaPlatform == "" {
-		quotaPlatform = PlatformFromAPIKey(apiKey)
-		if quotaPlatform == PlatformComposite && account != nil {
-			quotaPlatform = account.Platform
-		}
-	}
+	quotaPlatform := resolveGenericUsageQuotaPlatform(input.QuotaPlatform, apiKey, account)
 	requestID := usageLog.RequestID
 	billingApplied, billingResult, billingErr := applyUsageBillingDetailed(ctx, requestID, usageLog, &postUsageBillingParams{
 		Cost:                  cost,

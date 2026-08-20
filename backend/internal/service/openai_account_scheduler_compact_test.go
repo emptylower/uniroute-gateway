@@ -116,6 +116,62 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_CompactRejectsExplicitl
 	require.Nil(t, selection)
 }
 
+func TestOpenAIGatewayService_SelectAccountWithScheduler_PassthroughSelectionRemainsBaseline(t *testing.T) {
+	resetOpenAIAdvancedSchedulerSettingCacheForTest()
+	groupID := int64(91020)
+	account := Account{
+		ID: 71020, Platform: PlatformOpenAI, Type: AccountTypeAPIKey,
+		Status: StatusActive, Schedulable: true, Concurrency: 1,
+		Credentials: map[string]any{
+			"model_mapping":         map[string]any{"public": "normal-upstream"},
+			"compact_model_mapping": map[string]any{"public": "compact-upstream"},
+		},
+		Extra: map[string]any{"openai_passthrough": true, "openai_compact_supported": true},
+	}
+	cfg := &config.Config{}
+	cfg.Gateway.Scheduling.LoadBatchEnabled = false
+	svc := &OpenAIGatewayService{
+		accountRepo:        schedulerTestOpenAIAccountRepo{accounts: []Account{account}},
+		cache:              &schedulerTestGatewayCache{},
+		cfg:                cfg,
+		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{}),
+	}
+
+	selection, _, err := svc.SelectAccountWithScheduler(context.Background(), &groupID, "", "", "public", nil, OpenAIUpstreamTransportAny, true)
+
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.Equal(t, account.ID, selection.Account.ID)
+}
+
+func TestOpenAIGatewayService_SelectAccountWithScheduler_RejectsPassthroughCompactOutsideNormalMappingDomain(t *testing.T) {
+	resetOpenAIAdvancedSchedulerSettingCacheForTest()
+	groupID := int64(91021)
+	account := Account{
+		ID: 71021, Platform: PlatformOpenAI, Type: AccountTypeAPIKey,
+		Status: StatusActive, Schedulable: true, Concurrency: 1,
+		Credentials: map[string]any{
+			"model_mapping":         map[string]any{"public": "normal-upstream"},
+			"compact_model_mapping": map[string]any{"other": "compact-other"},
+		},
+		Extra: map[string]any{"openai_passthrough": true, "openai_compact_supported": true},
+	}
+	cfg := &config.Config{}
+	cfg.Gateway.Scheduling.LoadBatchEnabled = false
+	svc := &OpenAIGatewayService{
+		accountRepo:        schedulerTestOpenAIAccountRepo{accounts: []Account{account}},
+		cache:              &schedulerTestGatewayCache{},
+		cfg:                cfg,
+		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{}),
+	}
+
+	selection, _, err := svc.SelectAccountWithScheduler(context.Background(), &groupID, "", "", "other", nil, OpenAIUpstreamTransportAny, true)
+
+	require.ErrorIs(t, err, ErrNoAvailableAccounts)
+	require.ErrorContains(t, err, "supporting model: other")
+	require.Nil(t, selection)
+}
+
 // TestOpenAIGatewayService_SelectAccountWithScheduler_CompactFallsBackToUnknown
 // 验证当没有"已知支持"账号时，compact 请求会回退到"未探测"账号。
 func TestOpenAIGatewayService_SelectAccountWithScheduler_CompactFallsBackToUnknown(t *testing.T) {

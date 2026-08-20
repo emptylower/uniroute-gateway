@@ -883,6 +883,8 @@ func (s *OpenAIGatewayService) tryFinalizeLiveCall(record *LiveCallRecord) bool 
 		BaseCost:           baseCost,
 		CreatedAt:          record.CreatedAt,
 	}
+	liveTargetPlatform := PlatformOpenAI
+	usageLog.GovernanceTargetPlatform = &liveTargetPlatform
 	apiKey := &APIKey{ID: record.APIKeyID, UserID: record.UserID, GroupID: liveOptionalID(record.GroupID), Quota: record.APIKeyQuota, RateLimit5h: record.RateLimit5h, RateLimit1d: record.RateLimit1d, RateLimit7d: record.RateLimit7d}
 	user := &User{ID: record.UserID, BillingCurrency: record.BillingCurrency}
 	account := &Account{ID: record.AccountID}

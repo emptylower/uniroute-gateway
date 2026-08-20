@@ -160,6 +160,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			}
 		}
 		// 透传分支只需要轻量提取字段，避免热路径全量 Unmarshal。
+		modelResolution := resolveOpenAIForwardModelForEndpoint(account, reqModel, "", isOpenAIResponsesCompactPath(c))
 		mappedModel := account.GetMappedModel(reqModel)
 		reasoningEffort := extractOpenAIReasoningEffortFromBody(body, mappedModel)
 		// 国产模型默认 effort 补充：也要用 mappedModel 判定是否是 passback-required 上游。
@@ -171,6 +172,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			originalBody,
 			canonicalImageIntentBody,
 			reqModel,
+			modelResolution,
 			attemptImageIntentInvalidated,
 			reasoningEffort,
 			reqStream,
@@ -266,31 +268,25 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		markPatchSet("instructions", defaultCodexSynthInstructions(reqModel))
 	}
 
-	billingModel := account.GetMappedModel(reqModel)
+	modelResolution := resolveOpenAIForwardModelForEndpoint(account, reqModel, "", isOpenAIResponsesCompactPath(c))
+	billingModel := modelResolution.BillingModel
 	if billingModel != reqModel {
 		logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Model mapping applied: %s -> %s (account: %s, isCodexCLI: %v)", reqModel, billingModel, account.Name, isCodexCLI)
 		reqModel = billingModel
 		markPatchSet("model", billingModel)
 	}
-	upstreamModel := billingModel
+	upstreamModel := modelResolution.UpstreamModel
 	isCompactRequest := isOpenAIResponsesCompactPath(c)
-	compactMapped := false
-	if isCompactRequest {
-		compactMappedModel := resolveOpenAICompactForwardModel(account, billingModel)
-		if compactMappedModel != "" && compactMappedModel != billingModel {
-			compactMapped = true
-			upstreamModel = compactMappedModel
-			reqModel = compactMappedModel
-			markPatchSet("model", compactMappedModel)
-			logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Compact model mapping applied: %s -> %s (account: %s, isCodexCLI: %v)", billingModel, compactMappedModel, account.Name, isCodexCLI)
-		}
+	if modelResolution.CompactMapped {
+		reqModel = upstreamModel
+		markPatchSet("model", upstreamModel)
+		logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Compact model mapping applied: %s -> %s (account: %s, isCodexCLI: %v)", billingModel, upstreamModel, account.Name, isCodexCLI)
 	}
-	if !compactMapped {
+	if !modelResolution.CompactMapped {
 		modelForNormalize := reqModel
 		if modelForNormalize == "" {
 			modelForNormalize = requestView.Model
 		}
-		upstreamModel = normalizeOpenAIModelForUpstream(account, modelForNormalize)
 		if upstreamModel != "" && upstreamModel != modelForNormalize {
 			logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Upstream model resolved: %s -> %s (account: %s, type: %s, isCodexCLI: %v)", modelForNormalize, upstreamModel, account.Name, account.Type, isCodexCLI)
 			reqModel = upstreamModel

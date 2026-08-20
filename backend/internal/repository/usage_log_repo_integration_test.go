@@ -25,7 +25,7 @@ type UsageLogRepoSuite struct {
 	ctx    context.Context
 	tx     *dbent.Tx
 	client *dbent.Client
-	repo   *usageLogRepository
+	repo   *usageLogTestRepository
 }
 
 func (s *UsageLogRepoSuite) SetupTest() {
@@ -33,7 +33,7 @@ func (s *UsageLogRepoSuite) SetupTest() {
 	tx := testEntTx(s.T())
 	s.tx = tx
 	s.client = tx.Client()
-	s.repo = newUsageLogRepositoryWithSQL(s.client, tx)
+	s.repo = newUsageLogTestRepository(s.client, tx)
 }
 
 func TestUsageLogRepoSuite(t *testing.T) {
@@ -87,10 +87,64 @@ func (s *UsageLogRepoSuite) TestCreate() {
 	s.Require().NotZero(log.ID)
 }
 
+func (s *UsageLogRepoSuite) TestCreatePersistsGovernanceTargetPlatform() {
+	user := mustCreateUser(s.T(), s.client, &service.User{Email: "governance-target@test.com"})
+	apiKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user.ID, Key: "sk-governance-target", Name: "k"})
+	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "acc-governance-target"})
+	targetPlatform := service.PlatformGemini
+	exchangeRateAsOf := time.Now().UTC()
+	log := &service.UsageLog{
+		UserID:                   user.ID,
+		APIKeyID:                 apiKey.ID,
+		AccountID:                account.ID,
+		RequestID:                uuid.NewString(),
+		Model:                    "gemini-3-pro",
+		GovernanceTargetPlatform: &targetPlatform,
+		SourceCurrency:           service.CurrencyUSD,
+		SettlementCurrency:       service.CurrencyUSD,
+		ExchangeRate:             1,
+		ExchangeRateSource:       "identity",
+		ExchangeRateAsOf:         &exchangeRateAsOf,
+	}
+
+	_, err := s.repo.Create(s.ctx, log)
+	s.Require().NoError(err)
+	loaded, err := s.repo.GetByID(s.ctx, log.ID)
+	s.Require().NoError(err)
+	s.Require().NotNil(loaded.GovernanceTargetPlatform)
+	s.Require().Equal(targetPlatform, *loaded.GovernanceTargetPlatform)
+}
+
+func (s *UsageLogRepoSuite) TestCreateRejectsInvalidGovernanceTargetPlatform() {
+	user := mustCreateUser(s.T(), s.client, &service.User{Email: "invalid-governance-target@test.com"})
+	apiKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user.ID, Key: "sk-invalid-governance-target", Name: "k"})
+	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "acc-invalid-governance-target"})
+	invalid := "composite"
+	exchangeRateAsOf := time.Now().UTC()
+	log := &service.UsageLog{
+		UserID: user.ID, APIKeyID: apiKey.ID, AccountID: account.ID,
+		RequestID: uuid.NewString(), Model: "gpt-5",
+		GovernanceTargetPlatform: &invalid,
+		SourceCurrency:           service.CurrencyUSD, SettlementCurrency: service.CurrencyUSD,
+		ExchangeRate: 1, ExchangeRateSource: "identity", ExchangeRateAsOf: &exchangeRateAsOf,
+	}
+
+	_, err := s.repo.Create(s.ctx, log)
+	s.Require().ErrorContains(err, "governance_target_platform")
+
+	_, err = integrationDB.ExecContext(s.ctx, `
+		INSERT INTO usage_logs (
+			user_id, api_key_id, account_id, request_id, model, governance_target_platform,
+			source_currency, settlement_currency, exchange_rate, exchange_rate_source, exchange_rate_as_of
+		) VALUES ($1, $2, $3, $4, 'gpt-5', 'composite', 'USD', 'USD', 1, 'identity', $5)
+	`, user.ID, apiKey.ID, account.ID, uuid.NewString(), exchangeRateAsOf)
+	s.Require().ErrorContains(err, "chk_usage_logs_governance_target_platform")
+}
+
 func TestUsageLogRepositoryCreate_BatchPathConcurrent(t *testing.T) {
 	ctx := context.Background()
 	client := testEntClient(t)
-	repo := newUsageLogRepositoryWithSQL(client, integrationDB)
+	repo := newUsageLogTestRepository(client, integrationDB)
 
 	user := mustCreateUser(t, client, &service.User{Email: fmt.Sprintf("usage-batch-%d@example.com", time.Now().UnixNano())})
 	apiKey := mustCreateApiKey(t, client, &service.APIKey{UserID: user.ID, Key: "sk-usage-batch-" + uuid.NewString(), Name: "k"})
@@ -138,7 +192,7 @@ func TestUsageLogRepositoryCreate_BatchPathConcurrent(t *testing.T) {
 func TestUsageLogRepositoryCreate_BatchPathDuplicateRequestID(t *testing.T) {
 	ctx := context.Background()
 	client := testEntClient(t)
-	repo := newUsageLogRepositoryWithSQL(client, integrationDB)
+	repo := newUsageLogTestRepository(client, integrationDB)
 
 	user := mustCreateUser(t, client, &service.User{Email: fmt.Sprintf("usage-dup-%d@example.com", time.Now().UnixNano())})
 	apiKey := mustCreateApiKey(t, client, &service.APIKey{UserID: user.ID, Key: "sk-usage-dup-" + uuid.NewString(), Name: "k"})
@@ -186,7 +240,7 @@ func TestUsageLogRepositoryCreate_BatchPathDuplicateRequestID(t *testing.T) {
 func TestUsageLogRepositoryFlushCreateBatch_DeduplicatesSameKeyInMemory(t *testing.T) {
 	ctx := context.Background()
 	client := testEntClient(t)
-	repo := newUsageLogRepositoryWithSQL(client, integrationDB)
+	repo := newUsageLogTestRepository(client, integrationDB)
 
 	user := mustCreateUser(t, client, &service.User{Email: fmt.Sprintf("usage-batch-memdup-%d@example.com", time.Now().UnixNano())})
 	apiKey := mustCreateApiKey(t, client, &service.APIKey{UserID: user.ID, Key: "sk-usage-batch-memdup-" + uuid.NewString(), Name: "k"})
@@ -210,6 +264,7 @@ func TestUsageLogRepositoryFlushCreateBatch_DeduplicatesSameKeyInMemory(t *testi
 			ActualCost:   0.5,
 			CreatedAt:    time.Now().UTC(),
 		}
+		completeUsageLogTestCurrencySnapshot(log)
 		logs = append(logs, log)
 		batch = append(batch, usageLogCreateRequest{
 			log:      log,
@@ -246,7 +301,7 @@ func TestUsageLogRepositoryFlushCreateBatch_DeduplicatesSameKeyInMemory(t *testi
 func TestUsageLogRepositoryCreateBestEffort_BatchPathDuplicateRequestID(t *testing.T) {
 	ctx := context.Background()
 	client := testEntClient(t)
-	repo := newUsageLogRepositoryWithSQL(client, integrationDB)
+	repo := newUsageLogTestRepository(client, integrationDB)
 
 	user := mustCreateUser(t, client, &service.User{Email: fmt.Sprintf("usage-best-effort-dup-%d@example.com", time.Now().UnixNano())})
 	apiKey := mustCreateApiKey(t, client, &service.APIKey{UserID: user.ID, Key: "sk-usage-best-effort-dup-" + uuid.NewString(), Name: "k"})
@@ -291,7 +346,7 @@ func TestUsageLogRepositoryCreateBestEffort_BatchPathDuplicateRequestID(t *testi
 func TestUsageLogRepositoryCreateBestEffort_QueueFullBlocksUntilCtxDeadline(t *testing.T) {
 	// 队列满时不再立即丢弃：阻塞等待入队，直到调用方 ctx 到期才标记 dropped（issue #3656）。
 	client := testEntClient(t)
-	repo := newUsageLogRepositoryWithSQL(client, integrationDB)
+	repo := newUsageLogTestRepository(client, integrationDB)
 	repo.bestEffortBatchCh = make(chan usageLogBestEffortRequest, 1)
 	repo.bestEffortBatchCh <- usageLogBestEffortRequest{}
 
@@ -320,7 +375,7 @@ func TestUsageLogRepositoryCreateBestEffort_QueueFullBlocksUntilCtxDeadline(t *t
 func TestUsageLogRepositoryCreateBestEffort_QueueFullWaitsForDrain(t *testing.T) {
 	// 队列满但批处理器随后排空时，阻塞的入队应成功完成而非丢弃。
 	client := testEntClient(t)
-	repo := newUsageLogRepositoryWithSQL(client, integrationDB)
+	repo := newUsageLogTestRepository(client, integrationDB)
 	repo.bestEffortBatchCh = make(chan usageLogBestEffortRequest, 1)
 	repo.bestEffortBatchCh <- usageLogBestEffortRequest{}
 
@@ -352,7 +407,7 @@ func TestUsageLogRepositoryCreateBestEffort_QueueFullWaitsForDrain(t *testing.T)
 
 func TestUsageLogRepositoryCreate_BatchPathCanceledContextMarksNotPersisted(t *testing.T) {
 	client := testEntClient(t)
-	repo := newUsageLogRepositoryWithSQL(client, integrationDB)
+	repo := newUsageLogTestRepository(client, integrationDB)
 
 	user := mustCreateUser(t, client, &service.User{Email: fmt.Sprintf("usage-cancel-%d@example.com", time.Now().UnixNano())})
 	apiKey := mustCreateApiKey(t, client, &service.APIKey{UserID: user.ID, Key: "sk-usage-cancel-" + uuid.NewString(), Name: "k"})
@@ -382,7 +437,7 @@ func TestUsageLogRepositoryCreate_BatchPathCanceledContextMarksNotPersisted(t *t
 func TestUsageLogRepositoryCreate_BatchPathQueueFullMarksNotPersisted(t *testing.T) {
 	// 队列满时阻塞等待入队，直到调用方 ctx 到期才标记 not persisted（issue #3656）。
 	client := testEntClient(t)
-	repo := newUsageLogRepositoryWithSQL(client, integrationDB)
+	repo := newUsageLogTestRepository(client, integrationDB)
 	repo.createBatchCh = make(chan usageLogCreateRequest, 1)
 	repo.createBatchCh <- usageLogCreateRequest{}
 
@@ -415,7 +470,7 @@ func TestUsageLogRepositoryCreate_BatchPathQueueFullMarksNotPersisted(t *testing
 
 func TestUsageLogRepositoryCreate_BatchPathCanceledAfterQueueMarksNotPersisted(t *testing.T) {
 	client := testEntClient(t)
-	repo := newUsageLogRepositoryWithSQL(client, integrationDB)
+	repo := newUsageLogTestRepository(client, integrationDB)
 	repo.createBatchCh = make(chan usageLogCreateRequest, 1)
 
 	user := mustCreateUser(t, client, &service.User{Email: fmt.Sprintf("usage-cancel-queued-%d@example.com", time.Now().UnixNano())})
@@ -453,7 +508,7 @@ func TestUsageLogRepositoryCreate_BatchPathCanceledAfterQueueMarksNotPersisted(t
 
 func TestUsageLogRepositoryFlushCreateBatch_CanceledRequestReturnsNotPersisted(t *testing.T) {
 	client := testEntClient(t)
-	repo := newUsageLogRepositoryWithSQL(client, integrationDB)
+	repo := newUsageLogTestRepository(client, integrationDB)
 
 	user := mustCreateUser(t, client, &service.User{Email: fmt.Sprintf("usage-flush-cancel-%d@example.com", time.Now().UnixNano())})
 	apiKey := mustCreateApiKey(t, client, &service.APIKey{UserID: user.ID, Key: "sk-usage-flush-cancel-" + uuid.NewString(), Name: "k"})
@@ -893,6 +948,60 @@ func (s *UsageLogRepoSuite) TestGetUserDashboardStats() {
 	s.Require().NoError(err, "GetUserDashboardStats")
 	s.Require().Equal(int64(1), stats.TotalAPIKeys)
 	s.Require().Equal(int64(1), stats.TotalRequests)
+}
+
+func (s *UsageLogRepoSuite) TestAnalyticsPlatformGroupingIgnoresGovernanceEvidence() {
+	user := mustCreateUser(s.T(), s.client, &service.User{Email: "analytics-governance-evidence@test.com"})
+	compositeGroup := mustCreateGroup(s.T(), s.client, &service.Group{Name: "analytics-composite", Platform: service.PlatformComposite})
+	nativeGroup := mustCreateGroup(s.T(), s.client, &service.Group{Name: "analytics-native", Platform: service.PlatformAnthropic})
+	apiKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user.ID, Key: "sk-analytics-governance", Name: "k"})
+	antigravityAccount := mustCreateAccount(s.T(), s.client, &service.Account{Name: "analytics-antigravity", Platform: service.PlatformAntigravity})
+	openAIAccount := mustCreateAccount(s.T(), s.client, &service.Account{Name: "analytics-openai", Platform: service.PlatformOpenAI})
+	now := time.Now().UTC()
+	start := now.Add(-time.Hour)
+	end := now.Add(time.Hour)
+
+	insert := func(groupID *int64, accountID int64, evidence *string, cost float64) {
+		exchangeRateAsOf := now
+		_, err := s.repo.Create(s.ctx, &service.UsageLog{
+			UserID: user.ID, APIKeyID: apiKey.ID, AccountID: accountID, GroupID: groupID,
+			RequestID: uuid.NewString(), Model: "gpt-5", InputTokens: 10, OutputTokens: 5,
+			TotalCost: cost, ActualCost: cost, GovernanceTargetPlatform: evidence, CreatedAt: now,
+			SourceCurrency: service.CurrencyUSD, SettlementCurrency: service.CurrencyUSD,
+			ExchangeRate: 1, ExchangeRateSource: "identity", ExchangeRateAsOf: &exchangeRateAsOf,
+		})
+		s.Require().NoError(err)
+	}
+	geminiEvidence := service.PlatformGemini
+	openAIEvidence := service.PlatformOpenAI
+	antigravityEvidence := service.PlatformAntigravity
+	insert(&compositeGroup.ID, antigravityAccount.ID, &geminiEvidence, 1)
+	insert(&nativeGroup.ID, antigravityAccount.ID, &openAIEvidence, 2)
+	insert(nil, openAIAccount.ID, &antigravityEvidence, 3)
+	insert(&compositeGroup.ID, antigravityAccount.ID, nil, 4)
+
+	dashboard, err := s.repo.GetUserDashboardStats(s.ctx, user.ID)
+	s.Require().NoError(err)
+	dashboardCosts := make(map[string]float64, len(dashboard.ByPlatform))
+	for _, row := range dashboard.ByPlatform {
+		dashboardCosts[row.Platform] = row.TotalActualCost
+	}
+	s.Require().Equal(map[string]float64{
+		service.PlatformAntigravity: 5,
+		service.PlatformAnthropic:   2,
+		service.PlatformOpenAI:      3,
+	}, dashboardCosts)
+	s.Require().Equal(10.0, dashboard.TotalActualCost)
+	s.Require().Equal(int64(4), dashboard.TotalRequests)
+
+	batch, err := s.repo.GetBatchUserUsageStats(s.ctx, []int64{user.ID}, start, end)
+	s.Require().NoError(err)
+	s.Require().InDelta(10.0, batch[user.ID].TotalActualCost, 1e-12)
+	batchCosts := make(map[string]float64, len(batch[user.ID].ByPlatform))
+	for _, row := range batch[user.ID].ByPlatform {
+		batchCosts[row.Platform] = row.TotalActualCost
+	}
+	s.Require().Equal(dashboardCosts, batchCosts)
 }
 
 // --- GetAccountTodayStats ---

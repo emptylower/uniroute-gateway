@@ -291,3 +291,47 @@ func TestIsUpstreamModelRestrictedByChannel_UnsupportedModel(t *testing.T) {
 	require.False(t, svc.isUpstreamModelRestrictedByChannel(context.Background(), 10, account, "totally-unknown-model"),
 		"unmappable model → upstream model empty → not restricted (account filter handles this)")
 }
+
+func TestIsUpstreamModelRestrictedByChannel_OpenAIPassthroughKeepsBaselineSchedulerSemantics(t *testing.T) {
+	ch := Channel{
+		ID: 35, Status: StatusActive, GroupIDs: []int64{10}, RestrictModels: true,
+		ModelPricing: []ChannelModelPricing{{Platform: PlatformOpenAI, Models: []string{"normal-upstream"}}},
+	}
+	channelSvc := newTestChannelService(makeStandardRepo(ch, map[int64]string{10: PlatformOpenAI}))
+	svc := &OpenAIGatewayService{channelService: channelSvc}
+	account := &Account{
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"model_mapping":         map[string]any{"public": "normal-upstream"},
+			"compact_model_mapping": map[string]any{"public": "compact-upstream"},
+		},
+		Extra: map[string]any{"openai_passthrough": true},
+	}
+
+	forwarding := resolveOpenAIForwardModelForEndpoint(account, "public", "", true)
+	require.Equal(t, "compact-upstream", forwarding.UpstreamModel, "passthrough forwarding remains endpoint-aware")
+	require.Equal(t, "normal-upstream", resolveOpenAIAccountUpstreamModelForRequest(account, "public", true), "scheduler keeps the pre-overlay resolution sequence")
+	require.False(t, svc.isUpstreamModelRestrictedByChannel(context.Background(), 10, account, "public", true), "channel restriction follows scheduler semantics, not passthrough forwarding")
+}
+
+func TestIsUpstreamModelRestrictedByChannel_CompactDisabledAccountUsesOrdinaryModel(t *testing.T) {
+	ch := Channel{
+		ID: 36, Status: StatusActive, GroupIDs: []int64{10}, RestrictModels: true,
+		ModelPricing: []ChannelModelPricing{{Platform: PlatformOpenAI, Models: []string{"normal-upstream"}}},
+	}
+	channelSvc := newTestChannelService(makeStandardRepo(ch, map[int64]string{10: PlatformOpenAI}))
+	svc := &OpenAIGatewayService{channelService: channelSvc}
+	account := &Account{
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"model_mapping":         map[string]any{"public": "normal-upstream"},
+			"compact_model_mapping": map[string]any{"public": "compact-upstream"},
+		},
+		Extra: map[string]any{"openai_passthrough": true, "openai_compact_mode": OpenAICompactModeForceOff},
+	}
+
+	require.False(t, account.AllowsOpenAICompact())
+	require.False(t, svc.isUpstreamModelRestrictedByChannel(context.Background(), 10, account, "public", false))
+}

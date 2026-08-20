@@ -3093,6 +3093,7 @@ func (h *OpenAIGatewayHandler) recordCyberPolicyIfMarked(c *gin.Context, apiKey 
 	if c.Request != nil {
 		requestCtx = c.Request.Context()
 	}
+	governanceTargetPlatform := cyberPolicyGovernanceTargetPlatform(c, apiKey)
 	platform := resolveOpsPlatform(requestCtx, apiKey, guessPlatformFromPath(requestPath))
 	var clientRequestID, userAgent, clientIPStr string
 	if c.Request != nil {
@@ -3146,22 +3147,23 @@ func (h *OpenAIGatewayHandler) recordCyberPolicyIfMarked(c *gin.Context, apiKey 
 		}
 		if forwardErrored && gwSvc != nil {
 			gwSvc.RecordCyberPolicyUsageLog(ctx, service.CyberPolicyUsageInput{
-				APIKey:             apiKey,
-				Account:            account,
-				Subscription:       subscription,
-				RequestID:          requestID,
-				Model:              model,
-				Stream:             stream,
-				InputTokens:        mark.UpstreamInTok,
-				OutputTokens:       mark.UpstreamOutTok,
-				InboundEndpoint:    inboundEndpoint,
-				UpstreamEndpoint:   upstreamEndpoint,
-				UserAgent:          userAgent,
-				IPAddress:          clientIPStr,
-				SessionID:          sessionID,
-				RequestPayloadHash: requestPayloadHash,
-				APIKeyService:      apiKeySvc,
-				ChannelUsageFields: channelFields,
+				APIKey:                   apiKey,
+				Account:                  account,
+				Subscription:             subscription,
+				RequestID:                requestID,
+				Model:                    model,
+				Stream:                   stream,
+				InputTokens:              mark.UpstreamInTok,
+				OutputTokens:             mark.UpstreamOutTok,
+				InboundEndpoint:          inboundEndpoint,
+				UpstreamEndpoint:         upstreamEndpoint,
+				UserAgent:                userAgent,
+				IPAddress:                clientIPStr,
+				SessionID:                sessionID,
+				RequestPayloadHash:       requestPayloadHash,
+				APIKeyService:            apiKeySvc,
+				GovernanceTargetPlatform: governanceTargetPlatform,
+				ChannelUsageFields:       channelFields,
 			})
 		}
 		if gwSvc != nil && cyberBlockKey != "" {
@@ -3171,6 +3173,14 @@ func (h *OpenAIGatewayHandler) recordCyberPolicyIfMarked(c *gin.Context, apiKey 
 			enqueueOpsErrorLog(opsSvc, buildCyberPolicyOpsErrorEntry(opsMeta, mark))
 		}
 	}()
+}
+
+func cyberPolicyGovernanceTargetPlatform(c *gin.Context, apiKey *service.APIKey) string {
+	requestCtx := context.Background()
+	if c != nil && c.Request != nil {
+		requestCtx = c.Request.Context()
+	}
+	return service.QuotaPlatform(requestCtx, apiKey)
 }
 
 // clearCyberPolicyTurnState resets the cyber mark and the per-request recorded

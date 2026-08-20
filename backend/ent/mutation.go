@@ -43903,6 +43903,7 @@ type UsageLogMutation struct {
 	model                        *string
 	requested_model              *string
 	upstream_model               *string
+	governance_target_platform   *string
 	channel_id                   *int64
 	addchannel_id                *int64
 	model_mapping_chain          *string
@@ -44360,6 +44361,55 @@ func (m *UsageLogMutation) UpstreamModelCleared() bool {
 func (m *UsageLogMutation) ResetUpstreamModel() {
 	m.upstream_model = nil
 	delete(m.clearedFields, usagelog.FieldUpstreamModel)
+}
+
+// SetGovernanceTargetPlatform sets the "governance_target_platform" field.
+func (m *UsageLogMutation) SetGovernanceTargetPlatform(s string) {
+	m.governance_target_platform = &s
+}
+
+// GovernanceTargetPlatform returns the value of the "governance_target_platform" field in the mutation.
+func (m *UsageLogMutation) GovernanceTargetPlatform() (r string, exists bool) {
+	v := m.governance_target_platform
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldGovernanceTargetPlatform returns the old "governance_target_platform" field's value of the UsageLog entity.
+// If the UsageLog object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UsageLogMutation) OldGovernanceTargetPlatform(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldGovernanceTargetPlatform is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldGovernanceTargetPlatform requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldGovernanceTargetPlatform: %w", err)
+	}
+	return oldValue.GovernanceTargetPlatform, nil
+}
+
+// ClearGovernanceTargetPlatform clears the value of the "governance_target_platform" field.
+func (m *UsageLogMutation) ClearGovernanceTargetPlatform() {
+	m.governance_target_platform = nil
+	m.clearedFields[usagelog.FieldGovernanceTargetPlatform] = struct{}{}
+}
+
+// GovernanceTargetPlatformCleared returns if the "governance_target_platform" field was cleared in this mutation.
+func (m *UsageLogMutation) GovernanceTargetPlatformCleared() bool {
+	_, ok := m.clearedFields[usagelog.FieldGovernanceTargetPlatform]
+	return ok
+}
+
+// ResetGovernanceTargetPlatform resets all changes to the "governance_target_platform" field.
+func (m *UsageLogMutation) ResetGovernanceTargetPlatform() {
+	m.governance_target_platform = nil
+	delete(m.clearedFields, usagelog.FieldGovernanceTargetPlatform)
 }
 
 // SetChannelID sets the "channel_id" field.
@@ -46883,7 +46933,7 @@ func (m *UsageLogMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *UsageLogMutation) Fields() []string {
-	fields := make([]string, 0, 52)
+	fields := make([]string, 0, 53)
 	if m.user != nil {
 		fields = append(fields, usagelog.FieldUserID)
 	}
@@ -46904,6 +46954,9 @@ func (m *UsageLogMutation) Fields() []string {
 	}
 	if m.upstream_model != nil {
 		fields = append(fields, usagelog.FieldUpstreamModel)
+	}
+	if m.governance_target_platform != nil {
+		fields = append(fields, usagelog.FieldGovernanceTargetPlatform)
 	}
 	if m.channel_id != nil {
 		fields = append(fields, usagelog.FieldChannelID)
@@ -47062,6 +47115,8 @@ func (m *UsageLogMutation) Field(name string) (ent.Value, bool) {
 		return m.RequestedModel()
 	case usagelog.FieldUpstreamModel:
 		return m.UpstreamModel()
+	case usagelog.FieldGovernanceTargetPlatform:
+		return m.GovernanceTargetPlatform()
 	case usagelog.FieldChannelID:
 		return m.ChannelID()
 	case usagelog.FieldModelMappingChain:
@@ -47175,6 +47230,8 @@ func (m *UsageLogMutation) OldField(ctx context.Context, name string) (ent.Value
 		return m.OldRequestedModel(ctx)
 	case usagelog.FieldUpstreamModel:
 		return m.OldUpstreamModel(ctx)
+	case usagelog.FieldGovernanceTargetPlatform:
+		return m.OldGovernanceTargetPlatform(ctx)
 	case usagelog.FieldChannelID:
 		return m.OldChannelID(ctx)
 	case usagelog.FieldModelMappingChain:
@@ -47322,6 +47379,13 @@ func (m *UsageLogMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetUpstreamModel(v)
+		return nil
+	case usagelog.FieldGovernanceTargetPlatform:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetGovernanceTargetPlatform(v)
 		return nil
 	case usagelog.FieldChannelID:
 		v, ok := value.(int64)
@@ -47965,6 +48029,9 @@ func (m *UsageLogMutation) ClearedFields() []string {
 	if m.FieldCleared(usagelog.FieldUpstreamModel) {
 		fields = append(fields, usagelog.FieldUpstreamModel)
 	}
+	if m.FieldCleared(usagelog.FieldGovernanceTargetPlatform) {
+		fields = append(fields, usagelog.FieldGovernanceTargetPlatform)
+	}
 	if m.FieldCleared(usagelog.FieldChannelID) {
 		fields = append(fields, usagelog.FieldChannelID)
 	}
@@ -48041,6 +48108,9 @@ func (m *UsageLogMutation) ClearField(name string) error {
 		return nil
 	case usagelog.FieldUpstreamModel:
 		m.ClearUpstreamModel()
+		return nil
+	case usagelog.FieldGovernanceTargetPlatform:
+		m.ClearGovernanceTargetPlatform()
 		return nil
 	case usagelog.FieldChannelID:
 		m.ClearChannelID()
@@ -48127,6 +48197,9 @@ func (m *UsageLogMutation) ResetField(name string) error {
 		return nil
 	case usagelog.FieldUpstreamModel:
 		m.ResetUpstreamModel()
+		return nil
+	case usagelog.FieldGovernanceTargetPlatform:
+		m.ResetGovernanceTargetPlatform()
 		return nil
 	case usagelog.FieldChannelID:
 		m.ResetChannelID()

@@ -1,10 +1,15 @@
 package handler
 
 import (
+	"context"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -149,6 +154,166 @@ func TestRecordCyberPolicyIfMarked_BlockKeyPlumbed(t *testing.T) {
 	require.NotPanics(t, func() {
 		h.recordCyberPolicyIfMarked(c, nil, nil, nil, "gpt-5", true, "deadbeef", service.ChannelUsageFields{}, "")
 	})
+}
+
+func TestCyberPolicyGovernanceTargetPlatformSnapshotsConcreteTargetBeforeDetachment(t *testing.T) {
+	tests := []struct {
+		name          string
+		requestCtx    context.Context
+		groupPlatform string
+		want          string
+	}{
+		{
+			name:          "composite target differs from antigravity account native platform",
+			requestCtx:    service.WithResolvedTargetPlatform(context.Background(), service.PlatformGemini),
+			groupPlatform: service.PlatformComposite,
+			want:          service.PlatformGemini,
+		},
+		{
+			name:          "forced target differs from native routing platform",
+			requestCtx:    context.WithValue(context.Background(), ctxkey.ForcePlatform, service.PlatformAntigravity),
+			groupPlatform: service.PlatformAnthropic,
+			want:          service.PlatformAntigravity,
+		},
+		{
+			name:          "native platform remains unchanged",
+			requestCtx:    context.Background(),
+			groupPlatform: service.PlatformAntigravity,
+			want:          service.PlatformAntigravity,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newTestGinContext()
+			c.Request = httptest.NewRequest("POST", "/openai/v1/responses", nil).WithContext(tt.requestCtx)
+			apiKey := &service.APIKey{Group: &service.Group{Platform: tt.groupPlatform}}
+
+			require.Equal(t, tt.want, cyberPolicyGovernanceTargetPlatform(c, apiKey))
+		})
+	}
+}
+
+type cyberDetachedUsageRepoStub struct {
+	service.UsageLogRepository
+	created chan *service.UsageLog
+}
+
+func (s *cyberDetachedUsageRepoStub) Create(_ context.Context, log *service.UsageLog) (bool, error) {
+	s.created <- log
+	return true, nil
+}
+
+type cyberDetachedUserRepoStub struct {
+	service.UserRepository
+}
+
+func (s *cyberDetachedUserRepoStub) DeductBalance(context.Context, int64, float64) error {
+	return nil
+}
+
+type cyberDetachedPlatformQuotaRepoStub struct {
+	service.UserPlatformQuotaRepository
+	mu       sync.Mutex
+	platform string
+}
+
+func (s *cyberDetachedPlatformQuotaRepoStub) IncrementUsageWithReset(_ context.Context, _ int64, platform string, _ float64, _ time.Time) error {
+	s.mu.Lock()
+	s.platform = platform
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *cyberDetachedPlatformQuotaRepoStub) lastPlatform() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.platform
+}
+
+func TestRecordCyberPolicyIfMarked_DetachesConcreteEvidenceFromBaselineQuotaPlatform(t *testing.T) {
+	tests := []struct {
+		name                string
+		requestContext      func(context.Context) context.Context
+		groupPlatform       string
+		account             *service.Account
+		wantEvidence        string
+		wantBillingPlatform string
+	}{
+		{
+			name: "composite",
+			requestContext: func(ctx context.Context) context.Context {
+				return service.WithResolvedTargetPlatform(ctx, service.PlatformGemini)
+			},
+			groupPlatform: service.PlatformComposite,
+			account: &service.Account{ID: 301, Platform: service.PlatformAntigravity,
+				Extra: map[string]any{"mixed_scheduling": true}},
+			wantEvidence:        service.PlatformGemini,
+			wantBillingPlatform: service.PlatformComposite,
+		},
+		{
+			name: "forced",
+			requestContext: func(ctx context.Context) context.Context {
+				return context.WithValue(ctx, ctxkey.ForcePlatform, service.PlatformAntigravity)
+			},
+			groupPlatform:       service.PlatformAnthropic,
+			account:             &service.Account{ID: 302, Platform: service.PlatformAntigravity},
+			wantEvidence:        service.PlatformAntigravity,
+			wantBillingPlatform: service.PlatformAnthropic,
+		},
+		{
+			name:                "native",
+			requestContext:      func(ctx context.Context) context.Context { return ctx },
+			groupPlatform:       service.PlatformOpenAI,
+			account:             &service.Account{ID: 303, Platform: service.PlatformOpenAI},
+			wantEvidence:        service.PlatformOpenAI,
+			wantBillingPlatform: service.PlatformOpenAI,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{}
+			cfg.Default.RateMultiplier = 1
+			usageRepo := &cyberDetachedUsageRepoStub{created: make(chan *service.UsageLog, 1)}
+			quotaRepo := &cyberDetachedPlatformQuotaRepoStub{}
+			billingCache := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, quotaRepo)
+			t.Cleanup(billingCache.Stop)
+			gateway := service.NewOpenAIGatewayService(
+				nil, usageRepo, nil, &cyberDetachedUserRepoStub{}, nil, nil, nil, cfg,
+				nil, nil, service.NewBillingService(cfg, nil), nil, billingCache, nil,
+				&service.DeferredService{}, nil, nil, nil, nil, nil, nil, quotaRepo,
+			)
+			h := &OpenAIGatewayHandler{gatewayService: gateway}
+			groupID := int64(401)
+			apiKey := &service.APIKey{
+				ID: 201, User: &service.User{ID: 101, BillingCurrency: service.CurrencyUSD}, GroupID: &groupID,
+				Group: &service.Group{ID: groupID, Platform: tt.groupPlatform, RateMultiplier: 1},
+			}
+			baseCtx, cancel := context.WithCancel(context.Background())
+			c := newTestGinContext()
+			c.Request = httptest.NewRequest("POST", "/openai/v1/responses", nil).WithContext(tt.requestContext(baseCtx))
+			service.MarkOpsCyberPolicy(c, service.CyberPolicyMark{
+				Message: "blocked", UpstreamStatus: 400, UpstreamInTok: 1200, UpstreamOutTok: 300,
+			})
+
+			h.recordCyberPolicyIfMarked(c, apiKey, tt.account, nil, "gpt-5.1", true, "", service.ChannelUsageFields{}, "")
+			cancel()
+
+			select {
+			case log := <-usageRepo.created:
+				require.NotNil(t, log.GovernanceTargetPlatform)
+				require.Equal(t, tt.wantEvidence, *log.GovernanceTargetPlatform)
+				require.Equal(t, service.RequestTypeCyberBlocked, log.RequestType)
+				require.Equal(t, 1200, log.InputTokens)
+				require.Equal(t, 300, log.OutputTokens)
+				require.Greater(t, log.ActualCost, 0.0)
+				require.Equal(t, tt.wantBillingPlatform, quotaRepo.lastPlatform())
+			case <-time.After(3 * time.Second):
+				t.Fatal("timed out waiting for detached cyber usage persistence")
+			}
+		})
+	}
 }
 
 // TestBuildCyberPolicyOpsErrorEntry_StatusCode verifies F6: the ops error log

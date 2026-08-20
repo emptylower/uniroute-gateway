@@ -2,6 +2,7 @@
 package schema
 
 import (
+	"fmt"
 	"time"
 
 	"entgo.io/ent"
@@ -53,6 +54,19 @@ func (UsageLog) Fields() []ent.Field {
 			MaxLen(100).
 			Optional().
 			Nillable(),
+		field.String("governance_target_platform").
+			MaxLen(32).
+			Optional().
+			Nillable().
+			Validate(func(value string) error {
+				switch value {
+				case "anthropic", "openai", "gemini", "antigravity", "grok":
+					return nil
+				default:
+					return fmt.Errorf("unsupported governance target platform %q", value)
+				}
+			}).
+			Comment("Concrete request target platform captured for model governance"),
 		field.Int64("channel_id").Optional().Nillable().Comment("渠道 ID"),
 		field.String("model_mapping_chain").MaxLen(500).Optional().Nillable().Comment("模型映射链"),
 		field.String("billing_tier").MaxLen(50).Optional().Nillable().Comment("计费层级标签"),

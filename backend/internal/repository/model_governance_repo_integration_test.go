@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -30,7 +31,7 @@ type observationProjectionDetails struct {
 	observationProjection
 	ConnectionID       sql.NullInt64
 	ResolvedRegistryID sql.NullInt64
-	RawSnapshot        string
+	SnapshotBatchID    string
 }
 
 func TestModelGovernanceRepository_RecordDiscoveryPreservesIDsAndIsIdempotent(t *testing.T) {
@@ -98,6 +99,142 @@ func TestModelGovernanceRepository_RecordDiscoveryPreservesPayloadBytesThroughJS
 	roundTripped, err := base64.StdEncoding.DecodeString(stored.Evidence.PayloadBase64)
 	require.NoError(t, err)
 	require.Equal(t, payload, roundTripped)
+}
+
+func TestModelGovernanceRepository_RecordDiscoveryPersistsLongExactModelID(t *testing.T) {
+	ctx := context.Background()
+	accountID := createGovernanceObservationAccount(t, "openai", `{}`)
+	provider := service.GovernanceProvider("openai")
+	modelID := "vendor/" + strings.Repeat("model-segment-", 24)
+
+	batchID, err := NewModelObservationRepository(integrationDB).RecordDiscovery(ctx, service.DiscoveryBatchInput{
+		IdempotencyKey: "long-model-" + fmt.Sprint(accountID), AccountID: accountID,
+		AccountProvider: &provider, RoutingPlatform: "openai", ModelIDs: []string{modelID},
+		RawSnapshot: []byte(fmt.Sprintf(`{"models":[%q]}`, modelID)), ObservedAt: time.Date(2026, time.August, 19, 14, 0, 0, 0, time.UTC),
+	})
+	require.NoError(t, err)
+	require.Greater(t, len(modelID), 255)
+	require.Equal(t, modelID, loadObservationProjection(t, accountID, modelID).ModelID)
+	require.Equal(t, []string{modelID}, loadBatchEventModelIDs(t, batchID))
+}
+
+func TestModelGovernanceRepository_SnapshotStorageIsNormalizedAndReferencesResolve(t *testing.T) {
+	ctx := context.Background()
+	accountID := createGovernanceObservationAccount(t, "openai", `{}`)
+	provider := service.GovernanceProvider("openai")
+	base := time.Date(2026, time.August, 19, 14, 15, 0, 0, time.UTC)
+	models := []string{"model-a", "model-b", "model-c"}
+	firstSnapshot := []byte(`{"models":["model-a","model-b","model-c"],"metadata":{"representative":"complete"}}`)
+	firstBatchID, err := NewModelObservationRepository(integrationDB).RecordDiscovery(ctx, service.DiscoveryBatchInput{
+		IdempotencyKey: "normalized-first-" + fmt.Sprint(accountID), AccountID: accountID,
+		AccountProvider: &provider, RoutingPlatform: "openai", ModelIDs: models,
+		RawSnapshot: firstSnapshot, ObservedAt: base,
+	})
+	require.NoError(t, err)
+	secondBatchID, err := NewModelObservationRepository(integrationDB).RecordDiscovery(ctx, service.DiscoveryBatchInput{
+		IdempotencyKey: "normalized-second-" + fmt.Sprint(accountID), AccountID: accountID,
+		AccountProvider: &provider, RoutingPlatform: "openai", ModelIDs: []string{"model-a", "model-c"},
+		RawSnapshot: []byte(`{"models":["model-a","model-c"]}`), ObservedAt: base.Add(time.Hour),
+	})
+	require.NoError(t, err)
+
+	var batchEvidenceCopies, projectionRawColumns, eventRawPayloads, unresolvedReferences int
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM model_classification_batches
+		WHERE batch_id = $1 AND raw_snapshot->'evidence' = $2::jsonb
+	`, firstBatchID, string(firstSnapshot)).Scan(&batchEvidenceCopies))
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM information_schema.columns
+		WHERE table_schema = 'public' AND table_name = 'model_observations' AND column_name = 'raw_snapshot'
+	`).Scan(&projectionRawColumns))
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM model_observation_events WHERE payload ? 'raw_snapshot'
+		  AND account_id = $1
+	`, accountID).Scan(&eventRawPayloads))
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM model_observation_events e
+		LEFT JOIN model_classification_batches causal ON causal.batch_id = e.batch_id
+		LEFT JOIN model_classification_batches snapshot ON snapshot.batch_id = e.snapshot_batch_id
+		WHERE e.account_id = $1 AND (causal.batch_id IS NULL OR snapshot.batch_id IS NULL)
+	`, accountID).Scan(&unresolvedReferences))
+	require.Equal(t, 1, batchEvidenceCopies, "the complete raw snapshot has one durable owner")
+	require.Zero(t, projectionRawColumns)
+	require.Zero(t, eventRawPayloads)
+	require.Zero(t, unresolvedReferences)
+	require.Equal(t, secondBatchID, loadObservationProjectionDetails(t, accountID, "model-a").SnapshotBatchID)
+	require.Equal(t, firstBatchID, loadObservationProjectionDetails(t, accountID, "model-b").SnapshotBatchID,
+		"omission preserves the last snapshot that contained the model")
+	missing := loadDirectBatchEventPostState(t, secondBatchID, "model-b")
+	require.Equal(t, secondBatchID, missing.BatchID)
+	require.Equal(t, firstBatchID, missing.SnapshotBatchID)
+}
+
+func TestModelGovernanceRepository_LargeCatalogStoresOneSnapshotAndBoundedReferences(t *testing.T) {
+	ctx := context.Background()
+	accountID := createGovernanceObservationAccount(t, "openai", `{}`)
+	provider := service.GovernanceProvider("openai")
+	models := make([]string, 1000)
+	for index := range models {
+		models[index] = fmt.Sprintf("capacity-model-%04d", index)
+	}
+	snapshot, err := json.Marshal(map[string]any{
+		"models":  models,
+		"padding": strings.Repeat("x", 2*1024*1024),
+	})
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(snapshot), 2*1024*1024)
+
+	batchID, err := NewModelObservationRepository(integrationDB).RecordDiscovery(ctx, service.DiscoveryBatchInput{
+		IdempotencyKey: "capacity-1000-" + fmt.Sprint(accountID), AccountID: accountID,
+		AccountProvider: &provider, RoutingPlatform: "openai", ModelIDs: models,
+		RawSnapshot: snapshot, ObservedAt: time.Date(2026, time.August, 19, 15, 0, 0, 0, time.UTC),
+	})
+	require.NoError(t, err)
+
+	var batches, observations, events, projectionRawColumns, unresolvedReferences, eventSnapshotCopies, maxEventPayloadBytes int
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM model_classification_batches WHERE account_id = $1
+	`, accountID).Scan(&batches))
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM model_observations WHERE account_id = $1
+	`, accountID).Scan(&observations))
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM information_schema.columns
+		WHERE table_schema = 'public' AND table_name = 'model_observations' AND column_name = 'raw_snapshot'
+	`).Scan(&projectionRawColumns))
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		SELECT COUNT(*), COALESCE(MAX(octet_length(payload::text)), 0),
+		       COUNT(*) FILTER (WHERE payload ? 'raw_snapshot' OR payload ? 'evidence')
+		FROM model_observation_events WHERE account_id = $1
+	`, accountID).Scan(&events, &maxEventPayloadBytes, &eventSnapshotCopies))
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM model_observations o
+		LEFT JOIN model_classification_batches snapshot ON snapshot.batch_id = o.snapshot_batch_id
+		WHERE o.account_id = $1 AND snapshot.batch_id IS NULL
+	`, accountID).Scan(&unresolvedReferences))
+	var unresolvedEventReferences int
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM model_observation_events e
+		LEFT JOIN model_classification_batches causal ON causal.batch_id = e.batch_id
+		LEFT JOIN model_classification_batches snapshot ON snapshot.batch_id = e.snapshot_batch_id
+		WHERE e.account_id = $1 AND (causal.batch_id IS NULL OR snapshot.batch_id IS NULL)
+	`, accountID).Scan(&unresolvedEventReferences))
+
+	require.Equal(t, 1, batches, "the raw catalog has one durable batch owner")
+	require.Equal(t, 1000, observations)
+	require.Equal(t, 1000, events)
+	require.Zero(t, projectionRawColumns)
+	require.Zero(t, eventSnapshotCopies)
+	require.Zero(t, unresolvedReferences)
+	require.Zero(t, unresolvedEventReferences)
+	require.Less(t, maxEventPayloadBytes, 4096, "event payloads contain bounded metadata, not the 2 MiB snapshot")
+	assertBatchSemanticOwner(t, batchID, service.DiscoveryBatchInput{
+		AccountID: accountID, AccountProvider: &provider, RoutingPlatform: "openai", ModelIDs: models,
+		RawSnapshot: snapshot, ObservedAt: time.Date(2026, time.August, 19, 15, 0, 0, 0, time.UTC),
+	})
 }
 
 func TestModelGovernanceRepository_RecordDiscoveryReplayRequiresEquivalentProvenance(t *testing.T) {
@@ -286,6 +423,7 @@ func TestModelGovernanceRepository_RecordDiscoveryEqualWatermarkUsesHighestProve
 	observedAt := time.Date(2026, time.August, 18, 15, 30, 0, 0, time.UTC)
 	connectionA, connectionB := int64(910), int64(920)
 	accountID := createGovernanceObservationAccount(t, "openai", `{}`)
+	secondAccountID := createGovernanceObservationAccount(t, "openai", `{}`)
 	inputA := func(accountID int64) service.DiscoveryBatchInput {
 		return service.DiscoveryBatchInput{
 			AccountID: accountID, AccountProvider: &provider, RoutingPlatform: "openai", ConnectionID: &connectionA,
@@ -301,7 +439,8 @@ func TestModelGovernanceRepository_RecordDiscoveryEqualWatermarkUsesHighestProve
 	var winningSnapshot []byte
 	for nonce := 0; ; nonce++ {
 		candidate := []byte(fmt.Sprintf(`{"catalog":"b","nonce":%d}`, nonce))
-		if discoveryInputDigest(t, inputB(accountID, candidate)) > discoveryInputDigest(t, inputA(accountID)) {
+		if discoveryInputDigest(t, inputB(accountID, candidate)) > discoveryInputDigest(t, inputA(accountID)) &&
+			discoveryInputDigest(t, inputB(secondAccountID, candidate)) > discoveryInputDigest(t, inputA(secondAccountID)) {
 			winningSnapshot = candidate
 			break
 		}
@@ -325,17 +464,119 @@ func TestModelGovernanceRepository_RecordDiscoveryEqualWatermarkUsesHighestProve
 	lowThenHighProjection, lowThenHighEvents := run(
 		"low-high", accountID, inputA(accountID), inputB(accountID, winningSnapshot),
 	)
+	assertProjectionSnapshotOwner(t, accountID, "model-b", inputB(accountID, winningSnapshot))
 	require.NotEmpty(t, lowThenHighEvents["first"], "the initial lower digest truthfully projects on arrival")
 	require.Contains(t, lowThenHighEvents["second"], "projection_replaced", "the later winner records replacement history")
-	recreateGovernanceObservationAccount(t, accountID, "openai", `{}`)
-
 	highThenLowProjection, highThenLowEvents := run(
-		"high-low", accountID, inputB(accountID, winningSnapshot), inputA(accountID),
+		"high-low", secondAccountID, inputB(secondAccountID, winningSnapshot), inputA(secondAccountID),
 	)
+	assertProjectionSnapshotOwner(t, secondAccountID, "model-b", inputB(secondAccountID, winningSnapshot))
 	require.NotEmpty(t, highThenLowEvents["first"])
 	require.Empty(t, highThenLowEvents["second"], "a losing batch arriving after the winner is evidence-only")
-	require.Equal(t, highThenLowProjection, lowThenHighProjection,
-		"presence, miss streak, timestamps, snapshots, and connections must follow the tuple winner")
+	require.Equal(t, withoutSnapshotBatchIDs(highThenLowProjection), withoutSnapshotBatchIDs(lowThenHighProjection),
+		"presence, miss streak, timestamps, snapshot references, and connections must follow the tuple winner")
+}
+
+func TestModelGovernanceRepository_RecordDiscoveryCanonicalMicrosecondConvergesAcrossArrivalOrders(t *testing.T) {
+	ctx := context.Background()
+	repo := NewModelObservationRepository(integrationDB)
+	provider := service.GovernanceProvider("openai")
+	base := time.Date(2026, time.August, 19, 13, 0, 0, 0, time.UTC)
+	canonicalAt := base.Truncate(time.Microsecond)
+	connectionA, connectionB := int64(931), int64(932)
+	inputA := service.DiscoveryBatchInput{
+		AccountProvider: &provider, RoutingPlatform: "openai", ConnectionID: &connectionA,
+		ModelIDs: []string{"model-a"}, RawSnapshot: []byte(`{"catalog":"sub-microsecond-a"}`), ObservedAt: base.Add(100 * time.Nanosecond),
+	}
+	inputB := service.DiscoveryBatchInput{
+		AccountProvider: &provider, RoutingPlatform: "openai", ConnectionID: &connectionB,
+		ModelIDs: []string{"model-b"}, RawSnapshot: []byte(`{"catalog":"sub-microsecond-b"}`), ObservedAt: base.Add(200 * time.Nanosecond),
+	}
+	firstAccountID := createGovernanceObservationAccount(t, "openai", `{}`)
+	secondAccountID := createGovernanceObservationAccount(t, "openai", `{}`)
+	for nonce := 0; ; nonce++ {
+		inputB.RawSnapshot = []byte(fmt.Sprintf(`{"catalog":"sub-microsecond-b","nonce":%d}`, nonce))
+		firstA, firstB := inputA, inputB
+		firstA.AccountID, firstB.AccountID = firstAccountID, firstAccountID
+		secondA, secondB := inputA, inputB
+		secondA.AccountID, secondB.AccountID = secondAccountID, secondAccountID
+		firstA.ObservedAt, firstB.ObservedAt = canonicalAt, canonicalAt
+		secondA.ObservedAt, secondB.ObservedAt = canonicalAt, canonicalAt
+		if discoveryInputDigest(t, firstB) > discoveryInputDigest(t, firstA) &&
+			discoveryInputDigest(t, secondB) > discoveryInputDigest(t, secondA) {
+			break
+		}
+	}
+	run := func(label string, accountID int64, first, second service.DiscoveryBatchInput) ([]observationProjectionDetails, string) {
+		t.Helper()
+		first.AccountID, second.AccountID = accountID, accountID
+		canonicalFirst, canonicalSecond := first, second
+		canonicalFirst.ObservedAt, canonicalSecond.ObservedAt = canonicalAt, canonicalAt
+		winnerModelID := first.ModelIDs[0]
+		if discoveryInputDigest(t, canonicalSecond) > discoveryInputDigest(t, canonicalFirst) {
+			winnerModelID = second.ModelIDs[0]
+		}
+		first.IdempotencyKey = fmt.Sprintf("canonical-microsecond-%s-first-%d", label, accountID)
+		second.IdempotencyKey = fmt.Sprintf("canonical-microsecond-%s-second-%d", label, accountID)
+		firstBatchID, err := repo.RecordDiscovery(ctx, first)
+		require.NoError(t, err)
+		secondBatchID, err := repo.RecordDiscovery(ctx, second)
+		require.NoError(t, err)
+		require.Equal(t, canonicalAt, loadBatchObservedAt(t, firstBatchID))
+		require.Equal(t, canonicalAt, loadBatchObservedAt(t, secondBatchID))
+		assertBatchEventTimesCanonical(t, firstBatchID)
+		assertBatchEventTimesCanonical(t, secondBatchID)
+		for _, projection := range loadObservationProjectionDetailsForAccount(t, accountID) {
+			require.Equal(t, canonicalAt, projection.FirstSeenAt)
+			require.Equal(t, canonicalAt, projection.LastSeenAt)
+		}
+		return loadObservationProjectionDetailsForAccount(t, accountID), winnerModelID
+	}
+
+	firstProjection, firstWinner := run("a-b", firstAccountID, inputA, inputB)
+	require.Equal(t, []string{firstWinner}, loadPresentObservationModelIDs(t, firstAccountID))
+	firstWinnerInput := inputA
+	if firstWinner == inputB.ModelIDs[0] {
+		firstWinnerInput = inputB
+	}
+	firstWinnerInput.AccountID = firstAccountID
+	firstWinnerInput.ObservedAt = canonicalAt
+	assertProjectionSnapshotOwner(t, firstAccountID, firstWinner, firstWinnerInput)
+	secondProjection, secondWinner := run("b-a", secondAccountID, inputB, inputA)
+	require.Equal(t, withoutSnapshotBatchIDs(firstProjection), withoutSnapshotBatchIDs(secondProjection))
+	require.Equal(t, []string{secondWinner}, loadPresentObservationModelIDs(t, secondAccountID))
+	secondWinnerInput := inputA
+	if secondWinner == inputB.ModelIDs[0] {
+		secondWinnerInput = inputB
+	}
+	secondWinnerInput.AccountID = secondAccountID
+	secondWinnerInput.ObservedAt = canonicalAt
+	assertProjectionSnapshotOwner(t, secondAccountID, secondWinner, secondWinnerInput)
+}
+
+func TestModelGovernanceRepository_RecordDiscoveryDifferentCanonicalMicrosecondsRemainTimeOrdered(t *testing.T) {
+	ctx := context.Background()
+	repo := NewModelObservationRepository(integrationDB)
+	provider := service.GovernanceProvider("openai")
+	accountID := createGovernanceObservationAccount(t, "openai", `{}`)
+	base := time.Date(2026, time.August, 19, 13, 30, 0, 0, time.UTC)
+	older := service.DiscoveryBatchInput{
+		IdempotencyKey: "canonical-order-older-" + fmt.Sprint(accountID), AccountID: accountID,
+		AccountProvider: &provider, RoutingPlatform: "openai", ModelIDs: []string{"older-model"},
+		RawSnapshot: []byte(`{"catalog":"older"}`), ObservedAt: base.Add(900 * time.Nanosecond),
+	}
+	newer := service.DiscoveryBatchInput{
+		IdempotencyKey: "canonical-order-newer-" + fmt.Sprint(accountID), AccountID: accountID,
+		AccountProvider: &provider, RoutingPlatform: "openai", ModelIDs: []string{"newer-model"},
+		RawSnapshot: []byte(`{"catalog":"newer"}`), ObservedAt: base.Add(1100 * time.Nanosecond),
+	}
+
+	_, err := repo.RecordDiscovery(ctx, newer)
+	require.NoError(t, err)
+	olderBatchID, err := repo.RecordDiscovery(ctx, older)
+	require.NoError(t, err)
+	require.Empty(t, loadBatchEventTypes(t, olderBatchID))
+	require.Equal(t, []string{"newer-model"}, loadPresentObservationModelIDs(t, accountID))
 }
 
 func TestModelGovernanceRepository_RecordDiscoveryEqualWatermarkEmptyWinnerClearsProjection(t *testing.T) {
@@ -364,13 +605,15 @@ func TestModelGovernanceRepository_RecordDiscoveryEqualWatermarkEmptyWinnerClear
 		empty.RawSnapshot = []byte(fmt.Sprintf(`{"catalog":"empty","nonce":%d}`, nonce))
 	}
 
-	_, err := repo.RecordDiscovery(ctx, populated)
+	populatedBatchID, err := repo.RecordDiscovery(ctx, populated)
 	require.NoError(t, err)
 	emptyBatchID, err := repo.RecordDiscovery(ctx, empty)
 	require.NoError(t, err)
 	require.Empty(t, loadObservationProjections(t, accountID), "an empty higher-digest winner owns an empty projection")
 	require.Contains(t, loadBatchEventTypes(t, emptyBatchID), "projection_replaced")
 	require.Equal(t, 2, countDiscoveryBatches(t, accountID))
+	assertBatchSemanticOwner(t, populatedBatchID, populated)
+	assertBatchSemanticOwner(t, emptyBatchID, empty)
 }
 
 func TestModelGovernanceRepository_RecordDiscoveryEqualWatermarkReplacementAlwaysRestoresPreWatermarkBaseline(t *testing.T) {
@@ -407,8 +650,9 @@ func TestModelGovernanceRepository_RecordDiscoveryEqualWatermarkReplacementAlway
 			break
 		}
 	}
+	var winningBatchID string
 	for _, input := range inputs {
-		_, err := repo.RecordDiscovery(ctx, input)
+		winningBatchID, err = repo.RecordDiscovery(ctx, input)
 		require.NoError(t, err)
 	}
 
@@ -416,6 +660,8 @@ func TestModelGovernanceRepository_RecordDiscoveryEqualWatermarkReplacementAlway
 	require.Equal(t, "missing", baseline.Presence)
 	require.Equal(t, 1, baseline.MissStreak, "only the final winning complete catalog may advance the baseline miss streak")
 	require.Equal(t, []string{"winner-2"}, loadPresentObservationModelIDs(t, accountID))
+	assertBatchSemanticOwner(t, winningBatchID, inputs[2])
+	assertProjectionSnapshotOwner(t, accountID, "winner-2", inputs[2])
 }
 
 func TestModelGovernanceRepository_RecordDiscoveryEqualTupleDuplicateIsEvidenceOnly(t *testing.T) {
@@ -463,13 +709,17 @@ func TestModelGovernanceRepository_RecordDiscoveryEqualTupleDuplicateCannotOwnLa
 	}
 	higher = forceHigherDigest(t, projecting, higher, "final")
 
-	run := func(label string, withDuplicate bool) []observationProjectionDetails {
+	run := func(label string, accountID int64, withDuplicate bool) []observationProjectionDetails {
 		t.Helper()
 		initial := baseline
+		initial.AccountID = accountID
 		initial.IdempotencyKey = fmt.Sprintf("duplicate-owner-%s-baseline-%d", label, accountID)
 		owner := projecting
+		owner.AccountID = accountID
 		owner.IdempotencyKey = fmt.Sprintf("duplicate-owner-%s-projecting-%d", label, accountID)
 		winner := higher
+		winner.AccountID = accountID
+		winner = forceHigherDigest(t, owner, winner, "final")
 		winner.IdempotencyKey = fmt.Sprintf("duplicate-owner-%s-final-%d", label, accountID)
 
 		_, err := repo.RecordDiscovery(ctx, initial)
@@ -482,24 +732,19 @@ func TestModelGovernanceRepository_RecordDiscoveryEqualTupleDuplicateCannotOwnLa
 			duplicateBatchID, duplicateErr := repo.RecordDiscovery(ctx, duplicate)
 			require.NoError(t, duplicateErr)
 			require.Empty(t, loadBatchEventTypes(t, duplicateBatchID))
-			// Move the projecting owner's heap tuple after its duplicate so an
-			// unspecified SQL tie-break can select the evidence-only row.
-			_, err = integrationDB.ExecContext(ctx, `
-				UPDATE model_classification_batches SET raw_snapshot = raw_snapshot WHERE batch_id = $1
-			`, ownerBatchID)
-			require.NoError(t, err)
+			require.NotEmpty(t, ownerBatchID)
 		}
 		_, err = repo.RecordDiscovery(ctx, winner)
 		require.NoError(t, err)
 		return loadObservationProjectionDetailsForAccount(t, accountID)
 	}
 
-	withoutDuplicate := run("without", false)
-	recreateGovernanceObservationAccount(t, accountID, "openai", `{}`)
-	withDuplicate := run("with", true)
-	require.Equal(t, withoutDuplicate, withDuplicate,
+	withoutDuplicate := run("without", accountID, false)
+	secondAccountID := createGovernanceObservationAccount(t, "openai", `{}`)
+	withDuplicate := run("with", secondAccountID, true)
+	require.Equal(t, withoutSnapshotBatchIDs(withoutDuplicate), withoutSnapshotBatchIDs(withDuplicate),
 		"an evidence-only equal-tuple duplicate must not replace the batch that owns projection events")
-	require.Equal(t, 1, loadObservationProjection(t, accountID, "baseline-model").MissStreak)
+	require.Equal(t, 1, loadObservationProjection(t, secondAccountID, "baseline-model").MissStreak)
 }
 
 func TestModelGovernanceRepository_RecordDiscoveryReplacementEventsDescribeCommittedStateChange(t *testing.T) {
@@ -754,8 +999,9 @@ func TestModelGovernanceRepository_ObservationEventsSnapshotCompleteCommittedPos
 		require.True(t, event.HasResolvedRegistryID, "%s/%s must snapshot resolved_registry_id, including null", event.ModelID, event.Transition)
 		require.True(t, event.FirstSeenAt.Valid)
 		require.True(t, event.LastSeenAt.Valid)
-		require.True(t, event.RawSnapshot.Valid)
-		require.NotEmpty(t, event.RawSnapshot.String)
+		require.NotEmpty(t, event.BatchID)
+		require.NotEmpty(t, event.SnapshotBatchID)
+		require.False(t, event.HasRawSnapshot)
 		require.False(t, event.LastSeenAt.Time.Before(event.FirstSeenAt.Time))
 	}
 	removed := loadDirectBatchEventPostState(t, thirdBatchID, "removed-model")
@@ -799,12 +1045,22 @@ func TestModelGovernanceRepository_RecordDiscoveryLaterReplacementConvergesMetad
 	run := func(label string, firstPrior, secondPrior service.DiscoveryBatchInput) observationProjectionDetails {
 		t.Helper()
 		initial := base
+		initial.AccountID = accountID
+		firstPrior.AccountID, secondPrior.AccountID = accountID, accountID
+		if firstPrior.ModelIDs == nil {
+			firstPrior = forceHigherDigest(t, secondPrior, firstPrior, "prior-high")
+		} else if secondPrior.ModelIDs == nil {
+			secondPrior = forceHigherDigest(t, firstPrior, secondPrior, "prior-high")
+		}
 		initial.IdempotencyKey = fmt.Sprintf("metadata-%s-base-%d", label, accountID)
 		firstPrior.IdempotencyKey = fmt.Sprintf("metadata-%s-prior-first-%d", label, accountID)
 		secondPrior.IdempotencyKey = fmt.Sprintf("metadata-%s-prior-second-%d", label, accountID)
 		low := laterLow
+		low.AccountID = accountID
 		low.IdempotencyKey = fmt.Sprintf("metadata-%s-later-low-%d", label, accountID)
 		high := laterHigh
+		high.AccountID = accountID
+		high = forceHigherDigest(t, low, high, "later-high")
 		high.IdempotencyKey = fmt.Sprintf("metadata-%s-later-high-%d", label, accountID)
 		_, err := repo.RecordDiscovery(ctx, initial)
 		require.NoError(t, err)
@@ -820,10 +1076,23 @@ func TestModelGovernanceRepository_RecordDiscoveryLaterReplacementConvergesMetad
 	}
 
 	lowThenHigh := run("low-high", priorLow, priorHigh)
-	recreateGovernanceObservationAccount(t, accountID, "openai", `{}`)
+	firstAccountID := accountID
+	secondAccountID := createGovernanceObservationAccount(t, "openai", `{}`)
+	for _, input := range []*service.DiscoveryBatchInput{&base, &priorLow, &priorHigh, &laterLow, &laterHigh} {
+		input.AccountID = secondAccountID
+	}
+	accountID = secondAccountID
 	highThenLow := run("high-low", priorHigh, priorLow)
+	firstBase := base
+	firstBase.AccountID = firstAccountID
+	secondBase := base
+	secondBase.AccountID = secondAccountID
+	assertProjectionSnapshotOwner(t, firstAccountID, "shared-model", firstBase)
+	assertProjectionSnapshotOwner(t, secondAccountID, "shared-model", secondBase)
+	highThenLow.SnapshotBatchID = ""
+	lowThenHigh.SnapshotBatchID = ""
 	require.Equal(t, highThenLow, lowThenHigh,
-		"connection, first/last seen, raw snapshot, registry, classification, presence, and miss state must use the prior canonical final event")
+		"connection, first/last seen, snapshot reference, registry, classification, presence, and miss state must use the prior canonical final event")
 	require.Equal(t, "missing", lowThenHigh.Presence)
 	require.Equal(t, sql.NullInt64{Int64: baseConnection, Valid: true}, lowThenHigh.ConnectionID)
 }
@@ -1001,26 +1270,122 @@ func TestModelGovernanceRepository_ObservationEventsRetainIdentityAfterAccountDe
 	provider := service.GovernanceProvider("openai")
 	modelID := "reconstructable-model"
 
-	_, err := NewModelObservationRepository(integrationDB).RecordDiscovery(ctx, service.DiscoveryBatchInput{
+	batchID, err := NewModelObservationRepository(integrationDB).RecordDiscovery(ctx, service.DiscoveryBatchInput{
 		IdempotencyKey: "reconstructable-" + fmt.Sprint(accountID), AccountID: accountID,
 		AccountProvider: &provider, RoutingPlatform: "openai", ModelIDs: []string{modelID},
 		RawSnapshot: []byte(`{"source":"deletion-test"}`), ObservedAt: time.Date(2026, time.August, 18, 19, 0, 0, 0, time.UTC),
 	})
 	require.NoError(t, err)
 
-	_, err = integrationDB.ExecContext(ctx, `DELETE FROM accounts WHERE id = $1`, accountID)
-	require.NoError(t, err)
+	require.NoError(t, NewAccountRepository(integrationEntClient, integrationDB, nil).Delete(ctx, accountID))
 
 	var storedAccountID int64
-	var storedModelID, eventType string
+	var storedModelID, eventType, storedBatchID, snapshotBatchID, rawSnapshot, idempotencyKey string
+	var storedConnectionID sql.NullInt64
+	var storedObservedAt time.Time
 	require.NoError(t, integrationDB.QueryRowContext(ctx, `
-		SELECT account_id, upstream_model_id, event_type
-		FROM model_observation_events
-		WHERE account_id = $1 AND upstream_model_id = $2
-	`, accountID, modelID).Scan(&storedAccountID, &storedModelID, &eventType))
+		SELECT e.account_id, e.upstream_model_id, e.event_type, e.batch_id, e.snapshot_batch_id,
+		       b.connection_id, b.idempotency_key, b.observed_at, b.raw_snapshot::text
+		FROM model_observation_events e
+		JOIN model_classification_batches b ON b.batch_id = e.snapshot_batch_id
+		WHERE e.account_id = $1 AND e.upstream_model_id = $2
+	`, accountID, modelID).Scan(&storedAccountID, &storedModelID, &eventType, &storedBatchID, &snapshotBatchID,
+		&storedConnectionID, &idempotencyKey, &storedObservedAt, &rawSnapshot))
 	require.Equal(t, accountID, storedAccountID)
 	require.Equal(t, modelID, storedModelID)
 	require.Equal(t, "discovered", eventType)
+	require.Equal(t, batchID, storedBatchID)
+	require.Equal(t, batchID, snapshotBatchID)
+	require.Equal(t, "reconstructable-"+fmt.Sprint(accountID), idempotencyKey)
+	require.Contains(t, rawSnapshot, "deletion-test")
+	require.False(t, storedObservedAt.IsZero())
+	var batchCount, observationCount int
+	var accountDeletedAt sql.NullTime
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM model_classification_batches WHERE batch_id = $1`, batchID).Scan(&batchCount))
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM model_observations WHERE account_id = $1`, accountID).Scan(&observationCount))
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT deleted_at FROM accounts WHERE id = $1`, accountID).Scan(&accountDeletedAt))
+	require.Equal(t, 1, batchCount)
+	require.Equal(t, 1, observationCount, "soft deletion preserves the current projection alongside immutable evidence")
+	require.True(t, accountDeletedAt.Valid, "accountRepository.Delete must exercise the production soft-delete workflow")
+}
+
+func TestModelGovernanceRepository_AllBatchShapesSurviveAccountDeletion(t *testing.T) {
+	ctx := context.Background()
+	accountID := createGovernanceObservationAccount(t, "openai", `{}`)
+	provider := service.GovernanceProvider("openai")
+	repo := NewModelObservationRepository(integrationDB)
+	base := time.Date(2026, time.August, 19, 15, 0, 0, 0, time.UTC)
+	connectionID := int64(951)
+
+	record := func(key string, modelIDs []string, raw string, observedAt time.Time) string {
+		t.Helper()
+		batchID, err := repo.RecordDiscovery(ctx, service.DiscoveryBatchInput{
+			IdempotencyKey: key + fmt.Sprint(accountID), AccountID: accountID,
+			ConnectionID: &connectionID, AccountProvider: &provider, RoutingPlatform: "openai", ModelIDs: modelIDs,
+			RawSnapshot: []byte(raw), ObservedAt: observedAt,
+		})
+		require.NoError(t, err)
+		return batchID
+	}
+	nonEmptyBatchID := record("survive-non-empty-", []string{"model"}, `{"shape":"non-empty"}`, base)
+	emptyBatchID := record("survive-empty-", nil, `{"shape":"empty"}`, base.Add(time.Hour))
+	staleBatchID := record("survive-stale-", []string{"stale"}, `{"shape":"stale"}`, base.Add(-time.Hour))
+	equalLoserBatchID := record("survive-equal-loser-", nil, `{"shape":"empty"}`, base.Add(time.Hour))
+	require.Empty(t, loadBatchEventTypes(t, staleBatchID))
+	require.Empty(t, loadBatchEventTypes(t, equalLoserBatchID))
+
+	_, err := integrationDB.ExecContext(ctx, `DELETE FROM accounts WHERE id = $1`, accountID)
+	require.NoError(t, err)
+	for batchID, shape := range map[string]string{
+		nonEmptyBatchID:   "non-empty",
+		emptyBatchID:      "empty",
+		staleBatchID:      "stale",
+		equalLoserBatchID: "empty",
+	} {
+		var storedAccountID int64
+		var storedConnectionID int64
+		var idempotencyKey, rawSnapshot, provenanceDigest string
+		var observedAt time.Time
+		require.NoError(t, integrationDB.QueryRowContext(ctx, `
+			SELECT account_id, connection_id, idempotency_key, raw_snapshot::text,
+			       raw_snapshot->'provenance'->>'digest', observed_at
+			FROM model_classification_batches WHERE batch_id = $1
+		`, batchID).Scan(&storedAccountID, &storedConnectionID, &idempotencyKey, &rawSnapshot, &provenanceDigest, &observedAt))
+		require.Equal(t, accountID, storedAccountID)
+		require.Equal(t, connectionID, storedConnectionID)
+		require.NotEmpty(t, idempotencyKey)
+		require.Contains(t, rawSnapshot, shape)
+		require.NotEmpty(t, provenanceDigest)
+		require.False(t, observedAt.IsZero())
+	}
+	require.NotEmpty(t, loadBatchEventTypes(t, nonEmptyBatchID))
+	require.NotEmpty(t, loadBatchEventTypes(t, emptyBatchID))
+}
+
+func TestModelGovernanceRepository_EmptyZeroEventBatchSurvivesAccountDeletion(t *testing.T) {
+	ctx := context.Background()
+	accountID := createGovernanceObservationAccount(t, "openai", `{}`)
+	provider := service.GovernanceProvider("openai")
+	connectionID := int64(952)
+	batchID, err := NewModelObservationRepository(integrationDB).RecordDiscovery(ctx, service.DiscoveryBatchInput{
+		IdempotencyKey: "survive-empty-zero-events-" + fmt.Sprint(accountID), AccountID: accountID,
+		ConnectionID: &connectionID, AccountProvider: &provider, RoutingPlatform: "openai",
+		RawSnapshot: []byte(`{"shape":"empty-zero-events"}`), ObservedAt: time.Date(2026, time.August, 19, 16, 0, 0, 0, time.UTC),
+	})
+	require.NoError(t, err)
+	require.Empty(t, loadBatchEventTypes(t, batchID))
+
+	_, err = integrationDB.ExecContext(ctx, `DELETE FROM accounts WHERE id = $1`, accountID)
+	require.NoError(t, err)
+	var storedAccountID, storedConnectionID int64
+	var rawSnapshot string
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		SELECT account_id, connection_id, raw_snapshot::text
+		FROM model_classification_batches WHERE batch_id = $1
+	`, batchID).Scan(&storedAccountID, &storedConnectionID, &rawSnapshot))
+	require.Equal(t, accountID, storedAccountID)
+	require.Equal(t, connectionID, storedConnectionID)
+	require.Contains(t, rawSnapshot, "empty-zero-events")
 }
 
 func createGovernanceObservationAccount(t *testing.T, platform, credentials string) int64 {
@@ -1032,18 +1397,6 @@ func createGovernanceObservationAccount(t *testing.T, platform, credentials stri
 		RETURNING id
 	`, fmt.Sprintf("governance-observation-%s-%d", platform, time.Now().UnixNano()), platform, credentials).Scan(&accountID))
 	return accountID
-}
-
-func recreateGovernanceObservationAccount(t *testing.T, accountID int64, platform, credentials string) {
-	t.Helper()
-	ctx := context.Background()
-	_, err := integrationDB.ExecContext(ctx, `DELETE FROM accounts WHERE id = $1`, accountID)
-	require.NoError(t, err)
-	_, err = integrationDB.ExecContext(ctx, `
-		INSERT INTO accounts (id, name, platform, type, credentials)
-		VALUES ($1, $2, $3, 'apikey', $4::jsonb)
-	`, accountID, fmt.Sprintf("governance-observation-%s-recreated-%d", platform, time.Now().UnixNano()), platform, credentials)
-	require.NoError(t, err)
 }
 
 func loadObservationProjections(t *testing.T, accountID int64) []observationProjection {
@@ -1081,11 +1434,11 @@ func loadObservationProjectionDetails(t *testing.T, accountID int64, modelID str
 	var item observationProjectionDetails
 	require.NoError(t, integrationDB.QueryRowContext(context.Background(), `
 		SELECT upstream_model_id, classification, classification_reason, upstream_presence,
-		       miss_streak, first_seen_at, last_seen_at, connection_id, resolved_registry_id, raw_snapshot::text
+		       miss_streak, first_seen_at, last_seen_at, connection_id, resolved_registry_id, snapshot_batch_id
 		FROM model_observations WHERE account_id = $1 AND upstream_model_id = $2
 	`, accountID, modelID).Scan(
 		&item.ModelID, &item.Classification, &item.Reason, &item.Presence,
-		&item.MissStreak, &item.FirstSeenAt, &item.LastSeenAt, &item.ConnectionID, &item.ResolvedRegistryID, &item.RawSnapshot,
+		&item.MissStreak, &item.FirstSeenAt, &item.LastSeenAt, &item.ConnectionID, &item.ResolvedRegistryID, &item.SnapshotBatchID,
 	))
 	return item
 }
@@ -1094,7 +1447,7 @@ func loadObservationProjectionDetailsForAccount(t *testing.T, accountID int64) [
 	t.Helper()
 	rows, err := integrationDB.QueryContext(context.Background(), `
 		SELECT upstream_model_id, classification, classification_reason, upstream_presence,
-		       miss_streak, first_seen_at, last_seen_at, connection_id, resolved_registry_id, raw_snapshot::text
+		       miss_streak, first_seen_at, last_seen_at, connection_id, resolved_registry_id, snapshot_batch_id
 		FROM model_observations WHERE account_id = $1 ORDER BY upstream_model_id
 	`, accountID)
 	require.NoError(t, err)
@@ -1104,7 +1457,7 @@ func loadObservationProjectionDetailsForAccount(t *testing.T, accountID int64) [
 		var item observationProjectionDetails
 		require.NoError(t, rows.Scan(
 			&item.ModelID, &item.Classification, &item.Reason, &item.Presence,
-			&item.MissStreak, &item.FirstSeenAt, &item.LastSeenAt, &item.ConnectionID, &item.ResolvedRegistryID, &item.RawSnapshot,
+			&item.MissStreak, &item.FirstSeenAt, &item.LastSeenAt, &item.ConnectionID, &item.ResolvedRegistryID, &item.SnapshotBatchID,
 		))
 		result = append(result, item)
 	}
@@ -1159,6 +1512,55 @@ func loadBatchRawSnapshot(t *testing.T, batchID string) string {
 	return snapshot
 }
 
+func assertProjectionSnapshotOwner(t *testing.T, accountID int64, modelID string, expected service.DiscoveryBatchInput) {
+	t.Helper()
+	projection := loadObservationProjectionDetails(t, accountID, modelID)
+	require.NotEmpty(t, projection.SnapshotBatchID)
+	expected.AccountID = accountID
+	assertBatchSemanticOwner(t, projection.SnapshotBatchID, expected)
+}
+
+func assertBatchSemanticOwner(t *testing.T, batchID string, expected service.DiscoveryBatchInput) {
+	t.Helper()
+	var digest, evidence string
+	require.NoError(t, integrationDB.QueryRowContext(context.Background(), `
+		SELECT raw_snapshot->'provenance'->>'digest', raw_snapshot->'evidence'
+		FROM model_classification_batches WHERE batch_id = $1
+	`, batchID).Scan(&digest, &evidence))
+	require.Equal(t, discoveryInputDigest(t, expected), digest)
+	require.JSONEq(t, string(expected.RawSnapshot), evidence)
+}
+
+func loadBatchObservedAt(t *testing.T, batchID string) time.Time {
+	t.Helper()
+	var observedAt time.Time
+	require.NoError(t, integrationDB.QueryRowContext(context.Background(), `
+		SELECT observed_at FROM model_classification_batches WHERE batch_id = $1
+	`, batchID).Scan(&observedAt))
+	return observedAt
+}
+
+func assertBatchEventTimesCanonical(t *testing.T, batchID string) {
+	t.Helper()
+	rows, err := integrationDB.QueryContext(context.Background(), `
+		SELECT (payload->>'observed_at')::timestamptz,
+		       (payload->>'first_seen_at')::timestamptz,
+		       (payload->>'last_seen_at')::timestamptz
+		FROM model_observation_events WHERE batch_id = $1
+	`, batchID)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, rows.Close()) }()
+	for rows.Next() {
+		var observedAt, firstSeenAt, lastSeenAt time.Time
+		require.NoError(t, rows.Scan(&observedAt, &firstSeenAt, &lastSeenAt))
+		for _, value := range []time.Time{observedAt, firstSeenAt, lastSeenAt} {
+			require.Equal(t, value.Truncate(time.Microsecond), value)
+			require.Equal(t, time.UTC, value.Location())
+		}
+	}
+	require.NoError(t, rows.Err())
+}
+
 func loadBatchAccountID(t *testing.T, batchID string) int64 {
 	t.Helper()
 	var accountID int64
@@ -1171,9 +1573,8 @@ func loadBatchAccountID(t *testing.T, batchID string) int64 {
 func loadBatchEventModelIDs(t *testing.T, batchID string) []string {
 	t.Helper()
 	rows, err := integrationDB.QueryContext(context.Background(), `
-		SELECT o.upstream_model_id
+		SELECT e.upstream_model_id
 		FROM model_observation_events e
-		JOIN model_observations o ON o.id = e.observation_id
 		WHERE e.batch_id = $1
 		ORDER BY e.id
 	`, batchID)
@@ -1213,6 +1614,14 @@ func countDiscoveryBatches(t *testing.T, accountID int64) int {
 		SELECT COUNT(*) FROM model_classification_batches WHERE account_id = $1
 	`, accountID).Scan(&count))
 	return count
+}
+
+func withoutSnapshotBatchIDs(items []observationProjectionDetails) []observationProjectionDetails {
+	result := append([]observationProjectionDetails(nil), items...)
+	for index := range result {
+		result[index].SnapshotBatchID = ""
+	}
+	return result
 }
 
 func discoveryInputDigest(t *testing.T, input service.DiscoveryBatchInput) string {
@@ -1276,13 +1685,15 @@ func setObservationAdminState(t *testing.T, accountID int64, modelID, classifica
 type directObservationEventPostState struct {
 	ModelID               string
 	Transition            string
+	BatchID               string
+	SnapshotBatchID       string
 	Classification        string
 	Reason                string
 	ConnectionID          sql.NullInt64
 	ResolvedRegistryID    sql.NullInt64
 	FirstSeenAt           sql.NullTime
 	LastSeenAt            sql.NullTime
-	RawSnapshot           sql.NullString
+	HasRawSnapshot        bool
 	HasConnectionID       bool
 	HasResolvedRegistryID bool
 }
@@ -1290,11 +1701,12 @@ type directObservationEventPostState struct {
 func loadDirectObservationEventPostStates(t *testing.T, accountID int64) []directObservationEventPostState {
 	t.Helper()
 	rows, err := integrationDB.QueryContext(context.Background(), `
-		SELECT upstream_model_id, COALESCE(payload->>'transition', event_type), classification, classification_reason,
+		SELECT upstream_model_id, COALESCE(payload->>'transition', event_type), batch_id, snapshot_batch_id,
+		       classification, classification_reason,
 		       (payload ? 'connection_id'), NULLIF(payload->>'connection_id', '')::bigint,
 		       (payload ? 'resolved_registry_id'), NULLIF(payload->>'resolved_registry_id', '')::bigint,
 		       (payload->>'first_seen_at')::timestamptz, (payload->>'last_seen_at')::timestamptz,
-		       payload->'raw_snapshot'::text
+		       (payload ? 'raw_snapshot')
 		FROM model_observation_events
 		WHERE account_id = $1
 		ORDER BY id
@@ -1305,9 +1717,10 @@ func loadDirectObservationEventPostStates(t *testing.T, accountID int64) []direc
 	for rows.Next() {
 		var event directObservationEventPostState
 		require.NoError(t, rows.Scan(
-			&event.ModelID, &event.Transition, &event.Classification, &event.Reason,
+			&event.ModelID, &event.Transition, &event.BatchID, &event.SnapshotBatchID,
+			&event.Classification, &event.Reason,
 			&event.HasConnectionID, &event.ConnectionID, &event.HasResolvedRegistryID, &event.ResolvedRegistryID,
-			&event.FirstSeenAt, &event.LastSeenAt, &event.RawSnapshot,
+			&event.FirstSeenAt, &event.LastSeenAt, &event.HasRawSnapshot,
 		))
 		result = append(result, event)
 	}
@@ -1319,17 +1732,19 @@ func loadDirectBatchEventPostState(t *testing.T, batchID, modelID string) direct
 	t.Helper()
 	var event directObservationEventPostState
 	require.NoError(t, integrationDB.QueryRowContext(context.Background(), `
-		SELECT upstream_model_id, COALESCE(payload->>'transition', event_type), classification, classification_reason,
+		SELECT upstream_model_id, COALESCE(payload->>'transition', event_type), batch_id, snapshot_batch_id,
+		       classification, classification_reason,
 		       (payload ? 'connection_id'), NULLIF(payload->>'connection_id', '')::bigint,
 		       (payload ? 'resolved_registry_id'), NULLIF(payload->>'resolved_registry_id', '')::bigint,
 		       (payload->>'first_seen_at')::timestamptz, (payload->>'last_seen_at')::timestamptz,
-		       payload->'raw_snapshot'::text
+		       (payload ? 'raw_snapshot')
 		FROM model_observation_events
 		WHERE batch_id = $1 AND upstream_model_id = $2
 	`, batchID, modelID).Scan(
-		&event.ModelID, &event.Transition, &event.Classification, &event.Reason,
+		&event.ModelID, &event.Transition, &event.BatchID, &event.SnapshotBatchID,
+		&event.Classification, &event.Reason,
 		&event.HasConnectionID, &event.ConnectionID, &event.HasResolvedRegistryID, &event.ResolvedRegistryID,
-		&event.FirstSeenAt, &event.LastSeenAt, &event.RawSnapshot,
+		&event.FirstSeenAt, &event.LastSeenAt, &event.HasRawSnapshot,
 	))
 	return event
 }
@@ -1357,8 +1772,7 @@ func loadObservationEventTypes(t *testing.T, accountID int64, modelID string) []
 	rows, err := integrationDB.QueryContext(context.Background(), `
 		SELECT e.event_type
 		FROM model_observation_events e
-		JOIN model_observations o ON o.id = e.observation_id
-		WHERE o.account_id = $1 AND o.upstream_model_id = $2
+		WHERE e.account_id = $1 AND e.upstream_model_id = $2
 		ORDER BY e.id
 	`, accountID, modelID)
 	require.NoError(t, err)

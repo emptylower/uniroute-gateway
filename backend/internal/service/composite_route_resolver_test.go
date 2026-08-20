@@ -107,6 +107,26 @@ func TestCompositeRouteResolverPrefersEndpointSpecificLongestPrefix(t *testing.T
 	require.Equal(t, int64(2), decision.Route.ID)
 }
 
+func TestCompositeRouteResolverUsesPriorityThenIDForOtherwiseEqualRoutes(t *testing.T) {
+	routes := []CompositeModelRoute{
+		{ID: 30, GroupID: 7, PublicModel: "same", MatchType: CompositeRouteMatchExact, TargetPlatform: PlatformOpenAI, UpstreamModel: "higher-priority", Endpoint: CompositeRouteEndpointAny, Priority: 1, Enabled: true},
+		{ID: 10, GroupID: 7, PublicModel: "same", MatchType: CompositeRouteMatchExact, TargetPlatform: PlatformOpenAI, UpstreamModel: "lower-priority", Endpoint: CompositeRouteEndpointAny, Priority: 2, Enabled: true},
+		{ID: 20, GroupID: 7, PublicModel: "id-tie", MatchType: CompositeRouteMatchExact, TargetPlatform: PlatformOpenAI, UpstreamModel: "higher-id", Endpoint: CompositeRouteEndpointAny, Priority: 1, Enabled: true},
+		{ID: 15, GroupID: 7, PublicModel: "id-tie", MatchType: CompositeRouteMatchExact, TargetPlatform: PlatformOpenAI, UpstreamModel: "lower-id", Endpoint: CompositeRouteEndpointAny, Priority: 1, Enabled: true},
+	}
+	resolver := NewCompositeRouteResolver(compositeRouteRepoStub{routes: routes})
+
+	priorityDecision, err := resolver.Resolve(context.Background(), 7, "same", CompositeRouteEndpointMessages)
+	require.NoError(t, err)
+	require.Equal(t, "higher-priority", priorityDecision.UpstreamModel)
+	require.Equal(t, int64(30), priorityDecision.Route.ID)
+
+	idDecision, err := resolver.Resolve(context.Background(), 7, "id-tie", CompositeRouteEndpointMessages)
+	require.NoError(t, err)
+	require.Equal(t, "lower-id", idDecision.UpstreamModel)
+	require.Equal(t, int64(15), idDecision.Route.ID)
+}
+
 // TestCompositeRouteResolverPrefixEmptyUpstreamPassesThroughRequestedModel 验证：
 // 前缀匹配路由留空 upstream_model 时，转发的是具体请求模型（各自原样），而不是
 // 塌缩成 public_model。这是「留空 = 透传原始模型」语义的核心场景。

@@ -18,7 +18,7 @@ import (
 func TestUsageLog_SessionIDPersistence(t *testing.T) {
 	ctx := context.Background()
 	client := testEntClient(t)
-	repo := newUsageLogRepositoryWithSQL(client, integrationDB)
+	repo := newUsageLogTestRepository(client, integrationDB)
 
 	user := mustCreateUser(t, client, &service.User{Email: "session-id-" + uuid.NewString() + "@example.com"})
 	apiKey := mustCreateApiKey(t, client, &service.APIKey{UserID: user.ID, Key: "sk-session-" + uuid.NewString(), Name: "k"})

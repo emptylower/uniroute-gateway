@@ -32,6 +32,8 @@ type OpenAIRecordUsageInput struct {
 	RequestPayloadHash string
 	APIKeyService      APIKeyQuotaUpdater
 	QuotaPlatform      string // user×platform quota platform resolved by the handler before async billing.
+	// GovernanceTargetPlatform is evidence-only and must never select a billing or quota bucket.
+	GovernanceTargetPlatform string
 	// CyberBlocked 为 true 时把该用量行标记为 cyber（request_type=cyber），计费逻辑不变。
 	CyberBlocked bool
 	ChannelUsageFields
@@ -51,13 +53,14 @@ type CyberPolicyUsageInput struct {
 	OutputTokens int
 	// 渠道归因与请求级 meta，使 cyber 计费行与正常 RecordUsage 行口径一致
 	// （否则 cyber 行 channel_id 等为空，渠道维度统计会遗漏 cyber 命中）。
-	InboundEndpoint    string
-	UpstreamEndpoint   string
-	UserAgent          string
-	IPAddress          string
-	SessionID          string
-	RequestPayloadHash string
-	APIKeyService      APIKeyQuotaUpdater
+	InboundEndpoint          string
+	UpstreamEndpoint         string
+	UserAgent                string
+	IPAddress                string
+	SessionID                string
+	RequestPayloadHash       string
+	APIKeyService            APIKeyQuotaUpdater
+	GovernanceTargetPlatform string
 	ChannelUsageFields
 }
 
@@ -81,20 +84,21 @@ func (s *OpenAIGatewayService) RecordCyberPolicyUsageLog(ctx context.Context, in
 		},
 	}
 	if err := s.RecordUsage(ctx, &OpenAIRecordUsageInput{
-		Result:             result,
-		APIKey:             in.APIKey,
-		User:               in.APIKey.User,
-		Account:            in.Account,
-		Subscription:       in.Subscription,
-		InboundEndpoint:    in.InboundEndpoint,
-		UpstreamEndpoint:   in.UpstreamEndpoint,
-		UserAgent:          in.UserAgent,
-		IPAddress:          in.IPAddress,
-		SessionID:          in.SessionID,
-		RequestPayloadHash: in.RequestPayloadHash,
-		APIKeyService:      in.APIKeyService,
-		ChannelUsageFields: in.ChannelUsageFields,
-		CyberBlocked:       true,
+		Result:                   result,
+		APIKey:                   in.APIKey,
+		User:                     in.APIKey.User,
+		Account:                  in.Account,
+		Subscription:             in.Subscription,
+		InboundEndpoint:          in.InboundEndpoint,
+		UpstreamEndpoint:         in.UpstreamEndpoint,
+		UserAgent:                in.UserAgent,
+		IPAddress:                in.IPAddress,
+		SessionID:                in.SessionID,
+		RequestPayloadHash:       in.RequestPayloadHash,
+		APIKeyService:            in.APIKeyService,
+		GovernanceTargetPlatform: in.GovernanceTargetPlatform,
+		ChannelUsageFields:       in.ChannelUsageFields,
+		CyberBlocked:             true,
 	}); err != nil {
 		logger.LegacyPrintf("service.openai_gateway", "cyber usage record failed: request_id=%s err=%v", in.RequestID, err)
 	}
@@ -307,6 +311,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	}
 	usageLog.AccountRateMultiplier = &accountRateMultiplier
 	applySettlementSnapshot(usageLog, settlement)
+	usageLog.GovernanceTargetPlatform = resolvedUsageTargetPlatform(ctx, input.GovernanceTargetPlatform, input.QuotaPlatform, apiKey, account)
 	usageLog.BillingType = billingType
 	usageLog.Stream = result.Stream
 	if input.CyberBlocked {
@@ -370,10 +375,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 
 	// Async usage billing runs outside the original request context, so it
 	// cannot recover ForcePlatform there. Fall back for internal/test callers.
-	quotaPlatform := input.QuotaPlatform
-	if quotaPlatform == "" {
-		quotaPlatform = PlatformFromAPIKey(apiKey)
-	}
+	quotaPlatform := inputQuotaPlatformOrAPIKeyPlatform(input.QuotaPlatform, apiKey)
 
 	billingApplied, billingResult, billingErr := applyUsageBillingDetailed(ctx, requestID, usageLog, &postUsageBillingParams{
 		Cost:                  cost,

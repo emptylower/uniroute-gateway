@@ -380,6 +380,53 @@ func TestPersistDiscoveredModelsPreservesExactNonEmptyUpstreamModelIDs(t *testin
 		"evidence exactness must not change legacy mapping normalization")
 }
 
+func TestPersistDiscoveredModelsPreservesLongExactIDThroughGovernanceAndLegacyUpdate(t *testing.T) {
+	t.Parallel()
+
+	callOrder := []string{}
+	store := &orderedAccountModelDiscoveryStoreStub{callOrder: &callOrder}
+	observations := &modelObservationRepositoryStub{batchID: "batch-long-id", callOrder: &callOrder}
+	svc := &AccountTestService{
+		modelDiscoveryStore:        store,
+		modelObservationRepository: observations,
+	}
+	modelID := "vendor/" + strings.Repeat("exact-model-segment-", 16)
+
+	err := svc.PersistDiscoveredModels(context.Background(), &Account{
+		ID: 46, Platform: PlatformOpenAI, Type: AccountTypeAPIKey,
+	}, []string{modelID}, time.Date(2026, time.August, 19, 14, 30, 0, 0, time.UTC))
+	require.NoError(t, err)
+	require.Greater(t, len(modelID), 255)
+	require.Equal(t, []string{"observation", "credentials"}, callOrder)
+	require.Equal(t, []string{modelID}, observations.inputs[0].ModelIDs)
+	require.Equal(t, map[string]any{modelID: modelID}, store.mapping)
+	require.Equal(t, []string{modelID}, store.discovery["models"])
+}
+
+func TestPersistUpstreamModelDiscoveryCanonicalizesTimeBeforeIdempotencyAndRepositoryInput(t *testing.T) {
+	t.Parallel()
+
+	observations := &modelObservationRepositoryStub{batchID: "batch-canonical-time"}
+	svc := &AccountTestService{
+		modelDiscoveryStore:        &accountModelDiscoveryStoreStub{},
+		modelObservationRepository: observations,
+	}
+	account := &Account{ID: 47, Platform: PlatformOpenAI}
+	discovery := UpstreamModelDiscovery{
+		Models:           []string{"model-a"},
+		EvidenceModelIDs: []string{"model-a"},
+		RawSnapshot:      []byte(`{"catalog":"canonical-time"}`),
+	}
+	base := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.FixedZone("offset", 2*60*60))
+
+	require.NoError(t, svc.PersistUpstreamModelDiscovery(context.Background(), account, discovery, base.Add(100*time.Nanosecond)))
+	require.NoError(t, svc.PersistUpstreamModelDiscovery(context.Background(), account, discovery, base.Add(200*time.Nanosecond)))
+	require.Len(t, observations.inputs, 2)
+	require.Equal(t, time.Date(2026, time.August, 19, 10, 0, 0, 0, time.UTC), observations.inputs[0].ObservedAt)
+	require.Equal(t, observations.inputs[0].ObservedAt, observations.inputs[1].ObservedAt)
+	require.Equal(t, observations.inputs[0].IdempotencyKey, observations.inputs[1].IdempotencyKey)
+}
+
 func TestFetchUpstreamModelDiscoveryPreservesHTTPPayloadMetadataAndExactIDs(t *testing.T) {
 	t.Parallel()
 

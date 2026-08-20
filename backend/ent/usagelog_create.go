@@ -85,6 +85,20 @@ func (_c *UsageLogCreate) SetNillableUpstreamModel(v *string) *UsageLogCreate {
 	return _c
 }
 
+// SetGovernanceTargetPlatform sets the "governance_target_platform" field.
+func (_c *UsageLogCreate) SetGovernanceTargetPlatform(v string) *UsageLogCreate {
+	_c.mutation.SetGovernanceTargetPlatform(v)
+	return _c
+}
+
+// SetNillableGovernanceTargetPlatform sets the "governance_target_platform" field if the given value is not nil.
+func (_c *UsageLogCreate) SetNillableGovernanceTargetPlatform(v *string) *UsageLogCreate {
+	if v != nil {
+		_c.SetGovernanceTargetPlatform(*v)
+	}
+	return _c
+}
+
 // SetChannelID sets the "channel_id" field.
 func (_c *UsageLogCreate) SetChannelID(v int64) *UsageLogCreate {
 	_c.mutation.SetChannelID(v)
@@ -910,6 +924,11 @@ func (_c *UsageLogCreate) check() error {
 			return &ValidationError{Name: "upstream_model", err: fmt.Errorf(`ent: validator failed for field "UsageLog.upstream_model": %w`, err)}
 		}
 	}
+	if v, ok := _c.mutation.GovernanceTargetPlatform(); ok {
+		if err := usagelog.GovernanceTargetPlatformValidator(v); err != nil {
+			return &ValidationError{Name: "governance_target_platform", err: fmt.Errorf(`ent: validator failed for field "UsageLog.governance_target_platform": %w`, err)}
+		}
+	}
 	if v, ok := _c.mutation.ModelMappingChain(); ok {
 		if err := usagelog.ModelMappingChainValidator(v); err != nil {
 			return &ValidationError{Name: "model_mapping_chain", err: fmt.Errorf(`ent: validator failed for field "UsageLog.model_mapping_chain": %w`, err)}
@@ -1104,6 +1123,10 @@ func (_c *UsageLogCreate) createSpec() (*UsageLog, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.UpstreamModel(); ok {
 		_spec.SetField(usagelog.FieldUpstreamModel, field.TypeString, value)
 		_node.UpstreamModel = &value
+	}
+	if value, ok := _c.mutation.GovernanceTargetPlatform(); ok {
+		_spec.SetField(usagelog.FieldGovernanceTargetPlatform, field.TypeString, value)
+		_node.GovernanceTargetPlatform = &value
 	}
 	if value, ok := _c.mutation.ChannelID(); ok {
 		_spec.SetField(usagelog.FieldChannelID, field.TypeInt64, value)
@@ -1507,6 +1530,24 @@ func (u *UsageLogUpsert) UpdateUpstreamModel() *UsageLogUpsert {
 // ClearUpstreamModel clears the value of the "upstream_model" field.
 func (u *UsageLogUpsert) ClearUpstreamModel() *UsageLogUpsert {
 	u.SetNull(usagelog.FieldUpstreamModel)
+	return u
+}
+
+// SetGovernanceTargetPlatform sets the "governance_target_platform" field.
+func (u *UsageLogUpsert) SetGovernanceTargetPlatform(v string) *UsageLogUpsert {
+	u.Set(usagelog.FieldGovernanceTargetPlatform, v)
+	return u
+}
+
+// UpdateGovernanceTargetPlatform sets the "governance_target_platform" field to the value that was provided on create.
+func (u *UsageLogUpsert) UpdateGovernanceTargetPlatform() *UsageLogUpsert {
+	u.SetExcluded(usagelog.FieldGovernanceTargetPlatform)
+	return u
+}
+
+// ClearGovernanceTargetPlatform clears the value of the "governance_target_platform" field.
+func (u *UsageLogUpsert) ClearGovernanceTargetPlatform() *UsageLogUpsert {
+	u.SetNull(usagelog.FieldGovernanceTargetPlatform)
 	return u
 }
 
@@ -2450,6 +2491,27 @@ func (u *UsageLogUpsertOne) UpdateUpstreamModel() *UsageLogUpsertOne {
 func (u *UsageLogUpsertOne) ClearUpstreamModel() *UsageLogUpsertOne {
 	return u.Update(func(s *UsageLogUpsert) {
 		s.ClearUpstreamModel()
+	})
+}
+
+// SetGovernanceTargetPlatform sets the "governance_target_platform" field.
+func (u *UsageLogUpsertOne) SetGovernanceTargetPlatform(v string) *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetGovernanceTargetPlatform(v)
+	})
+}
+
+// UpdateGovernanceTargetPlatform sets the "governance_target_platform" field to the value that was provided on create.
+func (u *UsageLogUpsertOne) UpdateGovernanceTargetPlatform() *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateGovernanceTargetPlatform()
+	})
+}
+
+// ClearGovernanceTargetPlatform clears the value of the "governance_target_platform" field.
+func (u *UsageLogUpsertOne) ClearGovernanceTargetPlatform() *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.ClearGovernanceTargetPlatform()
 	})
 }
 
@@ -3690,6 +3752,27 @@ func (u *UsageLogUpsertBulk) UpdateUpstreamModel() *UsageLogUpsertBulk {
 func (u *UsageLogUpsertBulk) ClearUpstreamModel() *UsageLogUpsertBulk {
 	return u.Update(func(s *UsageLogUpsert) {
 		s.ClearUpstreamModel()
+	})
+}
+
+// SetGovernanceTargetPlatform sets the "governance_target_platform" field.
+func (u *UsageLogUpsertBulk) SetGovernanceTargetPlatform(v string) *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetGovernanceTargetPlatform(v)
+	})
+}
+
+// UpdateGovernanceTargetPlatform sets the "governance_target_platform" field to the value that was provided on create.
+func (u *UsageLogUpsertBulk) UpdateGovernanceTargetPlatform() *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateGovernanceTargetPlatform()
+	})
+}
+
+// ClearGovernanceTargetPlatform clears the value of the "governance_target_platform" field.
+func (u *UsageLogUpsertBulk) ClearGovernanceTargetPlatform() *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.ClearGovernanceTargetPlatform()
 	})
 }
 

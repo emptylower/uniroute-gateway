@@ -90,6 +90,11 @@ func UpstreamModel(v string) predicate.UsageLog {
 	return predicate.UsageLog(sql.FieldEQ(FieldUpstreamModel, v))
 }
 
+// GovernanceTargetPlatform applies equality check predicate on the "governance_target_platform" field. It's identical to GovernanceTargetPlatformEQ.
+func GovernanceTargetPlatform(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldGovernanceTargetPlatform, v))
+}
+
 // ChannelID applies equality check predicate on the "channel_id" field. It's identical to ChannelIDEQ.
 func ChannelID(v int64) predicate.UsageLog {
 	return predicate.UsageLog(sql.FieldEQ(FieldChannelID, v))
@@ -648,6 +653,81 @@ func UpstreamModelEqualFold(v string) predicate.UsageLog {
 // UpstreamModelContainsFold applies the ContainsFold predicate on the "upstream_model" field.
 func UpstreamModelContainsFold(v string) predicate.UsageLog {
 	return predicate.UsageLog(sql.FieldContainsFold(FieldUpstreamModel, v))
+}
+
+// GovernanceTargetPlatformEQ applies the EQ predicate on the "governance_target_platform" field.
+func GovernanceTargetPlatformEQ(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldGovernanceTargetPlatform, v))
+}
+
+// GovernanceTargetPlatformNEQ applies the NEQ predicate on the "governance_target_platform" field.
+func GovernanceTargetPlatformNEQ(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNEQ(FieldGovernanceTargetPlatform, v))
+}
+
+// GovernanceTargetPlatformIn applies the In predicate on the "governance_target_platform" field.
+func GovernanceTargetPlatformIn(vs ...string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldIn(FieldGovernanceTargetPlatform, vs...))
+}
+
+// GovernanceTargetPlatformNotIn applies the NotIn predicate on the "governance_target_platform" field.
+func GovernanceTargetPlatformNotIn(vs ...string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNotIn(FieldGovernanceTargetPlatform, vs...))
+}
+
+// GovernanceTargetPlatformGT applies the GT predicate on the "governance_target_platform" field.
+func GovernanceTargetPlatformGT(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGT(FieldGovernanceTargetPlatform, v))
+}
+
+// GovernanceTargetPlatformGTE applies the GTE predicate on the "governance_target_platform" field.
+func GovernanceTargetPlatformGTE(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGTE(FieldGovernanceTargetPlatform, v))
+}
+
+// GovernanceTargetPlatformLT applies the LT predicate on the "governance_target_platform" field.
+func GovernanceTargetPlatformLT(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLT(FieldGovernanceTargetPlatform, v))
+}
+
+// GovernanceTargetPlatformLTE applies the LTE predicate on the "governance_target_platform" field.
+func GovernanceTargetPlatformLTE(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLTE(FieldGovernanceTargetPlatform, v))
+}
+
+// GovernanceTargetPlatformContains applies the Contains predicate on the "governance_target_platform" field.
+func GovernanceTargetPlatformContains(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldContains(FieldGovernanceTargetPlatform, v))
+}
+
+// GovernanceTargetPlatformHasPrefix applies the HasPrefix predicate on the "governance_target_platform" field.
+func GovernanceTargetPlatformHasPrefix(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldHasPrefix(FieldGovernanceTargetPlatform, v))
+}
+
+// GovernanceTargetPlatformHasSuffix applies the HasSuffix predicate on the "governance_target_platform" field.
+func GovernanceTargetPlatformHasSuffix(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldHasSuffix(FieldGovernanceTargetPlatform, v))
+}
+
+// GovernanceTargetPlatformIsNil applies the IsNil predicate on the "governance_target_platform" field.
+func GovernanceTargetPlatformIsNil() predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldIsNull(FieldGovernanceTargetPlatform))
+}
+
+// GovernanceTargetPlatformNotNil applies the NotNil predicate on the "governance_target_platform" field.
+func GovernanceTargetPlatformNotNil() predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNotNull(FieldGovernanceTargetPlatform))
+}
+
+// GovernanceTargetPlatformEqualFold applies the EqualFold predicate on the "governance_target_platform" field.
+func GovernanceTargetPlatformEqualFold(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEqualFold(FieldGovernanceTargetPlatform, v))
+}
+
+// GovernanceTargetPlatformContainsFold applies the ContainsFold predicate on the "governance_target_platform" field.
+func GovernanceTargetPlatformContainsFold(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldContainsFold(FieldGovernanceTargetPlatform, v))
 }
 
 // ChannelIDEQ applies the EQ predicate on the "channel_id" field.

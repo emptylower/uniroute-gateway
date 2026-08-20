@@ -126,6 +126,40 @@ func TestRecordCyberPolicyUsageLog_NonStreamZeroTokensZeroCost(t *testing.T) {
 	require.Equal(t, RequestTypeCyberBlocked, usageRepo.lastLog.RequestType)
 }
 
+func TestRecordCyberPolicyUsageLog_SeparatesGovernanceEvidenceFromBaselineQuotaPlatform(t *testing.T) {
+	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+	userRepo := &openAIRecordUsageUserRepoStub{}
+	svc := newOpenAIRecordUsageServiceForTest(usageRepo, userRepo, &openAIRecordUsageSubRepoStub{}, nil)
+	platformQuotaRepo := &openAIRecordUsagePlatformQuotaRepoStub{}
+	svc.userPlatformQuotaRepo = platformQuotaRepo
+	svc.billingCacheService = &BillingCacheService{cfg: svc.cfg}
+	groupID := int64(805)
+
+	svc.RecordCyberPolicyUsageLog(context.Background(), CyberPolicyUsageInput{
+		APIKey:                   &APIKey{ID: 2, User: &User{ID: 1}, GroupID: &groupID, Group: &Group{ID: groupID, Platform: PlatformComposite, RateMultiplier: 1.1}},
+		Account:                  &Account{ID: 3, Platform: PlatformAntigravity, Extra: map[string]any{"mixed_scheduling": true}},
+		RequestID:                "rid-cyber-composite-target",
+		Model:                    "gpt-5.1",
+		Stream:                   true,
+		InputTokens:              1200,
+		OutputTokens:             300,
+		GovernanceTargetPlatform: PlatformGemini,
+	})
+
+	require.Equal(t, 1, usageRepo.calls)
+	require.NotNil(t, usageRepo.lastLog)
+	require.NotNil(t, usageRepo.lastLog.GovernanceTargetPlatform)
+	require.Equal(t, PlatformGemini, *usageRepo.lastLog.GovernanceTargetPlatform)
+	require.Equal(t, 1200, usageRepo.lastLog.InputTokens)
+	require.Equal(t, 300, usageRepo.lastLog.OutputTokens)
+	require.Equal(t, RequestTypeCyberBlocked, usageRepo.lastLog.RequestType)
+	require.True(t, usageRepo.lastLog.Stream)
+	expected := expectedOpenAICost(t, svc, "gpt-5.1", OpenAIUsage{InputTokens: 1200, OutputTokens: 300}, 1.1)
+	require.InDelta(t, expected.ActualCost, usageRepo.lastLog.ActualCost, 1e-12)
+	require.Equal(t, 1, platformQuotaRepo.calls)
+	require.Equal(t, PlatformComposite, platformQuotaRepo.lastPlatform, "cyber billing must retain the fb280639 group-platform fallback")
+}
+
 func TestRecordCyberPolicyUsageLog_SkipsWhenIncomplete(t *testing.T) {
 	usageRepo := &openAIRecordUsageLogRepoStub{}
 	svc := newOpenAIRecordUsageServiceForTest(usageRepo, &openAIRecordUsageUserRepoStub{}, &openAIRecordUsageSubRepoStub{}, nil)
@@ -160,6 +194,18 @@ type openAIRecordUsageSubRepoStub struct {
 	incrementCalls int
 	incrementErr   error
 	lastCtxErr     error
+}
+
+type openAIRecordUsagePlatformQuotaRepoStub struct {
+	UserPlatformQuotaRepository
+	calls        int
+	lastPlatform string
+}
+
+func (s *openAIRecordUsagePlatformQuotaRepoStub) IncrementUsageWithReset(_ context.Context, _ int64, platform string, _ float64, _ time.Time) error {
+	s.calls++
+	s.lastPlatform = platform
+	return nil
 }
 
 func (s *openAIRecordUsageSubRepoStub) IncrementUsage(ctx context.Context, id int64, costUSD float64) error {
@@ -738,6 +784,63 @@ func TestOpenAIGatewayServiceRecordUsage_BillingUsesDetachedContext(t *testing.T
 	require.NoError(t, userRepo.lastCtxErr)
 	require.Equal(t, 1, quotaSvc.quotaCalls)
 	require.NoError(t, quotaSvc.lastQuotaCtxErr)
+}
+
+func TestOpenAIGatewayServiceRecordUsage_PersistsResolvedGovernanceTargetPlatform(t *testing.T) {
+	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+	svc := newOpenAIRecordUsageServiceForTest(usageRepo, &openAIRecordUsageUserRepoStub{}, &openAIRecordUsageSubRepoStub{}, nil)
+	groupID := int64(802)
+
+	err := svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{
+		Result: &OpenAIForwardResult{
+			RequestID: "openai-governance-target",
+			Usage:     OpenAIUsage{InputTokens: 10, OutputTokens: 6},
+			Model:     "gpt-5.1",
+			Duration:  time.Second,
+		},
+		APIKey: &APIKey{ID: 501, GroupID: &groupID, Group: &Group{ID: groupID, Platform: PlatformComposite}},
+		User:   &User{ID: 601},
+		Account: &Account{
+			ID:       701,
+			Platform: PlatformOpenAI,
+		},
+		QuotaPlatform: PlatformOpenAI,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, usageRepo.lastLog)
+	require.NotNil(t, usageRepo.lastLog.GovernanceTargetPlatform)
+	require.Equal(t, PlatformOpenAI, *usageRepo.lastLog.GovernanceTargetPlatform)
+}
+
+func TestOpenAIGatewayServiceRecordUsage_InvalidForcedTargetFallsBackToNativePlatform(t *testing.T) {
+	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+	svc := newOpenAIRecordUsageServiceForTest(usageRepo, &openAIRecordUsageUserRepoStub{}, &openAIRecordUsageSubRepoStub{}, nil)
+	groupID := int64(804)
+	ctx := context.WithValue(context.Background(), ctxkey.ForcePlatform, PlatformAntigravity)
+
+	err := svc.RecordUsage(ctx, &OpenAIRecordUsageInput{
+		Result: &OpenAIForwardResult{
+			RequestID: "openai-invalid-forced-governance-target",
+			Usage:     OpenAIUsage{InputTokens: 10, OutputTokens: 6},
+			Model:     "gpt-5.1",
+			Duration:  time.Second,
+		},
+		APIKey: &APIKey{ID: 501, GroupID: &groupID, Group: &Group{ID: groupID, Platform: PlatformAnthropic}},
+		User:   &User{ID: 601},
+		Account: &Account{
+			ID:       701,
+			Platform: PlatformOpenAI,
+		},
+		QuotaPlatform: PlatformAntigravity,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, usageRepo.lastLog)
+	require.NotNil(t, usageRepo.lastLog.GovernanceTargetPlatform)
+	require.Equal(t, PlatformOpenAI, *usageRepo.lastLog.GovernanceTargetPlatform)
+	require.Equal(t, PlatformAntigravity, inputQuotaPlatformOrAPIKeyPlatform(PlatformAntigravity, &APIKey{Group: &Group{Platform: PlatformAnthropic}}),
+		"governance evidence must not change postUsageBillingParams.Platform")
 }
 
 func TestOpenAIGatewayServiceRecordUsage_BillingRepoUsesDetachedContext(t *testing.T) {

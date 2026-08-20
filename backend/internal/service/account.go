@@ -1632,6 +1632,22 @@ func (a *Account) IsMixedSchedulingEnabled() bool {
 	return false
 }
 
+// IsStableRuntimePlatformEligible reports configuration-only platform
+// eligibility. It intentionally ignores cooldown, quota, and other transient
+// scheduler state.
+func IsStableRuntimePlatformEligible(account *Account, targetPlatform string, forcePlatform bool) bool {
+	if account == nil {
+		return false
+	}
+	if account.Platform == targetPlatform {
+		return true
+	}
+	if forcePlatform || (targetPlatform != PlatformAnthropic && targetPlatform != PlatformGemini) {
+		return false
+	}
+	return account.Platform == PlatformAntigravity && account.IsMixedSchedulingEnabled()
+}
+
 // IsOveragesEnabled 检查 Antigravity 账号是否启用 AI Credits 超量请求。
 func (a *Account) IsOveragesEnabled() bool {
 	if a.Platform != PlatformAntigravity {

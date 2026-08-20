@@ -336,6 +336,8 @@ func TestFinalizeLiveCallAggregatesTokensAndBillsOnce(t *testing.T) {
 	log := usageRepo.logs[0]
 	usageRepo.mu.Unlock()
 	require.Equal(t, RequestTypeLive, log.RequestType)
+	require.NotNil(t, log.GovernanceTargetPlatform)
+	require.Equal(t, PlatformOpenAI, *log.GovernanceTargetPlatform)
 	require.Equal(t, record.CallHash, log.RequestID)
 	require.NotEqual(t, record.CallID, log.RequestID)
 	require.NotNil(t, log.DurationMs)

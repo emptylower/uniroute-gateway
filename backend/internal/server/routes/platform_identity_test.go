@@ -318,7 +318,7 @@ func TestModelGovernanceInventoryRouteRequiresSignedGatewayAdminAssertionAndAudi
 	userReader := delegatedUserReaderStub{user: &service.User{ID: 77, Email: "delegated@example.invalid", Role: service.RoleUser, Status: service.StatusActive}}
 	handlers := delegatedRouteContractHandlers(identityService, nil)
 	handlers.Admin.ModelInventory = adminhandler.NewModelGovernanceInventoryHandler(
-		service.NewModelGovernanceInventoryService(inventoryListerRouteStub{}),
+		service.NewModelGovernanceInventoryService(inventoryListerRouteStub{}, &config.Config{RunMode: config.RunModeStandard}),
 	)
 	auditRepository := &delegatedAuditCaptureRepository{}
 	auditService := service.NewAuditLogService(auditRepository, nil)
@@ -555,7 +555,7 @@ func delegatedRouteContractHandlers(
 			Ops:                    &adminhandler.OpsHandler{},
 			Usage:                  adminUsage,
 			ModelInventory: adminhandler.NewModelGovernanceInventoryHandler(
-				service.NewModelGovernanceInventoryService(inventoryListerRouteStub{}),
+				service.NewModelGovernanceInventoryService(inventoryListerRouteStub{}, &config.Config{RunMode: config.RunModeStandard}),
 			),
 		},
 	}

@@ -2,6 +2,12 @@ package service
 
 import "strings"
 
+type openAIForwardModelResolution struct {
+	BillingModel  string
+	UpstreamModel string
+	CompactMapped bool
+}
+
 // resolveOpenAIForwardModel 解析 OpenAI 兼容转发使用的模型。
 // messagesDispatchMappedModel 是调用方已为 /v1/messages 解析的显式调度结果；
 // 普通 OpenAI 请求必须传空，避免将分组配置作为通用模型兜底。
@@ -19,6 +25,41 @@ func resolveOpenAIForwardModel(account *Account, requestedModel, messagesDispatc
 		return messagesDispatchMappedModel
 	}
 	return mappedModel
+}
+
+// resolveOpenAIForwardModelForEndpoint is the shared model-resolution seam for
+// OpenAI /responses forwarding and finite reachability projection.
+func resolveOpenAIForwardModelForEndpoint(account *Account, requestedModel, messagesDispatchMappedModel string, compact bool) openAIForwardModelResolution {
+	if account != nil && account.IsOpenAIPassthroughEnabled() {
+		resolution := openAIForwardModelResolution{
+			BillingModel:  requestedModel,
+			UpstreamModel: requestedModel,
+		}
+		if compact {
+			compactModel := resolveOpenAICompactForwardModel(account, requestedModel)
+			if compactModel != requestedModel {
+				resolution.UpstreamModel = compactModel
+				resolution.CompactMapped = true
+			}
+		}
+		return resolution
+	}
+
+	billingModel := resolveOpenAIForwardModel(account, requestedModel, messagesDispatchMappedModel)
+	resolution := openAIForwardModelResolution{
+		BillingModel:  billingModel,
+		UpstreamModel: billingModel,
+	}
+	if compact {
+		compactModel := resolveOpenAICompactForwardModel(account, billingModel)
+		if compactModel != billingModel {
+			resolution.UpstreamModel = compactModel
+			resolution.CompactMapped = true
+			return resolution
+		}
+	}
+	resolution.UpstreamModel = normalizeOpenAIModelForUpstream(account, billingModel)
+	return resolution
 }
 
 // openAIOAuthForeignModelPrefixes 列出明确属于其他厂商家族的模型名前缀。

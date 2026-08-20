@@ -272,7 +272,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	auditLogService := service.ProvideAuditLogService(auditLogRepository, settingService)
 	auditLogHandler := admin.NewAuditLogHandler(auditLogService, totpService)
 	modelGovernanceInventoryRepository := repository.NewModelGovernanceInventoryRepository(db)
-	modelGovernanceInventoryService := service.NewModelGovernanceInventoryService(modelGovernanceInventoryRepository)
+	modelGovernanceInventoryService := service.NewModelGovernanceInventoryService(modelGovernanceInventoryRepository, configConfig)
 	modelGovernanceInventoryHandler := admin.NewModelGovernanceInventoryHandler(modelGovernanceInventoryService)
 	upstreamBillingProbeService := service.ProvideUpstreamBillingProbeService(accountRepository, accountTestService, settingService, leaderLockCache, db)
 	ollamaCloudUsageService := service.ProvideOllamaCloudUsageService(accountRepository, httpUpstream, settingService, secretEncryptor, configConfig, leaderLockCache, db)

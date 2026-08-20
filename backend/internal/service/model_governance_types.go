@@ -7,6 +7,10 @@ import (
 
 type GovernanceProvider string
 
+func CanonicalGovernanceTime(value time.Time) time.Time {
+	return value.UTC().Truncate(time.Microsecond)
+}
+
 // UpstreamModelDiscovery keeps governance evidence separate from the legacy
 // normalized model list consumed by runtime credential mappings.
 type UpstreamModelDiscovery struct {

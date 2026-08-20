@@ -16,7 +16,7 @@ func TestUsageLog_GetStatsWithFilters_AggregatesAndEndpoints(t *testing.T) {
 	ctx := context.Background()
 	tx := testEntTx(t)
 	client := tx.Client()
-	repo := newUsageLogRepositoryWithSQL(client, tx)
+	repo := newUsageLogTestRepository(client, tx)
 
 	user := mustCreateUser(t, client, &service.User{Email: "stats@test.com"})
 	apiKey := mustCreateApiKey(t, client, &service.APIKey{UserID: user.ID, Key: "sk-stats-1", Name: "k"})

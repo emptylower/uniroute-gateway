@@ -241,7 +241,8 @@ func (s *AccountTestService) PersistUpstreamModelDiscovery(ctx context.Context, 
 	if len(rawSnapshot) == 0 {
 		return newUpstreamModelSyncUpstreamError("Upstream model evidence snapshot is empty", nil)
 	}
-	idempotencySeed := fmt.Sprintf("%d\n%s\n%s", account.ID, syncedAt.UTC().Format(time.RFC3339Nano), rawSnapshot)
+	syncedAt = CanonicalGovernanceTime(syncedAt)
+	idempotencySeed := fmt.Sprintf("%d\n%s\n%s", account.ID, syncedAt.Format(time.RFC3339Nano), rawSnapshot)
 	idempotencyKey := fmt.Sprintf("model-discovery:%x", sha256.Sum256([]byte(idempotencySeed)))
 	if _, err := s.modelObservationRepository.RecordDiscovery(ctx, DiscoveryBatchInput{
 		IdempotencyKey:  idempotencyKey,
@@ -250,7 +251,7 @@ func (s *AccountTestService) PersistUpstreamModelDiscovery(ctx context.Context, 
 		RoutingPlatform: account.Platform,
 		ModelIDs:        dedupeExactModelIDs(discoveryInput.EvidenceModelIDs),
 		RawSnapshot:     rawSnapshot,
-		ObservedAt:      syncedAt.UTC(),
+		ObservedAt:      syncedAt,
 	}); err != nil {
 		return fmt.Errorf("record upstream model observation: %w", err)
 	}
@@ -273,7 +274,7 @@ func (s *AccountTestService) PersistUpstreamModelDiscovery(ctx context.Context, 
 	discovery := map[string]any{
 		"source":    "upstream",
 		"models":    models,
-		"synced_at": syncedAt.UTC().Format(time.RFC3339),
+		"synced_at": syncedAt.Format(time.RFC3339),
 	}
 	return s.modelDiscoveryStore.UpdateModelDiscovery(ctx, account.ID, mapping, discovery)
 }

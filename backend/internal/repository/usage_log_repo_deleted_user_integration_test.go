@@ -17,7 +17,7 @@ func TestUsageLog_ListWithFilters_ResolvesSoftDeletedUser(t *testing.T) {
 	ctx := context.Background()
 	tx := testEntTx(t)
 	client := tx.Client()
-	repo := newUsageLogRepositoryWithSQL(client, tx)
+	repo := newUsageLogTestRepository(client, tx)
 
 	// 一个活跃用户、一个将被软删的用户，各一条日志。
 	active := mustCreateUser(t, client, &service.User{Email: "active-listfilter@test.com"})

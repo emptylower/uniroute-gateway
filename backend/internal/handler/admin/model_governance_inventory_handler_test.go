@@ -25,7 +25,10 @@ func (s inventoryListerStub) List(context.Context) ([]service.InventoryItem, err
 
 func TestModelGovernanceInventoryHandlerReturnsInventory(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	want := []service.InventoryItem{{AccountID: 1, UpstreamModelID: "model", BillingCurrency: "USD"}}
+	want := []service.InventoryItem{{
+		AccountID: 1, TargetPlatform: service.PlatformOpenAI,
+		UpstreamModelID: "model", BillingCurrency: "USD",
+	}}
 	router := gin.New()
 	router.GET("/inventory", (&ModelGovernanceInventoryHandler{service: inventoryListerStub{items: want}}).List)
 
@@ -39,6 +42,7 @@ func TestModelGovernanceInventoryHandlerReturnsInventory(t *testing.T) {
 	var items []service.InventoryItem
 	require.NoError(t, json.Unmarshal(encoded, &items))
 	require.Equal(t, want, items)
+	require.Equal(t, service.PlatformOpenAI, items[0].TargetPlatform)
 }
 
 func TestModelGovernanceInventoryHandlerPropagatesRepositoryFailure(t *testing.T) {

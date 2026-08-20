@@ -31,21 +31,20 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	body []byte,
 	canonicalImageIntentBody []byte,
 	reqModel string,
+	modelResolution openAIForwardModelResolution,
 	attemptImageIntentInvalidated bool,
 	reasoningEffort *string,
 	reqStream bool,
 	startTime time.Time,
 ) (*OpenAIForwardResult, error) {
-	upstreamPassthroughModel := ""
-	if isOpenAIResponsesCompactPath(c) {
-		compactMappedModel := resolveOpenAICompactForwardModel(account, reqModel)
-		if compactMappedModel != "" && compactMappedModel != reqModel {
-			nextBody, setErr := sjson.SetBytes(body, "model", compactMappedModel)
+	upstreamPassthroughModel := modelResolution.UpstreamModel
+	if modelResolution.CompactMapped {
+		if modelResolution.UpstreamModel != "" && modelResolution.UpstreamModel != reqModel {
+			nextBody, setErr := sjson.SetBytes(body, "model", modelResolution.UpstreamModel)
 			if setErr != nil {
 				return nil, fmt.Errorf("set compact passthrough model: %w", setErr)
 			}
 			body = nextBody
-			upstreamPassthroughModel = compactMappedModel
 			attemptImageIntentInvalidated = true
 		}
 	}

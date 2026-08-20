@@ -143,6 +143,26 @@ func (_u *UsageLogUpdate) ClearUpstreamModel() *UsageLogUpdate {
 	return _u
 }
 
+// SetGovernanceTargetPlatform sets the "governance_target_platform" field.
+func (_u *UsageLogUpdate) SetGovernanceTargetPlatform(v string) *UsageLogUpdate {
+	_u.mutation.SetGovernanceTargetPlatform(v)
+	return _u
+}
+
+// SetNillableGovernanceTargetPlatform sets the "governance_target_platform" field if the given value is not nil.
+func (_u *UsageLogUpdate) SetNillableGovernanceTargetPlatform(v *string) *UsageLogUpdate {
+	if v != nil {
+		_u.SetGovernanceTargetPlatform(*v)
+	}
+	return _u
+}
+
+// ClearGovernanceTargetPlatform clears the value of the "governance_target_platform" field.
+func (_u *UsageLogUpdate) ClearGovernanceTargetPlatform() *UsageLogUpdate {
+	_u.mutation.ClearGovernanceTargetPlatform()
+	return _u
+}
+
 // SetChannelID sets the "channel_id" field.
 func (_u *UsageLogUpdate) SetChannelID(v int64) *UsageLogUpdate {
 	_u.mutation.ResetChannelID()
@@ -1142,6 +1162,11 @@ func (_u *UsageLogUpdate) check() error {
 			return &ValidationError{Name: "upstream_model", err: fmt.Errorf(`ent: validator failed for field "UsageLog.upstream_model": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.GovernanceTargetPlatform(); ok {
+		if err := usagelog.GovernanceTargetPlatformValidator(v); err != nil {
+			return &ValidationError{Name: "governance_target_platform", err: fmt.Errorf(`ent: validator failed for field "UsageLog.governance_target_platform": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.ModelMappingChain(); ok {
 		if err := usagelog.ModelMappingChainValidator(v); err != nil {
 			return &ValidationError{Name: "model_mapping_chain", err: fmt.Errorf(`ent: validator failed for field "UsageLog.model_mapping_chain": %w`, err)}
@@ -1248,6 +1273,12 @@ func (_u *UsageLogUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if _u.mutation.UpstreamModelCleared() {
 		_spec.ClearField(usagelog.FieldUpstreamModel, field.TypeString)
+	}
+	if value, ok := _u.mutation.GovernanceTargetPlatform(); ok {
+		_spec.SetField(usagelog.FieldGovernanceTargetPlatform, field.TypeString, value)
+	}
+	if _u.mutation.GovernanceTargetPlatformCleared() {
+		_spec.ClearField(usagelog.FieldGovernanceTargetPlatform, field.TypeString)
 	}
 	if value, ok := _u.mutation.ChannelID(); ok {
 		_spec.SetField(usagelog.FieldChannelID, field.TypeInt64, value)
@@ -1770,6 +1801,26 @@ func (_u *UsageLogUpdateOne) SetNillableUpstreamModel(v *string) *UsageLogUpdate
 // ClearUpstreamModel clears the value of the "upstream_model" field.
 func (_u *UsageLogUpdateOne) ClearUpstreamModel() *UsageLogUpdateOne {
 	_u.mutation.ClearUpstreamModel()
+	return _u
+}
+
+// SetGovernanceTargetPlatform sets the "governance_target_platform" field.
+func (_u *UsageLogUpdateOne) SetGovernanceTargetPlatform(v string) *UsageLogUpdateOne {
+	_u.mutation.SetGovernanceTargetPlatform(v)
+	return _u
+}
+
+// SetNillableGovernanceTargetPlatform sets the "governance_target_platform" field if the given value is not nil.
+func (_u *UsageLogUpdateOne) SetNillableGovernanceTargetPlatform(v *string) *UsageLogUpdateOne {
+	if v != nil {
+		_u.SetGovernanceTargetPlatform(*v)
+	}
+	return _u
+}
+
+// ClearGovernanceTargetPlatform clears the value of the "governance_target_platform" field.
+func (_u *UsageLogUpdateOne) ClearGovernanceTargetPlatform() *UsageLogUpdateOne {
+	_u.mutation.ClearGovernanceTargetPlatform()
 	return _u
 }
 
@@ -2785,6 +2836,11 @@ func (_u *UsageLogUpdateOne) check() error {
 			return &ValidationError{Name: "upstream_model", err: fmt.Errorf(`ent: validator failed for field "UsageLog.upstream_model": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.GovernanceTargetPlatform(); ok {
+		if err := usagelog.GovernanceTargetPlatformValidator(v); err != nil {
+			return &ValidationError{Name: "governance_target_platform", err: fmt.Errorf(`ent: validator failed for field "UsageLog.governance_target_platform": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.ModelMappingChain(); ok {
 		if err := usagelog.ModelMappingChainValidator(v); err != nil {
 			return &ValidationError{Name: "model_mapping_chain", err: fmt.Errorf(`ent: validator failed for field "UsageLog.model_mapping_chain": %w`, err)}
@@ -2908,6 +2964,12 @@ func (_u *UsageLogUpdateOne) sqlSave(ctx context.Context) (_node *UsageLog, err 
 	}
 	if _u.mutation.UpstreamModelCleared() {
 		_spec.ClearField(usagelog.FieldUpstreamModel, field.TypeString)
+	}
+	if value, ok := _u.mutation.GovernanceTargetPlatform(); ok {
+		_spec.SetField(usagelog.FieldGovernanceTargetPlatform, field.TypeString, value)
+	}
+	if _u.mutation.GovernanceTargetPlatformCleared() {
+		_spec.ClearField(usagelog.FieldGovernanceTargetPlatform, field.TypeString)
 	}
 	if value, ok := _u.mutation.ChannelID(); ok {
 		_spec.SetField(usagelog.FieldChannelID, field.TypeInt64, value)

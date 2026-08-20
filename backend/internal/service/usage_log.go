@@ -114,6 +114,10 @@ type UsageLog struct {
 	// UpstreamModel is the actual model sent to the upstream provider after mapping.
 	// Nil means no mapping was applied (requested model was used as-is).
 	UpstreamModel *string
+	// GovernanceTargetPlatform is the concrete request target selected before
+	// asynchronous billing loses the routing context. Nil identifies legacy or
+	// non-gateway rows where the exact target was not captured.
+	GovernanceTargetPlatform *string
 	// ChannelID 渠道 ID
 	ChannelID *int64
 	// ModelMappingChain 模型映射链，如 "a→b→c"
