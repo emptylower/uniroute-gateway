@@ -2,7 +2,7 @@
 
 日期：2026-08-20
 
-状态：**第三轮修复与当前 overlay 门禁通过；尚未提交，不能标记最终 PASS**
+状态：**FINAL PASS；accepted implementation range 已提交并通过独立审查**
 
 ## 1. 文档用途
 
