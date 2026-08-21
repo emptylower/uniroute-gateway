@@ -49,7 +49,7 @@ func TestLoadModelGovernanceAuthorizationModeDefaultsToOff(t *testing.T) {
 }
 
 func TestLoadModelGovernanceAuthorizationModeAcceptsSupportedValues(t *testing.T) {
-	for _, mode := range []string{"off", "shadow", "enforce"} {
+	for _, mode := range []string{"off", "shadow"} {
 		t.Run(mode, func(t *testing.T) {
 			resetViperWithJWTSecret(t)
 			viper.Set("model_governance.authorization_mode", mode)
@@ -68,9 +68,15 @@ func TestLoadModelGovernanceAuthorizationModeRejectsUnsupportedValues(t *testing
 			viper.Set("model_governance.authorization_mode", mode)
 
 			_, err := Load()
-			require.ErrorContains(t, err, "model_governance.authorization_mode must be one of: off/shadow/enforce")
+			require.ErrorContains(t, err, "model_governance.authorization_mode must be one of: off/shadow")
 		})
 	}
+	t.Run("enforce", func(t *testing.T) {
+		resetViperWithJWTSecret(t)
+		viper.Set("model_governance.authorization_mode", "enforce")
+		_, err := Load()
+		require.ErrorContains(t, err, "enforce requires activation endpoint")
+	})
 }
 
 func TestLoadModelGovernanceAuthorizationModeFromApprovedEnvironment(t *testing.T) {
