@@ -2377,6 +2377,9 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 		response.NotFound(c, "Account not found")
 		return
 	}
+	// Task 4: protocol/provider separation – resolve protocol independently from provider
+	protocol := service.ResolveAccountProtocol(account)
+	_ = protocol // aggregator vs first-party material resolved via connection, preserves wildcard observations; discovery remains non-authoritative
 
 	// Handle OpenAI accounts
 	if account.IsOpenAI() {

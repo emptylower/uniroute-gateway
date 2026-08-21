@@ -292,6 +292,11 @@ func governanceProviderForPlatform(platform string) *GovernanceProvider {
 	}
 }
 
+// ResolveAccountProtocol is the exported Task 4 resolver for admin and test flows.
+func ResolveAccountProtocol(account *Account) AccountProtocol {
+	return accountProtocolForRequest(account)
+}
+
 // Phase 4: protocol and provider are independent. Protocol determines wire format (anthropic|openai|gemini);
 // provider determines governance ownership. Aggregator connections supply baseURL/credential/proxy via connection.
 func accountProtocolForRequest(account *Account) AccountProtocol {

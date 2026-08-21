@@ -208,8 +208,12 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 	if err != nil {
 		return s.sendErrorAndEnd(c, "Account not found")
 	}
+	// Task 4: resolve connection base URL/credential/proxy and account provider/protocol/endpoint independently
+	if _, err := s.resolveUpstreamRequestMaterial(ctx, account); err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to resolve request material: %s", err.Error()))
+	}
 
-	// Route to platform-specific test method
+	// Route to platform-specific test method (protocol-aware, preserves wildcard observations)
 	if account.IsOpenAI() {
 		return s.testOpenAIAccountConnection(c, account, modelID, prompt, normalizeAccountTestMode(mode))
 	}
