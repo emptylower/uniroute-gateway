@@ -682,13 +682,17 @@ func ProvideModelGovernanceService(
 	classifier ModelClassifier,
 	evaluator PublicationEvaluator,
 ) ModelGovernanceService {
-	return NewModelGovernanceService(ModelGovernanceServiceConfig{
+	cfg := ModelGovernanceServiceConfig{
 		RegistryService:    registryService,
 		ObservationRepo:    observationRepo,
 		Classifier:         classifier,
 		Evaluator:          evaluator,
 		ShadowDecisionRepo: shadowRepo,
-	})
+	}
+	if ar, ok := observationRepo.(AtomicShadowRecorder); ok {
+		cfg.AtomicRecorder = ar
+	}
+	return NewModelGovernanceService(cfg)
 }
 
 // ProviderSet is the Wire provider set for all services

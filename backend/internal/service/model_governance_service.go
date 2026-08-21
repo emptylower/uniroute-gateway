@@ -258,8 +258,15 @@ func (s *modelGovernanceService) ClassifyAndPersistShadow(ctx context.Context, i
 
 	if s.shadowDecisionRepo != nil {
 		if err := s.shadowDecisionRepo.RecordShadowDecisions(ctx, batchID, shadowDecisions); err != nil {
-			// Compensating delete to preserve atomicity when atomic recorder not available.
-			_ = s.observationRepo.DeleteBatch(ctx, batchID)
+			// Production must wire AtomicRecorder for true atomicity (see
+			// ProvideModelGovernanceService). This fallback is retained only for
+			// test fakes without AtomicRecorder and intentionally does not
+			// attempt DeleteBatch compensating cleanup: model_shadow_decisions
+			// is append-only (triggers reject DELETE), so any compensation
+			// would be a guaranteed no-op and is swallowed. On shadow failure
+			// this path fails safe with an orphan batch+observations; caller
+			// must retry with the same idempotency key to observe the existing
+			// batch without re-inserting shadow rows.
 			return nil, fmt.Errorf("record shadow decisions: %w", err)
 		}
 	}

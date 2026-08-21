@@ -1,7 +1,6 @@
 package admin
 
 import (
-	"context"
 	"net/http"
 	"strconv"
 	"strings"
@@ -11,14 +10,6 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 )
-
-type modelRegistryService interface {
-	List(ctx context.Context) ([]service.ModelRegistryEntry, error)
-	Get(ctx context.Context, canonicalID string) (*service.ModelRegistryEntry, error)
-	CreateDecision(ctx context.Context, input service.RegistryDecisionInput) (*service.ModelRegistryEntry, error)
-	Rebuild(ctx context.Context) error
-	GetSnapshot(ctx context.Context) (*service.ModelRegistrySnapshot, error)
-}
 
 // ModelRegistryHandler exposes reviewed registry decisions.
 type ModelRegistryHandler struct {
@@ -179,26 +170,7 @@ func isConflictError(err error) bool {
 }
 
 func formatRegistryVersion(v int64) string {
-	return `"` + int64ToString(v) + `"`
-}
-
-func int64ToString(v int64) string {
-	if v == 0 {
-		return "0"
-	}
-	buf := make([]byte, 0, 20)
-	neg := v < 0
-	if neg {
-		v = -v
-	}
-	for v > 0 {
-		buf = append([]byte{byte('0' + v%10)}, buf...)
-		v /= 10
-	}
-	if neg {
-		buf = append([]byte{'-'}, buf...)
-	}
-	return string(buf)
+	return `"` + strconv.FormatInt(v, 10) + `"`
 }
 
 // Ensure handler uses context import.

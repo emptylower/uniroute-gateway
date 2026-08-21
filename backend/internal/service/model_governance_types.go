@@ -32,5 +32,10 @@ type DiscoveryBatchInput struct {
 
 type ModelObservationRepository interface {
 	RecordDiscovery(ctx context.Context, input DiscoveryBatchInput) (string, error)
+	// DeleteBatch removes a batch and its observations/events. It is NOT
+	// viable for shadow-compensation: model_shadow_decisions is append-only
+	// (BEFORE DELETE trigger rejects). Production shadow path must use
+	// AtomicShadowRecorder for true atomicity; this method is retained only
+	// for non-shadow cleanup and test fakes.
 	DeleteBatch(ctx context.Context, batchID string) error
 }

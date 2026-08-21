@@ -224,3 +224,125 @@ func TestModelGovernanceService_ShadowDoesNotMutateRouting(t *testing.T) {
 		t.Errorf("expected exactly 1 batch and 1 shadow call, got %d and %d", observationRepo.calls, shadowRepo.calls)
 	}
 }
+
+type fakeAtomicObservationRepo struct {
+	calls           int
+	batchID         string
+	atomicCalls     int
+	atomicDecisions []ShadowDecision
+	atomicErr       error
+}
+
+func (f *fakeAtomicObservationRepo) RecordDiscovery(ctx context.Context, input DiscoveryBatchInput) (string, error) {
+	f.calls++
+	if f.batchID == "" {
+		f.batchID = "batch-atomic-test"
+	}
+	return f.batchID, nil
+}
+
+func (f *fakeAtomicObservationRepo) DeleteBatch(ctx context.Context, batchID string) error {
+	return nil
+}
+
+func (f *fakeAtomicObservationRepo) RecordDiscoveryWithShadow(ctx context.Context, input DiscoveryBatchInput, decisions []ShadowDecision) (string, error) {
+	f.atomicCalls++
+	f.atomicDecisions = decisions
+	if f.atomicErr != nil {
+		return "", f.atomicErr
+	}
+	if f.batchID == "" {
+		f.batchID = "batch-atomic-test"
+	}
+	return f.batchID, nil
+}
+
+func TestModelGovernanceService_PrefersAtomicRecorder(t *testing.T) {
+	anthropic := GovernanceProviderAnthropic
+	snapshot := &ModelRegistrySnapshot{
+		Version: 42,
+		Entries: map[string]ModelRegistryEntry{
+			"claude-3-5-sonnet": {CanonicalID: "claude-3-5-sonnet", Provider: anthropic, Modality: ModelModalityText, Status: ModelLifecycleActive},
+		},
+		Aliases: map[string]string{},
+	}
+	registryService := &fakeRegistryService{snapshot: snapshot}
+	atomicRepo := &fakeAtomicObservationRepo{batchID: "batch-atomic-1"}
+	shadowRepo := &fakeShadowRepo{}
+
+	svc := NewModelGovernanceService(ModelGovernanceServiceConfig{
+		RegistryService:    registryService,
+		ObservationRepo:    atomicRepo,
+		ShadowDecisionRepo: shadowRepo,
+		AtomicRecorder:     atomicRepo,
+		Classifier:         NewModelClassifier(),
+		Evaluator:          NewPublicationEvaluator(),
+	})
+
+	input := DiscoveryBatchInput{
+		IdempotencyKey:  "idempotent-atomic",
+		AccountID:       3003,
+		AccountProvider: &anthropic,
+		RoutingPlatform: PlatformAnthropic,
+		ModelIDs:        []string{"claude-3-5-sonnet", "unknown-xyz"},
+		RawSnapshot:     []byte(`{"evidence": {}}`),
+	}
+
+	summary, err := svc.ClassifyAndPersistShadow(context.Background(), input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if summary.BatchID != "batch-atomic-1" {
+		t.Errorf("batch_id = %q, want batch-atomic-1", summary.BatchID)
+	}
+	if atomicRepo.atomicCalls != 1 {
+		t.Errorf("atomic calls = %d, want 1", atomicRepo.atomicCalls)
+	}
+	if atomicRepo.calls != 0 {
+		t.Errorf("fallback RecordDiscovery calls = %d, want 0 (atomic should be preferred)", atomicRepo.calls)
+	}
+	if shadowRepo.calls != 0 {
+		t.Errorf("shadow repo calls = %d, want 0 (atomic path handles shadow internally)", shadowRepo.calls)
+	}
+	if len(atomicRepo.atomicDecisions) != 2 {
+		t.Errorf("atomic decisions len = %d, want 2", len(atomicRepo.atomicDecisions))
+	}
+	if summary.Discovered != 2 {
+		t.Errorf("discovered = %d, want 2", summary.Discovered)
+	}
+}
+
+func TestProvideModelGovernanceService_WiresAtomicRecorder(t *testing.T) {
+	atomicRepo := &fakeAtomicObservationRepo{}
+	svc := ProvideModelGovernanceService(
+		&fakeRegistryService{snapshot: &ModelRegistrySnapshot{Version: 1}},
+		atomicRepo,
+		&fakeShadowRepo{},
+		NewModelClassifier(),
+		NewPublicationEvaluator(),
+	)
+	// Use type assertion to verify internal config wired AtomicRecorder
+	mgs, ok := svc.(*modelGovernanceService)
+	if !ok {
+		t.Fatalf("service is not *modelGovernanceService, got %T", svc)
+	}
+	if mgs.atomicRecorder == nil {
+		t.Error("atomicRecorder should be wired from observationRepo that implements AtomicShadowRecorder")
+	}
+	// Also verify non-atomic repo does not get wired
+	nonAtomicRepo := &fakeObservationRepo{}
+	svc2 := ProvideModelGovernanceService(
+		&fakeRegistryService{snapshot: &ModelRegistrySnapshot{Version: 1}},
+		nonAtomicRepo,
+		&fakeShadowRepo{},
+		NewModelClassifier(),
+		NewPublicationEvaluator(),
+	)
+	mgs2, ok := svc2.(*modelGovernanceService)
+	if !ok {
+		t.Fatalf("service2 is not *modelGovernanceService, got %T", svc2)
+	}
+	if mgs2.atomicRecorder != nil {
+		t.Error("atomicRecorder should be nil when observationRepo does not implement AtomicShadowRecorder")
+	}
+}
