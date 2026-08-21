@@ -675,6 +675,14 @@ func ProvideAPIKeyService(
 	return svc
 }
 
+func ProvideEndpointProbeChecker(repo AccountEndpointProbeRepository) EndpointProbeChecker {
+	if repo == nil {
+		return nil
+	}
+	svc := NewAccountEndpointProbeService(repo, nil)
+	return svc
+}
+
 func ProvideModelGovernanceService(
 	registryService ModelRegistryService,
 	observationRepo ModelObservationRepository,
@@ -695,6 +703,32 @@ func ProvideModelGovernanceService(
 	return NewModelGovernanceService(cfg)
 }
 
+// ProvideModelGovernanceServiceWithProbe wires real probe evidence into shadow evaluator (Phase 4 ready, Phase 5 enforce).
+func ProvideModelGovernanceServiceWithProbe(
+	registryService ModelRegistryService,
+	observationRepo ModelObservationRepository,
+	shadowRepo ShadowDecisionRepository,
+	classifier ModelClassifier,
+	evaluator PublicationEvaluator,
+	probeChecker EndpointProbeChecker,
+) ModelGovernanceService {
+	cfg := ModelGovernanceServiceConfig{
+		RegistryService:       registryService,
+		ObservationRepo:       observationRepo,
+		Classifier:            classifier,
+		Evaluator:             evaluator,
+		ShadowDecisionRepo:    shadowRepo,
+		EndpointProbeChecker:  probeChecker,
+		ChannelPriceChecker:   nil,
+		BillingMappingChecker: nil,
+		ResourceChecker:       nil,
+	}
+	if ar, ok := observationRepo.(AtomicShadowRecorder); ok {
+		cfg.AtomicRecorder = ar
+	}
+	return NewModelGovernanceService(cfg)
+}
+
 // ProviderSet is the Wire provider set for all services
 var ProviderSet = wire.NewSet(
 	NewPlatformIdentityService,
@@ -704,6 +738,8 @@ var ProviderSet = wire.NewSet(
 	NewPublicationEvaluator,
 	NewModelRegistryService,
 	ProvideModelGovernanceService,
+	ProvideEndpointProbeChecker,
+	ProvideModelGovernanceServiceWithProbe,
 	// Core services
 	NewAuthService,
 	NewUserService,
