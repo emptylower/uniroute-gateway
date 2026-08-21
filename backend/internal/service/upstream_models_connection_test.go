@@ -25,6 +25,7 @@ func (f *fakeConnRepoForTest) Create(ctx context.Context, conn *UpstreamConnecti
 func (f *fakeConnRepoForTest) UpdateCredential(ctx context.Context, id int64, expectedVersion int64, encryptedCredential string) (int64, error) {
 	return 0, nil
 }
+func (f *fakeConnRepoForTest) UpdateStatus(ctx context.Context, id int64, status string) error { return nil }
 func (f *fakeConnRepoForTest) BatchGetByIDs(ctx context.Context, ids []int64) (map[int64]*UpstreamConnection, error) {
 	return nil, nil
 }

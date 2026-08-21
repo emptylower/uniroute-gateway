@@ -117,7 +117,9 @@ func (s *AccountEndpointProbeService) Probe(ctx context.Context, accountID int64
 		summary["failure_scope"] = decision.Scope
 		summary["decision"] = decision.Scope
 		if s.connRepo != nil && decision.Scope == "connection" {
-			_ = s.connRepo.UpdateStatus(ctx, connection.ID, "suspended")
+			if err := s.connRepo.UpdateStatus(ctx, connection.ID, "suspended"); err != nil {
+				return nil, err
+			}
 		}
 		return s.persistProbe(ctx, accountID, connection, provider, protocol, normalizedEndpoint, "failed", summary)
 	case 404:
@@ -125,7 +127,9 @@ func (s *AccountEndpointProbeService) Probe(ctx context.Context, accountID int64
 		summary["failure_scope"] = decision.Scope
 		summary["decision"] = decision.Scope
 		if s.connRepo != nil && decision.Scope == "connection" {
-			_ = s.connRepo.UpdateStatus(ctx, connection.ID, "suspended")
+			if err := s.connRepo.UpdateStatus(ctx, connection.ID, "suspended"); err != nil {
+				return nil, err
+			}
 		}
 		return s.persistProbe(ctx, accountID, connection, provider, protocol, normalizedEndpoint, "failed", summary)
 	default:

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -31,6 +32,14 @@ func (f *fakeUpstreamConnRepo) Create(ctx context.Context, conn *UpstreamConnect
 	f.encs[conn.ID] = enc
 	return nil
 }
+func (f *fakeUpstreamConnRepo) UpdateStatus(ctx context.Context, id int64, status string) error {
+	if c, ok := f.store[id]; ok {
+		c.Status = status
+		return nil
+	}
+	return fmt.Errorf("not found")
+}
+
 func (f *fakeUpstreamConnRepo) GetByID(ctx context.Context, id int64) (*UpstreamConnection, string, error) {
 	c, ok := f.store[id]
 	if !ok {
