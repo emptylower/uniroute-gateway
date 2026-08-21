@@ -364,6 +364,11 @@ func (s *AccountTestService) resolveUpstreamRequestMaterial(ctx context.Context,
 }
 
 func (s *AccountTestService) buildUpstreamModelsRequest(ctx context.Context, account *Account) (*http.Request, error) {
+	// Phase 4: resolve connection base URL/credential/proxy independently from provider/protocol/endpoint
+	// This keeps discovery non-authoritative and preserves wildcard observations.
+	if _, err := s.resolveUpstreamRequestMaterial(ctx, account); err != nil {
+		return nil, err
+	}
 	switch {
 	case account.Platform == PlatformAntigravity:
 		return s.buildAntigravityAPIKeyModelsRequest(ctx, account)

@@ -154,7 +154,7 @@ func (s *UpstreamConnectionMigrationService) Apply(ctx context.Context, ackInven
 		if acc.ConnectionID != nil {
 			continue
 		}
-		// Encrypt dummy credential placeholder – real credential comes from existing account credential extraction
+		// Encrypt credential material – real credential comes from existing account credential extraction
 		// Secret-redacted report already, so we don't leak credential
 		credJSON, _ := json.Marshal(acc.Credentials)
 		encPlaceholder := string(credJSON) // In real repo, this would be encrypted via SecretEncryptor

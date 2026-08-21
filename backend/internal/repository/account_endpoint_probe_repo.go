@@ -19,6 +19,9 @@ func NewAccountEndpointProbeRepository(client *dbent.Client, db *sql.DB) service
 }
 
 func (r *accountEndpointProbeRepository) FindLatestValid(ctx context.Context, accountID int64, now time.Time) (*service.AccountEndpointProbe, error) {
+	if r.client == nil {
+		return nil, nil
+	}
 	entProbe, err := r.client.AccountEndpointProbe.Query().
 		Where().
 		All(ctx)
@@ -45,6 +48,9 @@ func (r *accountEndpointProbeRepository) FindLatestValid(ctx context.Context, ac
 }
 
 func (r *accountEndpointProbeRepository) FindByKey(ctx context.Context, accountID int64, connectionID int64, provider service.GovernanceProvider, protocol service.AccountProtocol, endpoint string, credentialVersion, configVersion int64) (*service.AccountEndpointProbe, error) {
+	if r.client == nil {
+		return nil, nil
+	}
 	// Stub scan – real would use ent query with unique index
 	probes, err := r.client.AccountEndpointProbe.Query().All(ctx)
 	if err != nil {
@@ -59,6 +65,9 @@ func (r *accountEndpointProbeRepository) FindByKey(ctx context.Context, accountI
 }
 
 func (r *accountEndpointProbeRepository) Insert(ctx context.Context, probe *service.AccountEndpointProbe) error {
+	if r.client == nil {
+		return nil
+	}
 	builder := r.client.AccountEndpointProbe.Create().
 		SetAccountID(probe.AccountID).
 		SetConnectionID(probe.ConnectionID).

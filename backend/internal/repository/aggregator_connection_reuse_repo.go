@@ -13,18 +13,38 @@ type aggregatorReuseRepository struct {
 	db     *sql.DB
 }
 
-func NewAggregatorReuseRepository(client *dbent.Client, db *sql.DB) *aggregatorReuseRepository {
+func NewAggregatorReuseRepository(client *dbent.Client, db *sql.DB) service.AggregatorReuseRepository {
 	return &aggregatorReuseRepository{client: client, db: db}
 }
 
-func (r *aggregatorReuseRepository) CreateReuseRequest(ctx context.Context, req *service.ReuseAggregatorConnectionInput, accountID *int64) error {
-	// Stub: would insert into aggregator_reuse_requests with idempotency scope uniqueness
+func (r *aggregatorReuseRepository) FindByScope(ctx context.Context, connectionID int64, provider service.GovernanceProvider, protocol service.AccountProtocol, endpoint, clientRequestID string) (int64, bool, error) {
+	if r.db == nil {
+		return 0, false, nil
+	}
+	var accountID sql.NullInt64
+	err := r.db.QueryRowContext(ctx, `SELECT account_id FROM aggregator_reuse_requests WHERE connection_id=$1 AND provider=$2 AND protocol=$3 AND normalized_endpoint_path=$4 AND client_request_id=$5`, connectionID, string(provider), string(protocol), endpoint, clientRequestID).Scan(&accountID)
+	if err == sql.ErrNoRows {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	if !accountID.Valid {
+		return 0, true, nil
+	}
+	return accountID.Int64, true, nil
+}
+
+func (r *aggregatorReuseRepository) Create(ctx context.Context, connectionID int64, provider service.GovernanceProvider, protocol service.AccountProtocol, endpoint, clientRequestID string, accountID int64) error {
+	if r.db == nil {
+		return nil
+	}
+	_, err := r.db.ExecContext(ctx, `INSERT INTO aggregator_reuse_requests (connection_id, provider, protocol, normalized_endpoint_path, client_request_id, account_id, status) VALUES ($1,$2,$3,$4,$5,$6,'pending')`, connectionID, string(provider), string(protocol), endpoint, clientRequestID, accountID)
+	if err != nil {
+		// Unique violation indicates concurrent hit – caller will handle via FindByScope
+		return err
+	}
 	return nil
 }
 
-func (r *aggregatorReuseRepository) GetByScope(ctx context.Context, connectionID int64, provider service.GovernanceProvider, protocol service.AccountProtocol, endpoint, clientRequestID string) (interface{}, error) {
-	return nil, nil
-}
-
-var _ = context.Background
-var _ = sql.ErrNoRows
+var _ service.AggregatorReuseRepository = (*aggregatorReuseRepository)(nil)

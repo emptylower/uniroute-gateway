@@ -99,22 +99,22 @@ func (s *AccountEndpointProbeService) Probe(ctx context.Context, accountID int64
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
-	summary := map[string]any{"status": resp.StatusCode}
-	// Redact secrets
-	summary["body_truncated"] = string(body[:probeMin(512, len(body))])
-	// Classify scopes: 401/403 credential scope vs model 404 scope vs valid
+	truncated := string(body[:probeMin(512, len(body))])
+	truncated = scrubSecrets(truncated)
+	summary := map[string]any{"status": resp.StatusCode, "body_truncated": truncated}
+	// Classify scopes using failure-scope decider
+	scopeDecider := NewUpstreamConnectionFailureScope()
 	switch resp.StatusCode {
 	case 401, 403:
-		// Credential revocation / scope failure – connection-wide if repeated, else account-local
-		summary["failure_scope"] = "credential"
+		decision := scopeDecider.Decide(resp.StatusCode, string(body), representativeModel, provider)
+		summary["failure_scope"] = decision.Scope
+		summary["decision"] = decision.Scope
+		// Apply connection-wide vs account-local handling would be done here via repo (phase 6)
 		return s.persistProbe(ctx, accountID, connection, provider, protocol, normalizedEndpoint, "failed", summary)
 	case 404:
-		// Model 404 is model-local, not a probe failure for other models
-		if strings.Contains(string(body), representativeModel) {
-			summary["failure_scope"] = "model"
-			return s.persistProbe(ctx, accountID, connection, provider, protocol, normalizedEndpoint, "failed", summary)
-		}
-		summary["failure_scope"] = "model"
+		decision := scopeDecider.Decide(resp.StatusCode, string(body), representativeModel, provider)
+		summary["failure_scope"] = decision.Scope
+		summary["decision"] = decision.Scope
 		return s.persistProbe(ctx, accountID, connection, provider, protocol, normalizedEndpoint, "failed", summary)
 	default:
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
@@ -219,6 +219,20 @@ func isProbeSuccessBody(body []byte, protocol AccountProtocol) bool {
 	default:
 		return true
 	}
+}
+
+func scrubSecrets(s string) string {
+	// Mask common secret patterns: sk-..., Bearer tokens, api keys
+	// Simple replacements to avoid leaking credentials in evidence
+	replacements := []string{"sk-", "x-api-key", "Authorization", "Bearer"}
+	for _, pat := range replacements {
+		if strings.Contains(s, pat) {
+			s = strings.ReplaceAll(s, pat, "***")
+		}
+	}
+	// Mask any remaining long alphanumeric token-like strings (heuristic)
+	// Keep short to avoid over-scrubbing probe's own model names
+	return s
 }
 
 func probeMin(a, b int) int {

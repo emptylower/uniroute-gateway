@@ -45,6 +45,14 @@ type UpstreamConnectionRepository interface {
 	ListAll(ctx context.Context) ([]*UpstreamConnection, error)
 }
 
+// AggregatorDesignationRepository extends connection repo with designation support.
+type AggregatorDesignationRepository interface {
+	UpstreamConnectionRepository
+	FindEventByIdempotencyKey(ctx context.Context, key string) (bool, error)
+	TransitionToAggregator(ctx context.Context, id int64, expectedVersion int64, evidenceRef, actorID, idempotencyKey string) error
+	CountAccountsByConnectionID(ctx context.Context, connectionID int64) (int, error)
+}
+
 // UpstreamConnectionService enforces kind/provider affinity, URL normalization, encryption, and DTO redaction.
 type UpstreamConnectionService struct {
 	repo      UpstreamConnectionRepository
