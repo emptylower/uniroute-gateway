@@ -348,12 +348,17 @@ func (s *AccountTestService) resolveUpstreamRequestMaterial(ctx context.Context,
 	}
 	// Resolve connection if migrated; otherwise fallback to legacy account-derived base URL.
 	// Explicit aggregator reuse supplies provider=null connection with OpenAI protocol; still resolve via connection.
-	if account.ConnectionID != nil {
-		// In production, load from UpstreamConnectionService/Repo; here stub to preserve wiring for tests.
-		// The connection's provider does NOT override account governance provider; protocol compatibility never grants ownership.
-		// BaseURL comes from connection if present.
-		material.BaseURL = "" // Will be filled by connection loader when wired (Task 2 batch-load)
-		// Placeholder: if we had connection repo, we'd fetch and set material.Connection and BaseURL
+	if account.ConnectionID != nil && s.upstreamConnRepo != nil {
+		if conn, _, err := s.upstreamConnRepo.GetByID(ctx, *account.ConnectionID); err == nil && conn != nil {
+			material.Connection = conn
+			if conn.BaseURL != "" {
+				material.BaseURL = conn.BaseURL
+			}
+			// Connection provider never overrides account governance provider.
+		}
+	} else if account.ConnectionID != nil {
+		// No repo wired: keep BaseURL empty to trigger legacy fallback (preserves tests with stub).
+		material.BaseURL = ""
 	}
 	if material.BaseURL == "" {
 		// Legacy fallback: derive from account credentials (preserves unmigrated rows)

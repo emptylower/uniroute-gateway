@@ -78,6 +78,7 @@ type AccountTestService struct {
 	modelObservationRepository ModelObservationRepository
 	agentIdentityTaskMu        sync.Mutex
 	agentIdentityWS            agentIdentityWSConnectionInvalidator
+	upstreamConnRepo           UpstreamConnectionRepository
 }
 
 // NewAccountTestService creates a new AccountTestService
@@ -120,6 +121,12 @@ func (s *AccountTestService) SetModelDiscoveryStore(store AccountModelDiscoveryS
 func (s *AccountTestService) SetModelObservationRepository(repo ModelObservationRepository) {
 	if s != nil {
 		s.modelObservationRepository = repo
+	}
+}
+
+func (s *AccountTestService) SetUpstreamConnectionRepository(repo UpstreamConnectionRepository) {
+	if s != nil {
+		s.upstreamConnRepo = repo
 	}
 }
 
