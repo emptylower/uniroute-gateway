@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 
@@ -35,9 +36,23 @@ type RestoreInput struct {
 
 // ModelQuarantineService handles reversible quarantine and restoration.
 type ModelQuarantineService struct {
-	store     ModelAuthorizationStore
-	loader    *ModelPublicationInputLoader
-	evaluator PublicationEvaluator
+	store       ModelAuthorizationStore
+	loader      *ModelPublicationInputLoader
+	evaluator   PublicationEvaluator
+	db          *sql.DB
+	channelRepo ChannelRepository
+}
+
+func (s *ModelQuarantineService) SetChannelRepository(repo ChannelRepository) {
+	if s != nil {
+		s.channelRepo = repo
+	}
+}
+
+func (s *ModelQuarantineService) SetDB(db *sql.DB) {
+	if s != nil {
+		s.db = db
+	}
 }
 
 // NewModelQuarantineService creates the service.
@@ -112,12 +127,18 @@ func (s *ModelQuarantineService) Restore(ctx context.Context, input RestoreInput
 	if pubInput.RegistryEntry != nil {
 		registryVersion = pubInput.RegistryEntry.Version
 	}
-	// Channel version from loader or default.
-	channelVersion := int64(1)
-	// Try to get actual channel version via store's decision or direct DB query?
-	// For now, use 1 and let RecomputeBatch's version check handle staleness.
-	// Retrieve current channel version via loader's resource? Simplified: use 1.
-	// In real implementation, we would query channels/governance_version.
+	// Query real channel governance version.
+	var channelVersion int64 = 1
+	if s.db != nil {
+		_ = s.db.QueryRowContext(ctx, `SELECT governance_version FROM channels WHERE id = $1`, input.ChannelID).Scan(&channelVersion)
+		if channelVersion == 0 {
+			channelVersion = 1
+		}
+	} else if s.channelRepo != nil {
+		// Fallback via repo's verification: try to get version via DB query inside repo.
+		// If repo does not expose getter, use Verify logic with current version 1 and let recompute conflict if stale.
+		// For now, keep 1.
+	}
 	recompute := RecomputeInput{
 		BatchID: fmt.Sprintf("restore-%s", input.IdempotencyKey), IdempotencyKey: input.IdempotencyKey,
 		RegistryVersion: registryVersion, ChannelVersions: map[int64]int64{input.ChannelID: channelVersion},
