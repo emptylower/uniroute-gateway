@@ -129,6 +129,14 @@ func registerDelegatedGatewayAdminRoutes(
 	accounts.POST("/:id/schedulable", h.Admin.Account.SetSchedulable)
 	accounts.GET("/:id/models", h.Admin.Account.GetAvailableModels)
 	accounts.POST("/:id/models/sync-upstream", h.Admin.Account.SyncUpstreamModels)
+	if h.Admin.ModelGovernanceProbe != nil {
+		accounts.POST("/:id/endpoint-probe", h.Admin.ModelGovernanceProbe.Probe)
+	}
+	if h.Admin.ModelGovernanceConnection != nil {
+		connections := admin.Group("/connections")
+		connections.POST("/:id/designate-aggregator", h.Admin.ModelGovernanceConnection.DesignateAggregator)
+		connections.POST("/:id/reuse", h.Admin.ModelGovernanceConnection.ReuseAggregatorConnection)
+	}
 	if h.Admin.OAuth != nil {
 		accounts.POST("/generate-auth-url", h.Admin.OAuth.GenerateAuthURL)
 		accounts.POST("/generate-setup-token-url", h.Admin.OAuth.GenerateSetupTokenURL)
