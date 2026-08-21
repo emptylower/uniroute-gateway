@@ -680,6 +680,10 @@ var ProviderSet = wire.NewSet(
 	NewPlatformIdentityService,
 	NewPlatformAPIKeyService,
 	NewModelGovernanceInventoryService,
+	NewModelClassifier,
+	NewPublicationEvaluator,
+	NewModelRegistryService,
+	NewModelGovernanceService,
 	// Core services
 	NewAuthService,
 	NewUserService,

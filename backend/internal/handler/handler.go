@@ -42,6 +42,7 @@ type AdminHandlers struct {
 	Compliance             *admin.ComplianceHandler
 	AuditLog               *admin.AuditLogHandler
 	ModelInventory         *admin.ModelGovernanceInventoryHandler
+	ModelRegistry          *admin.ModelRegistryHandler
 }
 
 // Handlers contains all HTTP handlers

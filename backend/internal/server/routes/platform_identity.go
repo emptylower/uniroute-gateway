@@ -97,6 +97,13 @@ func registerDelegatedGatewayAdminRoutes(
 	if h.Admin.ModelInventory != nil {
 		admin.GET("/model-governance/inventory", h.Admin.ModelInventory.List)
 	}
+	if h.Admin.ModelRegistry != nil {
+		registry := admin.Group("/model-registry")
+		registry.GET("", h.Admin.ModelRegistry.List)
+		registry.GET("/:canonical_id", h.Admin.ModelRegistry.Get)
+		registry.POST("/decisions", h.Admin.ModelRegistry.CreateDecision)
+		registry.POST("/rebuild", h.Admin.ModelRegistry.Rebuild)
+	}
 
 	accounts := admin.Group("/accounts")
 	accounts.GET("", h.Admin.Account.List)
