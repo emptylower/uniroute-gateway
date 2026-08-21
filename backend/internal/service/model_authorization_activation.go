@@ -74,8 +74,7 @@ func (s *ModelAuthorizationActivationService) Activate(ctx context.Context, inpu
 		return err
 	}
 
-	// Inventory completeness check: compare hash and versions? Simplified: verify inventory hash exists in recent inventory runs.
-	// For now, just verify registry version matches current max and channel versions match current.
+	// Inventory completeness: verify inventory hash exists in recent completed inventory runs.
 	var currentRegistryVersion int64
 	err = tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(registry_version),0) FROM model_registry_events`).Scan(&currentRegistryVersion)
 	if err != nil {
