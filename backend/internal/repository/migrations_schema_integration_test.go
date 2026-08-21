@@ -1319,11 +1319,14 @@ ORDER BY tablename
 	}
 	require.NoError(t, rows.Err())
 	require.Equal(t, []string{
+		"model_authorization_activations",
 		"model_classification_batches",
 		"model_inventory_items",
 		"model_inventory_runs",
 		"model_observation_events",
 		"model_observations",
+		"model_publication_eligibility",
+		"model_publication_events",
 		"model_registry",
 		"model_registry_aliases",
 		"model_registry_events",

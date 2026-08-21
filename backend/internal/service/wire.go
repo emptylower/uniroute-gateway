@@ -181,6 +181,7 @@ func ProvideAccountTestService(
 	tlsFPProfileService *TLSFingerprintProfileService,
 	openAIGatewayService *OpenAIGatewayService,
 	modelObservationRepository ModelObservationRepository,
+	upstreamConnRepo UpstreamConnectionRepository,
 ) *AccountTestService {
 	service := NewAccountTestService(
 		accountRepo,
@@ -195,6 +196,7 @@ func ProvideAccountTestService(
 	service.codexModelsFetcher = openAIGatewayService
 	service.agentIdentityWS = openAIGatewayService
 	service.modelObservationRepository = modelObservationRepository
+	service.SetUpstreamConnectionRepository(upstreamConnRepo)
 	return service
 }
 
@@ -766,7 +768,7 @@ var ProviderSet = wire.NewSet(
 	ProvideBillingCacheService,
 	NewAnnouncementService,
 	NewAdminService,
-	NewGatewayService,
+	ProvideGatewayService,
 	NewOpenAIGatewayService,
 	ProvideImageStorageSettingService,
 	ProvideImageTaskService,
@@ -937,5 +939,47 @@ func ProvideModelCatalogService(
 	svc := NewModelCatalogService(channels, selector, pricing, accounts, fx)
 	svc.SetPublicationStore(store)
 	svc.SetConfig(cfg)
+	return svc
+}
+
+func ProvideGatewayService(
+	accountRepo AccountRepository,
+	groupRepo GroupRepository,
+	usageLogRepo UsageLogRepository,
+	usageBillingRepo UsageBillingRepository,
+	userRepo UserRepository,
+	userSubRepo UserSubscriptionRepository,
+	userGroupRateRepo UserGroupRateRepository,
+	cache GatewayCache,
+	cfg *config.Config,
+	schedulerSnapshot *SchedulerSnapshotService,
+	concurrencyService *ConcurrencyService,
+	billingService *BillingService,
+	rateLimitService *RateLimitService,
+	billingCacheService *BillingCacheService,
+	identityService *IdentityService,
+	httpUpstream HTTPUpstream,
+	deferredService *DeferredService,
+	claudeTokenProvider *ClaudeTokenProvider,
+	sessionLimitCache SessionLimitCache,
+	rpmCache RPMCache,
+	digestStore *DigestSessionStore,
+	settingService *SettingService,
+	tlsFPProfileService *TLSFingerprintProfileService,
+	channelService *ChannelService,
+	resolver *ModelPricingResolver,
+	compositeResolver *CompositeRouteResolver,
+	balanceNotifyService *BalanceNotifyService,
+	userPlatformQuotaRepo UserPlatformQuotaRepository,
+	store ModelAuthorizationStore,
+) *GatewayService {
+	svc := NewGatewayService(
+		accountRepo, groupRepo, usageLogRepo, usageBillingRepo, userRepo, userSubRepo, userGroupRateRepo,
+		cache, cfg, schedulerSnapshot, concurrencyService, billingService, rateLimitService, billingCacheService,
+		identityService, httpUpstream, deferredService, claudeTokenProvider, sessionLimitCache, rpmCache,
+		digestStore, settingService, tlsFPProfileService, channelService, resolver, compositeResolver,
+		balanceNotifyService, userPlatformQuotaRepo,
+	)
+	svc.SetPublicationStore(store)
 	return svc
 }
