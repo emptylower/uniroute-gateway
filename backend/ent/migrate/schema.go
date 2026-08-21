@@ -130,7 +130,11 @@ var (
 		{Name: "session_window_end", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
 		{Name: "session_window_status", Type: field.TypeString, Nullable: true, Size: 20},
 		{Name: "quota_dimension", Type: field.TypeEnum, Enums: []string{"global", "spark"}, Default: "global"},
+		{Name: "protocol", Type: field.TypeString, Nullable: true, Size: 32},
+		{Name: "endpoint_path", Type: field.TypeString, Nullable: true, SchemaType: map[string]string{"postgres": "text"}},
+		{Name: "config_version", Type: field.TypeInt64, Default: 1},
 		{Name: "proxy_id", Type: field.TypeInt64, Nullable: true},
+		{Name: "connection_id", Type: field.TypeInt64, Nullable: true},
 		{Name: "parent_account_id", Type: field.TypeInt64, Nullable: true},
 	}
 	// AccountsTable holds the schema information for the "accounts" table.
@@ -141,13 +145,19 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "accounts_proxies_proxy",
-				Columns:    []*schema.Column{AccountsColumns[30]},
+				Columns:    []*schema.Column{AccountsColumns[33]},
 				RefColumns: []*schema.Column{ProxiesColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
 			{
+				Symbol:     "accounts_upstream_connections_connection",
+				Columns:    []*schema.Column{AccountsColumns[34]},
+				RefColumns: []*schema.Column{UpstreamConnectionsColumns[0]},
+				OnDelete:   schema.SetNull,
+			},
+			{
 				Symbol:     "accounts_accounts_children",
-				Columns:    []*schema.Column{AccountsColumns[31]},
+				Columns:    []*schema.Column{AccountsColumns[35]},
 				RefColumns: []*schema.Column{AccountsColumns[0]},
 				OnDelete:   schema.Restrict,
 			},
@@ -171,7 +181,7 @@ var (
 			{
 				Name:    "account_proxy_id",
 				Unique:  false,
-				Columns: []*schema.Column{AccountsColumns[30]},
+				Columns: []*schema.Column{AccountsColumns[33]},
 			},
 			{
 				Name:    "account_priority",
@@ -221,7 +231,76 @@ var (
 			{
 				Name:    "account_parent_account_id",
 				Unique:  false,
-				Columns: []*schema.Column{AccountsColumns[31]},
+				Columns: []*schema.Column{AccountsColumns[35]},
+			},
+			{
+				Name:    "account_connection_id",
+				Unique:  false,
+				Columns: []*schema.Column{AccountsColumns[34]},
+			},
+		},
+	}
+	// AccountEndpointProbesColumns holds the columns for the "account_endpoint_probes" table.
+	AccountEndpointProbesColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt64, Increment: true},
+		{Name: "provider", Type: field.TypeString, Size: 32},
+		{Name: "protocol", Type: field.TypeString, Size: 32},
+		{Name: "normalized_endpoint_path", Type: field.TypeString, SchemaType: map[string]string{"postgres": "text"}},
+		{Name: "credential_version", Type: field.TypeInt64},
+		{Name: "config_version", Type: field.TypeInt64},
+		{Name: "status", Type: field.TypeString, Size: 32},
+		{Name: "probed_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "expires_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "evidence_ref", Type: field.TypeString, Nullable: true, SchemaType: map[string]string{"postgres": "text"}},
+		{Name: "request_fingerprint", Type: field.TypeString, Nullable: true, SchemaType: map[string]string{"postgres": "text"}},
+		{Name: "response_summary", Type: field.TypeJSON, SchemaType: map[string]string{"postgres": "jsonb"}},
+		{Name: "account_id", Type: field.TypeInt64},
+		{Name: "connection_id", Type: field.TypeInt64},
+	}
+	// AccountEndpointProbesTable holds the schema information for the "account_endpoint_probes" table.
+	AccountEndpointProbesTable = &schema.Table{
+		Name:       "account_endpoint_probes",
+		Columns:    AccountEndpointProbesColumns,
+		PrimaryKey: []*schema.Column{AccountEndpointProbesColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "account_endpoint_probes_accounts_endpoint_probes",
+				Columns:    []*schema.Column{AccountEndpointProbesColumns[12]},
+				RefColumns: []*schema.Column{AccountsColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+			{
+				Symbol:     "account_endpoint_probes_upstream_connections_connection_probes",
+				Columns:    []*schema.Column{AccountEndpointProbesColumns[13]},
+				RefColumns: []*schema.Column{UpstreamConnectionsColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "accountendpointprobe_account_id_probed_at",
+				Unique:  false,
+				Columns: []*schema.Column{AccountEndpointProbesColumns[12], AccountEndpointProbesColumns[7]},
+			},
+			{
+				Name:    "accountendpointprobe_connection_id_probed_at",
+				Unique:  false,
+				Columns: []*schema.Column{AccountEndpointProbesColumns[13], AccountEndpointProbesColumns[7]},
+			},
+			{
+				Name:    "accountendpointprobe_expires_at",
+				Unique:  false,
+				Columns: []*schema.Column{AccountEndpointProbesColumns[8]},
+			},
+			{
+				Name:    "accountendpointprobe_provider_protocol",
+				Unique:  false,
+				Columns: []*schema.Column{AccountEndpointProbesColumns[1], AccountEndpointProbesColumns[2]},
+			},
+			{
+				Name:    "accountendpointprobe_account_id_connection_id_provider_protocol_credential_version_config_version",
+				Unique:  false,
+				Columns: []*schema.Column{AccountEndpointProbesColumns[12], AccountEndpointProbesColumns[13], AccountEndpointProbesColumns[1], AccountEndpointProbesColumns[2], AccountEndpointProbesColumns[4], AccountEndpointProbesColumns[5]},
 			},
 		},
 	}
@@ -1583,6 +1662,57 @@ var (
 		Columns:    TLSFingerprintProfilesColumns,
 		PrimaryKey: []*schema.Column{TLSFingerprintProfilesColumns[0]},
 	}
+	// UpstreamConnectionsColumns holds the columns for the "upstream_connections" table.
+	UpstreamConnectionsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt64, Increment: true},
+		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "updated_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "deleted_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
+		{Name: "kind", Type: field.TypeString, Size: 32},
+		{Name: "provider", Type: field.TypeString, Nullable: true, Size: 32},
+		{Name: "base_url", Type: field.TypeString, SchemaType: map[string]string{"postgres": "text"}},
+		{Name: "encrypted_credential", Type: field.TypeString, SchemaType: map[string]string{"postgres": "text"}},
+		{Name: "credential_version", Type: field.TypeInt64, Default: 1},
+		{Name: "status", Type: field.TypeString, Size: 32, Default: "active"},
+		{Name: "evidence_ref", Type: field.TypeString, Nullable: true, SchemaType: map[string]string{"postgres": "text"}},
+		{Name: "proxy_id", Type: field.TypeInt64, Nullable: true},
+	}
+	// UpstreamConnectionsTable holds the schema information for the "upstream_connections" table.
+	UpstreamConnectionsTable = &schema.Table{
+		Name:       "upstream_connections",
+		Columns:    UpstreamConnectionsColumns,
+		PrimaryKey: []*schema.Column{UpstreamConnectionsColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "upstream_connections_proxies_proxy",
+				Columns:    []*schema.Column{UpstreamConnectionsColumns[11]},
+				RefColumns: []*schema.Column{ProxiesColumns[0]},
+				OnDelete:   schema.SetNull,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "upstreamconnection_kind_provider",
+				Unique:  false,
+				Columns: []*schema.Column{UpstreamConnectionsColumns[4], UpstreamConnectionsColumns[5]},
+			},
+			{
+				Name:    "upstreamconnection_proxy_id",
+				Unique:  false,
+				Columns: []*schema.Column{UpstreamConnectionsColumns[11]},
+			},
+			{
+				Name:    "upstreamconnection_status",
+				Unique:  false,
+				Columns: []*schema.Column{UpstreamConnectionsColumns[9]},
+			},
+			{
+				Name:    "upstreamconnection_deleted_at",
+				Unique:  false,
+				Columns: []*schema.Column{UpstreamConnectionsColumns[3]},
+			},
+		},
+	}
 	// UsageCleanupTasksColumns holds the columns for the "usage_cleanup_tasks" table.
 	UsageCleanupTasksColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeInt64, Increment: true},
@@ -2085,6 +2215,7 @@ var (
 	Tables = []*schema.Table{
 		APIKeysTable,
 		AccountsTable,
+		AccountEndpointProbesTable,
 		AccountGroupsTable,
 		AnnouncementsTable,
 		AnnouncementReadsTable,
@@ -2114,6 +2245,7 @@ var (
 		SettingsTable,
 		SubscriptionPlansTable,
 		TLSFingerprintProfilesTable,
+		UpstreamConnectionsTable,
 		UsageCleanupTasksTable,
 		UsageLogsTable,
 		UsersTable,
@@ -2132,9 +2264,15 @@ func init() {
 		Table: "api_keys",
 	}
 	AccountsTable.ForeignKeys[0].RefTable = ProxiesTable
-	AccountsTable.ForeignKeys[1].RefTable = AccountsTable
+	AccountsTable.ForeignKeys[1].RefTable = UpstreamConnectionsTable
+	AccountsTable.ForeignKeys[2].RefTable = AccountsTable
 	AccountsTable.Annotation = &entsql.Annotation{
 		Table: "accounts",
+	}
+	AccountEndpointProbesTable.ForeignKeys[0].RefTable = AccountsTable
+	AccountEndpointProbesTable.ForeignKeys[1].RefTable = UpstreamConnectionsTable
+	AccountEndpointProbesTable.Annotation = &entsql.Annotation{
+		Table: "account_endpoint_probes",
 	}
 	AccountGroupsTable.ForeignKeys[0].RefTable = AccountsTable
 	AccountGroupsTable.ForeignKeys[1].RefTable = GroupsTable
@@ -2241,6 +2379,10 @@ func init() {
 	}
 	TLSFingerprintProfilesTable.Annotation = &entsql.Annotation{
 		Table: "tls_fingerprint_profiles",
+	}
+	UpstreamConnectionsTable.ForeignKeys[0].RefTable = ProxiesTable
+	UpstreamConnectionsTable.Annotation = &entsql.Annotation{
+		Table: "upstream_connections",
 	}
 	UsageCleanupTasksTable.Annotation = &entsql.Annotation{
 		Table: "usage_cleanup_tasks",

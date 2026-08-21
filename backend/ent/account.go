@@ -12,6 +12,7 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"github.com/Wei-Shaw/sub2api/ent/account"
 	"github.com/Wei-Shaw/sub2api/ent/proxy"
+	"github.com/Wei-Shaw/sub2api/ent/upstreamconnection"
 )
 
 // Account is the model entity for the Account schema.
@@ -81,6 +82,14 @@ type Account struct {
 	ParentAccountID *int64 `json:"parent_account_id,omitempty"`
 	// 'global' (default) or 'spark' (shadow reads codex_bengalfox).
 	QuotaDimension account.QuotaDimension `json:"quota_dimension,omitempty"`
+	// FK to upstream_connections, nullable until migration backfill completes.
+	ConnectionID *int64 `json:"connection_id,omitempty"`
+	// Request protocol: anthropic | openai | gemini, nullable until backfilled
+	Protocol *string `json:"protocol,omitempty"`
+	// Normalized endpoint path, nullable until backfilled
+	EndpointPath *string `json:"endpoint_path,omitempty"`
+	// Account config version for probe invalidation, >0
+	ConfigVersion int64 `json:"config_version,omitempty"`
 	// Edges holds the relations/edges for other nodes in the graph.
 	// The values are being populated by the AccountQuery when eager-loading is set.
 	Edges        AccountEdges `json:"edges"`
@@ -93,6 +102,10 @@ type AccountEdges struct {
 	Groups []*Group `json:"groups,omitempty"`
 	// Proxy holds the value of the proxy edge.
 	Proxy *Proxy `json:"proxy,omitempty"`
+	// Connection holds the value of the connection edge.
+	Connection *UpstreamConnection `json:"connection,omitempty"`
+	// EndpointProbes holds the value of the endpoint_probes edge.
+	EndpointProbes []*AccountEndpointProbe `json:"endpoint_probes,omitempty"`
 	// Parent holds the value of the parent edge.
 	Parent *Account `json:"parent,omitempty"`
 	// Children holds the value of the children edge.
@@ -103,7 +116,7 @@ type AccountEdges struct {
 	AccountGroups []*AccountGroup `json:"account_groups,omitempty"`
 	// loadedTypes holds the information for reporting if a
 	// type was loaded (or requested) in eager-loading or not.
-	loadedTypes [6]bool
+	loadedTypes [8]bool
 }
 
 // GroupsOrErr returns the Groups value or an error if the edge
@@ -126,12 +139,32 @@ func (e AccountEdges) ProxyOrErr() (*Proxy, error) {
 	return nil, &NotLoadedError{edge: "proxy"}
 }
 
+// ConnectionOrErr returns the Connection value or an error if the edge
+// was not loaded in eager-loading, or loaded but was not found.
+func (e AccountEdges) ConnectionOrErr() (*UpstreamConnection, error) {
+	if e.Connection != nil {
+		return e.Connection, nil
+	} else if e.loadedTypes[2] {
+		return nil, &NotFoundError{label: upstreamconnection.Label}
+	}
+	return nil, &NotLoadedError{edge: "connection"}
+}
+
+// EndpointProbesOrErr returns the EndpointProbes value or an error if the edge
+// was not loaded in eager-loading.
+func (e AccountEdges) EndpointProbesOrErr() ([]*AccountEndpointProbe, error) {
+	if e.loadedTypes[3] {
+		return e.EndpointProbes, nil
+	}
+	return nil, &NotLoadedError{edge: "endpoint_probes"}
+}
+
 // ParentOrErr returns the Parent value or an error if the edge
 // was not loaded in eager-loading, or loaded but was not found.
 func (e AccountEdges) ParentOrErr() (*Account, error) {
 	if e.Parent != nil {
 		return e.Parent, nil
-	} else if e.loadedTypes[2] {
+	} else if e.loadedTypes[4] {
 		return nil, &NotFoundError{label: account.Label}
 	}
 	return nil, &NotLoadedError{edge: "parent"}
@@ -140,7 +173,7 @@ func (e AccountEdges) ParentOrErr() (*Account, error) {
 // ChildrenOrErr returns the Children value or an error if the edge
 // was not loaded in eager-loading.
 func (e AccountEdges) ChildrenOrErr() ([]*Account, error) {
-	if e.loadedTypes[3] {
+	if e.loadedTypes[5] {
 		return e.Children, nil
 	}
 	return nil, &NotLoadedError{edge: "children"}
@@ -149,7 +182,7 @@ func (e AccountEdges) ChildrenOrErr() ([]*Account, error) {
 // UsageLogsOrErr returns the UsageLogs value or an error if the edge
 // was not loaded in eager-loading.
 func (e AccountEdges) UsageLogsOrErr() ([]*UsageLog, error) {
-	if e.loadedTypes[4] {
+	if e.loadedTypes[6] {
 		return e.UsageLogs, nil
 	}
 	return nil, &NotLoadedError{edge: "usage_logs"}
@@ -158,7 +191,7 @@ func (e AccountEdges) UsageLogsOrErr() ([]*UsageLog, error) {
 // AccountGroupsOrErr returns the AccountGroups value or an error if the edge
 // was not loaded in eager-loading.
 func (e AccountEdges) AccountGroupsOrErr() ([]*AccountGroup, error) {
-	if e.loadedTypes[5] {
+	if e.loadedTypes[7] {
 		return e.AccountGroups, nil
 	}
 	return nil, &NotLoadedError{edge: "account_groups"}
@@ -175,9 +208,9 @@ func (*Account) scanValues(columns []string) ([]any, error) {
 			values[i] = new(sql.NullBool)
 		case account.FieldRateMultiplier:
 			values[i] = new(sql.NullFloat64)
-		case account.FieldID, account.FieldProxyID, account.FieldProxyFallbackOriginID, account.FieldConcurrency, account.FieldLoadFactor, account.FieldPriority, account.FieldParentAccountID:
+		case account.FieldID, account.FieldProxyID, account.FieldProxyFallbackOriginID, account.FieldConcurrency, account.FieldLoadFactor, account.FieldPriority, account.FieldParentAccountID, account.FieldConnectionID, account.FieldConfigVersion:
 			values[i] = new(sql.NullInt64)
-		case account.FieldName, account.FieldNotes, account.FieldPlatform, account.FieldType, account.FieldStatus, account.FieldErrorMessage, account.FieldTempUnschedulableReason, account.FieldSessionWindowStatus, account.FieldQuotaDimension:
+		case account.FieldName, account.FieldNotes, account.FieldPlatform, account.FieldType, account.FieldStatus, account.FieldErrorMessage, account.FieldTempUnschedulableReason, account.FieldSessionWindowStatus, account.FieldQuotaDimension, account.FieldProtocol, account.FieldEndpointPath:
 			values[i] = new(sql.NullString)
 		case account.FieldCreatedAt, account.FieldUpdatedAt, account.FieldDeletedAt, account.FieldLastUsedAt, account.FieldExpiresAt, account.FieldRateLimitedAt, account.FieldRateLimitResetAt, account.FieldOverloadUntil, account.FieldTempUnschedulableUntil, account.FieldSessionWindowStart, account.FieldSessionWindowEnd:
 			values[i] = new(sql.NullTime)
@@ -409,6 +442,33 @@ func (_m *Account) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.QuotaDimension = account.QuotaDimension(value.String)
 			}
+		case account.FieldConnectionID:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field connection_id", values[i])
+			} else if value.Valid {
+				_m.ConnectionID = new(int64)
+				*_m.ConnectionID = value.Int64
+			}
+		case account.FieldProtocol:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field protocol", values[i])
+			} else if value.Valid {
+				_m.Protocol = new(string)
+				*_m.Protocol = value.String
+			}
+		case account.FieldEndpointPath:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field endpoint_path", values[i])
+			} else if value.Valid {
+				_m.EndpointPath = new(string)
+				*_m.EndpointPath = value.String
+			}
+		case account.FieldConfigVersion:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field config_version", values[i])
+			} else if value.Valid {
+				_m.ConfigVersion = value.Int64
+			}
 		default:
 			_m.selectValues.Set(columns[i], values[i])
 		}
@@ -430,6 +490,16 @@ func (_m *Account) QueryGroups() *GroupQuery {
 // QueryProxy queries the "proxy" edge of the Account entity.
 func (_m *Account) QueryProxy() *ProxyQuery {
 	return NewAccountClient(_m.config).QueryProxy(_m)
+}
+
+// QueryConnection queries the "connection" edge of the Account entity.
+func (_m *Account) QueryConnection() *UpstreamConnectionQuery {
+	return NewAccountClient(_m.config).QueryConnection(_m)
+}
+
+// QueryEndpointProbes queries the "endpoint_probes" edge of the Account entity.
+func (_m *Account) QueryEndpointProbes() *AccountEndpointProbeQuery {
+	return NewAccountClient(_m.config).QueryEndpointProbes(_m)
 }
 
 // QueryParent queries the "parent" edge of the Account entity.
@@ -601,6 +671,24 @@ func (_m *Account) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("quota_dimension=")
 	builder.WriteString(fmt.Sprintf("%v", _m.QuotaDimension))
+	builder.WriteString(", ")
+	if v := _m.ConnectionID; v != nil {
+		builder.WriteString("connection_id=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
+	builder.WriteString(", ")
+	if v := _m.Protocol; v != nil {
+		builder.WriteString("protocol=")
+		builder.WriteString(*v)
+	}
+	builder.WriteString(", ")
+	if v := _m.EndpointPath; v != nil {
+		builder.WriteString("endpoint_path=")
+		builder.WriteString(*v)
+	}
+	builder.WriteString(", ")
+	builder.WriteString("config_version=")
+	builder.WriteString(fmt.Sprintf("%v", _m.ConfigVersion))
 	builder.WriteByte(')')
 	return builder.String()
 }

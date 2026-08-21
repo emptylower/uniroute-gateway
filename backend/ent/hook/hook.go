@@ -33,6 +33,18 @@ func (f AccountFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, err
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.AccountMutation", m)
 }
 
+// The AccountEndpointProbeFunc type is an adapter to allow the use of ordinary
+// function as AccountEndpointProbe mutator.
+type AccountEndpointProbeFunc func(context.Context, *ent.AccountEndpointProbeMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f AccountEndpointProbeFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.AccountEndpointProbeMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.AccountEndpointProbeMutation", m)
+}
+
 // The AccountGroupFunc type is an adapter to allow the use of ordinary
 // function as AccountGroup mutator.
 type AccountGroupFunc func(context.Context, *ent.AccountGroupMutation) (ent.Value, error)
@@ -379,6 +391,18 @@ func (f TLSFingerprintProfileFunc) Mutate(ctx context.Context, m ent.Mutation) (
 		return f(ctx, mv)
 	}
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.TLSFingerprintProfileMutation", m)
+}
+
+// The UpstreamConnectionFunc type is an adapter to allow the use of ordinary
+// function as UpstreamConnection mutator.
+type UpstreamConnectionFunc func(context.Context, *ent.UpstreamConnectionMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f UpstreamConnectionFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.UpstreamConnectionMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.UpstreamConnectionMutation", m)
 }
 
 // The UsageCleanupTaskFunc type is an adapter to allow the use of ordinary

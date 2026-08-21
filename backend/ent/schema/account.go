@@ -201,6 +201,24 @@ func (Account) Fields() []ent.Field {
 			Comment("Parent account id for a linked spark shadow (NULL = normal)."),
 		field.Enum("quota_dimension").Values("global", "spark").Default("global").
 			Comment("'global' (default) or 'spark' (shadow reads codex_bengalfox)."),
+
+		// connection_id: Phase 4 upstream connection reference, nullable during backfill.
+		field.Int64("connection_id").Optional().Nillable().
+			Comment("FK to upstream_connections, nullable until migration backfill completes."),
+		// Phase 4 protocol/endpoint separation: protocol and endpoint are independent from provider.
+		field.String("protocol").
+			MaxLen(32).
+			Optional().
+			Nillable().
+			Comment("Request protocol: anthropic | openai | gemini, nullable until backfilled"),
+		field.String("endpoint_path").
+			Optional().
+			Nillable().
+			SchemaType(map[string]string{dialect.Postgres: "text"}).
+			Comment("Normalized endpoint path, nullable until backfilled"),
+		field.Int64("config_version").
+			Default(1).
+			Comment("Account config version for probe invalidation, >0"),
 	}
 }
 
@@ -217,6 +235,12 @@ func (Account) Edges() []ent.Edge {
 		edge.To("proxy", Proxy.Type).
 			Field("proxy_id").
 			Unique(),
+		// upstream connection (Phase 4)
+		edge.To("connection", UpstreamConnection.Type).
+			Field("connection_id").
+			Unique(),
+		// endpoint probes (Phase 4)
+		edge.To("endpoint_probes", AccountEndpointProbe.Type),
 		// children/parent: linked spark shadow relationship.
 		// parent_account_id is nullable, and the active one-shadow-per-parent rule
 		// is enforced by the partial unique index in migration 154a.
@@ -249,5 +273,6 @@ func (Account) Indexes() []ent.Index {
 		index.Fields("priority", "status"),
 		index.Fields("deleted_at"), // 软删除查询优化
 		index.Fields("parent_account_id"),
+		index.Fields("connection_id"),
 	}
 }

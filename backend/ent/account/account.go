@@ -78,10 +78,22 @@ const (
 	FieldParentAccountID = "parent_account_id"
 	// FieldQuotaDimension holds the string denoting the quota_dimension field in the database.
 	FieldQuotaDimension = "quota_dimension"
+	// FieldConnectionID holds the string denoting the connection_id field in the database.
+	FieldConnectionID = "connection_id"
+	// FieldProtocol holds the string denoting the protocol field in the database.
+	FieldProtocol = "protocol"
+	// FieldEndpointPath holds the string denoting the endpoint_path field in the database.
+	FieldEndpointPath = "endpoint_path"
+	// FieldConfigVersion holds the string denoting the config_version field in the database.
+	FieldConfigVersion = "config_version"
 	// EdgeGroups holds the string denoting the groups edge name in mutations.
 	EdgeGroups = "groups"
 	// EdgeProxy holds the string denoting the proxy edge name in mutations.
 	EdgeProxy = "proxy"
+	// EdgeConnection holds the string denoting the connection edge name in mutations.
+	EdgeConnection = "connection"
+	// EdgeEndpointProbes holds the string denoting the endpoint_probes edge name in mutations.
+	EdgeEndpointProbes = "endpoint_probes"
 	// EdgeParent holds the string denoting the parent edge name in mutations.
 	EdgeParent = "parent"
 	// EdgeChildren holds the string denoting the children edge name in mutations.
@@ -104,6 +116,20 @@ const (
 	ProxyInverseTable = "proxies"
 	// ProxyColumn is the table column denoting the proxy relation/edge.
 	ProxyColumn = "proxy_id"
+	// ConnectionTable is the table that holds the connection relation/edge.
+	ConnectionTable = "accounts"
+	// ConnectionInverseTable is the table name for the UpstreamConnection entity.
+	// It exists in this package in order to avoid circular dependency with the "upstreamconnection" package.
+	ConnectionInverseTable = "upstream_connections"
+	// ConnectionColumn is the table column denoting the connection relation/edge.
+	ConnectionColumn = "connection_id"
+	// EndpointProbesTable is the table that holds the endpoint_probes relation/edge.
+	EndpointProbesTable = "account_endpoint_probes"
+	// EndpointProbesInverseTable is the table name for the AccountEndpointProbe entity.
+	// It exists in this package in order to avoid circular dependency with the "accountendpointprobe" package.
+	EndpointProbesInverseTable = "account_endpoint_probes"
+	// EndpointProbesColumn is the table column denoting the endpoint_probes relation/edge.
+	EndpointProbesColumn = "account_id"
 	// ParentTable is the table that holds the parent relation/edge.
 	ParentTable = "accounts"
 	// ParentColumn is the table column denoting the parent relation/edge.
@@ -162,6 +188,10 @@ var Columns = []string{
 	FieldSessionWindowStatus,
 	FieldParentAccountID,
 	FieldQuotaDimension,
+	FieldConnectionID,
+	FieldProtocol,
+	FieldEndpointPath,
+	FieldConfigVersion,
 }
 
 var (
@@ -220,6 +250,10 @@ var (
 	DefaultSchedulable bool
 	// SessionWindowStatusValidator is a validator for the "session_window_status" field. It is called by the builders before save.
 	SessionWindowStatusValidator func(string) error
+	// ProtocolValidator is a validator for the "protocol" field. It is called by the builders before save.
+	ProtocolValidator func(string) error
+	// DefaultConfigVersion holds the default value on creation for the "config_version" field.
+	DefaultConfigVersion int64
 )
 
 // QuotaDimension defines the type for the "quota_dimension" enum field.
@@ -401,6 +435,26 @@ func ByQuotaDimension(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldQuotaDimension, opts...).ToFunc()
 }
 
+// ByConnectionID orders the results by the connection_id field.
+func ByConnectionID(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldConnectionID, opts...).ToFunc()
+}
+
+// ByProtocol orders the results by the protocol field.
+func ByProtocol(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldProtocol, opts...).ToFunc()
+}
+
+// ByEndpointPath orders the results by the endpoint_path field.
+func ByEndpointPath(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldEndpointPath, opts...).ToFunc()
+}
+
+// ByConfigVersion orders the results by the config_version field.
+func ByConfigVersion(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldConfigVersion, opts...).ToFunc()
+}
+
 // ByGroupsCount orders the results by groups count.
 func ByGroupsCount(opts ...sql.OrderTermOption) OrderOption {
 	return func(s *sql.Selector) {
@@ -419,6 +473,27 @@ func ByGroups(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
 func ByProxyField(field string, opts ...sql.OrderTermOption) OrderOption {
 	return func(s *sql.Selector) {
 		sqlgraph.OrderByNeighborTerms(s, newProxyStep(), sql.OrderByField(field, opts...))
+	}
+}
+
+// ByConnectionField orders the results by connection field.
+func ByConnectionField(field string, opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newConnectionStep(), sql.OrderByField(field, opts...))
+	}
+}
+
+// ByEndpointProbesCount orders the results by endpoint_probes count.
+func ByEndpointProbesCount(opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborsCount(s, newEndpointProbesStep(), opts...)
+	}
+}
+
+// ByEndpointProbes orders the results by endpoint_probes terms.
+func ByEndpointProbes(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newEndpointProbesStep(), append([]sql.OrderTerm{term}, terms...)...)
 	}
 }
 
@@ -482,6 +557,20 @@ func newProxyStep() *sqlgraph.Step {
 		sqlgraph.From(Table, FieldID),
 		sqlgraph.To(ProxyInverseTable, FieldID),
 		sqlgraph.Edge(sqlgraph.M2O, false, ProxyTable, ProxyColumn),
+	)
+}
+func newConnectionStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(ConnectionInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.M2O, false, ConnectionTable, ConnectionColumn),
+	)
+}
+func newEndpointProbesStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(EndpointProbesInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.O2M, false, EndpointProbesTable, EndpointProbesColumn),
 	)
 }
 func newParentStep() *sqlgraph.Step {

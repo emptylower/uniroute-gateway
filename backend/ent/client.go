@@ -16,6 +16,7 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"github.com/Wei-Shaw/sub2api/ent/account"
+	"github.com/Wei-Shaw/sub2api/ent/accountendpointprobe"
 	"github.com/Wei-Shaw/sub2api/ent/accountgroup"
 	"github.com/Wei-Shaw/sub2api/ent/announcement"
 	"github.com/Wei-Shaw/sub2api/ent/announcementread"
@@ -46,6 +47,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/setting"
 	"github.com/Wei-Shaw/sub2api/ent/subscriptionplan"
 	"github.com/Wei-Shaw/sub2api/ent/tlsfingerprintprofile"
+	"github.com/Wei-Shaw/sub2api/ent/upstreamconnection"
 	"github.com/Wei-Shaw/sub2api/ent/usagecleanuptask"
 	"github.com/Wei-Shaw/sub2api/ent/usagelog"
 	"github.com/Wei-Shaw/sub2api/ent/user"
@@ -67,6 +69,8 @@ type Client struct {
 	APIKey *APIKeyClient
 	// Account is the client for interacting with the Account builders.
 	Account *AccountClient
+	// AccountEndpointProbe is the client for interacting with the AccountEndpointProbe builders.
+	AccountEndpointProbe *AccountEndpointProbeClient
 	// AccountGroup is the client for interacting with the AccountGroup builders.
 	AccountGroup *AccountGroupClient
 	// Announcement is the client for interacting with the Announcement builders.
@@ -125,6 +129,8 @@ type Client struct {
 	SubscriptionPlan *SubscriptionPlanClient
 	// TLSFingerprintProfile is the client for interacting with the TLSFingerprintProfile builders.
 	TLSFingerprintProfile *TLSFingerprintProfileClient
+	// UpstreamConnection is the client for interacting with the UpstreamConnection builders.
+	UpstreamConnection *UpstreamConnectionClient
 	// UsageCleanupTask is the client for interacting with the UsageCleanupTask builders.
 	UsageCleanupTask *UsageCleanupTaskClient
 	// UsageLog is the client for interacting with the UsageLog builders.
@@ -154,6 +160,7 @@ func (c *Client) init() {
 	c.Schema = migrate.NewSchema(c.driver)
 	c.APIKey = NewAPIKeyClient(c.config)
 	c.Account = NewAccountClient(c.config)
+	c.AccountEndpointProbe = NewAccountEndpointProbeClient(c.config)
 	c.AccountGroup = NewAccountGroupClient(c.config)
 	c.Announcement = NewAnnouncementClient(c.config)
 	c.AnnouncementRead = NewAnnouncementReadClient(c.config)
@@ -183,6 +190,7 @@ func (c *Client) init() {
 	c.Setting = NewSettingClient(c.config)
 	c.SubscriptionPlan = NewSubscriptionPlanClient(c.config)
 	c.TLSFingerprintProfile = NewTLSFingerprintProfileClient(c.config)
+	c.UpstreamConnection = NewUpstreamConnectionClient(c.config)
 	c.UsageCleanupTask = NewUsageCleanupTaskClient(c.config)
 	c.UsageLog = NewUsageLogClient(c.config)
 	c.User = NewUserClient(c.config)
@@ -285,6 +293,7 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 		config:                        cfg,
 		APIKey:                        NewAPIKeyClient(cfg),
 		Account:                       NewAccountClient(cfg),
+		AccountEndpointProbe:          NewAccountEndpointProbeClient(cfg),
 		AccountGroup:                  NewAccountGroupClient(cfg),
 		Announcement:                  NewAnnouncementClient(cfg),
 		AnnouncementRead:              NewAnnouncementReadClient(cfg),
@@ -314,6 +323,7 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 		Setting:                       NewSettingClient(cfg),
 		SubscriptionPlan:              NewSubscriptionPlanClient(cfg),
 		TLSFingerprintProfile:         NewTLSFingerprintProfileClient(cfg),
+		UpstreamConnection:            NewUpstreamConnectionClient(cfg),
 		UsageCleanupTask:              NewUsageCleanupTaskClient(cfg),
 		UsageLog:                      NewUsageLogClient(cfg),
 		User:                          NewUserClient(cfg),
@@ -343,6 +353,7 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 		config:                        cfg,
 		APIKey:                        NewAPIKeyClient(cfg),
 		Account:                       NewAccountClient(cfg),
+		AccountEndpointProbe:          NewAccountEndpointProbeClient(cfg),
 		AccountGroup:                  NewAccountGroupClient(cfg),
 		Announcement:                  NewAnnouncementClient(cfg),
 		AnnouncementRead:              NewAnnouncementReadClient(cfg),
@@ -372,6 +383,7 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 		Setting:                       NewSettingClient(cfg),
 		SubscriptionPlan:              NewSubscriptionPlanClient(cfg),
 		TLSFingerprintProfile:         NewTLSFingerprintProfileClient(cfg),
+		UpstreamConnection:            NewUpstreamConnectionClient(cfg),
 		UsageCleanupTask:              NewUsageCleanupTaskClient(cfg),
 		UsageLog:                      NewUsageLogClient(cfg),
 		User:                          NewUserClient(cfg),
@@ -409,17 +421,18 @@ func (c *Client) Close() error {
 // In order to add hooks to a specific client, call: `client.Node.Use(...)`.
 func (c *Client) Use(hooks ...Hook) {
 	for _, n := range []interface{ Use(...Hook) }{
-		c.APIKey, c.Account, c.AccountGroup, c.Announcement, c.AnnouncementRead,
-		c.AuthIdentity, c.AuthIdentityChannel, c.BatchImageEvent, c.BatchImageItem,
-		c.BatchImageJob, c.ChannelMonitor, c.ChannelMonitorDailyRollup,
-		c.ChannelMonitorHistory, c.ChannelMonitorRequestTemplate,
-		c.CompositeModelRoute, c.ErrorPassthroughRule, c.Group, c.IdempotencyRecord,
-		c.IdentityAdoptionDecision, c.PaymentAuditLog, c.PaymentOrder,
-		c.PaymentProviderInstance, c.PendingAuthSession, c.PromoCode, c.PromoCodeUsage,
-		c.Proxy, c.RedeemCode, c.SecuritySecret, c.Setting, c.SubscriptionPlan,
-		c.TLSFingerprintProfile, c.UsageCleanupTask, c.UsageLog, c.User,
-		c.UserAllowedGroup, c.UserAttributeDefinition, c.UserAttributeValue,
-		c.UserPlatformQuota, c.UserSubscription,
+		c.APIKey, c.Account, c.AccountEndpointProbe, c.AccountGroup, c.Announcement,
+		c.AnnouncementRead, c.AuthIdentity, c.AuthIdentityChannel, c.BatchImageEvent,
+		c.BatchImageItem, c.BatchImageJob, c.ChannelMonitor,
+		c.ChannelMonitorDailyRollup, c.ChannelMonitorHistory,
+		c.ChannelMonitorRequestTemplate, c.CompositeModelRoute, c.ErrorPassthroughRule,
+		c.Group, c.IdempotencyRecord, c.IdentityAdoptionDecision, c.PaymentAuditLog,
+		c.PaymentOrder, c.PaymentProviderInstance, c.PendingAuthSession, c.PromoCode,
+		c.PromoCodeUsage, c.Proxy, c.RedeemCode, c.SecuritySecret, c.Setting,
+		c.SubscriptionPlan, c.TLSFingerprintProfile, c.UpstreamConnection,
+		c.UsageCleanupTask, c.UsageLog, c.User, c.UserAllowedGroup,
+		c.UserAttributeDefinition, c.UserAttributeValue, c.UserPlatformQuota,
+		c.UserSubscription,
 	} {
 		n.Use(hooks...)
 	}
@@ -429,17 +442,18 @@ func (c *Client) Use(hooks ...Hook) {
 // In order to add interceptors to a specific client, call: `client.Node.Intercept(...)`.
 func (c *Client) Intercept(interceptors ...Interceptor) {
 	for _, n := range []interface{ Intercept(...Interceptor) }{
-		c.APIKey, c.Account, c.AccountGroup, c.Announcement, c.AnnouncementRead,
-		c.AuthIdentity, c.AuthIdentityChannel, c.BatchImageEvent, c.BatchImageItem,
-		c.BatchImageJob, c.ChannelMonitor, c.ChannelMonitorDailyRollup,
-		c.ChannelMonitorHistory, c.ChannelMonitorRequestTemplate,
-		c.CompositeModelRoute, c.ErrorPassthroughRule, c.Group, c.IdempotencyRecord,
-		c.IdentityAdoptionDecision, c.PaymentAuditLog, c.PaymentOrder,
-		c.PaymentProviderInstance, c.PendingAuthSession, c.PromoCode, c.PromoCodeUsage,
-		c.Proxy, c.RedeemCode, c.SecuritySecret, c.Setting, c.SubscriptionPlan,
-		c.TLSFingerprintProfile, c.UsageCleanupTask, c.UsageLog, c.User,
-		c.UserAllowedGroup, c.UserAttributeDefinition, c.UserAttributeValue,
-		c.UserPlatformQuota, c.UserSubscription,
+		c.APIKey, c.Account, c.AccountEndpointProbe, c.AccountGroup, c.Announcement,
+		c.AnnouncementRead, c.AuthIdentity, c.AuthIdentityChannel, c.BatchImageEvent,
+		c.BatchImageItem, c.BatchImageJob, c.ChannelMonitor,
+		c.ChannelMonitorDailyRollup, c.ChannelMonitorHistory,
+		c.ChannelMonitorRequestTemplate, c.CompositeModelRoute, c.ErrorPassthroughRule,
+		c.Group, c.IdempotencyRecord, c.IdentityAdoptionDecision, c.PaymentAuditLog,
+		c.PaymentOrder, c.PaymentProviderInstance, c.PendingAuthSession, c.PromoCode,
+		c.PromoCodeUsage, c.Proxy, c.RedeemCode, c.SecuritySecret, c.Setting,
+		c.SubscriptionPlan, c.TLSFingerprintProfile, c.UpstreamConnection,
+		c.UsageCleanupTask, c.UsageLog, c.User, c.UserAllowedGroup,
+		c.UserAttributeDefinition, c.UserAttributeValue, c.UserPlatformQuota,
+		c.UserSubscription,
 	} {
 		n.Intercept(interceptors...)
 	}
@@ -452,6 +466,8 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.APIKey.mutate(ctx, m)
 	case *AccountMutation:
 		return c.Account.mutate(ctx, m)
+	case *AccountEndpointProbeMutation:
+		return c.AccountEndpointProbe.mutate(ctx, m)
 	case *AccountGroupMutation:
 		return c.AccountGroup.mutate(ctx, m)
 	case *AnnouncementMutation:
@@ -510,6 +526,8 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.SubscriptionPlan.mutate(ctx, m)
 	case *TLSFingerprintProfileMutation:
 		return c.TLSFingerprintProfile.mutate(ctx, m)
+	case *UpstreamConnectionMutation:
+		return c.UpstreamConnection.mutate(ctx, m)
 	case *UsageCleanupTaskMutation:
 		return c.UsageCleanupTask.mutate(ctx, m)
 	case *UsageLogMutation:
@@ -854,6 +872,38 @@ func (c *AccountClient) QueryProxy(_m *Account) *ProxyQuery {
 	return query
 }
 
+// QueryConnection queries the connection edge of a Account.
+func (c *AccountClient) QueryConnection(_m *Account) *UpstreamConnectionQuery {
+	query := (&UpstreamConnectionClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(account.Table, account.FieldID, id),
+			sqlgraph.To(upstreamconnection.Table, upstreamconnection.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, false, account.ConnectionTable, account.ConnectionColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryEndpointProbes queries the endpoint_probes edge of a Account.
+func (c *AccountClient) QueryEndpointProbes(_m *Account) *AccountEndpointProbeQuery {
+	query := (&AccountEndpointProbeClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(account.Table, account.FieldID, id),
+			sqlgraph.To(accountendpointprobe.Table, accountendpointprobe.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, account.EndpointProbesTable, account.EndpointProbesColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
 // QueryParent queries the parent edge of a Account.
 func (c *AccountClient) QueryParent(_m *Account) *AccountQuery {
 	query := (&AccountClient{config: c.config}).Query()
@@ -942,6 +992,171 @@ func (c *AccountClient) mutate(ctx context.Context, m *AccountMutation) (Value, 
 		return (&AccountDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
 	default:
 		return nil, fmt.Errorf("ent: unknown Account mutation op: %q", m.Op())
+	}
+}
+
+// AccountEndpointProbeClient is a client for the AccountEndpointProbe schema.
+type AccountEndpointProbeClient struct {
+	config
+}
+
+// NewAccountEndpointProbeClient returns a client for the AccountEndpointProbe from the given config.
+func NewAccountEndpointProbeClient(c config) *AccountEndpointProbeClient {
+	return &AccountEndpointProbeClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `accountendpointprobe.Hooks(f(g(h())))`.
+func (c *AccountEndpointProbeClient) Use(hooks ...Hook) {
+	c.hooks.AccountEndpointProbe = append(c.hooks.AccountEndpointProbe, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `accountendpointprobe.Intercept(f(g(h())))`.
+func (c *AccountEndpointProbeClient) Intercept(interceptors ...Interceptor) {
+	c.inters.AccountEndpointProbe = append(c.inters.AccountEndpointProbe, interceptors...)
+}
+
+// Create returns a builder for creating a AccountEndpointProbe entity.
+func (c *AccountEndpointProbeClient) Create() *AccountEndpointProbeCreate {
+	mutation := newAccountEndpointProbeMutation(c.config, OpCreate)
+	return &AccountEndpointProbeCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of AccountEndpointProbe entities.
+func (c *AccountEndpointProbeClient) CreateBulk(builders ...*AccountEndpointProbeCreate) *AccountEndpointProbeCreateBulk {
+	return &AccountEndpointProbeCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *AccountEndpointProbeClient) MapCreateBulk(slice any, setFunc func(*AccountEndpointProbeCreate, int)) *AccountEndpointProbeCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &AccountEndpointProbeCreateBulk{err: fmt.Errorf("calling to AccountEndpointProbeClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*AccountEndpointProbeCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &AccountEndpointProbeCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for AccountEndpointProbe.
+func (c *AccountEndpointProbeClient) Update() *AccountEndpointProbeUpdate {
+	mutation := newAccountEndpointProbeMutation(c.config, OpUpdate)
+	return &AccountEndpointProbeUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *AccountEndpointProbeClient) UpdateOne(_m *AccountEndpointProbe) *AccountEndpointProbeUpdateOne {
+	mutation := newAccountEndpointProbeMutation(c.config, OpUpdateOne, withAccountEndpointProbe(_m))
+	return &AccountEndpointProbeUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *AccountEndpointProbeClient) UpdateOneID(id int64) *AccountEndpointProbeUpdateOne {
+	mutation := newAccountEndpointProbeMutation(c.config, OpUpdateOne, withAccountEndpointProbeID(id))
+	return &AccountEndpointProbeUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for AccountEndpointProbe.
+func (c *AccountEndpointProbeClient) Delete() *AccountEndpointProbeDelete {
+	mutation := newAccountEndpointProbeMutation(c.config, OpDelete)
+	return &AccountEndpointProbeDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *AccountEndpointProbeClient) DeleteOne(_m *AccountEndpointProbe) *AccountEndpointProbeDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *AccountEndpointProbeClient) DeleteOneID(id int64) *AccountEndpointProbeDeleteOne {
+	builder := c.Delete().Where(accountendpointprobe.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &AccountEndpointProbeDeleteOne{builder}
+}
+
+// Query returns a query builder for AccountEndpointProbe.
+func (c *AccountEndpointProbeClient) Query() *AccountEndpointProbeQuery {
+	return &AccountEndpointProbeQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeAccountEndpointProbe},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a AccountEndpointProbe entity by its id.
+func (c *AccountEndpointProbeClient) Get(ctx context.Context, id int64) (*AccountEndpointProbe, error) {
+	return c.Query().Where(accountendpointprobe.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *AccountEndpointProbeClient) GetX(ctx context.Context, id int64) *AccountEndpointProbe {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// QueryAccount queries the account edge of a AccountEndpointProbe.
+func (c *AccountEndpointProbeClient) QueryAccount(_m *AccountEndpointProbe) *AccountQuery {
+	query := (&AccountClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(accountendpointprobe.Table, accountendpointprobe.FieldID, id),
+			sqlgraph.To(account.Table, account.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, accountendpointprobe.AccountTable, accountendpointprobe.AccountColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryConnection queries the connection edge of a AccountEndpointProbe.
+func (c *AccountEndpointProbeClient) QueryConnection(_m *AccountEndpointProbe) *UpstreamConnectionQuery {
+	query := (&UpstreamConnectionClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(accountendpointprobe.Table, accountendpointprobe.FieldID, id),
+			sqlgraph.To(upstreamconnection.Table, upstreamconnection.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, accountendpointprobe.ConnectionTable, accountendpointprobe.ConnectionColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// Hooks returns the client hooks.
+func (c *AccountEndpointProbeClient) Hooks() []Hook {
+	return c.hooks.AccountEndpointProbe
+}
+
+// Interceptors returns the client interceptors.
+func (c *AccountEndpointProbeClient) Interceptors() []Interceptor {
+	return c.inters.AccountEndpointProbe
+}
+
+func (c *AccountEndpointProbeClient) mutate(ctx context.Context, m *AccountEndpointProbeMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&AccountEndpointProbeCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&AccountEndpointProbeUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&AccountEndpointProbeUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&AccountEndpointProbeDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown AccountEndpointProbe mutation op: %q", m.Op())
 	}
 }
 
@@ -5335,6 +5550,189 @@ func (c *TLSFingerprintProfileClient) mutate(ctx context.Context, m *TLSFingerpr
 	}
 }
 
+// UpstreamConnectionClient is a client for the UpstreamConnection schema.
+type UpstreamConnectionClient struct {
+	config
+}
+
+// NewUpstreamConnectionClient returns a client for the UpstreamConnection from the given config.
+func NewUpstreamConnectionClient(c config) *UpstreamConnectionClient {
+	return &UpstreamConnectionClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `upstreamconnection.Hooks(f(g(h())))`.
+func (c *UpstreamConnectionClient) Use(hooks ...Hook) {
+	c.hooks.UpstreamConnection = append(c.hooks.UpstreamConnection, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `upstreamconnection.Intercept(f(g(h())))`.
+func (c *UpstreamConnectionClient) Intercept(interceptors ...Interceptor) {
+	c.inters.UpstreamConnection = append(c.inters.UpstreamConnection, interceptors...)
+}
+
+// Create returns a builder for creating a UpstreamConnection entity.
+func (c *UpstreamConnectionClient) Create() *UpstreamConnectionCreate {
+	mutation := newUpstreamConnectionMutation(c.config, OpCreate)
+	return &UpstreamConnectionCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of UpstreamConnection entities.
+func (c *UpstreamConnectionClient) CreateBulk(builders ...*UpstreamConnectionCreate) *UpstreamConnectionCreateBulk {
+	return &UpstreamConnectionCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *UpstreamConnectionClient) MapCreateBulk(slice any, setFunc func(*UpstreamConnectionCreate, int)) *UpstreamConnectionCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &UpstreamConnectionCreateBulk{err: fmt.Errorf("calling to UpstreamConnectionClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*UpstreamConnectionCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &UpstreamConnectionCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for UpstreamConnection.
+func (c *UpstreamConnectionClient) Update() *UpstreamConnectionUpdate {
+	mutation := newUpstreamConnectionMutation(c.config, OpUpdate)
+	return &UpstreamConnectionUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *UpstreamConnectionClient) UpdateOne(_m *UpstreamConnection) *UpstreamConnectionUpdateOne {
+	mutation := newUpstreamConnectionMutation(c.config, OpUpdateOne, withUpstreamConnection(_m))
+	return &UpstreamConnectionUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *UpstreamConnectionClient) UpdateOneID(id int64) *UpstreamConnectionUpdateOne {
+	mutation := newUpstreamConnectionMutation(c.config, OpUpdateOne, withUpstreamConnectionID(id))
+	return &UpstreamConnectionUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for UpstreamConnection.
+func (c *UpstreamConnectionClient) Delete() *UpstreamConnectionDelete {
+	mutation := newUpstreamConnectionMutation(c.config, OpDelete)
+	return &UpstreamConnectionDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *UpstreamConnectionClient) DeleteOne(_m *UpstreamConnection) *UpstreamConnectionDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *UpstreamConnectionClient) DeleteOneID(id int64) *UpstreamConnectionDeleteOne {
+	builder := c.Delete().Where(upstreamconnection.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &UpstreamConnectionDeleteOne{builder}
+}
+
+// Query returns a query builder for UpstreamConnection.
+func (c *UpstreamConnectionClient) Query() *UpstreamConnectionQuery {
+	return &UpstreamConnectionQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeUpstreamConnection},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a UpstreamConnection entity by its id.
+func (c *UpstreamConnectionClient) Get(ctx context.Context, id int64) (*UpstreamConnection, error) {
+	return c.Query().Where(upstreamconnection.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *UpstreamConnectionClient) GetX(ctx context.Context, id int64) *UpstreamConnection {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// QueryAccounts queries the accounts edge of a UpstreamConnection.
+func (c *UpstreamConnectionClient) QueryAccounts(_m *UpstreamConnection) *AccountQuery {
+	query := (&AccountClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(upstreamconnection.Table, upstreamconnection.FieldID, id),
+			sqlgraph.To(account.Table, account.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, true, upstreamconnection.AccountsTable, upstreamconnection.AccountsColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryConnectionProbes queries the connection_probes edge of a UpstreamConnection.
+func (c *UpstreamConnectionClient) QueryConnectionProbes(_m *UpstreamConnection) *AccountEndpointProbeQuery {
+	query := (&AccountEndpointProbeClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(upstreamconnection.Table, upstreamconnection.FieldID, id),
+			sqlgraph.To(accountendpointprobe.Table, accountendpointprobe.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, upstreamconnection.ConnectionProbesTable, upstreamconnection.ConnectionProbesColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryProxy queries the proxy edge of a UpstreamConnection.
+func (c *UpstreamConnectionClient) QueryProxy(_m *UpstreamConnection) *ProxyQuery {
+	query := (&ProxyClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(upstreamconnection.Table, upstreamconnection.FieldID, id),
+			sqlgraph.To(proxy.Table, proxy.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, false, upstreamconnection.ProxyTable, upstreamconnection.ProxyColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// Hooks returns the client hooks.
+func (c *UpstreamConnectionClient) Hooks() []Hook {
+	hooks := c.hooks.UpstreamConnection
+	return append(hooks[:len(hooks):len(hooks)], upstreamconnection.Hooks[:]...)
+}
+
+// Interceptors returns the client interceptors.
+func (c *UpstreamConnectionClient) Interceptors() []Interceptor {
+	inters := c.inters.UpstreamConnection
+	return append(inters[:len(inters):len(inters)], upstreamconnection.Interceptors[:]...)
+}
+
+func (c *UpstreamConnectionClient) mutate(ctx context.Context, m *UpstreamConnectionMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&UpstreamConnectionCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&UpstreamConnectionUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&UpstreamConnectionUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&UpstreamConnectionDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown UpstreamConnection mutation op: %q", m.Op())
+	}
+}
+
 // UsageCleanupTaskClient is a client for the UsageCleanupTask schema.
 type UsageCleanupTaskClient struct {
 	config
@@ -6825,28 +7223,28 @@ func (c *UserSubscriptionClient) mutate(ctx context.Context, m *UserSubscription
 // hooks and interceptors per client, for fast access.
 type (
 	hooks struct {
-		APIKey, Account, AccountGroup, Announcement, AnnouncementRead, AuthIdentity,
-		AuthIdentityChannel, BatchImageEvent, BatchImageItem, BatchImageJob,
-		ChannelMonitor, ChannelMonitorDailyRollup, ChannelMonitorHistory,
-		ChannelMonitorRequestTemplate, CompositeModelRoute, ErrorPassthroughRule,
-		Group, IdempotencyRecord, IdentityAdoptionDecision, PaymentAuditLog,
-		PaymentOrder, PaymentProviderInstance, PendingAuthSession, PromoCode,
-		PromoCodeUsage, Proxy, RedeemCode, SecuritySecret, Setting, SubscriptionPlan,
-		TLSFingerprintProfile, UsageCleanupTask, UsageLog, User, UserAllowedGroup,
-		UserAttributeDefinition, UserAttributeValue, UserPlatformQuota,
-		UserSubscription []ent.Hook
+		APIKey, Account, AccountEndpointProbe, AccountGroup, Announcement,
+		AnnouncementRead, AuthIdentity, AuthIdentityChannel, BatchImageEvent,
+		BatchImageItem, BatchImageJob, ChannelMonitor, ChannelMonitorDailyRollup,
+		ChannelMonitorHistory, ChannelMonitorRequestTemplate, CompositeModelRoute,
+		ErrorPassthroughRule, Group, IdempotencyRecord, IdentityAdoptionDecision,
+		PaymentAuditLog, PaymentOrder, PaymentProviderInstance, PendingAuthSession,
+		PromoCode, PromoCodeUsage, Proxy, RedeemCode, SecuritySecret, Setting,
+		SubscriptionPlan, TLSFingerprintProfile, UpstreamConnection, UsageCleanupTask,
+		UsageLog, User, UserAllowedGroup, UserAttributeDefinition, UserAttributeValue,
+		UserPlatformQuota, UserSubscription []ent.Hook
 	}
 	inters struct {
-		APIKey, Account, AccountGroup, Announcement, AnnouncementRead, AuthIdentity,
-		AuthIdentityChannel, BatchImageEvent, BatchImageItem, BatchImageJob,
-		ChannelMonitor, ChannelMonitorDailyRollup, ChannelMonitorHistory,
-		ChannelMonitorRequestTemplate, CompositeModelRoute, ErrorPassthroughRule,
-		Group, IdempotencyRecord, IdentityAdoptionDecision, PaymentAuditLog,
-		PaymentOrder, PaymentProviderInstance, PendingAuthSession, PromoCode,
-		PromoCodeUsage, Proxy, RedeemCode, SecuritySecret, Setting, SubscriptionPlan,
-		TLSFingerprintProfile, UsageCleanupTask, UsageLog, User, UserAllowedGroup,
-		UserAttributeDefinition, UserAttributeValue, UserPlatformQuota,
-		UserSubscription []ent.Interceptor
+		APIKey, Account, AccountEndpointProbe, AccountGroup, Announcement,
+		AnnouncementRead, AuthIdentity, AuthIdentityChannel, BatchImageEvent,
+		BatchImageItem, BatchImageJob, ChannelMonitor, ChannelMonitorDailyRollup,
+		ChannelMonitorHistory, ChannelMonitorRequestTemplate, CompositeModelRoute,
+		ErrorPassthroughRule, Group, IdempotencyRecord, IdentityAdoptionDecision,
+		PaymentAuditLog, PaymentOrder, PaymentProviderInstance, PendingAuthSession,
+		PromoCode, PromoCodeUsage, Proxy, RedeemCode, SecuritySecret, Setting,
+		SubscriptionPlan, TLSFingerprintProfile, UpstreamConnection, UsageCleanupTask,
+		UsageLog, User, UserAllowedGroup, UserAttributeDefinition, UserAttributeValue,
+		UserPlatformQuota, UserSubscription []ent.Interceptor
 	}
 )
 

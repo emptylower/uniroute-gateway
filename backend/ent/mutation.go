@@ -13,6 +13,7 @@ import (
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
 	"github.com/Wei-Shaw/sub2api/ent/account"
+	"github.com/Wei-Shaw/sub2api/ent/accountendpointprobe"
 	"github.com/Wei-Shaw/sub2api/ent/accountgroup"
 	"github.com/Wei-Shaw/sub2api/ent/announcement"
 	"github.com/Wei-Shaw/sub2api/ent/announcementread"
@@ -44,6 +45,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/setting"
 	"github.com/Wei-Shaw/sub2api/ent/subscriptionplan"
 	"github.com/Wei-Shaw/sub2api/ent/tlsfingerprintprofile"
+	"github.com/Wei-Shaw/sub2api/ent/upstreamconnection"
 	"github.com/Wei-Shaw/sub2api/ent/usagecleanuptask"
 	"github.com/Wei-Shaw/sub2api/ent/usagelog"
 	"github.com/Wei-Shaw/sub2api/ent/user"
@@ -66,6 +68,7 @@ const (
 	// Node types.
 	TypeAPIKey                        = "APIKey"
 	TypeAccount                       = "Account"
+	TypeAccountEndpointProbe          = "AccountEndpointProbe"
 	TypeAccountGroup                  = "AccountGroup"
 	TypeAnnouncement                  = "Announcement"
 	TypeAnnouncementRead              = "AnnouncementRead"
@@ -95,6 +98,7 @@ const (
 	TypeSetting                       = "Setting"
 	TypeSubscriptionPlan              = "SubscriptionPlan"
 	TypeTLSFingerprintProfile         = "TLSFingerprintProfile"
+	TypeUpstreamConnection            = "UpstreamConnection"
 	TypeUsageCleanupTask              = "UsageCleanupTask"
 	TypeUsageLog                      = "UsageLog"
 	TypeUser                          = "User"
@@ -2699,12 +2703,21 @@ type AccountMutation struct {
 	session_window_end          *time.Time
 	session_window_status       *string
 	quota_dimension             *account.QuotaDimension
+	protocol                    *string
+	endpoint_path               *string
+	config_version              *int64
+	addconfig_version           *int64
 	clearedFields               map[string]struct{}
 	groups                      map[int64]struct{}
 	removedgroups               map[int64]struct{}
 	clearedgroups               bool
 	proxy                       *int64
 	clearedproxy                bool
+	connection                  *int64
+	clearedconnection           bool
+	endpoint_probes             map[int64]struct{}
+	removedendpoint_probes      map[int64]struct{}
+	clearedendpoint_probes      bool
 	parent                      *int64
 	clearedparent               bool
 	children                    map[int64]struct{}
@@ -4255,6 +4268,209 @@ func (m *AccountMutation) ResetQuotaDimension() {
 	m.quota_dimension = nil
 }
 
+// SetConnectionID sets the "connection_id" field.
+func (m *AccountMutation) SetConnectionID(i int64) {
+	m.connection = &i
+}
+
+// ConnectionID returns the value of the "connection_id" field in the mutation.
+func (m *AccountMutation) ConnectionID() (r int64, exists bool) {
+	v := m.connection
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldConnectionID returns the old "connection_id" field's value of the Account entity.
+// If the Account object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AccountMutation) OldConnectionID(ctx context.Context) (v *int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldConnectionID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldConnectionID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldConnectionID: %w", err)
+	}
+	return oldValue.ConnectionID, nil
+}
+
+// ClearConnectionID clears the value of the "connection_id" field.
+func (m *AccountMutation) ClearConnectionID() {
+	m.connection = nil
+	m.clearedFields[account.FieldConnectionID] = struct{}{}
+}
+
+// ConnectionIDCleared returns if the "connection_id" field was cleared in this mutation.
+func (m *AccountMutation) ConnectionIDCleared() bool {
+	_, ok := m.clearedFields[account.FieldConnectionID]
+	return ok
+}
+
+// ResetConnectionID resets all changes to the "connection_id" field.
+func (m *AccountMutation) ResetConnectionID() {
+	m.connection = nil
+	delete(m.clearedFields, account.FieldConnectionID)
+}
+
+// SetProtocol sets the "protocol" field.
+func (m *AccountMutation) SetProtocol(s string) {
+	m.protocol = &s
+}
+
+// Protocol returns the value of the "protocol" field in the mutation.
+func (m *AccountMutation) Protocol() (r string, exists bool) {
+	v := m.protocol
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldProtocol returns the old "protocol" field's value of the Account entity.
+// If the Account object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AccountMutation) OldProtocol(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldProtocol is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldProtocol requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldProtocol: %w", err)
+	}
+	return oldValue.Protocol, nil
+}
+
+// ClearProtocol clears the value of the "protocol" field.
+func (m *AccountMutation) ClearProtocol() {
+	m.protocol = nil
+	m.clearedFields[account.FieldProtocol] = struct{}{}
+}
+
+// ProtocolCleared returns if the "protocol" field was cleared in this mutation.
+func (m *AccountMutation) ProtocolCleared() bool {
+	_, ok := m.clearedFields[account.FieldProtocol]
+	return ok
+}
+
+// ResetProtocol resets all changes to the "protocol" field.
+func (m *AccountMutation) ResetProtocol() {
+	m.protocol = nil
+	delete(m.clearedFields, account.FieldProtocol)
+}
+
+// SetEndpointPath sets the "endpoint_path" field.
+func (m *AccountMutation) SetEndpointPath(s string) {
+	m.endpoint_path = &s
+}
+
+// EndpointPath returns the value of the "endpoint_path" field in the mutation.
+func (m *AccountMutation) EndpointPath() (r string, exists bool) {
+	v := m.endpoint_path
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldEndpointPath returns the old "endpoint_path" field's value of the Account entity.
+// If the Account object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AccountMutation) OldEndpointPath(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldEndpointPath is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldEndpointPath requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldEndpointPath: %w", err)
+	}
+	return oldValue.EndpointPath, nil
+}
+
+// ClearEndpointPath clears the value of the "endpoint_path" field.
+func (m *AccountMutation) ClearEndpointPath() {
+	m.endpoint_path = nil
+	m.clearedFields[account.FieldEndpointPath] = struct{}{}
+}
+
+// EndpointPathCleared returns if the "endpoint_path" field was cleared in this mutation.
+func (m *AccountMutation) EndpointPathCleared() bool {
+	_, ok := m.clearedFields[account.FieldEndpointPath]
+	return ok
+}
+
+// ResetEndpointPath resets all changes to the "endpoint_path" field.
+func (m *AccountMutation) ResetEndpointPath() {
+	m.endpoint_path = nil
+	delete(m.clearedFields, account.FieldEndpointPath)
+}
+
+// SetConfigVersion sets the "config_version" field.
+func (m *AccountMutation) SetConfigVersion(i int64) {
+	m.config_version = &i
+	m.addconfig_version = nil
+}
+
+// ConfigVersion returns the value of the "config_version" field in the mutation.
+func (m *AccountMutation) ConfigVersion() (r int64, exists bool) {
+	v := m.config_version
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldConfigVersion returns the old "config_version" field's value of the Account entity.
+// If the Account object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AccountMutation) OldConfigVersion(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldConfigVersion is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldConfigVersion requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldConfigVersion: %w", err)
+	}
+	return oldValue.ConfigVersion, nil
+}
+
+// AddConfigVersion adds i to the "config_version" field.
+func (m *AccountMutation) AddConfigVersion(i int64) {
+	if m.addconfig_version != nil {
+		*m.addconfig_version += i
+	} else {
+		m.addconfig_version = &i
+	}
+}
+
+// AddedConfigVersion returns the value that was added to the "config_version" field in this mutation.
+func (m *AccountMutation) AddedConfigVersion() (r int64, exists bool) {
+	v := m.addconfig_version
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetConfigVersion resets all changes to the "config_version" field.
+func (m *AccountMutation) ResetConfigVersion() {
+	m.config_version = nil
+	m.addconfig_version = nil
+}
+
 // AddGroupIDs adds the "groups" edge to the Group entity by ids.
 func (m *AccountMutation) AddGroupIDs(ids ...int64) {
 	if m.groups == nil {
@@ -4334,6 +4550,87 @@ func (m *AccountMutation) ProxyIDs() (ids []int64) {
 func (m *AccountMutation) ResetProxy() {
 	m.proxy = nil
 	m.clearedproxy = false
+}
+
+// ClearConnection clears the "connection" edge to the UpstreamConnection entity.
+func (m *AccountMutation) ClearConnection() {
+	m.clearedconnection = true
+	m.clearedFields[account.FieldConnectionID] = struct{}{}
+}
+
+// ConnectionCleared reports if the "connection" edge to the UpstreamConnection entity was cleared.
+func (m *AccountMutation) ConnectionCleared() bool {
+	return m.ConnectionIDCleared() || m.clearedconnection
+}
+
+// ConnectionIDs returns the "connection" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// ConnectionID instead. It exists only for internal usage by the builders.
+func (m *AccountMutation) ConnectionIDs() (ids []int64) {
+	if id := m.connection; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetConnection resets all changes to the "connection" edge.
+func (m *AccountMutation) ResetConnection() {
+	m.connection = nil
+	m.clearedconnection = false
+}
+
+// AddEndpointProbeIDs adds the "endpoint_probes" edge to the AccountEndpointProbe entity by ids.
+func (m *AccountMutation) AddEndpointProbeIDs(ids ...int64) {
+	if m.endpoint_probes == nil {
+		m.endpoint_probes = make(map[int64]struct{})
+	}
+	for i := range ids {
+		m.endpoint_probes[ids[i]] = struct{}{}
+	}
+}
+
+// ClearEndpointProbes clears the "endpoint_probes" edge to the AccountEndpointProbe entity.
+func (m *AccountMutation) ClearEndpointProbes() {
+	m.clearedendpoint_probes = true
+}
+
+// EndpointProbesCleared reports if the "endpoint_probes" edge to the AccountEndpointProbe entity was cleared.
+func (m *AccountMutation) EndpointProbesCleared() bool {
+	return m.clearedendpoint_probes
+}
+
+// RemoveEndpointProbeIDs removes the "endpoint_probes" edge to the AccountEndpointProbe entity by IDs.
+func (m *AccountMutation) RemoveEndpointProbeIDs(ids ...int64) {
+	if m.removedendpoint_probes == nil {
+		m.removedendpoint_probes = make(map[int64]struct{})
+	}
+	for i := range ids {
+		delete(m.endpoint_probes, ids[i])
+		m.removedendpoint_probes[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedEndpointProbes returns the removed IDs of the "endpoint_probes" edge to the AccountEndpointProbe entity.
+func (m *AccountMutation) RemovedEndpointProbesIDs() (ids []int64) {
+	for id := range m.removedendpoint_probes {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// EndpointProbesIDs returns the "endpoint_probes" edge IDs in the mutation.
+func (m *AccountMutation) EndpointProbesIDs() (ids []int64) {
+	for id := range m.endpoint_probes {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetEndpointProbes resets all changes to the "endpoint_probes" edge.
+func (m *AccountMutation) ResetEndpointProbes() {
+	m.endpoint_probes = nil
+	m.clearedendpoint_probes = false
+	m.removedendpoint_probes = nil
 }
 
 // SetParentID sets the "parent" edge to the Account entity by id.
@@ -4518,7 +4815,7 @@ func (m *AccountMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *AccountMutation) Fields() []string {
-	fields := make([]string, 0, 31)
+	fields := make([]string, 0, 35)
 	if m.created_at != nil {
 		fields = append(fields, account.FieldCreatedAt)
 	}
@@ -4612,6 +4909,18 @@ func (m *AccountMutation) Fields() []string {
 	if m.quota_dimension != nil {
 		fields = append(fields, account.FieldQuotaDimension)
 	}
+	if m.connection != nil {
+		fields = append(fields, account.FieldConnectionID)
+	}
+	if m.protocol != nil {
+		fields = append(fields, account.FieldProtocol)
+	}
+	if m.endpoint_path != nil {
+		fields = append(fields, account.FieldEndpointPath)
+	}
+	if m.config_version != nil {
+		fields = append(fields, account.FieldConfigVersion)
+	}
 	return fields
 }
 
@@ -4682,6 +4991,14 @@ func (m *AccountMutation) Field(name string) (ent.Value, bool) {
 		return m.ParentAccountID()
 	case account.FieldQuotaDimension:
 		return m.QuotaDimension()
+	case account.FieldConnectionID:
+		return m.ConnectionID()
+	case account.FieldProtocol:
+		return m.Protocol()
+	case account.FieldEndpointPath:
+		return m.EndpointPath()
+	case account.FieldConfigVersion:
+		return m.ConfigVersion()
 	}
 	return nil, false
 }
@@ -4753,6 +5070,14 @@ func (m *AccountMutation) OldField(ctx context.Context, name string) (ent.Value,
 		return m.OldParentAccountID(ctx)
 	case account.FieldQuotaDimension:
 		return m.OldQuotaDimension(ctx)
+	case account.FieldConnectionID:
+		return m.OldConnectionID(ctx)
+	case account.FieldProtocol:
+		return m.OldProtocol(ctx)
+	case account.FieldEndpointPath:
+		return m.OldEndpointPath(ctx)
+	case account.FieldConfigVersion:
+		return m.OldConfigVersion(ctx)
 	}
 	return nil, fmt.Errorf("unknown Account field %s", name)
 }
@@ -4979,6 +5304,34 @@ func (m *AccountMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetQuotaDimension(v)
 		return nil
+	case account.FieldConnectionID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetConnectionID(v)
+		return nil
+	case account.FieldProtocol:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetProtocol(v)
+		return nil
+	case account.FieldEndpointPath:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetEndpointPath(v)
+		return nil
+	case account.FieldConfigVersion:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetConfigVersion(v)
+		return nil
 	}
 	return fmt.Errorf("unknown Account field %s", name)
 }
@@ -5002,6 +5355,9 @@ func (m *AccountMutation) AddedFields() []string {
 	if m.addrate_multiplier != nil {
 		fields = append(fields, account.FieldRateMultiplier)
 	}
+	if m.addconfig_version != nil {
+		fields = append(fields, account.FieldConfigVersion)
+	}
 	return fields
 }
 
@@ -5020,6 +5376,8 @@ func (m *AccountMutation) AddedField(name string) (ent.Value, bool) {
 		return m.AddedPriority()
 	case account.FieldRateMultiplier:
 		return m.AddedRateMultiplier()
+	case account.FieldConfigVersion:
+		return m.AddedConfigVersion()
 	}
 	return nil, false
 }
@@ -5063,6 +5421,13 @@ func (m *AccountMutation) AddField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.AddRateMultiplier(v)
+		return nil
+	case account.FieldConfigVersion:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddConfigVersion(v)
 		return nil
 	}
 	return fmt.Errorf("unknown Account numeric field %s", name)
@@ -5122,6 +5487,15 @@ func (m *AccountMutation) ClearedFields() []string {
 	}
 	if m.FieldCleared(account.FieldParentAccountID) {
 		fields = append(fields, account.FieldParentAccountID)
+	}
+	if m.FieldCleared(account.FieldConnectionID) {
+		fields = append(fields, account.FieldConnectionID)
+	}
+	if m.FieldCleared(account.FieldProtocol) {
+		fields = append(fields, account.FieldProtocol)
+	}
+	if m.FieldCleared(account.FieldEndpointPath) {
+		fields = append(fields, account.FieldEndpointPath)
 	}
 	return fields
 }
@@ -5187,6 +5561,15 @@ func (m *AccountMutation) ClearField(name string) error {
 		return nil
 	case account.FieldParentAccountID:
 		m.ClearParentAccountID()
+		return nil
+	case account.FieldConnectionID:
+		m.ClearConnectionID()
+		return nil
+	case account.FieldProtocol:
+		m.ClearProtocol()
+		return nil
+	case account.FieldEndpointPath:
+		m.ClearEndpointPath()
 		return nil
 	}
 	return fmt.Errorf("unknown Account nullable field %s", name)
@@ -5289,18 +5672,36 @@ func (m *AccountMutation) ResetField(name string) error {
 	case account.FieldQuotaDimension:
 		m.ResetQuotaDimension()
 		return nil
+	case account.FieldConnectionID:
+		m.ResetConnectionID()
+		return nil
+	case account.FieldProtocol:
+		m.ResetProtocol()
+		return nil
+	case account.FieldEndpointPath:
+		m.ResetEndpointPath()
+		return nil
+	case account.FieldConfigVersion:
+		m.ResetConfigVersion()
+		return nil
 	}
 	return fmt.Errorf("unknown Account field %s", name)
 }
 
 // AddedEdges returns all edge names that were set/added in this mutation.
 func (m *AccountMutation) AddedEdges() []string {
-	edges := make([]string, 0, 5)
+	edges := make([]string, 0, 7)
 	if m.groups != nil {
 		edges = append(edges, account.EdgeGroups)
 	}
 	if m.proxy != nil {
 		edges = append(edges, account.EdgeProxy)
+	}
+	if m.connection != nil {
+		edges = append(edges, account.EdgeConnection)
+	}
+	if m.endpoint_probes != nil {
+		edges = append(edges, account.EdgeEndpointProbes)
 	}
 	if m.parent != nil {
 		edges = append(edges, account.EdgeParent)
@@ -5328,6 +5729,16 @@ func (m *AccountMutation) AddedIDs(name string) []ent.Value {
 		if id := m.proxy; id != nil {
 			return []ent.Value{*id}
 		}
+	case account.EdgeConnection:
+		if id := m.connection; id != nil {
+			return []ent.Value{*id}
+		}
+	case account.EdgeEndpointProbes:
+		ids := make([]ent.Value, 0, len(m.endpoint_probes))
+		for id := range m.endpoint_probes {
+			ids = append(ids, id)
+		}
+		return ids
 	case account.EdgeParent:
 		if id := m.parent; id != nil {
 			return []ent.Value{*id}
@@ -5350,9 +5761,12 @@ func (m *AccountMutation) AddedIDs(name string) []ent.Value {
 
 // RemovedEdges returns all edge names that were removed in this mutation.
 func (m *AccountMutation) RemovedEdges() []string {
-	edges := make([]string, 0, 5)
+	edges := make([]string, 0, 7)
 	if m.removedgroups != nil {
 		edges = append(edges, account.EdgeGroups)
+	}
+	if m.removedendpoint_probes != nil {
+		edges = append(edges, account.EdgeEndpointProbes)
 	}
 	if m.removedchildren != nil {
 		edges = append(edges, account.EdgeChildren)
@@ -5370,6 +5784,12 @@ func (m *AccountMutation) RemovedIDs(name string) []ent.Value {
 	case account.EdgeGroups:
 		ids := make([]ent.Value, 0, len(m.removedgroups))
 		for id := range m.removedgroups {
+			ids = append(ids, id)
+		}
+		return ids
+	case account.EdgeEndpointProbes:
+		ids := make([]ent.Value, 0, len(m.removedendpoint_probes))
+		for id := range m.removedendpoint_probes {
 			ids = append(ids, id)
 		}
 		return ids
@@ -5391,12 +5811,18 @@ func (m *AccountMutation) RemovedIDs(name string) []ent.Value {
 
 // ClearedEdges returns all edge names that were cleared in this mutation.
 func (m *AccountMutation) ClearedEdges() []string {
-	edges := make([]string, 0, 5)
+	edges := make([]string, 0, 7)
 	if m.clearedgroups {
 		edges = append(edges, account.EdgeGroups)
 	}
 	if m.clearedproxy {
 		edges = append(edges, account.EdgeProxy)
+	}
+	if m.clearedconnection {
+		edges = append(edges, account.EdgeConnection)
+	}
+	if m.clearedendpoint_probes {
+		edges = append(edges, account.EdgeEndpointProbes)
 	}
 	if m.clearedparent {
 		edges = append(edges, account.EdgeParent)
@@ -5418,6 +5844,10 @@ func (m *AccountMutation) EdgeCleared(name string) bool {
 		return m.clearedgroups
 	case account.EdgeProxy:
 		return m.clearedproxy
+	case account.EdgeConnection:
+		return m.clearedconnection
+	case account.EdgeEndpointProbes:
+		return m.clearedendpoint_probes
 	case account.EdgeParent:
 		return m.clearedparent
 	case account.EdgeChildren:
@@ -5434,6 +5864,9 @@ func (m *AccountMutation) ClearEdge(name string) error {
 	switch name {
 	case account.EdgeProxy:
 		m.ClearProxy()
+		return nil
+	case account.EdgeConnection:
+		m.ClearConnection()
 		return nil
 	case account.EdgeParent:
 		m.ClearParent()
@@ -5452,6 +5885,12 @@ func (m *AccountMutation) ResetEdge(name string) error {
 	case account.EdgeProxy:
 		m.ResetProxy()
 		return nil
+	case account.EdgeConnection:
+		m.ResetConnection()
+		return nil
+	case account.EdgeEndpointProbes:
+		m.ResetEndpointProbes()
+		return nil
 	case account.EdgeParent:
 		m.ResetParent()
 		return nil
@@ -5463,6 +5902,1190 @@ func (m *AccountMutation) ResetEdge(name string) error {
 		return nil
 	}
 	return fmt.Errorf("unknown Account edge %s", name)
+}
+
+// AccountEndpointProbeMutation represents an operation that mutates the AccountEndpointProbe nodes in the graph.
+type AccountEndpointProbeMutation struct {
+	config
+	op                       Op
+	typ                      string
+	id                       *int64
+	provider                 *string
+	protocol                 *string
+	normalized_endpoint_path *string
+	credential_version       *int64
+	addcredential_version    *int64
+	config_version           *int64
+	addconfig_version        *int64
+	status                   *string
+	probed_at                *time.Time
+	expires_at               *time.Time
+	evidence_ref             *string
+	request_fingerprint      *string
+	response_summary         *map[string]interface{}
+	clearedFields            map[string]struct{}
+	account                  *int64
+	clearedaccount           bool
+	connection               *int64
+	clearedconnection        bool
+	done                     bool
+	oldValue                 func(context.Context) (*AccountEndpointProbe, error)
+	predicates               []predicate.AccountEndpointProbe
+}
+
+var _ ent.Mutation = (*AccountEndpointProbeMutation)(nil)
+
+// accountendpointprobeOption allows management of the mutation configuration using functional options.
+type accountendpointprobeOption func(*AccountEndpointProbeMutation)
+
+// newAccountEndpointProbeMutation creates new mutation for the AccountEndpointProbe entity.
+func newAccountEndpointProbeMutation(c config, op Op, opts ...accountendpointprobeOption) *AccountEndpointProbeMutation {
+	m := &AccountEndpointProbeMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeAccountEndpointProbe,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withAccountEndpointProbeID sets the ID field of the mutation.
+func withAccountEndpointProbeID(id int64) accountendpointprobeOption {
+	return func(m *AccountEndpointProbeMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *AccountEndpointProbe
+		)
+		m.oldValue = func(ctx context.Context) (*AccountEndpointProbe, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().AccountEndpointProbe.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withAccountEndpointProbe sets the old AccountEndpointProbe of the mutation.
+func withAccountEndpointProbe(node *AccountEndpointProbe) accountendpointprobeOption {
+	return func(m *AccountEndpointProbeMutation) {
+		m.oldValue = func(context.Context) (*AccountEndpointProbe, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m AccountEndpointProbeMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m AccountEndpointProbeMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *AccountEndpointProbeMutation) ID() (id int64, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *AccountEndpointProbeMutation) IDs(ctx context.Context) ([]int64, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []int64{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().AccountEndpointProbe.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetAccountID sets the "account_id" field.
+func (m *AccountEndpointProbeMutation) SetAccountID(i int64) {
+	m.account = &i
+}
+
+// AccountID returns the value of the "account_id" field in the mutation.
+func (m *AccountEndpointProbeMutation) AccountID() (r int64, exists bool) {
+	v := m.account
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAccountID returns the old "account_id" field's value of the AccountEndpointProbe entity.
+// If the AccountEndpointProbe object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AccountEndpointProbeMutation) OldAccountID(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAccountID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAccountID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAccountID: %w", err)
+	}
+	return oldValue.AccountID, nil
+}
+
+// ResetAccountID resets all changes to the "account_id" field.
+func (m *AccountEndpointProbeMutation) ResetAccountID() {
+	m.account = nil
+}
+
+// SetConnectionID sets the "connection_id" field.
+func (m *AccountEndpointProbeMutation) SetConnectionID(i int64) {
+	m.connection = &i
+}
+
+// ConnectionID returns the value of the "connection_id" field in the mutation.
+func (m *AccountEndpointProbeMutation) ConnectionID() (r int64, exists bool) {
+	v := m.connection
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldConnectionID returns the old "connection_id" field's value of the AccountEndpointProbe entity.
+// If the AccountEndpointProbe object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AccountEndpointProbeMutation) OldConnectionID(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldConnectionID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldConnectionID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldConnectionID: %w", err)
+	}
+	return oldValue.ConnectionID, nil
+}
+
+// ResetConnectionID resets all changes to the "connection_id" field.
+func (m *AccountEndpointProbeMutation) ResetConnectionID() {
+	m.connection = nil
+}
+
+// SetProvider sets the "provider" field.
+func (m *AccountEndpointProbeMutation) SetProvider(s string) {
+	m.provider = &s
+}
+
+// Provider returns the value of the "provider" field in the mutation.
+func (m *AccountEndpointProbeMutation) Provider() (r string, exists bool) {
+	v := m.provider
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldProvider returns the old "provider" field's value of the AccountEndpointProbe entity.
+// If the AccountEndpointProbe object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AccountEndpointProbeMutation) OldProvider(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldProvider is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldProvider requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldProvider: %w", err)
+	}
+	return oldValue.Provider, nil
+}
+
+// ResetProvider resets all changes to the "provider" field.
+func (m *AccountEndpointProbeMutation) ResetProvider() {
+	m.provider = nil
+}
+
+// SetProtocol sets the "protocol" field.
+func (m *AccountEndpointProbeMutation) SetProtocol(s string) {
+	m.protocol = &s
+}
+
+// Protocol returns the value of the "protocol" field in the mutation.
+func (m *AccountEndpointProbeMutation) Protocol() (r string, exists bool) {
+	v := m.protocol
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldProtocol returns the old "protocol" field's value of the AccountEndpointProbe entity.
+// If the AccountEndpointProbe object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AccountEndpointProbeMutation) OldProtocol(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldProtocol is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldProtocol requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldProtocol: %w", err)
+	}
+	return oldValue.Protocol, nil
+}
+
+// ResetProtocol resets all changes to the "protocol" field.
+func (m *AccountEndpointProbeMutation) ResetProtocol() {
+	m.protocol = nil
+}
+
+// SetNormalizedEndpointPath sets the "normalized_endpoint_path" field.
+func (m *AccountEndpointProbeMutation) SetNormalizedEndpointPath(s string) {
+	m.normalized_endpoint_path = &s
+}
+
+// NormalizedEndpointPath returns the value of the "normalized_endpoint_path" field in the mutation.
+func (m *AccountEndpointProbeMutation) NormalizedEndpointPath() (r string, exists bool) {
+	v := m.normalized_endpoint_path
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldNormalizedEndpointPath returns the old "normalized_endpoint_path" field's value of the AccountEndpointProbe entity.
+// If the AccountEndpointProbe object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AccountEndpointProbeMutation) OldNormalizedEndpointPath(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldNormalizedEndpointPath is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldNormalizedEndpointPath requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldNormalizedEndpointPath: %w", err)
+	}
+	return oldValue.NormalizedEndpointPath, nil
+}
+
+// ResetNormalizedEndpointPath resets all changes to the "normalized_endpoint_path" field.
+func (m *AccountEndpointProbeMutation) ResetNormalizedEndpointPath() {
+	m.normalized_endpoint_path = nil
+}
+
+// SetCredentialVersion sets the "credential_version" field.
+func (m *AccountEndpointProbeMutation) SetCredentialVersion(i int64) {
+	m.credential_version = &i
+	m.addcredential_version = nil
+}
+
+// CredentialVersion returns the value of the "credential_version" field in the mutation.
+func (m *AccountEndpointProbeMutation) CredentialVersion() (r int64, exists bool) {
+	v := m.credential_version
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCredentialVersion returns the old "credential_version" field's value of the AccountEndpointProbe entity.
+// If the AccountEndpointProbe object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AccountEndpointProbeMutation) OldCredentialVersion(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCredentialVersion is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCredentialVersion requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCredentialVersion: %w", err)
+	}
+	return oldValue.CredentialVersion, nil
+}
+
+// AddCredentialVersion adds i to the "credential_version" field.
+func (m *AccountEndpointProbeMutation) AddCredentialVersion(i int64) {
+	if m.addcredential_version != nil {
+		*m.addcredential_version += i
+	} else {
+		m.addcredential_version = &i
+	}
+}
+
+// AddedCredentialVersion returns the value that was added to the "credential_version" field in this mutation.
+func (m *AccountEndpointProbeMutation) AddedCredentialVersion() (r int64, exists bool) {
+	v := m.addcredential_version
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetCredentialVersion resets all changes to the "credential_version" field.
+func (m *AccountEndpointProbeMutation) ResetCredentialVersion() {
+	m.credential_version = nil
+	m.addcredential_version = nil
+}
+
+// SetConfigVersion sets the "config_version" field.
+func (m *AccountEndpointProbeMutation) SetConfigVersion(i int64) {
+	m.config_version = &i
+	m.addconfig_version = nil
+}
+
+// ConfigVersion returns the value of the "config_version" field in the mutation.
+func (m *AccountEndpointProbeMutation) ConfigVersion() (r int64, exists bool) {
+	v := m.config_version
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldConfigVersion returns the old "config_version" field's value of the AccountEndpointProbe entity.
+// If the AccountEndpointProbe object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AccountEndpointProbeMutation) OldConfigVersion(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldConfigVersion is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldConfigVersion requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldConfigVersion: %w", err)
+	}
+	return oldValue.ConfigVersion, nil
+}
+
+// AddConfigVersion adds i to the "config_version" field.
+func (m *AccountEndpointProbeMutation) AddConfigVersion(i int64) {
+	if m.addconfig_version != nil {
+		*m.addconfig_version += i
+	} else {
+		m.addconfig_version = &i
+	}
+}
+
+// AddedConfigVersion returns the value that was added to the "config_version" field in this mutation.
+func (m *AccountEndpointProbeMutation) AddedConfigVersion() (r int64, exists bool) {
+	v := m.addconfig_version
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetConfigVersion resets all changes to the "config_version" field.
+func (m *AccountEndpointProbeMutation) ResetConfigVersion() {
+	m.config_version = nil
+	m.addconfig_version = nil
+}
+
+// SetStatus sets the "status" field.
+func (m *AccountEndpointProbeMutation) SetStatus(s string) {
+	m.status = &s
+}
+
+// Status returns the value of the "status" field in the mutation.
+func (m *AccountEndpointProbeMutation) Status() (r string, exists bool) {
+	v := m.status
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldStatus returns the old "status" field's value of the AccountEndpointProbe entity.
+// If the AccountEndpointProbe object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AccountEndpointProbeMutation) OldStatus(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldStatus is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldStatus requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldStatus: %w", err)
+	}
+	return oldValue.Status, nil
+}
+
+// ResetStatus resets all changes to the "status" field.
+func (m *AccountEndpointProbeMutation) ResetStatus() {
+	m.status = nil
+}
+
+// SetProbedAt sets the "probed_at" field.
+func (m *AccountEndpointProbeMutation) SetProbedAt(t time.Time) {
+	m.probed_at = &t
+}
+
+// ProbedAt returns the value of the "probed_at" field in the mutation.
+func (m *AccountEndpointProbeMutation) ProbedAt() (r time.Time, exists bool) {
+	v := m.probed_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldProbedAt returns the old "probed_at" field's value of the AccountEndpointProbe entity.
+// If the AccountEndpointProbe object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AccountEndpointProbeMutation) OldProbedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldProbedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldProbedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldProbedAt: %w", err)
+	}
+	return oldValue.ProbedAt, nil
+}
+
+// ResetProbedAt resets all changes to the "probed_at" field.
+func (m *AccountEndpointProbeMutation) ResetProbedAt() {
+	m.probed_at = nil
+}
+
+// SetExpiresAt sets the "expires_at" field.
+func (m *AccountEndpointProbeMutation) SetExpiresAt(t time.Time) {
+	m.expires_at = &t
+}
+
+// ExpiresAt returns the value of the "expires_at" field in the mutation.
+func (m *AccountEndpointProbeMutation) ExpiresAt() (r time.Time, exists bool) {
+	v := m.expires_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldExpiresAt returns the old "expires_at" field's value of the AccountEndpointProbe entity.
+// If the AccountEndpointProbe object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AccountEndpointProbeMutation) OldExpiresAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldExpiresAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldExpiresAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldExpiresAt: %w", err)
+	}
+	return oldValue.ExpiresAt, nil
+}
+
+// ResetExpiresAt resets all changes to the "expires_at" field.
+func (m *AccountEndpointProbeMutation) ResetExpiresAt() {
+	m.expires_at = nil
+}
+
+// SetEvidenceRef sets the "evidence_ref" field.
+func (m *AccountEndpointProbeMutation) SetEvidenceRef(s string) {
+	m.evidence_ref = &s
+}
+
+// EvidenceRef returns the value of the "evidence_ref" field in the mutation.
+func (m *AccountEndpointProbeMutation) EvidenceRef() (r string, exists bool) {
+	v := m.evidence_ref
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldEvidenceRef returns the old "evidence_ref" field's value of the AccountEndpointProbe entity.
+// If the AccountEndpointProbe object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AccountEndpointProbeMutation) OldEvidenceRef(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldEvidenceRef is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldEvidenceRef requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldEvidenceRef: %w", err)
+	}
+	return oldValue.EvidenceRef, nil
+}
+
+// ClearEvidenceRef clears the value of the "evidence_ref" field.
+func (m *AccountEndpointProbeMutation) ClearEvidenceRef() {
+	m.evidence_ref = nil
+	m.clearedFields[accountendpointprobe.FieldEvidenceRef] = struct{}{}
+}
+
+// EvidenceRefCleared returns if the "evidence_ref" field was cleared in this mutation.
+func (m *AccountEndpointProbeMutation) EvidenceRefCleared() bool {
+	_, ok := m.clearedFields[accountendpointprobe.FieldEvidenceRef]
+	return ok
+}
+
+// ResetEvidenceRef resets all changes to the "evidence_ref" field.
+func (m *AccountEndpointProbeMutation) ResetEvidenceRef() {
+	m.evidence_ref = nil
+	delete(m.clearedFields, accountendpointprobe.FieldEvidenceRef)
+}
+
+// SetRequestFingerprint sets the "request_fingerprint" field.
+func (m *AccountEndpointProbeMutation) SetRequestFingerprint(s string) {
+	m.request_fingerprint = &s
+}
+
+// RequestFingerprint returns the value of the "request_fingerprint" field in the mutation.
+func (m *AccountEndpointProbeMutation) RequestFingerprint() (r string, exists bool) {
+	v := m.request_fingerprint
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRequestFingerprint returns the old "request_fingerprint" field's value of the AccountEndpointProbe entity.
+// If the AccountEndpointProbe object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AccountEndpointProbeMutation) OldRequestFingerprint(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRequestFingerprint is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRequestFingerprint requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRequestFingerprint: %w", err)
+	}
+	return oldValue.RequestFingerprint, nil
+}
+
+// ClearRequestFingerprint clears the value of the "request_fingerprint" field.
+func (m *AccountEndpointProbeMutation) ClearRequestFingerprint() {
+	m.request_fingerprint = nil
+	m.clearedFields[accountendpointprobe.FieldRequestFingerprint] = struct{}{}
+}
+
+// RequestFingerprintCleared returns if the "request_fingerprint" field was cleared in this mutation.
+func (m *AccountEndpointProbeMutation) RequestFingerprintCleared() bool {
+	_, ok := m.clearedFields[accountendpointprobe.FieldRequestFingerprint]
+	return ok
+}
+
+// ResetRequestFingerprint resets all changes to the "request_fingerprint" field.
+func (m *AccountEndpointProbeMutation) ResetRequestFingerprint() {
+	m.request_fingerprint = nil
+	delete(m.clearedFields, accountendpointprobe.FieldRequestFingerprint)
+}
+
+// SetResponseSummary sets the "response_summary" field.
+func (m *AccountEndpointProbeMutation) SetResponseSummary(value map[string]interface{}) {
+	m.response_summary = &value
+}
+
+// ResponseSummary returns the value of the "response_summary" field in the mutation.
+func (m *AccountEndpointProbeMutation) ResponseSummary() (r map[string]interface{}, exists bool) {
+	v := m.response_summary
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldResponseSummary returns the old "response_summary" field's value of the AccountEndpointProbe entity.
+// If the AccountEndpointProbe object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AccountEndpointProbeMutation) OldResponseSummary(ctx context.Context) (v map[string]interface{}, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldResponseSummary is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldResponseSummary requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldResponseSummary: %w", err)
+	}
+	return oldValue.ResponseSummary, nil
+}
+
+// ResetResponseSummary resets all changes to the "response_summary" field.
+func (m *AccountEndpointProbeMutation) ResetResponseSummary() {
+	m.response_summary = nil
+}
+
+// ClearAccount clears the "account" edge to the Account entity.
+func (m *AccountEndpointProbeMutation) ClearAccount() {
+	m.clearedaccount = true
+	m.clearedFields[accountendpointprobe.FieldAccountID] = struct{}{}
+}
+
+// AccountCleared reports if the "account" edge to the Account entity was cleared.
+func (m *AccountEndpointProbeMutation) AccountCleared() bool {
+	return m.clearedaccount
+}
+
+// AccountIDs returns the "account" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// AccountID instead. It exists only for internal usage by the builders.
+func (m *AccountEndpointProbeMutation) AccountIDs() (ids []int64) {
+	if id := m.account; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetAccount resets all changes to the "account" edge.
+func (m *AccountEndpointProbeMutation) ResetAccount() {
+	m.account = nil
+	m.clearedaccount = false
+}
+
+// ClearConnection clears the "connection" edge to the UpstreamConnection entity.
+func (m *AccountEndpointProbeMutation) ClearConnection() {
+	m.clearedconnection = true
+	m.clearedFields[accountendpointprobe.FieldConnectionID] = struct{}{}
+}
+
+// ConnectionCleared reports if the "connection" edge to the UpstreamConnection entity was cleared.
+func (m *AccountEndpointProbeMutation) ConnectionCleared() bool {
+	return m.clearedconnection
+}
+
+// ConnectionIDs returns the "connection" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// ConnectionID instead. It exists only for internal usage by the builders.
+func (m *AccountEndpointProbeMutation) ConnectionIDs() (ids []int64) {
+	if id := m.connection; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetConnection resets all changes to the "connection" edge.
+func (m *AccountEndpointProbeMutation) ResetConnection() {
+	m.connection = nil
+	m.clearedconnection = false
+}
+
+// Where appends a list predicates to the AccountEndpointProbeMutation builder.
+func (m *AccountEndpointProbeMutation) Where(ps ...predicate.AccountEndpointProbe) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the AccountEndpointProbeMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *AccountEndpointProbeMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.AccountEndpointProbe, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *AccountEndpointProbeMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *AccountEndpointProbeMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (AccountEndpointProbe).
+func (m *AccountEndpointProbeMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *AccountEndpointProbeMutation) Fields() []string {
+	fields := make([]string, 0, 13)
+	if m.account != nil {
+		fields = append(fields, accountendpointprobe.FieldAccountID)
+	}
+	if m.connection != nil {
+		fields = append(fields, accountendpointprobe.FieldConnectionID)
+	}
+	if m.provider != nil {
+		fields = append(fields, accountendpointprobe.FieldProvider)
+	}
+	if m.protocol != nil {
+		fields = append(fields, accountendpointprobe.FieldProtocol)
+	}
+	if m.normalized_endpoint_path != nil {
+		fields = append(fields, accountendpointprobe.FieldNormalizedEndpointPath)
+	}
+	if m.credential_version != nil {
+		fields = append(fields, accountendpointprobe.FieldCredentialVersion)
+	}
+	if m.config_version != nil {
+		fields = append(fields, accountendpointprobe.FieldConfigVersion)
+	}
+	if m.status != nil {
+		fields = append(fields, accountendpointprobe.FieldStatus)
+	}
+	if m.probed_at != nil {
+		fields = append(fields, accountendpointprobe.FieldProbedAt)
+	}
+	if m.expires_at != nil {
+		fields = append(fields, accountendpointprobe.FieldExpiresAt)
+	}
+	if m.evidence_ref != nil {
+		fields = append(fields, accountendpointprobe.FieldEvidenceRef)
+	}
+	if m.request_fingerprint != nil {
+		fields = append(fields, accountendpointprobe.FieldRequestFingerprint)
+	}
+	if m.response_summary != nil {
+		fields = append(fields, accountendpointprobe.FieldResponseSummary)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *AccountEndpointProbeMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case accountendpointprobe.FieldAccountID:
+		return m.AccountID()
+	case accountendpointprobe.FieldConnectionID:
+		return m.ConnectionID()
+	case accountendpointprobe.FieldProvider:
+		return m.Provider()
+	case accountendpointprobe.FieldProtocol:
+		return m.Protocol()
+	case accountendpointprobe.FieldNormalizedEndpointPath:
+		return m.NormalizedEndpointPath()
+	case accountendpointprobe.FieldCredentialVersion:
+		return m.CredentialVersion()
+	case accountendpointprobe.FieldConfigVersion:
+		return m.ConfigVersion()
+	case accountendpointprobe.FieldStatus:
+		return m.Status()
+	case accountendpointprobe.FieldProbedAt:
+		return m.ProbedAt()
+	case accountendpointprobe.FieldExpiresAt:
+		return m.ExpiresAt()
+	case accountendpointprobe.FieldEvidenceRef:
+		return m.EvidenceRef()
+	case accountendpointprobe.FieldRequestFingerprint:
+		return m.RequestFingerprint()
+	case accountendpointprobe.FieldResponseSummary:
+		return m.ResponseSummary()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *AccountEndpointProbeMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case accountendpointprobe.FieldAccountID:
+		return m.OldAccountID(ctx)
+	case accountendpointprobe.FieldConnectionID:
+		return m.OldConnectionID(ctx)
+	case accountendpointprobe.FieldProvider:
+		return m.OldProvider(ctx)
+	case accountendpointprobe.FieldProtocol:
+		return m.OldProtocol(ctx)
+	case accountendpointprobe.FieldNormalizedEndpointPath:
+		return m.OldNormalizedEndpointPath(ctx)
+	case accountendpointprobe.FieldCredentialVersion:
+		return m.OldCredentialVersion(ctx)
+	case accountendpointprobe.FieldConfigVersion:
+		return m.OldConfigVersion(ctx)
+	case accountendpointprobe.FieldStatus:
+		return m.OldStatus(ctx)
+	case accountendpointprobe.FieldProbedAt:
+		return m.OldProbedAt(ctx)
+	case accountendpointprobe.FieldExpiresAt:
+		return m.OldExpiresAt(ctx)
+	case accountendpointprobe.FieldEvidenceRef:
+		return m.OldEvidenceRef(ctx)
+	case accountendpointprobe.FieldRequestFingerprint:
+		return m.OldRequestFingerprint(ctx)
+	case accountendpointprobe.FieldResponseSummary:
+		return m.OldResponseSummary(ctx)
+	}
+	return nil, fmt.Errorf("unknown AccountEndpointProbe field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *AccountEndpointProbeMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case accountendpointprobe.FieldAccountID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAccountID(v)
+		return nil
+	case accountendpointprobe.FieldConnectionID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetConnectionID(v)
+		return nil
+	case accountendpointprobe.FieldProvider:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetProvider(v)
+		return nil
+	case accountendpointprobe.FieldProtocol:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetProtocol(v)
+		return nil
+	case accountendpointprobe.FieldNormalizedEndpointPath:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetNormalizedEndpointPath(v)
+		return nil
+	case accountendpointprobe.FieldCredentialVersion:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCredentialVersion(v)
+		return nil
+	case accountendpointprobe.FieldConfigVersion:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetConfigVersion(v)
+		return nil
+	case accountendpointprobe.FieldStatus:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetStatus(v)
+		return nil
+	case accountendpointprobe.FieldProbedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetProbedAt(v)
+		return nil
+	case accountendpointprobe.FieldExpiresAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetExpiresAt(v)
+		return nil
+	case accountendpointprobe.FieldEvidenceRef:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetEvidenceRef(v)
+		return nil
+	case accountendpointprobe.FieldRequestFingerprint:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRequestFingerprint(v)
+		return nil
+	case accountendpointprobe.FieldResponseSummary:
+		v, ok := value.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetResponseSummary(v)
+		return nil
+	}
+	return fmt.Errorf("unknown AccountEndpointProbe field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *AccountEndpointProbeMutation) AddedFields() []string {
+	var fields []string
+	if m.addcredential_version != nil {
+		fields = append(fields, accountendpointprobe.FieldCredentialVersion)
+	}
+	if m.addconfig_version != nil {
+		fields = append(fields, accountendpointprobe.FieldConfigVersion)
+	}
+	return fields
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *AccountEndpointProbeMutation) AddedField(name string) (ent.Value, bool) {
+	switch name {
+	case accountendpointprobe.FieldCredentialVersion:
+		return m.AddedCredentialVersion()
+	case accountendpointprobe.FieldConfigVersion:
+		return m.AddedConfigVersion()
+	}
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *AccountEndpointProbeMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	case accountendpointprobe.FieldCredentialVersion:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddCredentialVersion(v)
+		return nil
+	case accountendpointprobe.FieldConfigVersion:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddConfigVersion(v)
+		return nil
+	}
+	return fmt.Errorf("unknown AccountEndpointProbe numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *AccountEndpointProbeMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(accountendpointprobe.FieldEvidenceRef) {
+		fields = append(fields, accountendpointprobe.FieldEvidenceRef)
+	}
+	if m.FieldCleared(accountendpointprobe.FieldRequestFingerprint) {
+		fields = append(fields, accountendpointprobe.FieldRequestFingerprint)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *AccountEndpointProbeMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *AccountEndpointProbeMutation) ClearField(name string) error {
+	switch name {
+	case accountendpointprobe.FieldEvidenceRef:
+		m.ClearEvidenceRef()
+		return nil
+	case accountendpointprobe.FieldRequestFingerprint:
+		m.ClearRequestFingerprint()
+		return nil
+	}
+	return fmt.Errorf("unknown AccountEndpointProbe nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *AccountEndpointProbeMutation) ResetField(name string) error {
+	switch name {
+	case accountendpointprobe.FieldAccountID:
+		m.ResetAccountID()
+		return nil
+	case accountendpointprobe.FieldConnectionID:
+		m.ResetConnectionID()
+		return nil
+	case accountendpointprobe.FieldProvider:
+		m.ResetProvider()
+		return nil
+	case accountendpointprobe.FieldProtocol:
+		m.ResetProtocol()
+		return nil
+	case accountendpointprobe.FieldNormalizedEndpointPath:
+		m.ResetNormalizedEndpointPath()
+		return nil
+	case accountendpointprobe.FieldCredentialVersion:
+		m.ResetCredentialVersion()
+		return nil
+	case accountendpointprobe.FieldConfigVersion:
+		m.ResetConfigVersion()
+		return nil
+	case accountendpointprobe.FieldStatus:
+		m.ResetStatus()
+		return nil
+	case accountendpointprobe.FieldProbedAt:
+		m.ResetProbedAt()
+		return nil
+	case accountendpointprobe.FieldExpiresAt:
+		m.ResetExpiresAt()
+		return nil
+	case accountendpointprobe.FieldEvidenceRef:
+		m.ResetEvidenceRef()
+		return nil
+	case accountendpointprobe.FieldRequestFingerprint:
+		m.ResetRequestFingerprint()
+		return nil
+	case accountendpointprobe.FieldResponseSummary:
+		m.ResetResponseSummary()
+		return nil
+	}
+	return fmt.Errorf("unknown AccountEndpointProbe field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *AccountEndpointProbeMutation) AddedEdges() []string {
+	edges := make([]string, 0, 2)
+	if m.account != nil {
+		edges = append(edges, accountendpointprobe.EdgeAccount)
+	}
+	if m.connection != nil {
+		edges = append(edges, accountendpointprobe.EdgeConnection)
+	}
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *AccountEndpointProbeMutation) AddedIDs(name string) []ent.Value {
+	switch name {
+	case accountendpointprobe.EdgeAccount:
+		if id := m.account; id != nil {
+			return []ent.Value{*id}
+		}
+	case accountendpointprobe.EdgeConnection:
+		if id := m.connection; id != nil {
+			return []ent.Value{*id}
+		}
+	}
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *AccountEndpointProbeMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 2)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *AccountEndpointProbeMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *AccountEndpointProbeMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 2)
+	if m.clearedaccount {
+		edges = append(edges, accountendpointprobe.EdgeAccount)
+	}
+	if m.clearedconnection {
+		edges = append(edges, accountendpointprobe.EdgeConnection)
+	}
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *AccountEndpointProbeMutation) EdgeCleared(name string) bool {
+	switch name {
+	case accountendpointprobe.EdgeAccount:
+		return m.clearedaccount
+	case accountendpointprobe.EdgeConnection:
+		return m.clearedconnection
+	}
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *AccountEndpointProbeMutation) ClearEdge(name string) error {
+	switch name {
+	case accountendpointprobe.EdgeAccount:
+		m.ClearAccount()
+		return nil
+	case accountendpointprobe.EdgeConnection:
+		m.ClearConnection()
+		return nil
+	}
+	return fmt.Errorf("unknown AccountEndpointProbe unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *AccountEndpointProbeMutation) ResetEdge(name string) error {
+	switch name {
+	case accountendpointprobe.EdgeAccount:
+		m.ResetAccount()
+		return nil
+	case accountendpointprobe.EdgeConnection:
+		m.ResetConnection()
+		return nil
+	}
+	return fmt.Errorf("unknown AccountEndpointProbe edge %s", name)
 }
 
 // AccountGroupMutation represents an operation that mutates the AccountGroup nodes in the graph.
@@ -42808,6 +44431,1209 @@ func (m *TLSFingerprintProfileMutation) ClearEdge(name string) error {
 // It returns an error if the edge is not defined in the schema.
 func (m *TLSFingerprintProfileMutation) ResetEdge(name string) error {
 	return fmt.Errorf("unknown TLSFingerprintProfile edge %s", name)
+}
+
+// UpstreamConnectionMutation represents an operation that mutates the UpstreamConnection nodes in the graph.
+type UpstreamConnectionMutation struct {
+	config
+	op                       Op
+	typ                      string
+	id                       *int64
+	created_at               *time.Time
+	updated_at               *time.Time
+	deleted_at               *time.Time
+	kind                     *string
+	provider                 *string
+	base_url                 *string
+	encrypted_credential     *string
+	credential_version       *int64
+	addcredential_version    *int64
+	status                   *string
+	evidence_ref             *string
+	clearedFields            map[string]struct{}
+	accounts                 map[int64]struct{}
+	removedaccounts          map[int64]struct{}
+	clearedaccounts          bool
+	connection_probes        map[int64]struct{}
+	removedconnection_probes map[int64]struct{}
+	clearedconnection_probes bool
+	proxy                    *int64
+	clearedproxy             bool
+	done                     bool
+	oldValue                 func(context.Context) (*UpstreamConnection, error)
+	predicates               []predicate.UpstreamConnection
+}
+
+var _ ent.Mutation = (*UpstreamConnectionMutation)(nil)
+
+// upstreamconnectionOption allows management of the mutation configuration using functional options.
+type upstreamconnectionOption func(*UpstreamConnectionMutation)
+
+// newUpstreamConnectionMutation creates new mutation for the UpstreamConnection entity.
+func newUpstreamConnectionMutation(c config, op Op, opts ...upstreamconnectionOption) *UpstreamConnectionMutation {
+	m := &UpstreamConnectionMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeUpstreamConnection,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withUpstreamConnectionID sets the ID field of the mutation.
+func withUpstreamConnectionID(id int64) upstreamconnectionOption {
+	return func(m *UpstreamConnectionMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *UpstreamConnection
+		)
+		m.oldValue = func(ctx context.Context) (*UpstreamConnection, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().UpstreamConnection.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withUpstreamConnection sets the old UpstreamConnection of the mutation.
+func withUpstreamConnection(node *UpstreamConnection) upstreamconnectionOption {
+	return func(m *UpstreamConnectionMutation) {
+		m.oldValue = func(context.Context) (*UpstreamConnection, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m UpstreamConnectionMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m UpstreamConnectionMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *UpstreamConnectionMutation) ID() (id int64, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *UpstreamConnectionMutation) IDs(ctx context.Context) ([]int64, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []int64{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().UpstreamConnection.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *UpstreamConnectionMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *UpstreamConnectionMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the UpstreamConnection entity.
+// If the UpstreamConnection object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UpstreamConnectionMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *UpstreamConnectionMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// SetUpdatedAt sets the "updated_at" field.
+func (m *UpstreamConnectionMutation) SetUpdatedAt(t time.Time) {
+	m.updated_at = &t
+}
+
+// UpdatedAt returns the value of the "updated_at" field in the mutation.
+func (m *UpstreamConnectionMutation) UpdatedAt() (r time.Time, exists bool) {
+	v := m.updated_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUpdatedAt returns the old "updated_at" field's value of the UpstreamConnection entity.
+// If the UpstreamConnection object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UpstreamConnectionMutation) OldUpdatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUpdatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUpdatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUpdatedAt: %w", err)
+	}
+	return oldValue.UpdatedAt, nil
+}
+
+// ResetUpdatedAt resets all changes to the "updated_at" field.
+func (m *UpstreamConnectionMutation) ResetUpdatedAt() {
+	m.updated_at = nil
+}
+
+// SetDeletedAt sets the "deleted_at" field.
+func (m *UpstreamConnectionMutation) SetDeletedAt(t time.Time) {
+	m.deleted_at = &t
+}
+
+// DeletedAt returns the value of the "deleted_at" field in the mutation.
+func (m *UpstreamConnectionMutation) DeletedAt() (r time.Time, exists bool) {
+	v := m.deleted_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDeletedAt returns the old "deleted_at" field's value of the UpstreamConnection entity.
+// If the UpstreamConnection object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UpstreamConnectionMutation) OldDeletedAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDeletedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDeletedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDeletedAt: %w", err)
+	}
+	return oldValue.DeletedAt, nil
+}
+
+// ClearDeletedAt clears the value of the "deleted_at" field.
+func (m *UpstreamConnectionMutation) ClearDeletedAt() {
+	m.deleted_at = nil
+	m.clearedFields[upstreamconnection.FieldDeletedAt] = struct{}{}
+}
+
+// DeletedAtCleared returns if the "deleted_at" field was cleared in this mutation.
+func (m *UpstreamConnectionMutation) DeletedAtCleared() bool {
+	_, ok := m.clearedFields[upstreamconnection.FieldDeletedAt]
+	return ok
+}
+
+// ResetDeletedAt resets all changes to the "deleted_at" field.
+func (m *UpstreamConnectionMutation) ResetDeletedAt() {
+	m.deleted_at = nil
+	delete(m.clearedFields, upstreamconnection.FieldDeletedAt)
+}
+
+// SetKind sets the "kind" field.
+func (m *UpstreamConnectionMutation) SetKind(s string) {
+	m.kind = &s
+}
+
+// Kind returns the value of the "kind" field in the mutation.
+func (m *UpstreamConnectionMutation) Kind() (r string, exists bool) {
+	v := m.kind
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldKind returns the old "kind" field's value of the UpstreamConnection entity.
+// If the UpstreamConnection object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UpstreamConnectionMutation) OldKind(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldKind is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldKind requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldKind: %w", err)
+	}
+	return oldValue.Kind, nil
+}
+
+// ResetKind resets all changes to the "kind" field.
+func (m *UpstreamConnectionMutation) ResetKind() {
+	m.kind = nil
+}
+
+// SetProvider sets the "provider" field.
+func (m *UpstreamConnectionMutation) SetProvider(s string) {
+	m.provider = &s
+}
+
+// Provider returns the value of the "provider" field in the mutation.
+func (m *UpstreamConnectionMutation) Provider() (r string, exists bool) {
+	v := m.provider
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldProvider returns the old "provider" field's value of the UpstreamConnection entity.
+// If the UpstreamConnection object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UpstreamConnectionMutation) OldProvider(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldProvider is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldProvider requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldProvider: %w", err)
+	}
+	return oldValue.Provider, nil
+}
+
+// ClearProvider clears the value of the "provider" field.
+func (m *UpstreamConnectionMutation) ClearProvider() {
+	m.provider = nil
+	m.clearedFields[upstreamconnection.FieldProvider] = struct{}{}
+}
+
+// ProviderCleared returns if the "provider" field was cleared in this mutation.
+func (m *UpstreamConnectionMutation) ProviderCleared() bool {
+	_, ok := m.clearedFields[upstreamconnection.FieldProvider]
+	return ok
+}
+
+// ResetProvider resets all changes to the "provider" field.
+func (m *UpstreamConnectionMutation) ResetProvider() {
+	m.provider = nil
+	delete(m.clearedFields, upstreamconnection.FieldProvider)
+}
+
+// SetBaseURL sets the "base_url" field.
+func (m *UpstreamConnectionMutation) SetBaseURL(s string) {
+	m.base_url = &s
+}
+
+// BaseURL returns the value of the "base_url" field in the mutation.
+func (m *UpstreamConnectionMutation) BaseURL() (r string, exists bool) {
+	v := m.base_url
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldBaseURL returns the old "base_url" field's value of the UpstreamConnection entity.
+// If the UpstreamConnection object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UpstreamConnectionMutation) OldBaseURL(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldBaseURL is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldBaseURL requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldBaseURL: %w", err)
+	}
+	return oldValue.BaseURL, nil
+}
+
+// ResetBaseURL resets all changes to the "base_url" field.
+func (m *UpstreamConnectionMutation) ResetBaseURL() {
+	m.base_url = nil
+}
+
+// SetEncryptedCredential sets the "encrypted_credential" field.
+func (m *UpstreamConnectionMutation) SetEncryptedCredential(s string) {
+	m.encrypted_credential = &s
+}
+
+// EncryptedCredential returns the value of the "encrypted_credential" field in the mutation.
+func (m *UpstreamConnectionMutation) EncryptedCredential() (r string, exists bool) {
+	v := m.encrypted_credential
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldEncryptedCredential returns the old "encrypted_credential" field's value of the UpstreamConnection entity.
+// If the UpstreamConnection object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UpstreamConnectionMutation) OldEncryptedCredential(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldEncryptedCredential is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldEncryptedCredential requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldEncryptedCredential: %w", err)
+	}
+	return oldValue.EncryptedCredential, nil
+}
+
+// ResetEncryptedCredential resets all changes to the "encrypted_credential" field.
+func (m *UpstreamConnectionMutation) ResetEncryptedCredential() {
+	m.encrypted_credential = nil
+}
+
+// SetCredentialVersion sets the "credential_version" field.
+func (m *UpstreamConnectionMutation) SetCredentialVersion(i int64) {
+	m.credential_version = &i
+	m.addcredential_version = nil
+}
+
+// CredentialVersion returns the value of the "credential_version" field in the mutation.
+func (m *UpstreamConnectionMutation) CredentialVersion() (r int64, exists bool) {
+	v := m.credential_version
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCredentialVersion returns the old "credential_version" field's value of the UpstreamConnection entity.
+// If the UpstreamConnection object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UpstreamConnectionMutation) OldCredentialVersion(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCredentialVersion is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCredentialVersion requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCredentialVersion: %w", err)
+	}
+	return oldValue.CredentialVersion, nil
+}
+
+// AddCredentialVersion adds i to the "credential_version" field.
+func (m *UpstreamConnectionMutation) AddCredentialVersion(i int64) {
+	if m.addcredential_version != nil {
+		*m.addcredential_version += i
+	} else {
+		m.addcredential_version = &i
+	}
+}
+
+// AddedCredentialVersion returns the value that was added to the "credential_version" field in this mutation.
+func (m *UpstreamConnectionMutation) AddedCredentialVersion() (r int64, exists bool) {
+	v := m.addcredential_version
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetCredentialVersion resets all changes to the "credential_version" field.
+func (m *UpstreamConnectionMutation) ResetCredentialVersion() {
+	m.credential_version = nil
+	m.addcredential_version = nil
+}
+
+// SetProxyID sets the "proxy_id" field.
+func (m *UpstreamConnectionMutation) SetProxyID(i int64) {
+	m.proxy = &i
+}
+
+// ProxyID returns the value of the "proxy_id" field in the mutation.
+func (m *UpstreamConnectionMutation) ProxyID() (r int64, exists bool) {
+	v := m.proxy
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldProxyID returns the old "proxy_id" field's value of the UpstreamConnection entity.
+// If the UpstreamConnection object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UpstreamConnectionMutation) OldProxyID(ctx context.Context) (v *int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldProxyID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldProxyID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldProxyID: %w", err)
+	}
+	return oldValue.ProxyID, nil
+}
+
+// ClearProxyID clears the value of the "proxy_id" field.
+func (m *UpstreamConnectionMutation) ClearProxyID() {
+	m.proxy = nil
+	m.clearedFields[upstreamconnection.FieldProxyID] = struct{}{}
+}
+
+// ProxyIDCleared returns if the "proxy_id" field was cleared in this mutation.
+func (m *UpstreamConnectionMutation) ProxyIDCleared() bool {
+	_, ok := m.clearedFields[upstreamconnection.FieldProxyID]
+	return ok
+}
+
+// ResetProxyID resets all changes to the "proxy_id" field.
+func (m *UpstreamConnectionMutation) ResetProxyID() {
+	m.proxy = nil
+	delete(m.clearedFields, upstreamconnection.FieldProxyID)
+}
+
+// SetStatus sets the "status" field.
+func (m *UpstreamConnectionMutation) SetStatus(s string) {
+	m.status = &s
+}
+
+// Status returns the value of the "status" field in the mutation.
+func (m *UpstreamConnectionMutation) Status() (r string, exists bool) {
+	v := m.status
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldStatus returns the old "status" field's value of the UpstreamConnection entity.
+// If the UpstreamConnection object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UpstreamConnectionMutation) OldStatus(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldStatus is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldStatus requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldStatus: %w", err)
+	}
+	return oldValue.Status, nil
+}
+
+// ResetStatus resets all changes to the "status" field.
+func (m *UpstreamConnectionMutation) ResetStatus() {
+	m.status = nil
+}
+
+// SetEvidenceRef sets the "evidence_ref" field.
+func (m *UpstreamConnectionMutation) SetEvidenceRef(s string) {
+	m.evidence_ref = &s
+}
+
+// EvidenceRef returns the value of the "evidence_ref" field in the mutation.
+func (m *UpstreamConnectionMutation) EvidenceRef() (r string, exists bool) {
+	v := m.evidence_ref
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldEvidenceRef returns the old "evidence_ref" field's value of the UpstreamConnection entity.
+// If the UpstreamConnection object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UpstreamConnectionMutation) OldEvidenceRef(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldEvidenceRef is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldEvidenceRef requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldEvidenceRef: %w", err)
+	}
+	return oldValue.EvidenceRef, nil
+}
+
+// ClearEvidenceRef clears the value of the "evidence_ref" field.
+func (m *UpstreamConnectionMutation) ClearEvidenceRef() {
+	m.evidence_ref = nil
+	m.clearedFields[upstreamconnection.FieldEvidenceRef] = struct{}{}
+}
+
+// EvidenceRefCleared returns if the "evidence_ref" field was cleared in this mutation.
+func (m *UpstreamConnectionMutation) EvidenceRefCleared() bool {
+	_, ok := m.clearedFields[upstreamconnection.FieldEvidenceRef]
+	return ok
+}
+
+// ResetEvidenceRef resets all changes to the "evidence_ref" field.
+func (m *UpstreamConnectionMutation) ResetEvidenceRef() {
+	m.evidence_ref = nil
+	delete(m.clearedFields, upstreamconnection.FieldEvidenceRef)
+}
+
+// AddAccountIDs adds the "accounts" edge to the Account entity by ids.
+func (m *UpstreamConnectionMutation) AddAccountIDs(ids ...int64) {
+	if m.accounts == nil {
+		m.accounts = make(map[int64]struct{})
+	}
+	for i := range ids {
+		m.accounts[ids[i]] = struct{}{}
+	}
+}
+
+// ClearAccounts clears the "accounts" edge to the Account entity.
+func (m *UpstreamConnectionMutation) ClearAccounts() {
+	m.clearedaccounts = true
+}
+
+// AccountsCleared reports if the "accounts" edge to the Account entity was cleared.
+func (m *UpstreamConnectionMutation) AccountsCleared() bool {
+	return m.clearedaccounts
+}
+
+// RemoveAccountIDs removes the "accounts" edge to the Account entity by IDs.
+func (m *UpstreamConnectionMutation) RemoveAccountIDs(ids ...int64) {
+	if m.removedaccounts == nil {
+		m.removedaccounts = make(map[int64]struct{})
+	}
+	for i := range ids {
+		delete(m.accounts, ids[i])
+		m.removedaccounts[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedAccounts returns the removed IDs of the "accounts" edge to the Account entity.
+func (m *UpstreamConnectionMutation) RemovedAccountsIDs() (ids []int64) {
+	for id := range m.removedaccounts {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// AccountsIDs returns the "accounts" edge IDs in the mutation.
+func (m *UpstreamConnectionMutation) AccountsIDs() (ids []int64) {
+	for id := range m.accounts {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetAccounts resets all changes to the "accounts" edge.
+func (m *UpstreamConnectionMutation) ResetAccounts() {
+	m.accounts = nil
+	m.clearedaccounts = false
+	m.removedaccounts = nil
+}
+
+// AddConnectionProbeIDs adds the "connection_probes" edge to the AccountEndpointProbe entity by ids.
+func (m *UpstreamConnectionMutation) AddConnectionProbeIDs(ids ...int64) {
+	if m.connection_probes == nil {
+		m.connection_probes = make(map[int64]struct{})
+	}
+	for i := range ids {
+		m.connection_probes[ids[i]] = struct{}{}
+	}
+}
+
+// ClearConnectionProbes clears the "connection_probes" edge to the AccountEndpointProbe entity.
+func (m *UpstreamConnectionMutation) ClearConnectionProbes() {
+	m.clearedconnection_probes = true
+}
+
+// ConnectionProbesCleared reports if the "connection_probes" edge to the AccountEndpointProbe entity was cleared.
+func (m *UpstreamConnectionMutation) ConnectionProbesCleared() bool {
+	return m.clearedconnection_probes
+}
+
+// RemoveConnectionProbeIDs removes the "connection_probes" edge to the AccountEndpointProbe entity by IDs.
+func (m *UpstreamConnectionMutation) RemoveConnectionProbeIDs(ids ...int64) {
+	if m.removedconnection_probes == nil {
+		m.removedconnection_probes = make(map[int64]struct{})
+	}
+	for i := range ids {
+		delete(m.connection_probes, ids[i])
+		m.removedconnection_probes[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedConnectionProbes returns the removed IDs of the "connection_probes" edge to the AccountEndpointProbe entity.
+func (m *UpstreamConnectionMutation) RemovedConnectionProbesIDs() (ids []int64) {
+	for id := range m.removedconnection_probes {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ConnectionProbesIDs returns the "connection_probes" edge IDs in the mutation.
+func (m *UpstreamConnectionMutation) ConnectionProbesIDs() (ids []int64) {
+	for id := range m.connection_probes {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetConnectionProbes resets all changes to the "connection_probes" edge.
+func (m *UpstreamConnectionMutation) ResetConnectionProbes() {
+	m.connection_probes = nil
+	m.clearedconnection_probes = false
+	m.removedconnection_probes = nil
+}
+
+// ClearProxy clears the "proxy" edge to the Proxy entity.
+func (m *UpstreamConnectionMutation) ClearProxy() {
+	m.clearedproxy = true
+	m.clearedFields[upstreamconnection.FieldProxyID] = struct{}{}
+}
+
+// ProxyCleared reports if the "proxy" edge to the Proxy entity was cleared.
+func (m *UpstreamConnectionMutation) ProxyCleared() bool {
+	return m.ProxyIDCleared() || m.clearedproxy
+}
+
+// ProxyIDs returns the "proxy" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// ProxyID instead. It exists only for internal usage by the builders.
+func (m *UpstreamConnectionMutation) ProxyIDs() (ids []int64) {
+	if id := m.proxy; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetProxy resets all changes to the "proxy" edge.
+func (m *UpstreamConnectionMutation) ResetProxy() {
+	m.proxy = nil
+	m.clearedproxy = false
+}
+
+// Where appends a list predicates to the UpstreamConnectionMutation builder.
+func (m *UpstreamConnectionMutation) Where(ps ...predicate.UpstreamConnection) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the UpstreamConnectionMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *UpstreamConnectionMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.UpstreamConnection, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *UpstreamConnectionMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *UpstreamConnectionMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (UpstreamConnection).
+func (m *UpstreamConnectionMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *UpstreamConnectionMutation) Fields() []string {
+	fields := make([]string, 0, 11)
+	if m.created_at != nil {
+		fields = append(fields, upstreamconnection.FieldCreatedAt)
+	}
+	if m.updated_at != nil {
+		fields = append(fields, upstreamconnection.FieldUpdatedAt)
+	}
+	if m.deleted_at != nil {
+		fields = append(fields, upstreamconnection.FieldDeletedAt)
+	}
+	if m.kind != nil {
+		fields = append(fields, upstreamconnection.FieldKind)
+	}
+	if m.provider != nil {
+		fields = append(fields, upstreamconnection.FieldProvider)
+	}
+	if m.base_url != nil {
+		fields = append(fields, upstreamconnection.FieldBaseURL)
+	}
+	if m.encrypted_credential != nil {
+		fields = append(fields, upstreamconnection.FieldEncryptedCredential)
+	}
+	if m.credential_version != nil {
+		fields = append(fields, upstreamconnection.FieldCredentialVersion)
+	}
+	if m.proxy != nil {
+		fields = append(fields, upstreamconnection.FieldProxyID)
+	}
+	if m.status != nil {
+		fields = append(fields, upstreamconnection.FieldStatus)
+	}
+	if m.evidence_ref != nil {
+		fields = append(fields, upstreamconnection.FieldEvidenceRef)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *UpstreamConnectionMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case upstreamconnection.FieldCreatedAt:
+		return m.CreatedAt()
+	case upstreamconnection.FieldUpdatedAt:
+		return m.UpdatedAt()
+	case upstreamconnection.FieldDeletedAt:
+		return m.DeletedAt()
+	case upstreamconnection.FieldKind:
+		return m.Kind()
+	case upstreamconnection.FieldProvider:
+		return m.Provider()
+	case upstreamconnection.FieldBaseURL:
+		return m.BaseURL()
+	case upstreamconnection.FieldEncryptedCredential:
+		return m.EncryptedCredential()
+	case upstreamconnection.FieldCredentialVersion:
+		return m.CredentialVersion()
+	case upstreamconnection.FieldProxyID:
+		return m.ProxyID()
+	case upstreamconnection.FieldStatus:
+		return m.Status()
+	case upstreamconnection.FieldEvidenceRef:
+		return m.EvidenceRef()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *UpstreamConnectionMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case upstreamconnection.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	case upstreamconnection.FieldUpdatedAt:
+		return m.OldUpdatedAt(ctx)
+	case upstreamconnection.FieldDeletedAt:
+		return m.OldDeletedAt(ctx)
+	case upstreamconnection.FieldKind:
+		return m.OldKind(ctx)
+	case upstreamconnection.FieldProvider:
+		return m.OldProvider(ctx)
+	case upstreamconnection.FieldBaseURL:
+		return m.OldBaseURL(ctx)
+	case upstreamconnection.FieldEncryptedCredential:
+		return m.OldEncryptedCredential(ctx)
+	case upstreamconnection.FieldCredentialVersion:
+		return m.OldCredentialVersion(ctx)
+	case upstreamconnection.FieldProxyID:
+		return m.OldProxyID(ctx)
+	case upstreamconnection.FieldStatus:
+		return m.OldStatus(ctx)
+	case upstreamconnection.FieldEvidenceRef:
+		return m.OldEvidenceRef(ctx)
+	}
+	return nil, fmt.Errorf("unknown UpstreamConnection field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *UpstreamConnectionMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case upstreamconnection.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	case upstreamconnection.FieldUpdatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUpdatedAt(v)
+		return nil
+	case upstreamconnection.FieldDeletedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDeletedAt(v)
+		return nil
+	case upstreamconnection.FieldKind:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetKind(v)
+		return nil
+	case upstreamconnection.FieldProvider:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetProvider(v)
+		return nil
+	case upstreamconnection.FieldBaseURL:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetBaseURL(v)
+		return nil
+	case upstreamconnection.FieldEncryptedCredential:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetEncryptedCredential(v)
+		return nil
+	case upstreamconnection.FieldCredentialVersion:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCredentialVersion(v)
+		return nil
+	case upstreamconnection.FieldProxyID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetProxyID(v)
+		return nil
+	case upstreamconnection.FieldStatus:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetStatus(v)
+		return nil
+	case upstreamconnection.FieldEvidenceRef:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetEvidenceRef(v)
+		return nil
+	}
+	return fmt.Errorf("unknown UpstreamConnection field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *UpstreamConnectionMutation) AddedFields() []string {
+	var fields []string
+	if m.addcredential_version != nil {
+		fields = append(fields, upstreamconnection.FieldCredentialVersion)
+	}
+	return fields
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *UpstreamConnectionMutation) AddedField(name string) (ent.Value, bool) {
+	switch name {
+	case upstreamconnection.FieldCredentialVersion:
+		return m.AddedCredentialVersion()
+	}
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *UpstreamConnectionMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	case upstreamconnection.FieldCredentialVersion:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddCredentialVersion(v)
+		return nil
+	}
+	return fmt.Errorf("unknown UpstreamConnection numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *UpstreamConnectionMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(upstreamconnection.FieldDeletedAt) {
+		fields = append(fields, upstreamconnection.FieldDeletedAt)
+	}
+	if m.FieldCleared(upstreamconnection.FieldProvider) {
+		fields = append(fields, upstreamconnection.FieldProvider)
+	}
+	if m.FieldCleared(upstreamconnection.FieldProxyID) {
+		fields = append(fields, upstreamconnection.FieldProxyID)
+	}
+	if m.FieldCleared(upstreamconnection.FieldEvidenceRef) {
+		fields = append(fields, upstreamconnection.FieldEvidenceRef)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *UpstreamConnectionMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *UpstreamConnectionMutation) ClearField(name string) error {
+	switch name {
+	case upstreamconnection.FieldDeletedAt:
+		m.ClearDeletedAt()
+		return nil
+	case upstreamconnection.FieldProvider:
+		m.ClearProvider()
+		return nil
+	case upstreamconnection.FieldProxyID:
+		m.ClearProxyID()
+		return nil
+	case upstreamconnection.FieldEvidenceRef:
+		m.ClearEvidenceRef()
+		return nil
+	}
+	return fmt.Errorf("unknown UpstreamConnection nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *UpstreamConnectionMutation) ResetField(name string) error {
+	switch name {
+	case upstreamconnection.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	case upstreamconnection.FieldUpdatedAt:
+		m.ResetUpdatedAt()
+		return nil
+	case upstreamconnection.FieldDeletedAt:
+		m.ResetDeletedAt()
+		return nil
+	case upstreamconnection.FieldKind:
+		m.ResetKind()
+		return nil
+	case upstreamconnection.FieldProvider:
+		m.ResetProvider()
+		return nil
+	case upstreamconnection.FieldBaseURL:
+		m.ResetBaseURL()
+		return nil
+	case upstreamconnection.FieldEncryptedCredential:
+		m.ResetEncryptedCredential()
+		return nil
+	case upstreamconnection.FieldCredentialVersion:
+		m.ResetCredentialVersion()
+		return nil
+	case upstreamconnection.FieldProxyID:
+		m.ResetProxyID()
+		return nil
+	case upstreamconnection.FieldStatus:
+		m.ResetStatus()
+		return nil
+	case upstreamconnection.FieldEvidenceRef:
+		m.ResetEvidenceRef()
+		return nil
+	}
+	return fmt.Errorf("unknown UpstreamConnection field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *UpstreamConnectionMutation) AddedEdges() []string {
+	edges := make([]string, 0, 3)
+	if m.accounts != nil {
+		edges = append(edges, upstreamconnection.EdgeAccounts)
+	}
+	if m.connection_probes != nil {
+		edges = append(edges, upstreamconnection.EdgeConnectionProbes)
+	}
+	if m.proxy != nil {
+		edges = append(edges, upstreamconnection.EdgeProxy)
+	}
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *UpstreamConnectionMutation) AddedIDs(name string) []ent.Value {
+	switch name {
+	case upstreamconnection.EdgeAccounts:
+		ids := make([]ent.Value, 0, len(m.accounts))
+		for id := range m.accounts {
+			ids = append(ids, id)
+		}
+		return ids
+	case upstreamconnection.EdgeConnectionProbes:
+		ids := make([]ent.Value, 0, len(m.connection_probes))
+		for id := range m.connection_probes {
+			ids = append(ids, id)
+		}
+		return ids
+	case upstreamconnection.EdgeProxy:
+		if id := m.proxy; id != nil {
+			return []ent.Value{*id}
+		}
+	}
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *UpstreamConnectionMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 3)
+	if m.removedaccounts != nil {
+		edges = append(edges, upstreamconnection.EdgeAccounts)
+	}
+	if m.removedconnection_probes != nil {
+		edges = append(edges, upstreamconnection.EdgeConnectionProbes)
+	}
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *UpstreamConnectionMutation) RemovedIDs(name string) []ent.Value {
+	switch name {
+	case upstreamconnection.EdgeAccounts:
+		ids := make([]ent.Value, 0, len(m.removedaccounts))
+		for id := range m.removedaccounts {
+			ids = append(ids, id)
+		}
+		return ids
+	case upstreamconnection.EdgeConnectionProbes:
+		ids := make([]ent.Value, 0, len(m.removedconnection_probes))
+		for id := range m.removedconnection_probes {
+			ids = append(ids, id)
+		}
+		return ids
+	}
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *UpstreamConnectionMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 3)
+	if m.clearedaccounts {
+		edges = append(edges, upstreamconnection.EdgeAccounts)
+	}
+	if m.clearedconnection_probes {
+		edges = append(edges, upstreamconnection.EdgeConnectionProbes)
+	}
+	if m.clearedproxy {
+		edges = append(edges, upstreamconnection.EdgeProxy)
+	}
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *UpstreamConnectionMutation) EdgeCleared(name string) bool {
+	switch name {
+	case upstreamconnection.EdgeAccounts:
+		return m.clearedaccounts
+	case upstreamconnection.EdgeConnectionProbes:
+		return m.clearedconnection_probes
+	case upstreamconnection.EdgeProxy:
+		return m.clearedproxy
+	}
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *UpstreamConnectionMutation) ClearEdge(name string) error {
+	switch name {
+	case upstreamconnection.EdgeProxy:
+		m.ClearProxy()
+		return nil
+	}
+	return fmt.Errorf("unknown UpstreamConnection unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *UpstreamConnectionMutation) ResetEdge(name string) error {
+	switch name {
+	case upstreamconnection.EdgeAccounts:
+		m.ResetAccounts()
+		return nil
+	case upstreamconnection.EdgeConnectionProbes:
+		m.ResetConnectionProbes()
+		return nil
+	case upstreamconnection.EdgeProxy:
+		m.ResetProxy()
+		return nil
+	}
+	return fmt.Errorf("unknown UpstreamConnection edge %s", name)
 }
 
 // UsageCleanupTaskMutation represents an operation that mutates the UsageCleanupTask nodes in the graph.

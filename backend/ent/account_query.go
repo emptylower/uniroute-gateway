@@ -14,27 +14,31 @@ import (
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
 	"github.com/Wei-Shaw/sub2api/ent/account"
+	"github.com/Wei-Shaw/sub2api/ent/accountendpointprobe"
 	"github.com/Wei-Shaw/sub2api/ent/accountgroup"
 	"github.com/Wei-Shaw/sub2api/ent/group"
 	"github.com/Wei-Shaw/sub2api/ent/predicate"
 	"github.com/Wei-Shaw/sub2api/ent/proxy"
+	"github.com/Wei-Shaw/sub2api/ent/upstreamconnection"
 	"github.com/Wei-Shaw/sub2api/ent/usagelog"
 )
 
 // AccountQuery is the builder for querying Account entities.
 type AccountQuery struct {
 	config
-	ctx               *QueryContext
-	order             []account.OrderOption
-	inters            []Interceptor
-	predicates        []predicate.Account
-	withGroups        *GroupQuery
-	withProxy         *ProxyQuery
-	withParent        *AccountQuery
-	withChildren      *AccountQuery
-	withUsageLogs     *UsageLogQuery
-	withAccountGroups *AccountGroupQuery
-	modifiers         []func(*sql.Selector)
+	ctx                *QueryContext
+	order              []account.OrderOption
+	inters             []Interceptor
+	predicates         []predicate.Account
+	withGroups         *GroupQuery
+	withProxy          *ProxyQuery
+	withConnection     *UpstreamConnectionQuery
+	withEndpointProbes *AccountEndpointProbeQuery
+	withParent         *AccountQuery
+	withChildren       *AccountQuery
+	withUsageLogs      *UsageLogQuery
+	withAccountGroups  *AccountGroupQuery
+	modifiers          []func(*sql.Selector)
 	// intermediate query (i.e. traversal path).
 	sql  *sql.Selector
 	path func(context.Context) (*sql.Selector, error)
@@ -108,6 +112,50 @@ func (_q *AccountQuery) QueryProxy() *ProxyQuery {
 			sqlgraph.From(account.Table, account.FieldID, selector),
 			sqlgraph.To(proxy.Table, proxy.FieldID),
 			sqlgraph.Edge(sqlgraph.M2O, false, account.ProxyTable, account.ProxyColumn),
+		)
+		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
+		return fromU, nil
+	}
+	return query
+}
+
+// QueryConnection chains the current query on the "connection" edge.
+func (_q *AccountQuery) QueryConnection() *UpstreamConnectionQuery {
+	query := (&UpstreamConnectionClient{config: _q.config}).Query()
+	query.path = func(ctx context.Context) (fromU *sql.Selector, err error) {
+		if err := _q.prepareQuery(ctx); err != nil {
+			return nil, err
+		}
+		selector := _q.sqlQuery(ctx)
+		if err := selector.Err(); err != nil {
+			return nil, err
+		}
+		step := sqlgraph.NewStep(
+			sqlgraph.From(account.Table, account.FieldID, selector),
+			sqlgraph.To(upstreamconnection.Table, upstreamconnection.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, false, account.ConnectionTable, account.ConnectionColumn),
+		)
+		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
+		return fromU, nil
+	}
+	return query
+}
+
+// QueryEndpointProbes chains the current query on the "endpoint_probes" edge.
+func (_q *AccountQuery) QueryEndpointProbes() *AccountEndpointProbeQuery {
+	query := (&AccountEndpointProbeClient{config: _q.config}).Query()
+	query.path = func(ctx context.Context) (fromU *sql.Selector, err error) {
+		if err := _q.prepareQuery(ctx); err != nil {
+			return nil, err
+		}
+		selector := _q.sqlQuery(ctx)
+		if err := selector.Err(); err != nil {
+			return nil, err
+		}
+		step := sqlgraph.NewStep(
+			sqlgraph.From(account.Table, account.FieldID, selector),
+			sqlgraph.To(accountendpointprobe.Table, accountendpointprobe.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, account.EndpointProbesTable, account.EndpointProbesColumn),
 		)
 		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
 		return fromU, nil
@@ -390,17 +438,19 @@ func (_q *AccountQuery) Clone() *AccountQuery {
 		return nil
 	}
 	return &AccountQuery{
-		config:            _q.config,
-		ctx:               _q.ctx.Clone(),
-		order:             append([]account.OrderOption{}, _q.order...),
-		inters:            append([]Interceptor{}, _q.inters...),
-		predicates:        append([]predicate.Account{}, _q.predicates...),
-		withGroups:        _q.withGroups.Clone(),
-		withProxy:         _q.withProxy.Clone(),
-		withParent:        _q.withParent.Clone(),
-		withChildren:      _q.withChildren.Clone(),
-		withUsageLogs:     _q.withUsageLogs.Clone(),
-		withAccountGroups: _q.withAccountGroups.Clone(),
+		config:             _q.config,
+		ctx:                _q.ctx.Clone(),
+		order:              append([]account.OrderOption{}, _q.order...),
+		inters:             append([]Interceptor{}, _q.inters...),
+		predicates:         append([]predicate.Account{}, _q.predicates...),
+		withGroups:         _q.withGroups.Clone(),
+		withProxy:          _q.withProxy.Clone(),
+		withConnection:     _q.withConnection.Clone(),
+		withEndpointProbes: _q.withEndpointProbes.Clone(),
+		withParent:         _q.withParent.Clone(),
+		withChildren:       _q.withChildren.Clone(),
+		withUsageLogs:      _q.withUsageLogs.Clone(),
+		withAccountGroups:  _q.withAccountGroups.Clone(),
 		// clone intermediate query.
 		sql:  _q.sql.Clone(),
 		path: _q.path,
@@ -426,6 +476,28 @@ func (_q *AccountQuery) WithProxy(opts ...func(*ProxyQuery)) *AccountQuery {
 		opt(query)
 	}
 	_q.withProxy = query
+	return _q
+}
+
+// WithConnection tells the query-builder to eager-load the nodes that are connected to
+// the "connection" edge. The optional arguments are used to configure the query builder of the edge.
+func (_q *AccountQuery) WithConnection(opts ...func(*UpstreamConnectionQuery)) *AccountQuery {
+	query := (&UpstreamConnectionClient{config: _q.config}).Query()
+	for _, opt := range opts {
+		opt(query)
+	}
+	_q.withConnection = query
+	return _q
+}
+
+// WithEndpointProbes tells the query-builder to eager-load the nodes that are connected to
+// the "endpoint_probes" edge. The optional arguments are used to configure the query builder of the edge.
+func (_q *AccountQuery) WithEndpointProbes(opts ...func(*AccountEndpointProbeQuery)) *AccountQuery {
+	query := (&AccountEndpointProbeClient{config: _q.config}).Query()
+	for _, opt := range opts {
+		opt(query)
+	}
+	_q.withEndpointProbes = query
 	return _q
 }
 
@@ -551,9 +623,11 @@ func (_q *AccountQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*Acco
 	var (
 		nodes       = []*Account{}
 		_spec       = _q.querySpec()
-		loadedTypes = [6]bool{
+		loadedTypes = [8]bool{
 			_q.withGroups != nil,
 			_q.withProxy != nil,
+			_q.withConnection != nil,
+			_q.withEndpointProbes != nil,
 			_q.withParent != nil,
 			_q.withChildren != nil,
 			_q.withUsageLogs != nil,
@@ -591,6 +665,19 @@ func (_q *AccountQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*Acco
 	if query := _q.withProxy; query != nil {
 		if err := _q.loadProxy(ctx, query, nodes, nil,
 			func(n *Account, e *Proxy) { n.Edges.Proxy = e }); err != nil {
+			return nil, err
+		}
+	}
+	if query := _q.withConnection; query != nil {
+		if err := _q.loadConnection(ctx, query, nodes, nil,
+			func(n *Account, e *UpstreamConnection) { n.Edges.Connection = e }); err != nil {
+			return nil, err
+		}
+	}
+	if query := _q.withEndpointProbes; query != nil {
+		if err := _q.loadEndpointProbes(ctx, query, nodes,
+			func(n *Account) { n.Edges.EndpointProbes = []*AccountEndpointProbe{} },
+			func(n *Account, e *AccountEndpointProbe) { n.Edges.EndpointProbes = append(n.Edges.EndpointProbes, e) }); err != nil {
 			return nil, err
 		}
 	}
@@ -714,6 +801,68 @@ func (_q *AccountQuery) loadProxy(ctx context.Context, query *ProxyQuery, nodes 
 		for i := range nodes {
 			assign(nodes[i], n)
 		}
+	}
+	return nil
+}
+func (_q *AccountQuery) loadConnection(ctx context.Context, query *UpstreamConnectionQuery, nodes []*Account, init func(*Account), assign func(*Account, *UpstreamConnection)) error {
+	ids := make([]int64, 0, len(nodes))
+	nodeids := make(map[int64][]*Account)
+	for i := range nodes {
+		if nodes[i].ConnectionID == nil {
+			continue
+		}
+		fk := *nodes[i].ConnectionID
+		if _, ok := nodeids[fk]; !ok {
+			ids = append(ids, fk)
+		}
+		nodeids[fk] = append(nodeids[fk], nodes[i])
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	query.Where(upstreamconnection.IDIn(ids...))
+	neighbors, err := query.All(ctx)
+	if err != nil {
+		return err
+	}
+	for _, n := range neighbors {
+		nodes, ok := nodeids[n.ID]
+		if !ok {
+			return fmt.Errorf(`unexpected foreign-key "connection_id" returned %v`, n.ID)
+		}
+		for i := range nodes {
+			assign(nodes[i], n)
+		}
+	}
+	return nil
+}
+func (_q *AccountQuery) loadEndpointProbes(ctx context.Context, query *AccountEndpointProbeQuery, nodes []*Account, init func(*Account), assign func(*Account, *AccountEndpointProbe)) error {
+	fks := make([]driver.Value, 0, len(nodes))
+	nodeids := make(map[int64]*Account)
+	for i := range nodes {
+		fks = append(fks, nodes[i].ID)
+		nodeids[nodes[i].ID] = nodes[i]
+		if init != nil {
+			init(nodes[i])
+		}
+	}
+	if len(query.ctx.Fields) > 0 {
+		query.ctx.AppendFieldOnce(accountendpointprobe.FieldAccountID)
+	}
+	query.Where(predicate.AccountEndpointProbe(func(s *sql.Selector) {
+		s.Where(sql.InValues(s.C(account.EndpointProbesColumn), fks...))
+	}))
+	neighbors, err := query.All(ctx)
+	if err != nil {
+		return err
+	}
+	for _, n := range neighbors {
+		fk := n.AccountID
+		node, ok := nodeids[fk]
+		if !ok {
+			return fmt.Errorf(`unexpected referenced foreign-key "account_id" returned %v for node %v`, fk, n.ID)
+		}
+		assign(node, n)
 	}
 	return nil
 }
@@ -873,6 +1022,9 @@ func (_q *AccountQuery) querySpec() *sqlgraph.QuerySpec {
 		}
 		if _q.withProxy != nil {
 			_spec.Node.AddColumnOnce(account.FieldProxyID)
+		}
+		if _q.withConnection != nil {
+			_spec.Node.AddColumnOnce(account.FieldConnectionID)
 		}
 		if _q.withParent != nil {
 			_spec.Node.AddColumnOnce(account.FieldParentAccountID)

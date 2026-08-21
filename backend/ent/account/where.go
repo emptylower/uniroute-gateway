@@ -195,6 +195,26 @@ func ParentAccountID(v int64) predicate.Account {
 	return predicate.Account(sql.FieldEQ(FieldParentAccountID, v))
 }
 
+// ConnectionID applies equality check predicate on the "connection_id" field. It's identical to ConnectionIDEQ.
+func ConnectionID(v int64) predicate.Account {
+	return predicate.Account(sql.FieldEQ(FieldConnectionID, v))
+}
+
+// Protocol applies equality check predicate on the "protocol" field. It's identical to ProtocolEQ.
+func Protocol(v string) predicate.Account {
+	return predicate.Account(sql.FieldEQ(FieldProtocol, v))
+}
+
+// EndpointPath applies equality check predicate on the "endpoint_path" field. It's identical to EndpointPathEQ.
+func EndpointPath(v string) predicate.Account {
+	return predicate.Account(sql.FieldEQ(FieldEndpointPath, v))
+}
+
+// ConfigVersion applies equality check predicate on the "config_version" field. It's identical to ConfigVersionEQ.
+func ConfigVersion(v int64) predicate.Account {
+	return predicate.Account(sql.FieldEQ(FieldConfigVersion, v))
+}
+
 // CreatedAtEQ applies the EQ predicate on the "created_at" field.
 func CreatedAtEQ(v time.Time) predicate.Account {
 	return predicate.Account(sql.FieldEQ(FieldCreatedAt, v))
@@ -1605,6 +1625,226 @@ func QuotaDimensionNotIn(vs ...QuotaDimension) predicate.Account {
 	return predicate.Account(sql.FieldNotIn(FieldQuotaDimension, vs...))
 }
 
+// ConnectionIDEQ applies the EQ predicate on the "connection_id" field.
+func ConnectionIDEQ(v int64) predicate.Account {
+	return predicate.Account(sql.FieldEQ(FieldConnectionID, v))
+}
+
+// ConnectionIDNEQ applies the NEQ predicate on the "connection_id" field.
+func ConnectionIDNEQ(v int64) predicate.Account {
+	return predicate.Account(sql.FieldNEQ(FieldConnectionID, v))
+}
+
+// ConnectionIDIn applies the In predicate on the "connection_id" field.
+func ConnectionIDIn(vs ...int64) predicate.Account {
+	return predicate.Account(sql.FieldIn(FieldConnectionID, vs...))
+}
+
+// ConnectionIDNotIn applies the NotIn predicate on the "connection_id" field.
+func ConnectionIDNotIn(vs ...int64) predicate.Account {
+	return predicate.Account(sql.FieldNotIn(FieldConnectionID, vs...))
+}
+
+// ConnectionIDIsNil applies the IsNil predicate on the "connection_id" field.
+func ConnectionIDIsNil() predicate.Account {
+	return predicate.Account(sql.FieldIsNull(FieldConnectionID))
+}
+
+// ConnectionIDNotNil applies the NotNil predicate on the "connection_id" field.
+func ConnectionIDNotNil() predicate.Account {
+	return predicate.Account(sql.FieldNotNull(FieldConnectionID))
+}
+
+// ProtocolEQ applies the EQ predicate on the "protocol" field.
+func ProtocolEQ(v string) predicate.Account {
+	return predicate.Account(sql.FieldEQ(FieldProtocol, v))
+}
+
+// ProtocolNEQ applies the NEQ predicate on the "protocol" field.
+func ProtocolNEQ(v string) predicate.Account {
+	return predicate.Account(sql.FieldNEQ(FieldProtocol, v))
+}
+
+// ProtocolIn applies the In predicate on the "protocol" field.
+func ProtocolIn(vs ...string) predicate.Account {
+	return predicate.Account(sql.FieldIn(FieldProtocol, vs...))
+}
+
+// ProtocolNotIn applies the NotIn predicate on the "protocol" field.
+func ProtocolNotIn(vs ...string) predicate.Account {
+	return predicate.Account(sql.FieldNotIn(FieldProtocol, vs...))
+}
+
+// ProtocolGT applies the GT predicate on the "protocol" field.
+func ProtocolGT(v string) predicate.Account {
+	return predicate.Account(sql.FieldGT(FieldProtocol, v))
+}
+
+// ProtocolGTE applies the GTE predicate on the "protocol" field.
+func ProtocolGTE(v string) predicate.Account {
+	return predicate.Account(sql.FieldGTE(FieldProtocol, v))
+}
+
+// ProtocolLT applies the LT predicate on the "protocol" field.
+func ProtocolLT(v string) predicate.Account {
+	return predicate.Account(sql.FieldLT(FieldProtocol, v))
+}
+
+// ProtocolLTE applies the LTE predicate on the "protocol" field.
+func ProtocolLTE(v string) predicate.Account {
+	return predicate.Account(sql.FieldLTE(FieldProtocol, v))
+}
+
+// ProtocolContains applies the Contains predicate on the "protocol" field.
+func ProtocolContains(v string) predicate.Account {
+	return predicate.Account(sql.FieldContains(FieldProtocol, v))
+}
+
+// ProtocolHasPrefix applies the HasPrefix predicate on the "protocol" field.
+func ProtocolHasPrefix(v string) predicate.Account {
+	return predicate.Account(sql.FieldHasPrefix(FieldProtocol, v))
+}
+
+// ProtocolHasSuffix applies the HasSuffix predicate on the "protocol" field.
+func ProtocolHasSuffix(v string) predicate.Account {
+	return predicate.Account(sql.FieldHasSuffix(FieldProtocol, v))
+}
+
+// ProtocolIsNil applies the IsNil predicate on the "protocol" field.
+func ProtocolIsNil() predicate.Account {
+	return predicate.Account(sql.FieldIsNull(FieldProtocol))
+}
+
+// ProtocolNotNil applies the NotNil predicate on the "protocol" field.
+func ProtocolNotNil() predicate.Account {
+	return predicate.Account(sql.FieldNotNull(FieldProtocol))
+}
+
+// ProtocolEqualFold applies the EqualFold predicate on the "protocol" field.
+func ProtocolEqualFold(v string) predicate.Account {
+	return predicate.Account(sql.FieldEqualFold(FieldProtocol, v))
+}
+
+// ProtocolContainsFold applies the ContainsFold predicate on the "protocol" field.
+func ProtocolContainsFold(v string) predicate.Account {
+	return predicate.Account(sql.FieldContainsFold(FieldProtocol, v))
+}
+
+// EndpointPathEQ applies the EQ predicate on the "endpoint_path" field.
+func EndpointPathEQ(v string) predicate.Account {
+	return predicate.Account(sql.FieldEQ(FieldEndpointPath, v))
+}
+
+// EndpointPathNEQ applies the NEQ predicate on the "endpoint_path" field.
+func EndpointPathNEQ(v string) predicate.Account {
+	return predicate.Account(sql.FieldNEQ(FieldEndpointPath, v))
+}
+
+// EndpointPathIn applies the In predicate on the "endpoint_path" field.
+func EndpointPathIn(vs ...string) predicate.Account {
+	return predicate.Account(sql.FieldIn(FieldEndpointPath, vs...))
+}
+
+// EndpointPathNotIn applies the NotIn predicate on the "endpoint_path" field.
+func EndpointPathNotIn(vs ...string) predicate.Account {
+	return predicate.Account(sql.FieldNotIn(FieldEndpointPath, vs...))
+}
+
+// EndpointPathGT applies the GT predicate on the "endpoint_path" field.
+func EndpointPathGT(v string) predicate.Account {
+	return predicate.Account(sql.FieldGT(FieldEndpointPath, v))
+}
+
+// EndpointPathGTE applies the GTE predicate on the "endpoint_path" field.
+func EndpointPathGTE(v string) predicate.Account {
+	return predicate.Account(sql.FieldGTE(FieldEndpointPath, v))
+}
+
+// EndpointPathLT applies the LT predicate on the "endpoint_path" field.
+func EndpointPathLT(v string) predicate.Account {
+	return predicate.Account(sql.FieldLT(FieldEndpointPath, v))
+}
+
+// EndpointPathLTE applies the LTE predicate on the "endpoint_path" field.
+func EndpointPathLTE(v string) predicate.Account {
+	return predicate.Account(sql.FieldLTE(FieldEndpointPath, v))
+}
+
+// EndpointPathContains applies the Contains predicate on the "endpoint_path" field.
+func EndpointPathContains(v string) predicate.Account {
+	return predicate.Account(sql.FieldContains(FieldEndpointPath, v))
+}
+
+// EndpointPathHasPrefix applies the HasPrefix predicate on the "endpoint_path" field.
+func EndpointPathHasPrefix(v string) predicate.Account {
+	return predicate.Account(sql.FieldHasPrefix(FieldEndpointPath, v))
+}
+
+// EndpointPathHasSuffix applies the HasSuffix predicate on the "endpoint_path" field.
+func EndpointPathHasSuffix(v string) predicate.Account {
+	return predicate.Account(sql.FieldHasSuffix(FieldEndpointPath, v))
+}
+
+// EndpointPathIsNil applies the IsNil predicate on the "endpoint_path" field.
+func EndpointPathIsNil() predicate.Account {
+	return predicate.Account(sql.FieldIsNull(FieldEndpointPath))
+}
+
+// EndpointPathNotNil applies the NotNil predicate on the "endpoint_path" field.
+func EndpointPathNotNil() predicate.Account {
+	return predicate.Account(sql.FieldNotNull(FieldEndpointPath))
+}
+
+// EndpointPathEqualFold applies the EqualFold predicate on the "endpoint_path" field.
+func EndpointPathEqualFold(v string) predicate.Account {
+	return predicate.Account(sql.FieldEqualFold(FieldEndpointPath, v))
+}
+
+// EndpointPathContainsFold applies the ContainsFold predicate on the "endpoint_path" field.
+func EndpointPathContainsFold(v string) predicate.Account {
+	return predicate.Account(sql.FieldContainsFold(FieldEndpointPath, v))
+}
+
+// ConfigVersionEQ applies the EQ predicate on the "config_version" field.
+func ConfigVersionEQ(v int64) predicate.Account {
+	return predicate.Account(sql.FieldEQ(FieldConfigVersion, v))
+}
+
+// ConfigVersionNEQ applies the NEQ predicate on the "config_version" field.
+func ConfigVersionNEQ(v int64) predicate.Account {
+	return predicate.Account(sql.FieldNEQ(FieldConfigVersion, v))
+}
+
+// ConfigVersionIn applies the In predicate on the "config_version" field.
+func ConfigVersionIn(vs ...int64) predicate.Account {
+	return predicate.Account(sql.FieldIn(FieldConfigVersion, vs...))
+}
+
+// ConfigVersionNotIn applies the NotIn predicate on the "config_version" field.
+func ConfigVersionNotIn(vs ...int64) predicate.Account {
+	return predicate.Account(sql.FieldNotIn(FieldConfigVersion, vs...))
+}
+
+// ConfigVersionGT applies the GT predicate on the "config_version" field.
+func ConfigVersionGT(v int64) predicate.Account {
+	return predicate.Account(sql.FieldGT(FieldConfigVersion, v))
+}
+
+// ConfigVersionGTE applies the GTE predicate on the "config_version" field.
+func ConfigVersionGTE(v int64) predicate.Account {
+	return predicate.Account(sql.FieldGTE(FieldConfigVersion, v))
+}
+
+// ConfigVersionLT applies the LT predicate on the "config_version" field.
+func ConfigVersionLT(v int64) predicate.Account {
+	return predicate.Account(sql.FieldLT(FieldConfigVersion, v))
+}
+
+// ConfigVersionLTE applies the LTE predicate on the "config_version" field.
+func ConfigVersionLTE(v int64) predicate.Account {
+	return predicate.Account(sql.FieldLTE(FieldConfigVersion, v))
+}
+
 // HasGroups applies the HasEdge predicate on the "groups" edge.
 func HasGroups() predicate.Account {
 	return predicate.Account(func(s *sql.Selector) {
@@ -1643,6 +1883,52 @@ func HasProxy() predicate.Account {
 func HasProxyWith(preds ...predicate.Proxy) predicate.Account {
 	return predicate.Account(func(s *sql.Selector) {
 		step := newProxyStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
+// HasConnection applies the HasEdge predicate on the "connection" edge.
+func HasConnection() predicate.Account {
+	return predicate.Account(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, false, ConnectionTable, ConnectionColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasConnectionWith applies the HasEdge predicate on the "connection" edge with a given conditions (other predicates).
+func HasConnectionWith(preds ...predicate.UpstreamConnection) predicate.Account {
+	return predicate.Account(func(s *sql.Selector) {
+		step := newConnectionStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
+// HasEndpointProbes applies the HasEdge predicate on the "endpoint_probes" edge.
+func HasEndpointProbes() predicate.Account {
+	return predicate.Account(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, EndpointProbesTable, EndpointProbesColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasEndpointProbesWith applies the HasEdge predicate on the "endpoint_probes" edge with a given conditions (other predicates).
+func HasEndpointProbesWith(preds ...predicate.AccountEndpointProbe) predicate.Account {
+	return predicate.Account(func(s *sql.Selector) {
+		step := newEndpointProbesStep()
 		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
 			for _, p := range preds {
 				p(s)

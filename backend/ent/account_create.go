@@ -12,8 +12,10 @@ import (
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
 	"github.com/Wei-Shaw/sub2api/ent/account"
+	"github.com/Wei-Shaw/sub2api/ent/accountendpointprobe"
 	"github.com/Wei-Shaw/sub2api/ent/group"
 	"github.com/Wei-Shaw/sub2api/ent/proxy"
+	"github.com/Wei-Shaw/sub2api/ent/upstreamconnection"
 	"github.com/Wei-Shaw/sub2api/ent/usagelog"
 )
 
@@ -419,6 +421,62 @@ func (_c *AccountCreate) SetNillableQuotaDimension(v *account.QuotaDimension) *A
 	return _c
 }
 
+// SetConnectionID sets the "connection_id" field.
+func (_c *AccountCreate) SetConnectionID(v int64) *AccountCreate {
+	_c.mutation.SetConnectionID(v)
+	return _c
+}
+
+// SetNillableConnectionID sets the "connection_id" field if the given value is not nil.
+func (_c *AccountCreate) SetNillableConnectionID(v *int64) *AccountCreate {
+	if v != nil {
+		_c.SetConnectionID(*v)
+	}
+	return _c
+}
+
+// SetProtocol sets the "protocol" field.
+func (_c *AccountCreate) SetProtocol(v string) *AccountCreate {
+	_c.mutation.SetProtocol(v)
+	return _c
+}
+
+// SetNillableProtocol sets the "protocol" field if the given value is not nil.
+func (_c *AccountCreate) SetNillableProtocol(v *string) *AccountCreate {
+	if v != nil {
+		_c.SetProtocol(*v)
+	}
+	return _c
+}
+
+// SetEndpointPath sets the "endpoint_path" field.
+func (_c *AccountCreate) SetEndpointPath(v string) *AccountCreate {
+	_c.mutation.SetEndpointPath(v)
+	return _c
+}
+
+// SetNillableEndpointPath sets the "endpoint_path" field if the given value is not nil.
+func (_c *AccountCreate) SetNillableEndpointPath(v *string) *AccountCreate {
+	if v != nil {
+		_c.SetEndpointPath(*v)
+	}
+	return _c
+}
+
+// SetConfigVersion sets the "config_version" field.
+func (_c *AccountCreate) SetConfigVersion(v int64) *AccountCreate {
+	_c.mutation.SetConfigVersion(v)
+	return _c
+}
+
+// SetNillableConfigVersion sets the "config_version" field if the given value is not nil.
+func (_c *AccountCreate) SetNillableConfigVersion(v *int64) *AccountCreate {
+	if v != nil {
+		_c.SetConfigVersion(*v)
+	}
+	return _c
+}
+
 // AddGroupIDs adds the "groups" edge to the Group entity by IDs.
 func (_c *AccountCreate) AddGroupIDs(ids ...int64) *AccountCreate {
 	_c.mutation.AddGroupIDs(ids...)
@@ -437,6 +495,26 @@ func (_c *AccountCreate) AddGroups(v ...*Group) *AccountCreate {
 // SetProxy sets the "proxy" edge to the Proxy entity.
 func (_c *AccountCreate) SetProxy(v *Proxy) *AccountCreate {
 	return _c.SetProxyID(v.ID)
+}
+
+// SetConnection sets the "connection" edge to the UpstreamConnection entity.
+func (_c *AccountCreate) SetConnection(v *UpstreamConnection) *AccountCreate {
+	return _c.SetConnectionID(v.ID)
+}
+
+// AddEndpointProbeIDs adds the "endpoint_probes" edge to the AccountEndpointProbe entity by IDs.
+func (_c *AccountCreate) AddEndpointProbeIDs(ids ...int64) *AccountCreate {
+	_c.mutation.AddEndpointProbeIDs(ids...)
+	return _c
+}
+
+// AddEndpointProbes adds the "endpoint_probes" edges to the AccountEndpointProbe entity.
+func (_c *AccountCreate) AddEndpointProbes(v ...*AccountEndpointProbe) *AccountCreate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _c.AddEndpointProbeIDs(ids...)
 }
 
 // SetParentID sets the "parent" edge to the Account entity by ID.
@@ -581,6 +659,10 @@ func (_c *AccountCreate) defaults() error {
 		v := account.DefaultQuotaDimension
 		_c.mutation.SetQuotaDimension(v)
 	}
+	if _, ok := _c.mutation.ConfigVersion(); !ok {
+		v := account.DefaultConfigVersion
+		_c.mutation.SetConfigVersion(v)
+	}
 	return nil
 }
 
@@ -657,6 +739,14 @@ func (_c *AccountCreate) check() error {
 		if err := account.QuotaDimensionValidator(v); err != nil {
 			return &ValidationError{Name: "quota_dimension", err: fmt.Errorf(`ent: validator failed for field "Account.quota_dimension": %w`, err)}
 		}
+	}
+	if v, ok := _c.mutation.Protocol(); ok {
+		if err := account.ProtocolValidator(v); err != nil {
+			return &ValidationError{Name: "protocol", err: fmt.Errorf(`ent: validator failed for field "Account.protocol": %w`, err)}
+		}
+	}
+	if _, ok := _c.mutation.ConfigVersion(); !ok {
+		return &ValidationError{Name: "config_version", err: errors.New(`ent: missing required field "Account.config_version"`)}
 	}
 	return nil
 }
@@ -801,6 +891,18 @@ func (_c *AccountCreate) createSpec() (*Account, *sqlgraph.CreateSpec) {
 		_spec.SetField(account.FieldQuotaDimension, field.TypeEnum, value)
 		_node.QuotaDimension = value
 	}
+	if value, ok := _c.mutation.Protocol(); ok {
+		_spec.SetField(account.FieldProtocol, field.TypeString, value)
+		_node.Protocol = &value
+	}
+	if value, ok := _c.mutation.EndpointPath(); ok {
+		_spec.SetField(account.FieldEndpointPath, field.TypeString, value)
+		_node.EndpointPath = &value
+	}
+	if value, ok := _c.mutation.ConfigVersion(); ok {
+		_spec.SetField(account.FieldConfigVersion, field.TypeInt64, value)
+		_node.ConfigVersion = value
+	}
 	if nodes := _c.mutation.GroupsIDs(); len(nodes) > 0 {
 		edge := &sqlgraph.EdgeSpec{
 			Rel:     sqlgraph.M2M,
@@ -836,6 +938,39 @@ func (_c *AccountCreate) createSpec() (*Account, *sqlgraph.CreateSpec) {
 			edge.Target.Nodes = append(edge.Target.Nodes, k)
 		}
 		_node.ProxyID = &nodes[0]
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := _c.mutation.ConnectionIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: false,
+			Table:   account.ConnectionTable,
+			Columns: []string{account.ConnectionColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(upstreamconnection.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_node.ConnectionID = &nodes[0]
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := _c.mutation.EndpointProbesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   account.EndpointProbesTable,
+			Columns: []string{account.EndpointProbesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(accountendpointprobe.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
 		_spec.Edges = append(_spec.Edges, edge)
 	}
 	if nodes := _c.mutation.ParentIDs(); len(nodes) > 0 {
@@ -1428,6 +1563,78 @@ func (u *AccountUpsert) SetQuotaDimension(v account.QuotaDimension) *AccountUpse
 // UpdateQuotaDimension sets the "quota_dimension" field to the value that was provided on create.
 func (u *AccountUpsert) UpdateQuotaDimension() *AccountUpsert {
 	u.SetExcluded(account.FieldQuotaDimension)
+	return u
+}
+
+// SetConnectionID sets the "connection_id" field.
+func (u *AccountUpsert) SetConnectionID(v int64) *AccountUpsert {
+	u.Set(account.FieldConnectionID, v)
+	return u
+}
+
+// UpdateConnectionID sets the "connection_id" field to the value that was provided on create.
+func (u *AccountUpsert) UpdateConnectionID() *AccountUpsert {
+	u.SetExcluded(account.FieldConnectionID)
+	return u
+}
+
+// ClearConnectionID clears the value of the "connection_id" field.
+func (u *AccountUpsert) ClearConnectionID() *AccountUpsert {
+	u.SetNull(account.FieldConnectionID)
+	return u
+}
+
+// SetProtocol sets the "protocol" field.
+func (u *AccountUpsert) SetProtocol(v string) *AccountUpsert {
+	u.Set(account.FieldProtocol, v)
+	return u
+}
+
+// UpdateProtocol sets the "protocol" field to the value that was provided on create.
+func (u *AccountUpsert) UpdateProtocol() *AccountUpsert {
+	u.SetExcluded(account.FieldProtocol)
+	return u
+}
+
+// ClearProtocol clears the value of the "protocol" field.
+func (u *AccountUpsert) ClearProtocol() *AccountUpsert {
+	u.SetNull(account.FieldProtocol)
+	return u
+}
+
+// SetEndpointPath sets the "endpoint_path" field.
+func (u *AccountUpsert) SetEndpointPath(v string) *AccountUpsert {
+	u.Set(account.FieldEndpointPath, v)
+	return u
+}
+
+// UpdateEndpointPath sets the "endpoint_path" field to the value that was provided on create.
+func (u *AccountUpsert) UpdateEndpointPath() *AccountUpsert {
+	u.SetExcluded(account.FieldEndpointPath)
+	return u
+}
+
+// ClearEndpointPath clears the value of the "endpoint_path" field.
+func (u *AccountUpsert) ClearEndpointPath() *AccountUpsert {
+	u.SetNull(account.FieldEndpointPath)
+	return u
+}
+
+// SetConfigVersion sets the "config_version" field.
+func (u *AccountUpsert) SetConfigVersion(v int64) *AccountUpsert {
+	u.Set(account.FieldConfigVersion, v)
+	return u
+}
+
+// UpdateConfigVersion sets the "config_version" field to the value that was provided on create.
+func (u *AccountUpsert) UpdateConfigVersion() *AccountUpsert {
+	u.SetExcluded(account.FieldConfigVersion)
+	return u
+}
+
+// AddConfigVersion adds v to the "config_version" field.
+func (u *AccountUpsert) AddConfigVersion(v int64) *AccountUpsert {
+	u.Add(account.FieldConfigVersion, v)
 	return u
 }
 
@@ -2047,6 +2254,90 @@ func (u *AccountUpsertOne) SetQuotaDimension(v account.QuotaDimension) *AccountU
 func (u *AccountUpsertOne) UpdateQuotaDimension() *AccountUpsertOne {
 	return u.Update(func(s *AccountUpsert) {
 		s.UpdateQuotaDimension()
+	})
+}
+
+// SetConnectionID sets the "connection_id" field.
+func (u *AccountUpsertOne) SetConnectionID(v int64) *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.SetConnectionID(v)
+	})
+}
+
+// UpdateConnectionID sets the "connection_id" field to the value that was provided on create.
+func (u *AccountUpsertOne) UpdateConnectionID() *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.UpdateConnectionID()
+	})
+}
+
+// ClearConnectionID clears the value of the "connection_id" field.
+func (u *AccountUpsertOne) ClearConnectionID() *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.ClearConnectionID()
+	})
+}
+
+// SetProtocol sets the "protocol" field.
+func (u *AccountUpsertOne) SetProtocol(v string) *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.SetProtocol(v)
+	})
+}
+
+// UpdateProtocol sets the "protocol" field to the value that was provided on create.
+func (u *AccountUpsertOne) UpdateProtocol() *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.UpdateProtocol()
+	})
+}
+
+// ClearProtocol clears the value of the "protocol" field.
+func (u *AccountUpsertOne) ClearProtocol() *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.ClearProtocol()
+	})
+}
+
+// SetEndpointPath sets the "endpoint_path" field.
+func (u *AccountUpsertOne) SetEndpointPath(v string) *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.SetEndpointPath(v)
+	})
+}
+
+// UpdateEndpointPath sets the "endpoint_path" field to the value that was provided on create.
+func (u *AccountUpsertOne) UpdateEndpointPath() *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.UpdateEndpointPath()
+	})
+}
+
+// ClearEndpointPath clears the value of the "endpoint_path" field.
+func (u *AccountUpsertOne) ClearEndpointPath() *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.ClearEndpointPath()
+	})
+}
+
+// SetConfigVersion sets the "config_version" field.
+func (u *AccountUpsertOne) SetConfigVersion(v int64) *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.SetConfigVersion(v)
+	})
+}
+
+// AddConfigVersion adds v to the "config_version" field.
+func (u *AccountUpsertOne) AddConfigVersion(v int64) *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.AddConfigVersion(v)
+	})
+}
+
+// UpdateConfigVersion sets the "config_version" field to the value that was provided on create.
+func (u *AccountUpsertOne) UpdateConfigVersion() *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.UpdateConfigVersion()
 	})
 }
 
@@ -2832,6 +3123,90 @@ func (u *AccountUpsertBulk) SetQuotaDimension(v account.QuotaDimension) *Account
 func (u *AccountUpsertBulk) UpdateQuotaDimension() *AccountUpsertBulk {
 	return u.Update(func(s *AccountUpsert) {
 		s.UpdateQuotaDimension()
+	})
+}
+
+// SetConnectionID sets the "connection_id" field.
+func (u *AccountUpsertBulk) SetConnectionID(v int64) *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.SetConnectionID(v)
+	})
+}
+
+// UpdateConnectionID sets the "connection_id" field to the value that was provided on create.
+func (u *AccountUpsertBulk) UpdateConnectionID() *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.UpdateConnectionID()
+	})
+}
+
+// ClearConnectionID clears the value of the "connection_id" field.
+func (u *AccountUpsertBulk) ClearConnectionID() *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.ClearConnectionID()
+	})
+}
+
+// SetProtocol sets the "protocol" field.
+func (u *AccountUpsertBulk) SetProtocol(v string) *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.SetProtocol(v)
+	})
+}
+
+// UpdateProtocol sets the "protocol" field to the value that was provided on create.
+func (u *AccountUpsertBulk) UpdateProtocol() *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.UpdateProtocol()
+	})
+}
+
+// ClearProtocol clears the value of the "protocol" field.
+func (u *AccountUpsertBulk) ClearProtocol() *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.ClearProtocol()
+	})
+}
+
+// SetEndpointPath sets the "endpoint_path" field.
+func (u *AccountUpsertBulk) SetEndpointPath(v string) *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.SetEndpointPath(v)
+	})
+}
+
+// UpdateEndpointPath sets the "endpoint_path" field to the value that was provided on create.
+func (u *AccountUpsertBulk) UpdateEndpointPath() *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.UpdateEndpointPath()
+	})
+}
+
+// ClearEndpointPath clears the value of the "endpoint_path" field.
+func (u *AccountUpsertBulk) ClearEndpointPath() *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.ClearEndpointPath()
+	})
+}
+
+// SetConfigVersion sets the "config_version" field.
+func (u *AccountUpsertBulk) SetConfigVersion(v int64) *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.SetConfigVersion(v)
+	})
+}
+
+// AddConfigVersion adds v to the "config_version" field.
+func (u *AccountUpsertBulk) AddConfigVersion(v int64) *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.AddConfigVersion(v)
+	})
+}
+
+// UpdateConfigVersion sets the "config_version" field to the value that was provided on create.
+func (u *AccountUpsertBulk) UpdateConfigVersion() *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.UpdateConfigVersion()
 	})
 }
 

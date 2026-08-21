@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/ent/account"
+	"github.com/Wei-Shaw/sub2api/ent/accountendpointprobe"
 	"github.com/Wei-Shaw/sub2api/ent/accountgroup"
 	"github.com/Wei-Shaw/sub2api/ent/announcement"
 	"github.com/Wei-Shaw/sub2api/ent/announcementread"
@@ -37,6 +38,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/setting"
 	"github.com/Wei-Shaw/sub2api/ent/subscriptionplan"
 	"github.com/Wei-Shaw/sub2api/ent/tlsfingerprintprofile"
+	"github.com/Wei-Shaw/sub2api/ent/upstreamconnection"
 	"github.com/Wei-Shaw/sub2api/ent/usagecleanuptask"
 	"github.com/Wei-Shaw/sub2api/ent/usagelog"
 	"github.com/Wei-Shaw/sub2api/ent/user"
@@ -274,6 +276,78 @@ func init() {
 	accountDescSessionWindowStatus := accountFields[25].Descriptor()
 	// account.SessionWindowStatusValidator is a validator for the "session_window_status" field. It is called by the builders before save.
 	account.SessionWindowStatusValidator = accountDescSessionWindowStatus.Validators[0].(func(string) error)
+	// accountDescProtocol is the schema descriptor for protocol field.
+	accountDescProtocol := accountFields[29].Descriptor()
+	// account.ProtocolValidator is a validator for the "protocol" field. It is called by the builders before save.
+	account.ProtocolValidator = accountDescProtocol.Validators[0].(func(string) error)
+	// accountDescConfigVersion is the schema descriptor for config_version field.
+	accountDescConfigVersion := accountFields[31].Descriptor()
+	// account.DefaultConfigVersion holds the default value on creation for the config_version field.
+	account.DefaultConfigVersion = accountDescConfigVersion.Default.(int64)
+	accountendpointprobeFields := schema.AccountEndpointProbe{}.Fields()
+	_ = accountendpointprobeFields
+	// accountendpointprobeDescProvider is the schema descriptor for provider field.
+	accountendpointprobeDescProvider := accountendpointprobeFields[2].Descriptor()
+	// accountendpointprobe.ProviderValidator is a validator for the "provider" field. It is called by the builders before save.
+	accountendpointprobe.ProviderValidator = func() func(string) error {
+		validators := accountendpointprobeDescProvider.Validators
+		fns := [...]func(string) error{
+			validators[0].(func(string) error),
+			validators[1].(func(string) error),
+		}
+		return func(provider string) error {
+			for _, fn := range fns {
+				if err := fn(provider); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}()
+	// accountendpointprobeDescProtocol is the schema descriptor for protocol field.
+	accountendpointprobeDescProtocol := accountendpointprobeFields[3].Descriptor()
+	// accountendpointprobe.ProtocolValidator is a validator for the "protocol" field. It is called by the builders before save.
+	accountendpointprobe.ProtocolValidator = func() func(string) error {
+		validators := accountendpointprobeDescProtocol.Validators
+		fns := [...]func(string) error{
+			validators[0].(func(string) error),
+			validators[1].(func(string) error),
+		}
+		return func(protocol string) error {
+			for _, fn := range fns {
+				if err := fn(protocol); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}()
+	// accountendpointprobeDescNormalizedEndpointPath is the schema descriptor for normalized_endpoint_path field.
+	accountendpointprobeDescNormalizedEndpointPath := accountendpointprobeFields[4].Descriptor()
+	// accountendpointprobe.NormalizedEndpointPathValidator is a validator for the "normalized_endpoint_path" field. It is called by the builders before save.
+	accountendpointprobe.NormalizedEndpointPathValidator = accountendpointprobeDescNormalizedEndpointPath.Validators[0].(func(string) error)
+	// accountendpointprobeDescStatus is the schema descriptor for status field.
+	accountendpointprobeDescStatus := accountendpointprobeFields[7].Descriptor()
+	// accountendpointprobe.StatusValidator is a validator for the "status" field. It is called by the builders before save.
+	accountendpointprobe.StatusValidator = func() func(string) error {
+		validators := accountendpointprobeDescStatus.Validators
+		fns := [...]func(string) error{
+			validators[0].(func(string) error),
+			validators[1].(func(string) error),
+		}
+		return func(status string) error {
+			for _, fn := range fns {
+				if err := fn(status); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}()
+	// accountendpointprobeDescResponseSummary is the schema descriptor for response_summary field.
+	accountendpointprobeDescResponseSummary := accountendpointprobeFields[12].Descriptor()
+	// accountendpointprobe.DefaultResponseSummary holds the default value on creation for the response_summary field.
+	accountendpointprobe.DefaultResponseSummary = accountendpointprobeDescResponseSummary.Default.(func() map[string]interface{})
 	accountgroupFields := schema.AccountGroup{}.Fields()
 	_ = accountgroupFields
 	// accountgroupDescPriority is the schema descriptor for priority field.
@@ -1921,6 +1995,65 @@ func init() {
 	tlsfingerprintprofileDescEnableGrease := tlsfingerprintprofileFields[2].Descriptor()
 	// tlsfingerprintprofile.DefaultEnableGrease holds the default value on creation for the enable_grease field.
 	tlsfingerprintprofile.DefaultEnableGrease = tlsfingerprintprofileDescEnableGrease.Default.(bool)
+	upstreamconnectionMixin := schema.UpstreamConnection{}.Mixin()
+	upstreamconnectionMixinHooks1 := upstreamconnectionMixin[1].Hooks()
+	upstreamconnection.Hooks[0] = upstreamconnectionMixinHooks1[0]
+	upstreamconnectionMixinInters1 := upstreamconnectionMixin[1].Interceptors()
+	upstreamconnection.Interceptors[0] = upstreamconnectionMixinInters1[0]
+	upstreamconnectionMixinFields0 := upstreamconnectionMixin[0].Fields()
+	_ = upstreamconnectionMixinFields0
+	upstreamconnectionFields := schema.UpstreamConnection{}.Fields()
+	_ = upstreamconnectionFields
+	// upstreamconnectionDescCreatedAt is the schema descriptor for created_at field.
+	upstreamconnectionDescCreatedAt := upstreamconnectionMixinFields0[0].Descriptor()
+	// upstreamconnection.DefaultCreatedAt holds the default value on creation for the created_at field.
+	upstreamconnection.DefaultCreatedAt = upstreamconnectionDescCreatedAt.Default.(func() time.Time)
+	// upstreamconnectionDescUpdatedAt is the schema descriptor for updated_at field.
+	upstreamconnectionDescUpdatedAt := upstreamconnectionMixinFields0[1].Descriptor()
+	// upstreamconnection.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	upstreamconnection.DefaultUpdatedAt = upstreamconnectionDescUpdatedAt.Default.(func() time.Time)
+	// upstreamconnection.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	upstreamconnection.UpdateDefaultUpdatedAt = upstreamconnectionDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// upstreamconnectionDescKind is the schema descriptor for kind field.
+	upstreamconnectionDescKind := upstreamconnectionFields[0].Descriptor()
+	// upstreamconnection.KindValidator is a validator for the "kind" field. It is called by the builders before save.
+	upstreamconnection.KindValidator = func() func(string) error {
+		validators := upstreamconnectionDescKind.Validators
+		fns := [...]func(string) error{
+			validators[0].(func(string) error),
+			validators[1].(func(string) error),
+		}
+		return func(kind string) error {
+			for _, fn := range fns {
+				if err := fn(kind); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}()
+	// upstreamconnectionDescProvider is the schema descriptor for provider field.
+	upstreamconnectionDescProvider := upstreamconnectionFields[1].Descriptor()
+	// upstreamconnection.ProviderValidator is a validator for the "provider" field. It is called by the builders before save.
+	upstreamconnection.ProviderValidator = upstreamconnectionDescProvider.Validators[0].(func(string) error)
+	// upstreamconnectionDescBaseURL is the schema descriptor for base_url field.
+	upstreamconnectionDescBaseURL := upstreamconnectionFields[2].Descriptor()
+	// upstreamconnection.BaseURLValidator is a validator for the "base_url" field. It is called by the builders before save.
+	upstreamconnection.BaseURLValidator = upstreamconnectionDescBaseURL.Validators[0].(func(string) error)
+	// upstreamconnectionDescEncryptedCredential is the schema descriptor for encrypted_credential field.
+	upstreamconnectionDescEncryptedCredential := upstreamconnectionFields[3].Descriptor()
+	// upstreamconnection.EncryptedCredentialValidator is a validator for the "encrypted_credential" field. It is called by the builders before save.
+	upstreamconnection.EncryptedCredentialValidator = upstreamconnectionDescEncryptedCredential.Validators[0].(func(string) error)
+	// upstreamconnectionDescCredentialVersion is the schema descriptor for credential_version field.
+	upstreamconnectionDescCredentialVersion := upstreamconnectionFields[4].Descriptor()
+	// upstreamconnection.DefaultCredentialVersion holds the default value on creation for the credential_version field.
+	upstreamconnection.DefaultCredentialVersion = upstreamconnectionDescCredentialVersion.Default.(int64)
+	// upstreamconnectionDescStatus is the schema descriptor for status field.
+	upstreamconnectionDescStatus := upstreamconnectionFields[6].Descriptor()
+	// upstreamconnection.DefaultStatus holds the default value on creation for the status field.
+	upstreamconnection.DefaultStatus = upstreamconnectionDescStatus.Default.(string)
+	// upstreamconnection.StatusValidator is a validator for the "status" field. It is called by the builders before save.
+	upstreamconnection.StatusValidator = upstreamconnectionDescStatus.Validators[0].(func(string) error)
 	usagecleanuptaskMixin := schema.UsageCleanupTask{}.Mixin()
 	usagecleanuptaskMixinFields0 := usagecleanuptaskMixin[0].Fields()
 	_ = usagecleanuptaskMixinFields0

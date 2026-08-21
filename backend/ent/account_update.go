@@ -12,9 +12,11 @@ import (
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
 	"github.com/Wei-Shaw/sub2api/ent/account"
+	"github.com/Wei-Shaw/sub2api/ent/accountendpointprobe"
 	"github.com/Wei-Shaw/sub2api/ent/group"
 	"github.com/Wei-Shaw/sub2api/ent/predicate"
 	"github.com/Wei-Shaw/sub2api/ent/proxy"
+	"github.com/Wei-Shaw/sub2api/ent/upstreamconnection"
 	"github.com/Wei-Shaw/sub2api/ent/usagelog"
 )
 
@@ -564,6 +566,87 @@ func (_u *AccountUpdate) SetNillableQuotaDimension(v *account.QuotaDimension) *A
 	return _u
 }
 
+// SetConnectionID sets the "connection_id" field.
+func (_u *AccountUpdate) SetConnectionID(v int64) *AccountUpdate {
+	_u.mutation.SetConnectionID(v)
+	return _u
+}
+
+// SetNillableConnectionID sets the "connection_id" field if the given value is not nil.
+func (_u *AccountUpdate) SetNillableConnectionID(v *int64) *AccountUpdate {
+	if v != nil {
+		_u.SetConnectionID(*v)
+	}
+	return _u
+}
+
+// ClearConnectionID clears the value of the "connection_id" field.
+func (_u *AccountUpdate) ClearConnectionID() *AccountUpdate {
+	_u.mutation.ClearConnectionID()
+	return _u
+}
+
+// SetProtocol sets the "protocol" field.
+func (_u *AccountUpdate) SetProtocol(v string) *AccountUpdate {
+	_u.mutation.SetProtocol(v)
+	return _u
+}
+
+// SetNillableProtocol sets the "protocol" field if the given value is not nil.
+func (_u *AccountUpdate) SetNillableProtocol(v *string) *AccountUpdate {
+	if v != nil {
+		_u.SetProtocol(*v)
+	}
+	return _u
+}
+
+// ClearProtocol clears the value of the "protocol" field.
+func (_u *AccountUpdate) ClearProtocol() *AccountUpdate {
+	_u.mutation.ClearProtocol()
+	return _u
+}
+
+// SetEndpointPath sets the "endpoint_path" field.
+func (_u *AccountUpdate) SetEndpointPath(v string) *AccountUpdate {
+	_u.mutation.SetEndpointPath(v)
+	return _u
+}
+
+// SetNillableEndpointPath sets the "endpoint_path" field if the given value is not nil.
+func (_u *AccountUpdate) SetNillableEndpointPath(v *string) *AccountUpdate {
+	if v != nil {
+		_u.SetEndpointPath(*v)
+	}
+	return _u
+}
+
+// ClearEndpointPath clears the value of the "endpoint_path" field.
+func (_u *AccountUpdate) ClearEndpointPath() *AccountUpdate {
+	_u.mutation.ClearEndpointPath()
+	return _u
+}
+
+// SetConfigVersion sets the "config_version" field.
+func (_u *AccountUpdate) SetConfigVersion(v int64) *AccountUpdate {
+	_u.mutation.ResetConfigVersion()
+	_u.mutation.SetConfigVersion(v)
+	return _u
+}
+
+// SetNillableConfigVersion sets the "config_version" field if the given value is not nil.
+func (_u *AccountUpdate) SetNillableConfigVersion(v *int64) *AccountUpdate {
+	if v != nil {
+		_u.SetConfigVersion(*v)
+	}
+	return _u
+}
+
+// AddConfigVersion adds value to the "config_version" field.
+func (_u *AccountUpdate) AddConfigVersion(v int64) *AccountUpdate {
+	_u.mutation.AddConfigVersion(v)
+	return _u
+}
+
 // AddGroupIDs adds the "groups" edge to the Group entity by IDs.
 func (_u *AccountUpdate) AddGroupIDs(ids ...int64) *AccountUpdate {
 	_u.mutation.AddGroupIDs(ids...)
@@ -582,6 +665,26 @@ func (_u *AccountUpdate) AddGroups(v ...*Group) *AccountUpdate {
 // SetProxy sets the "proxy" edge to the Proxy entity.
 func (_u *AccountUpdate) SetProxy(v *Proxy) *AccountUpdate {
 	return _u.SetProxyID(v.ID)
+}
+
+// SetConnection sets the "connection" edge to the UpstreamConnection entity.
+func (_u *AccountUpdate) SetConnection(v *UpstreamConnection) *AccountUpdate {
+	return _u.SetConnectionID(v.ID)
+}
+
+// AddEndpointProbeIDs adds the "endpoint_probes" edge to the AccountEndpointProbe entity by IDs.
+func (_u *AccountUpdate) AddEndpointProbeIDs(ids ...int64) *AccountUpdate {
+	_u.mutation.AddEndpointProbeIDs(ids...)
+	return _u
+}
+
+// AddEndpointProbes adds the "endpoint_probes" edges to the AccountEndpointProbe entity.
+func (_u *AccountUpdate) AddEndpointProbes(v ...*AccountEndpointProbe) *AccountUpdate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddEndpointProbeIDs(ids...)
 }
 
 // SetParentID sets the "parent" edge to the Account entity by ID.
@@ -663,6 +766,33 @@ func (_u *AccountUpdate) RemoveGroups(v ...*Group) *AccountUpdate {
 func (_u *AccountUpdate) ClearProxy() *AccountUpdate {
 	_u.mutation.ClearProxy()
 	return _u
+}
+
+// ClearConnection clears the "connection" edge to the UpstreamConnection entity.
+func (_u *AccountUpdate) ClearConnection() *AccountUpdate {
+	_u.mutation.ClearConnection()
+	return _u
+}
+
+// ClearEndpointProbes clears all "endpoint_probes" edges to the AccountEndpointProbe entity.
+func (_u *AccountUpdate) ClearEndpointProbes() *AccountUpdate {
+	_u.mutation.ClearEndpointProbes()
+	return _u
+}
+
+// RemoveEndpointProbeIDs removes the "endpoint_probes" edge to AccountEndpointProbe entities by IDs.
+func (_u *AccountUpdate) RemoveEndpointProbeIDs(ids ...int64) *AccountUpdate {
+	_u.mutation.RemoveEndpointProbeIDs(ids...)
+	return _u
+}
+
+// RemoveEndpointProbes removes "endpoint_probes" edges to AccountEndpointProbe entities.
+func (_u *AccountUpdate) RemoveEndpointProbes(v ...*AccountEndpointProbe) *AccountUpdate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveEndpointProbeIDs(ids...)
 }
 
 // ClearParent clears the "parent" edge to the Account entity.
@@ -785,6 +915,11 @@ func (_u *AccountUpdate) check() error {
 	if v, ok := _u.mutation.QuotaDimension(); ok {
 		if err := account.QuotaDimensionValidator(v); err != nil {
 			return &ValidationError{Name: "quota_dimension", err: fmt.Errorf(`ent: validator failed for field "Account.quota_dimension": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.Protocol(); ok {
+		if err := account.ProtocolValidator(v); err != nil {
+			return &ValidationError{Name: "protocol", err: fmt.Errorf(`ent: validator failed for field "Account.protocol": %w`, err)}
 		}
 	}
 	return nil
@@ -946,6 +1081,24 @@ func (_u *AccountUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if value, ok := _u.mutation.QuotaDimension(); ok {
 		_spec.SetField(account.FieldQuotaDimension, field.TypeEnum, value)
 	}
+	if value, ok := _u.mutation.Protocol(); ok {
+		_spec.SetField(account.FieldProtocol, field.TypeString, value)
+	}
+	if _u.mutation.ProtocolCleared() {
+		_spec.ClearField(account.FieldProtocol, field.TypeString)
+	}
+	if value, ok := _u.mutation.EndpointPath(); ok {
+		_spec.SetField(account.FieldEndpointPath, field.TypeString, value)
+	}
+	if _u.mutation.EndpointPathCleared() {
+		_spec.ClearField(account.FieldEndpointPath, field.TypeString)
+	}
+	if value, ok := _u.mutation.ConfigVersion(); ok {
+		_spec.SetField(account.FieldConfigVersion, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedConfigVersion(); ok {
+		_spec.AddField(account.FieldConfigVersion, field.TypeInt64, value)
+	}
 	if _u.mutation.GroupsCleared() {
 		edge := &sqlgraph.EdgeSpec{
 			Rel:     sqlgraph.M2M,
@@ -1025,6 +1178,80 @@ func (_u *AccountUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(proxy.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.ConnectionCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: false,
+			Table:   account.ConnectionTable,
+			Columns: []string{account.ConnectionColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(upstreamconnection.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.ConnectionIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: false,
+			Table:   account.ConnectionTable,
+			Columns: []string{account.ConnectionColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(upstreamconnection.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.EndpointProbesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   account.EndpointProbesTable,
+			Columns: []string{account.EndpointProbesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(accountendpointprobe.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedEndpointProbesIDs(); len(nodes) > 0 && !_u.mutation.EndpointProbesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   account.EndpointProbesTable,
+			Columns: []string{account.EndpointProbesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(accountendpointprobe.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.EndpointProbesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   account.EndpointProbesTable,
+			Columns: []string{account.EndpointProbesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(accountendpointprobe.FieldID, field.TypeInt64),
 			},
 		}
 		for _, k := range nodes {
@@ -1704,6 +1931,87 @@ func (_u *AccountUpdateOne) SetNillableQuotaDimension(v *account.QuotaDimension)
 	return _u
 }
 
+// SetConnectionID sets the "connection_id" field.
+func (_u *AccountUpdateOne) SetConnectionID(v int64) *AccountUpdateOne {
+	_u.mutation.SetConnectionID(v)
+	return _u
+}
+
+// SetNillableConnectionID sets the "connection_id" field if the given value is not nil.
+func (_u *AccountUpdateOne) SetNillableConnectionID(v *int64) *AccountUpdateOne {
+	if v != nil {
+		_u.SetConnectionID(*v)
+	}
+	return _u
+}
+
+// ClearConnectionID clears the value of the "connection_id" field.
+func (_u *AccountUpdateOne) ClearConnectionID() *AccountUpdateOne {
+	_u.mutation.ClearConnectionID()
+	return _u
+}
+
+// SetProtocol sets the "protocol" field.
+func (_u *AccountUpdateOne) SetProtocol(v string) *AccountUpdateOne {
+	_u.mutation.SetProtocol(v)
+	return _u
+}
+
+// SetNillableProtocol sets the "protocol" field if the given value is not nil.
+func (_u *AccountUpdateOne) SetNillableProtocol(v *string) *AccountUpdateOne {
+	if v != nil {
+		_u.SetProtocol(*v)
+	}
+	return _u
+}
+
+// ClearProtocol clears the value of the "protocol" field.
+func (_u *AccountUpdateOne) ClearProtocol() *AccountUpdateOne {
+	_u.mutation.ClearProtocol()
+	return _u
+}
+
+// SetEndpointPath sets the "endpoint_path" field.
+func (_u *AccountUpdateOne) SetEndpointPath(v string) *AccountUpdateOne {
+	_u.mutation.SetEndpointPath(v)
+	return _u
+}
+
+// SetNillableEndpointPath sets the "endpoint_path" field if the given value is not nil.
+func (_u *AccountUpdateOne) SetNillableEndpointPath(v *string) *AccountUpdateOne {
+	if v != nil {
+		_u.SetEndpointPath(*v)
+	}
+	return _u
+}
+
+// ClearEndpointPath clears the value of the "endpoint_path" field.
+func (_u *AccountUpdateOne) ClearEndpointPath() *AccountUpdateOne {
+	_u.mutation.ClearEndpointPath()
+	return _u
+}
+
+// SetConfigVersion sets the "config_version" field.
+func (_u *AccountUpdateOne) SetConfigVersion(v int64) *AccountUpdateOne {
+	_u.mutation.ResetConfigVersion()
+	_u.mutation.SetConfigVersion(v)
+	return _u
+}
+
+// SetNillableConfigVersion sets the "config_version" field if the given value is not nil.
+func (_u *AccountUpdateOne) SetNillableConfigVersion(v *int64) *AccountUpdateOne {
+	if v != nil {
+		_u.SetConfigVersion(*v)
+	}
+	return _u
+}
+
+// AddConfigVersion adds value to the "config_version" field.
+func (_u *AccountUpdateOne) AddConfigVersion(v int64) *AccountUpdateOne {
+	_u.mutation.AddConfigVersion(v)
+	return _u
+}
+
 // AddGroupIDs adds the "groups" edge to the Group entity by IDs.
 func (_u *AccountUpdateOne) AddGroupIDs(ids ...int64) *AccountUpdateOne {
 	_u.mutation.AddGroupIDs(ids...)
@@ -1722,6 +2030,26 @@ func (_u *AccountUpdateOne) AddGroups(v ...*Group) *AccountUpdateOne {
 // SetProxy sets the "proxy" edge to the Proxy entity.
 func (_u *AccountUpdateOne) SetProxy(v *Proxy) *AccountUpdateOne {
 	return _u.SetProxyID(v.ID)
+}
+
+// SetConnection sets the "connection" edge to the UpstreamConnection entity.
+func (_u *AccountUpdateOne) SetConnection(v *UpstreamConnection) *AccountUpdateOne {
+	return _u.SetConnectionID(v.ID)
+}
+
+// AddEndpointProbeIDs adds the "endpoint_probes" edge to the AccountEndpointProbe entity by IDs.
+func (_u *AccountUpdateOne) AddEndpointProbeIDs(ids ...int64) *AccountUpdateOne {
+	_u.mutation.AddEndpointProbeIDs(ids...)
+	return _u
+}
+
+// AddEndpointProbes adds the "endpoint_probes" edges to the AccountEndpointProbe entity.
+func (_u *AccountUpdateOne) AddEndpointProbes(v ...*AccountEndpointProbe) *AccountUpdateOne {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddEndpointProbeIDs(ids...)
 }
 
 // SetParentID sets the "parent" edge to the Account entity by ID.
@@ -1803,6 +2131,33 @@ func (_u *AccountUpdateOne) RemoveGroups(v ...*Group) *AccountUpdateOne {
 func (_u *AccountUpdateOne) ClearProxy() *AccountUpdateOne {
 	_u.mutation.ClearProxy()
 	return _u
+}
+
+// ClearConnection clears the "connection" edge to the UpstreamConnection entity.
+func (_u *AccountUpdateOne) ClearConnection() *AccountUpdateOne {
+	_u.mutation.ClearConnection()
+	return _u
+}
+
+// ClearEndpointProbes clears all "endpoint_probes" edges to the AccountEndpointProbe entity.
+func (_u *AccountUpdateOne) ClearEndpointProbes() *AccountUpdateOne {
+	_u.mutation.ClearEndpointProbes()
+	return _u
+}
+
+// RemoveEndpointProbeIDs removes the "endpoint_probes" edge to AccountEndpointProbe entities by IDs.
+func (_u *AccountUpdateOne) RemoveEndpointProbeIDs(ids ...int64) *AccountUpdateOne {
+	_u.mutation.RemoveEndpointProbeIDs(ids...)
+	return _u
+}
+
+// RemoveEndpointProbes removes "endpoint_probes" edges to AccountEndpointProbe entities.
+func (_u *AccountUpdateOne) RemoveEndpointProbes(v ...*AccountEndpointProbe) *AccountUpdateOne {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveEndpointProbeIDs(ids...)
 }
 
 // ClearParent clears the "parent" edge to the Account entity.
@@ -1938,6 +2293,11 @@ func (_u *AccountUpdateOne) check() error {
 	if v, ok := _u.mutation.QuotaDimension(); ok {
 		if err := account.QuotaDimensionValidator(v); err != nil {
 			return &ValidationError{Name: "quota_dimension", err: fmt.Errorf(`ent: validator failed for field "Account.quota_dimension": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.Protocol(); ok {
+		if err := account.ProtocolValidator(v); err != nil {
+			return &ValidationError{Name: "protocol", err: fmt.Errorf(`ent: validator failed for field "Account.protocol": %w`, err)}
 		}
 	}
 	return nil
@@ -2116,6 +2476,24 @@ func (_u *AccountUpdateOne) sqlSave(ctx context.Context) (_node *Account, err er
 	if value, ok := _u.mutation.QuotaDimension(); ok {
 		_spec.SetField(account.FieldQuotaDimension, field.TypeEnum, value)
 	}
+	if value, ok := _u.mutation.Protocol(); ok {
+		_spec.SetField(account.FieldProtocol, field.TypeString, value)
+	}
+	if _u.mutation.ProtocolCleared() {
+		_spec.ClearField(account.FieldProtocol, field.TypeString)
+	}
+	if value, ok := _u.mutation.EndpointPath(); ok {
+		_spec.SetField(account.FieldEndpointPath, field.TypeString, value)
+	}
+	if _u.mutation.EndpointPathCleared() {
+		_spec.ClearField(account.FieldEndpointPath, field.TypeString)
+	}
+	if value, ok := _u.mutation.ConfigVersion(); ok {
+		_spec.SetField(account.FieldConfigVersion, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedConfigVersion(); ok {
+		_spec.AddField(account.FieldConfigVersion, field.TypeInt64, value)
+	}
 	if _u.mutation.GroupsCleared() {
 		edge := &sqlgraph.EdgeSpec{
 			Rel:     sqlgraph.M2M,
@@ -2195,6 +2573,80 @@ func (_u *AccountUpdateOne) sqlSave(ctx context.Context) (_node *Account, err er
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(proxy.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.ConnectionCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: false,
+			Table:   account.ConnectionTable,
+			Columns: []string{account.ConnectionColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(upstreamconnection.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.ConnectionIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: false,
+			Table:   account.ConnectionTable,
+			Columns: []string{account.ConnectionColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(upstreamconnection.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.EndpointProbesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   account.EndpointProbesTable,
+			Columns: []string{account.EndpointProbesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(accountendpointprobe.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedEndpointProbesIDs(); len(nodes) > 0 && !_u.mutation.EndpointProbesCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   account.EndpointProbesTable,
+			Columns: []string{account.EndpointProbesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(accountendpointprobe.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.EndpointProbesIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   account.EndpointProbesTable,
+			Columns: []string{account.EndpointProbesColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(accountendpointprobe.FieldID, field.TypeInt64),
 			},
 		}
 		for _, k := range nodes {
