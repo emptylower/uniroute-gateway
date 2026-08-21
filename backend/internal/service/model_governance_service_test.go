@@ -321,6 +321,7 @@ func TestProvideModelGovernanceService_WiresAtomicRecorder(t *testing.T) {
 		NewModelClassifier(),
 		NewPublicationEvaluator(),
 		nil,
+		nil, nil, nil,
 	)
 	// Use type assertion to verify internal config wired AtomicRecorder
 	mgs, ok := svc.(*modelGovernanceService)
@@ -339,6 +340,7 @@ func TestProvideModelGovernanceService_WiresAtomicRecorder(t *testing.T) {
 		NewModelClassifier(),
 		NewPublicationEvaluator(),
 		nil,
+		nil, nil, nil,
 	)
 	mgs2, ok := svc2.(*modelGovernanceService)
 	if !ok {
