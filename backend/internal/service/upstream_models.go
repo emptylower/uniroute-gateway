@@ -379,8 +379,13 @@ func (s *AccountTestService) resolveUpstreamRequestMaterial(ctx context.Context,
 func (s *AccountTestService) buildUpstreamModelsRequest(ctx context.Context, account *Account) (*http.Request, error) {
 	// Phase 4: resolve connection base URL/credential/proxy independently from provider/protocol/endpoint
 	// This keeps discovery non-authoritative and preserves wildcard observations.
-	if _, err := s.resolveUpstreamRequestMaterial(ctx, account); err != nil {
+	material, err := s.resolveUpstreamRequestMaterial(ctx, account)
+	if err != nil {
 		return nil, err
+	}
+	// If connection provides base URL, use it (overrides account-derived URL) – R3 ②.
+	if material.BaseURL != "" && material.Connection != nil {
+		return s.buildRequestFromMaterial(ctx, material, account)
 	}
 	switch {
 	case account.Platform == PlatformAntigravity:
@@ -398,6 +403,27 @@ func (s *AccountTestService) buildUpstreamModelsRequest(ctx context.Context, acc
 			fmt.Sprintf("Unsupported platform for upstream model sync: %s", account.Platform), nil,
 		)
 	}
+}
+
+func (s *AccountTestService) buildRequestFromMaterial(ctx context.Context, material *UpstreamRequestMaterial, account *Account) (*http.Request, error) {
+	// Connection-sourced material takes precedence; legacy per-platform switches are fallback only.
+	baseURL := strings.TrimRight(material.BaseURL, "/")
+	endpoint := material.Endpoint
+	if endpoint == "" {
+		endpoint = "/v1/models"
+	}
+	fullURL := baseURL + endpoint
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fullURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	// Credential from connection is encrypted at rest; for probe we use account credential as fallback
+	// (plaintext copy still exists in reuse-created accounts until Phase 6 removes it – see plan deferral).
+	if cred, ok := account.Credentials["api_key"].(string); ok && cred != "" {
+		req.Header.Set("Authorization", "Bearer "+cred)
+		req.Header.Set("x-api-key", cred)
+	}
+	return req, nil
 }
 
 func (s *AccountTestService) buildGrokUpstreamModelsRequest(ctx context.Context, account *Account) (*http.Request, error) {

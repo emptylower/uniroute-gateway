@@ -291,7 +291,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	modelGovernanceService := service.ProvideModelGovernanceService(modelRegistryService, modelObservationRepository, shadowDecisionRepository, modelClassifier, publicationEvaluator, endpointProbeChecker, channelPriceChecker, billingMappingChecker, resourceChecker)
 	upstreamBillingProbeService := service.ProvideUpstreamBillingProbeService(accountRepository, accountTestService, settingService, leaderLockCache, db)
 	ollamaCloudUsageService := service.ProvideOllamaCloudUsageService(accountRepository, httpUpstream, settingService, secretEncryptor, configConfig, leaderLockCache, db)
-	accountEndpointProbeService := service.ProvideAccountEndpointProbeService(accountEndpointProbeRepository)
+	accountEndpointProbeService := service.ProvideAccountEndpointProbeService(accountEndpointProbeRepository, upstreamConnectionRepository)
 	modelPublicationInputLoader := service.ProvideModelPublicationInputLoader(accountEndpointProbeService, modelRegistryService, accountRepository, upstreamConnectionRepository, channelPriceChecker, billingMappingChecker, resourceChecker)
 	modelQuarantineService := service.ProvideModelQuarantineService(modelAuthorizationStore, modelPublicationInputLoader, publicationEvaluator, db, channelRepository)
 	modelAuthorizationActivationService := service.ProvideModelAuthorizationActivationService(db, governanceModeProvider)

@@ -677,8 +677,10 @@ func ProvideAPIKeyService(
 	return svc
 }
 
-func ProvideAccountEndpointProbeService(repo AccountEndpointProbeRepository) *AccountEndpointProbeService {
-	return NewAccountEndpointProbeService(repo, nil)
+func ProvideAccountEndpointProbeService(repo AccountEndpointProbeRepository, connRepo UpstreamConnectionRepository) *AccountEndpointProbeService {
+	svc := NewAccountEndpointProbeService(repo, nil)
+	svc.SetConnectionRepository(connRepo)
+	return svc
 }
 
 func ProvideUpstreamConnectionService(repo UpstreamConnectionRepository, encryptor SecretEncryptor) *UpstreamConnectionService {

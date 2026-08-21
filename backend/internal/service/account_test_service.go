@@ -64,6 +64,13 @@ func isOpenAIImageModel(model string) bool {
 }
 
 // AccountTestService handles account testing operations
+type upstreamMaterialKey struct{}
+
+func upstreamMaterialFromContext(ctx context.Context) (*UpstreamRequestMaterial, bool) {
+	m, ok := ctx.Value(upstreamMaterialKey{}).(*UpstreamRequestMaterial)
+	return m, ok
+}
+
 type AccountTestService struct {
 	accountRepo                AccountRepository
 	geminiTokenProvider        *GeminiTokenProvider
@@ -216,8 +223,13 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 		return s.sendErrorAndEnd(c, "Account not found")
 	}
 	// Task 4: resolve connection base URL/credential/proxy and account provider/protocol/endpoint independently
-	if _, err := s.resolveUpstreamRequestMaterial(ctx, account); err != nil {
+	material, err := s.resolveUpstreamRequestMaterial(ctx, account)
+	if err != nil {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to resolve request material: %s", err.Error()))
+	}
+	if material.BaseURL != "" {
+		ctx = context.WithValue(ctx, upstreamMaterialKey{}, material)
+		c.Request = c.Request.WithContext(ctx)
 	}
 
 	// Route to platform-specific test method (protocol-aware, preserves wildcard observations)
@@ -280,6 +292,9 @@ func (s *AccountTestService) testClaudeAccountConnection(c *gin.Context, account
 		}
 
 		baseURL := account.GetBaseURL()
+		if m, ok := upstreamMaterialFromContext(ctx); ok && m.BaseURL != "" {
+			baseURL = m.BaseURL
+		}
 		if baseURL == "" {
 			baseURL = "https://api.anthropic.com"
 		}
@@ -599,6 +614,9 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 		}
 
 		baseURL := credentialAccount.GetOpenAIBaseURL()
+		if m, ok := upstreamMaterialFromContext(ctx); ok && m.BaseURL != "" {
+			baseURL = m.BaseURL
+		}
 		if baseURL == "" {
 			baseURL = "https://api.openai.com"
 		}
