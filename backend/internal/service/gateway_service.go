@@ -715,6 +715,85 @@ type GatewayService struct {
 	userPlatformQuotaRepo UserPlatformQuotaRepository
 	exchangeRates         *ExchangeRateService
 	canonicalWallet       *CanonicalWalletBridge
+	publicationStore      ModelAuthorizationStore
+}
+
+func (s *GatewayService) SetPublicationStore(store ModelAuthorizationStore) {
+	if s != nil {
+		s.publicationStore = store
+	}
+}
+
+func (s *GatewayService) isEnforceMode() bool {
+	return s != nil && s.cfg != nil && s.cfg.ModelGovernance.AuthorizationMode == "enforce"
+}
+
+func (s *GatewayService) isModelEligibleForDispatch(ctx context.Context, model string) bool {
+	if !s.isEnforceMode() || s.publicationStore == nil || model == "" {
+		return true
+	}
+	canonical := strings.ToLower(strings.TrimSpace(model))
+	if canonical == "" || strings.Contains(canonical, "*") {
+		return false
+	}
+	eligible, err := s.publicationStore.IsCanonicalEligible(ctx, canonical)
+	if err != nil {
+		return false
+	}
+	return eligible
+}
+
+func (s *GatewayService) isModelEligibleForGroup(ctx context.Context, groupID *int64, model string) bool {
+	if !s.isEnforceMode() || s.publicationStore == nil || model == "" {
+		return true
+	}
+	canonical := strings.ToLower(strings.TrimSpace(model))
+	if canonical == "" || strings.Contains(canonical, "*") {
+		return false
+	}
+	if groupID == nil {
+		eligible, err := s.publicationStore.IsCanonicalEligible(ctx, canonical)
+		if err != nil {
+			return false
+		}
+		return eligible
+	}
+	if s.channelService == nil {
+		eligible, err := s.publicationStore.IsCanonicalEligible(ctx, canonical)
+		if err != nil {
+			return false
+		}
+		return eligible
+	}
+	channels, err := s.channelService.ListAvailable(ctx)
+	if err != nil {
+		return false
+	}
+	var groupChannels []int64
+	for _, ch := range channels {
+		if ch.Status != StatusActive {
+			continue
+		}
+		for _, ref := range ch.Groups {
+			if ref.ID == *groupID {
+				groupChannels = append(groupChannels, ch.ID)
+			}
+		}
+	}
+	if len(groupChannels) == 0 {
+		eligible, err := s.publicationStore.IsCanonicalEligible(ctx, canonical)
+		if err != nil {
+			return false
+		}
+		return eligible
+	}
+	for _, chID := range groupChannels {
+		eligible, err := s.publicationStore.IsChannelModelEligible(ctx, chID, canonical)
+		if err == nil && eligible {
+			return true
+		}
+	}
+	return false
 }
 
 // NewGatewayService creates a new GatewayService

@@ -290,6 +290,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	userMsgQueueCache := repository.NewUserMsgQueueCache(redisClient)
 	userMessageQueueService := service.ProvideUserMessageQueueService(userMsgQueueCache, rpmCache, configConfig)
 	modelAuthorizationStore := repository.NewModelPublicationRepository(db)
+	gatewayService.SetPublicationStore(modelAuthorizationStore)
 	channelRoutingSelector := service.ProvideChannelRoutingSelector(channelService, apiKeyService, channelPreferenceService, configConfig, modelAuthorizationStore)
 	legacyEngine := securityaudit.NewLegacyModerationAdapter(contentModerationService)
 	coordinator := securityaudit.NewCoordinator(legacyEngine, promptService)

@@ -38,6 +38,13 @@ func (f *fakePublicationStore) IsChannelModelEligible(ctx context.Context, chann
 	}
 	return true, nil
 }
+func (f *fakePublicationStore) IsCanonicalEligible(ctx context.Context, canonicalModelID string) (bool, error) {
+	if f.channelEligibleFn != nil {
+		// Reuse channel eligible fn for global check: test with channelID 0 meaning global
+		return f.channelEligibleFn(ctx, 0, canonicalModelID)
+	}
+	return true, nil
+}
 
 func TestModelPublicationService_DecisionCachesAndInvalidates(t *testing.T) {
 	fake := &fakePublicationStore{

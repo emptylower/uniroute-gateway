@@ -3,6 +3,8 @@ package service
 import (
 	"fmt"
 	"strings"
+
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 )
 
 // Governed providers are exactly anthropic, openai, gemini, grok.
@@ -163,3 +165,6 @@ func NormalizeModelID(modelID string) string {
 func IsWildcardModelID(modelID string) bool {
 	return strings.Contains(modelID, "*")
 }
+
+// ErrModelNotAvailableOnThisRoute is the stable denial code for governance enforcement.
+var ErrModelNotAvailableOnThisRoute = infraerrors.NotFound("model_not_available_on_this_route", "model not available on this route")

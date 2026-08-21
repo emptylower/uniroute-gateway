@@ -73,6 +73,9 @@ func (s *GatewayService) SelectAccountForModelWithExclusions(ctx context.Context
 			"model", requestedModel)
 		return nil, fmt.Errorf("%w supporting model: %s (channel pricing restriction)", ErrNoAvailableAccounts, requestedModel)
 	}
+	if requestedModel != "" && !s.isModelEligibleForGroup(ctx, groupID, requestedModel) {
+		return nil, ErrModelNotAvailableOnThisRoute
+	}
 
 	// anthropic/gemini 分组支持混合调度（包含启用了 mixed_scheduling 的 antigravity 账户）
 	// 注意：强制平台模式不走混合调度
@@ -107,6 +110,10 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 		"model", requestedModel,
 		"session", shortSessionHash(sessionHash),
 		"excluded_ids", excludedIDsList)
+
+	if requestedModel != "" && !s.isModelEligibleForDispatch(ctx, requestedModel) {
+		return nil, ErrModelNotAvailableOnThisRoute
+	}
 
 	cfg := s.schedulingConfig()
 
@@ -149,6 +156,9 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 		"has_concurrency_svc", s.concurrencyService != nil,
 		"excluded_count", len(excludedIDs),
 	)
+	if requestedModel != "" && !s.isModelEligibleForGroup(ctx, groupID, requestedModel) {
+		return nil, ErrModelNotAvailableOnThisRoute
+	}
 
 	if s.debugModelRoutingEnabled() && requestedModel != "" {
 		groupPlatform := ""

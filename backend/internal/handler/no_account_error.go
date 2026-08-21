@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -139,4 +140,16 @@ func openAICompatibleSelectionErrorForLog(err error, platform string) error {
 		return err
 	}
 	return fmt.Errorf("%s", message)
+}
+
+func GovernanceDenialClassification() noAccountErrorClassification {
+	return noAccountErrorClassification{
+		Status:  http.StatusNotFound,
+		ErrType: "model_not_available_on_this_route",
+		Message: "model not available on this route",
+	}
+}
+
+func IsGovernanceDenial(err error) bool {
+	return errors.Is(err, service.ErrModelNotAvailableOnThisRoute)
 }

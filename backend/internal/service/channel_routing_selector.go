@@ -302,6 +302,9 @@ func (s *ChannelRoutingSelector) Candidates(ctx context.Context, apiKey *APIKey,
 		}
 	}
 	if len(candidates) == 0 {
+		if s.isEnforceMode() && model != "" && s.publicationStore != nil {
+			return nil, ErrModelNotAvailableOnThisRoute
+		}
 		return nil, ErrNoChannelRoutingCandidate
 	}
 	sort.SliceStable(candidates, func(i, j int) bool {
@@ -377,6 +380,9 @@ func (s *ChannelRoutingSelector) automaticCandidates(
 		})
 	}
 	if len(candidates) == 0 {
+		if s.isEnforceMode() && model != "" && s.publicationStore != nil {
+			return nil, ErrModelNotAvailableOnThisRoute
+		}
 		return nil, ErrNoChannelRoutingCandidate
 	}
 	sort.SliceStable(candidates, func(i, j int) bool {

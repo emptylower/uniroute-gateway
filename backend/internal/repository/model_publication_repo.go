@@ -59,6 +59,21 @@ func (r *modelPublicationRepository) IsChannelModelEligible(ctx context.Context,
 	return exists, nil
 }
 
+func (r *modelPublicationRepository) IsCanonicalEligible(ctx context.Context, canonicalModelID string) (bool, error) {
+	if r == nil || r.db == nil {
+		return false, errors.New("model publication repository is not configured")
+	}
+	if strings.TrimSpace(canonicalModelID) == "" {
+		return false, fmt.Errorf("canonical model id is required")
+	}
+	var exists bool
+	err := r.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM model_publication_eligibility WHERE canonical_model_id = $1 AND eligibility = 'eligible')`, strings.ToLower(strings.TrimSpace(canonicalModelID))).Scan(&exists)
+	if err != nil {
+		return false, err
+	}
+	return exists, nil
+}
+
 func (r *modelPublicationRepository) RecomputeBatch(ctx context.Context, input service.RecomputeInput) (err error) {
 	if r == nil || r.db == nil {
 		return errors.New("model publication repository is not configured")
