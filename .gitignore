@@ -137,6 +137,8 @@ docs/*
 !docs/ADMIN_PAYMENT_INTEGRATION_API.md
 !docs/ASYNC_IMAGE_TASKS.md
 !docs/canonical-wallet-shadow-boundary.md
+!docs/model-governance-phase-2-acceptance-report.md
+!docs/model-governance-phase-2-second-review.md
 !docs/legal/
 !docs/legal/*.md
 .serena/
