@@ -50,14 +50,16 @@ func ProvideAdminHandlers(
 	modelGovernanceService service.ModelGovernanceService,
 	upstreamBillingProbe *service.UpstreamBillingProbeService,
 	ollamaCloudUsage *service.OllamaCloudUsageService,
+	quarantineService *service.ModelQuarantineService,
+	activationService *service.ModelAuthorizationActivationService,
 ) *AdminHandlers {
 	accountHandler.SetUpstreamBillingProbeService(upstreamBillingProbe)
 	accountHandler.SetOllamaCloudUsageService(ollamaCloudUsage)
 	accountHandler.SetModelGovernanceService(modelGovernanceService)
 	probeHandler := admin.NewModelGovernanceProbeHandler(nil)
 	connHandler := admin.NewModelGovernanceConnectionHandler(nil, nil, nil)
-	quarantineHandler := admin.NewModelQuarantineHandler(nil)
-	activationHandler := admin.NewModelAuthorizationActivationHandler(nil)
+	quarantineHandler := admin.NewModelQuarantineHandler(quarantineService)
+	activationHandler := admin.NewModelAuthorizationActivationHandler(activationService)
 	return &AdminHandlers{
 		Dashboard:                 dashboardHandler,
 		User:                      userHandler,
