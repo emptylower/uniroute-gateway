@@ -12,13 +12,21 @@ import (
 
 func TestModelPublicationRepoIntegration_RecomputeWritesProjectionAndEventsAtomically(t *testing.T) {
 	ctx := context.Background()
+	// Repeat-safe: clean any rows left by a prior failed run with the same fixed IDs.
+	_, _ = integrationDB.ExecContext(ctx, `DELETE FROM model_publication_events WHERE batch_id IN ('batch-int-1','batch-q-1')`)
+	_, _ = integrationDB.ExecContext(ctx, `DELETE FROM model_publication_eligibility WHERE canonical_model_id='claude-opus-4-6' AND batch_id IN ('batch-int-1','batch-q-1')`)
+	_, _ = integrationDB.ExecContext(ctx, `DELETE FROM governance_idempotency_records WHERE idempotency_key IN ('idem-int-1','idem-q-1','idem-stale-reg','idem-stale-ch')`)
+	// Also clean any leftover channels/accounts with the test's fixed prefix (from a prior crash before defer).
+	_, _ = integrationDB.ExecContext(ctx, `DELETE FROM channels WHERE name LIKE 'pub-int-test-ch-%'`)
+	_, _ = integrationDB.ExecContext(ctx, `DELETE FROM accounts WHERE name LIKE 'pub-int-test-acc-%'`)
 	repo := NewModelPublicationRepository(integrationDB).(*modelPublicationRepository)
-	// Create a channel and account for test
+	// Create a channel and account for test with unique-per-run suffix to avoid collision if cleanup missed.
+	uniqueSuffix := t.Name() // t.Name() is stable per test, but we add cleanup above for crash safety
 	var channelID int64
-	require.NoError(t, integrationDB.QueryRowContext(ctx, `INSERT INTO channels (name, status) VALUES ($1, 'active') RETURNING id`, "pub-int-test-ch-"+t.Name()).Scan(&channelID))
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `INSERT INTO channels (name, status) VALUES ($1, 'active') RETURNING id`, "pub-int-test-ch-"+uniqueSuffix).Scan(&channelID))
 	defer func() { _, _ = integrationDB.ExecContext(ctx, `DELETE FROM channels WHERE id = $1`, channelID) }()
 	var accountID int64
-	require.NoError(t, integrationDB.QueryRowContext(ctx, `INSERT INTO accounts (name, platform, type, status, schedulable) VALUES ($1, 'anthropic', 'apikey', 'active', true) RETURNING id`, "pub-int-test-acc-"+t.Name()).Scan(&accountID))
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `INSERT INTO accounts (name, platform, type, status, schedulable) VALUES ($1, 'anthropic', 'apikey', 'active', true) RETURNING id`, "pub-int-test-acc-"+uniqueSuffix).Scan(&accountID))
 	defer func() { _, _ = integrationDB.ExecContext(ctx, `DELETE FROM accounts WHERE id = $1`, accountID) }()
 	// Ensure registry version exists
 	var registryVersion int64 = 1
