@@ -23,7 +23,14 @@ type ActivationInput struct {
 
 // ModelAuthorizationActivationService gates enforce activation.
 type ModelAuthorizationActivationService struct {
-	db *sql.DB
+	db           *sql.DB
+	modeProvider GovernanceModeProvider
+}
+
+func (s *ModelAuthorizationActivationService) SetModeProvider(p GovernanceModeProvider) {
+	if s != nil {
+		s.modeProvider = p
+	}
 }
 
 // NewModelAuthorizationActivationService creates the service.
@@ -90,6 +97,50 @@ func (s *ModelAuthorizationActivationService) Activate(ctx context.Context, inpu
 		}
 	}
 
+	// Inventory completeness: hash must match a completed inventory run.
+	var inventoryCount int
+	err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM model_inventory_runs WHERE inventory_hash = $1 AND status = 'completed'`, input.InventoryHash).Scan(&inventoryCount)
+	if err != nil {
+		return err
+	}
+	if inventoryCount == 0 {
+		err = infraerrors.Conflict("INVENTORY_NOT_COMPLETED", "inventory hash does not match a completed inventory run")
+		return err
+	}
+
+	// Post-registry shadow coverage: every enabled governed account must have a shadow decision at current registry version.
+	var enabledAccounts int
+	err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM accounts WHERE platform IN ('anthropic','openai','gemini','grok') AND status = 'active'`).Scan(&enabledAccounts)
+	if err != nil {
+		return err
+	}
+	if enabledAccounts > 0 {
+		var shadowAccounts int
+		err = tx.QueryRowContext(ctx, `SELECT COUNT(DISTINCT batch.account_id)
+FROM model_shadow_decisions d
+JOIN model_classification_batches batch ON batch.batch_id = d.batch_id
+WHERE batch.registry_version = $1`, input.RegistryVersion).Scan(&shadowAccounts)
+		if err != nil {
+			return err
+		}
+		if shadowAccounts < enabledAccounts {
+			err = infraerrors.Conflict("SHADOW_COVERAGE_INCOMPLETE", fmt.Sprintf("shadow coverage incomplete: %d/%d", shadowAccounts, enabledAccounts))
+			return err
+		}
+	}
+
+	// Unresolved impact reports: for now, check that no unsupported routing-only accounts remain without connection.
+	// If any account has connection_id IS NULL and platform in governed set, it is an unresolved impact.
+	var unresolved int
+	err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM accounts WHERE platform IN ('anthropic','openai','gemini','grok') AND status = 'active' AND connection_id IS NULL`).Scan(&unresolved)
+	if err != nil {
+		return err
+	}
+	if unresolved > 0 {
+		err = infraerrors.Conflict("UNRESOLVED_IMPACT_REPORTS", fmt.Sprintf("unresolved impact reports: %d accounts without connection", unresolved))
+		return err
+	}
+
 	// Explicit acknowledgment required.
 	if strings.TrimSpace(input.AcknowledgedBy) == "" {
 		err = infraerrors.BadRequest("ACTIVATION_ACK_REQUIRED", "acknowledged_by is required")
@@ -109,6 +160,11 @@ VALUES ($1,$2,$3::jsonb,$4,$5,$6,'shadow','enforce',$7)
 	if err = tx.Commit(); err != nil {
 		return err
 	}
+	if s.modeProvider != nil {
+		if p, ok := s.modeProvider.(*dbGovernanceModeProvider); ok {
+			p.Invalidate()
+		}
+	}
 	return nil
 }
 
@@ -120,10 +176,40 @@ func (s *ModelAuthorizationActivationService) Deactivate(ctx context.Context, id
 	if s.db == nil {
 		return fmt.Errorf("not configured")
 	}
-	_, err := s.db.ExecContext(ctx, `
+	// Use current registry and channel versions for deactivate record.
+	var currentRegistry int64
+	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(registry_version),1) FROM model_registry_events`).Scan(&currentRegistry)
+	if err != nil {
+		currentRegistry = 1
+	}
+	channelVersions := map[int64]int64{}
+	rows, err := s.db.QueryContext(ctx, `SELECT id, governance_version FROM channels`)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var id, ver int64
+			if err := rows.Scan(&id, &ver); err == nil {
+				channelVersions[id] = ver
+			}
+		}
+	}
+	cvJSON, _ := json.Marshal(channelVersions)
+	var inventoryHash = "deactivate"
+	// Use a completed inventory hash if exists, otherwise use placeholder.
+	var existingHash sql.NullString
+	_ = s.db.QueryRowContext(ctx, `SELECT inventory_hash FROM model_inventory_runs WHERE status='completed' ORDER BY created_at DESC LIMIT 1`).Scan(&existingHash)
+	if existingHash.Valid {
+		inventoryHash = existingHash.String
+	}
+	_, err = s.db.ExecContext(ctx, `
 INSERT INTO model_authorization_activations (inventory_hash, registry_version, channel_versions, projected_batch_id, acknowledged_by, idempotency_key, mode_before, mode_after, actor_id)
-VALUES ('deactivate', 1, '{}'::jsonb, 'deactivate', 'system', $1, 'enforce', 'shadow', $2)
-`, idempotencyKey, actorID)
+VALUES ($1,$2,$3::jsonb,$4,'system',$5,'enforce','shadow',$6)
+`, inventoryHash, currentRegistry, string(cvJSON), "deactivate", idempotencyKey, actorID)
+	if err == nil && s.modeProvider != nil {
+		if p, ok := s.modeProvider.(*dbGovernanceModeProvider); ok {
+			p.Invalidate()
+		}
+	}
 	return err
 }
 

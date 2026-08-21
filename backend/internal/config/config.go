@@ -2680,9 +2680,12 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("canonical_wallet.mode must be one of: disabled/shadow/enforce")
 	}
 	switch c.ModelGovernance.AuthorizationMode {
-	case "off", "shadow", "enforce":
+	case "off", "shadow":
 	default:
-		return fmt.Errorf("model_governance.authorization_mode must be one of: off/shadow/enforce")
+		if c.ModelGovernance.AuthorizationMode == "enforce" {
+			return fmt.Errorf("model_governance.authorization_mode 'enforce' requires activation endpoint; use off or shadow in config")
+		}
+		return fmt.Errorf("model_governance.authorization_mode must be one of: off/shadow; enforce requires activation endpoint")
 	}
 	switch c.Log.Level {
 	case "debug", "info", "warn", "error":

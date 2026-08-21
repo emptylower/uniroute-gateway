@@ -716,6 +716,7 @@ type GatewayService struct {
 	exchangeRates         *ExchangeRateService
 	canonicalWallet       *CanonicalWalletBridge
 	publicationStore      ModelAuthorizationStore
+	modeProvider          GovernanceModeProvider
 }
 
 func (s *GatewayService) SetPublicationStore(store ModelAuthorizationStore) {
@@ -724,8 +725,21 @@ func (s *GatewayService) SetPublicationStore(store ModelAuthorizationStore) {
 	}
 }
 
+func (s *GatewayService) SetGovernanceModeProvider(p GovernanceModeProvider) {
+	if s != nil {
+		s.modeProvider = p
+	}
+}
+
 func (s *GatewayService) isEnforceMode() bool {
-	return s != nil && s.cfg != nil && s.cfg.ModelGovernance.AuthorizationMode == "enforce"
+	if s == nil {
+		return false
+	}
+	if s.modeProvider != nil {
+		return s.modeProvider.IsEnforce(context.Background())
+	}
+	// Fallback for unit tests without DB provider: use static config
+	return s.cfg != nil && s.cfg.ModelGovernance.AuthorizationMode == "enforce"
 }
 
 func (s *GatewayService) isModelEligibleForDispatch(ctx context.Context, model string) bool {

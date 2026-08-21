@@ -716,6 +716,9 @@ func ProvideModelGovernanceService(
 	classifier ModelClassifier,
 	evaluator PublicationEvaluator,
 	probeChecker EndpointProbeChecker,
+	priceChecker ChannelPriceChecker,
+	billingChecker BillingMappingChecker,
+	resourceChecker ResourceChecker,
 ) ModelGovernanceService {
 	cfg := ModelGovernanceServiceConfig{
 		RegistryService:       registryService,
@@ -724,14 +727,68 @@ func ProvideModelGovernanceService(
 		Evaluator:             evaluator,
 		ShadowDecisionRepo:    shadowRepo,
 		EndpointProbeChecker:  probeChecker,
-		ChannelPriceChecker:   nil,
-		BillingMappingChecker: nil,
-		ResourceChecker:       nil,
+		ChannelPriceChecker:   priceChecker,
+		BillingMappingChecker: billingChecker,
+		ResourceChecker:       resourceChecker,
 	}
 	if ar, ok := observationRepo.(AtomicShadowRecorder); ok {
 		cfg.AtomicRecorder = ar
 	}
 	return NewModelGovernanceService(cfg)
+}
+
+func ProvideChannelPriceChecker(db *sql.DB) ChannelPriceChecker {
+	return NewChannelPriceChecker(db)
+}
+
+func ProvideBillingMappingChecker(db *sql.DB) BillingMappingChecker {
+	return NewBillingMappingChecker(db)
+}
+
+func ProvideResourceChecker(db *sql.DB) ResourceChecker {
+	return NewResourceChecker(db)
+}
+
+func ProvideModelPublicationInputLoader(
+	probeSvc *AccountEndpointProbeService,
+	registryService ModelRegistryService,
+	accountRepo AccountRepository,
+	connRepo UpstreamConnectionRepository,
+	priceChecker ChannelPriceChecker,
+	billingChecker BillingMappingChecker,
+	resourceChecker ResourceChecker,
+) *ModelPublicationInputLoader {
+	return NewModelPublicationInputLoaderWithDeps(probeSvc, registryService, accountRepo, connRepo, priceChecker, billingChecker, resourceChecker)
+}
+
+func ProvideModelQuarantineService(
+	store ModelAuthorizationStore,
+	loader *ModelPublicationInputLoader,
+	evaluator PublicationEvaluator,
+	db *sql.DB,
+	channelRepo ChannelRepository,
+) *ModelQuarantineService {
+	svc := NewModelQuarantineService(store, loader, evaluator)
+	svc.SetDB(db)
+	svc.SetChannelRepository(channelRepo)
+	return svc
+}
+
+func ProvideModelAuthorizationActivationService(db *sql.DB, modeProvider GovernanceModeProvider) *ModelAuthorizationActivationService {
+	svc := NewModelAuthorizationActivationService(db)
+	svc.SetModeProvider(modeProvider)
+	return svc
+}
+
+func ProvideGovernanceModeProvider(db *sql.DB, cfg *config.Config) GovernanceModeProvider {
+	bootMode := "off"
+	if cfg != nil {
+		bootMode = cfg.ModelGovernance.AuthorizationMode
+		if bootMode == "enforce" {
+			bootMode = "shadow"
+		}
+	}
+	return NewGovernanceModeProvider(db, bootMode)
 }
 
 // ProviderSet is the Wire provider set for all services
@@ -749,6 +806,13 @@ var ProviderSet = wire.NewSet(
 	ProvideEndpointProbeChecker,
 	ProvideModelGovernanceService,
 	NewModelPublicationService,
+	ProvideChannelPriceChecker,
+	ProvideBillingMappingChecker,
+	ProvideResourceChecker,
+	ProvideModelPublicationInputLoader,
+	ProvideModelQuarantineService,
+	ProvideModelAuthorizationActivationService,
+	ProvideGovernanceModeProvider,
 	// Core services
 	NewAuthService,
 	NewUserService,
@@ -972,6 +1036,7 @@ func ProvideGatewayService(
 	balanceNotifyService *BalanceNotifyService,
 	userPlatformQuotaRepo UserPlatformQuotaRepository,
 	store ModelAuthorizationStore,
+	modeProvider GovernanceModeProvider,
 ) *GatewayService {
 	svc := NewGatewayService(
 		accountRepo, groupRepo, usageLogRepo, usageBillingRepo, userRepo, userSubRepo, userGroupRateRepo,
@@ -981,5 +1046,6 @@ func ProvideGatewayService(
 		balanceNotifyService, userPlatformQuotaRepo,
 	)
 	svc.SetPublicationStore(store)
+	svc.SetGovernanceModeProvider(modeProvider)
 	return svc
 }
