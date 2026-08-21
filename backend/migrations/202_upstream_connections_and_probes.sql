@@ -43,10 +43,33 @@ CREATE INDEX IF NOT EXISTS idx_upstream_connections_status
 CREATE INDEX IF NOT EXISTS idx_upstream_connections_deleted_at
     ON upstream_connections(deleted_at);
 
--- Accounts gain a nullable connection reference during backfill; populated by migration command in Task 3.
+-- Accounts gain nullable connection/protocol/endpoint/config references during backfill; populated by migration command in Task 3.
+-- Backfill of protocol/endpoint_path happens via the Task 3 migration command; connection_id stays nullable until migrated.
 ALTER TABLE accounts
     ADD COLUMN IF NOT EXISTS connection_id BIGINT REFERENCES upstream_connections(id) ON DELETE SET NULL;
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS protocol VARCHAR(32);
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS endpoint_path TEXT;
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS config_version BIGINT NOT NULL DEFAULT 1;
 CREATE INDEX IF NOT EXISTS idx_accounts_connection_id ON accounts(connection_id);
+
+-- Constraints matching Ent schema
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'chk_accounts_protocol' AND conrelid = 'accounts'::regclass
+    ) THEN
+        ALTER TABLE accounts ADD CONSTRAINT chk_accounts_protocol CHECK (protocol IS NULL OR protocol IN ('anthropic','openai','gemini'));
+    END IF;
+END $$;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'chk_accounts_config_version' AND conrelid = 'accounts'::regclass
+    ) THEN
+        ALTER TABLE accounts ADD CONSTRAINT chk_accounts_config_version CHECK (config_version > 0);
+    END IF;
+END $$;
 
 -- Trigger to keep updated_at fresh for upstream_connections
 CREATE OR REPLACE FUNCTION touch_upstream_connections_updated_at()

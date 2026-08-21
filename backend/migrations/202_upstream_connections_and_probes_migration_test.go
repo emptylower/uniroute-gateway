@@ -49,6 +49,14 @@ func TestUpstreamConnectionsAndProbesMigrationContract(t *testing.T) {
 	// accounts.connection_id must be nullable for backfill; other tables (probes, events) legitimately use NOT NULL FKs
 	require.Contains(t, sql, "ADD COLUMN IF NOT EXISTS CONNECTION_ID BIGINT REFERENCES UPSTREAM_CONNECTIONS(ID) ON DELETE SET NULL")
 	require.Contains(t, sql, "IDX_ACCOUNTS_CONNECTION_ID")
+	// Phase 4 Ent alignment: protocol, endpoint_path, config_version
+	require.Contains(t, sql, "ADD COLUMN IF NOT EXISTS PROTOCOL VARCHAR(32)")
+	require.Contains(t, sql, "ADD COLUMN IF NOT EXISTS ENDPOINT_PATH TEXT")
+	require.Contains(t, sql, "ADD COLUMN IF NOT EXISTS CONFIG_VERSION BIGINT NOT NULL DEFAULT 1")
+	require.Contains(t, sql, "CHK_ACCOUNTS_PROTOCOL")
+	require.Contains(t, sql, "CHK_ACCOUNTS_CONFIG_VERSION")
+	require.Contains(t, sql, "CONFIG_VERSION > 0")
+	require.Contains(t, sql, "PROTOCOL IS NULL OR PROTOCOL IN ('ANTHROPIC','OPENAI','GEMINI')")
 
 	// Probe uniqueness key
 	require.Contains(t, sql, "ENFORCE_ACCOUNT_ENDPOINT_PROBE_EXACT_UNIQUE")
