@@ -689,27 +689,6 @@ func ProvideModelGovernanceService(
 	shadowRepo ShadowDecisionRepository,
 	classifier ModelClassifier,
 	evaluator PublicationEvaluator,
-) ModelGovernanceService {
-	cfg := ModelGovernanceServiceConfig{
-		RegistryService:    registryService,
-		ObservationRepo:    observationRepo,
-		Classifier:         classifier,
-		Evaluator:          evaluator,
-		ShadowDecisionRepo: shadowRepo,
-	}
-	if ar, ok := observationRepo.(AtomicShadowRecorder); ok {
-		cfg.AtomicRecorder = ar
-	}
-	return NewModelGovernanceService(cfg)
-}
-
-// ProvideModelGovernanceServiceWithProbe wires real probe evidence into shadow evaluator (Phase 4 ready, Phase 5 enforce).
-func ProvideModelGovernanceServiceWithProbe(
-	registryService ModelRegistryService,
-	observationRepo ModelObservationRepository,
-	shadowRepo ShadowDecisionRepository,
-	classifier ModelClassifier,
-	evaluator PublicationEvaluator,
 	probeChecker EndpointProbeChecker,
 ) ModelGovernanceService {
 	cfg := ModelGovernanceServiceConfig{
@@ -737,9 +716,8 @@ var ProviderSet = wire.NewSet(
 	NewModelClassifier,
 	NewPublicationEvaluator,
 	NewModelRegistryService,
-	ProvideModelGovernanceService,
 	ProvideEndpointProbeChecker,
-	ProvideModelGovernanceServiceWithProbe,
+	ProvideModelGovernanceService,
 	// Core services
 	NewAuthService,
 	NewUserService,
