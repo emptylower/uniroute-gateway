@@ -157,6 +157,18 @@ func createAccountRecord(ctx context.Context, client *dbent.Client, account *ser
 	if account.ParentAccountID != nil {
 		builder.SetParentAccountID(*account.ParentAccountID)
 	}
+	if account.ConnectionID != nil {
+		builder.SetConnectionID(*account.ConnectionID)
+	}
+	if account.Protocol != nil {
+		builder.SetProtocol(*account.Protocol)
+	}
+	if account.EndpointPath != nil {
+		builder.SetEndpointPath(*account.EndpointPath)
+	}
+	if account.ConfigVersion > 0 {
+		builder.SetConfigVersion(account.ConfigVersion)
+	}
 
 	created, err := builder.Save(ctx)
 	if err != nil {
@@ -3340,6 +3352,10 @@ func accountEntityToService(m *dbent.Account) *service.Account {
 		SessionWindowStatus:     derefString(m.SessionWindowStatus),
 		ParentAccountID:         m.ParentAccountID,
 		QuotaDimension:          string(m.QuotaDimension),
+		ConnectionID:            m.ConnectionID,
+		Protocol:                m.Protocol,
+		EndpointPath:            m.EndpointPath,
+		ConfigVersion:           m.ConfigVersion,
 	}
 }
 

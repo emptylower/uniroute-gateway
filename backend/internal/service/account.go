@@ -59,6 +59,12 @@ type Account struct {
 	ParentAccountID *int64 // non-nil → 影子账号（不持凭据，透传母账号凭据）
 	QuotaDimension  string // 用量维度："" / "global" / "spark"
 
+	// Phase 4: upstream connection separation (nullable during backfill)
+	ConnectionID *int64 `json:"connection_id,omitempty"`
+	Protocol     *string `json:"protocol,omitempty"` // anthropic | openai | gemini
+	EndpointPath *string `json:"endpoint_path,omitempty"`
+	ConfigVersion int64  `json:"config_version"`
+
 	Proxy         *Proxy
 	AccountGroups []AccountGroup
 	GroupIDs      []int64

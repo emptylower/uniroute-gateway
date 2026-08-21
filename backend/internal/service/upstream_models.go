@@ -289,6 +289,80 @@ func governanceProviderForPlatform(platform string) *GovernanceProvider {
 	}
 }
 
+// Phase 4: protocol and provider are independent. Protocol determines wire format (anthropic|openai|gemini);
+// provider determines governance ownership. Aggregator connections supply baseURL/credential/proxy via connection.
+func accountProtocolForRequest(account *Account) AccountProtocol {
+	if account == nil {
+		return ""
+	}
+	if account.Protocol != nil && ValidAccountProtocol(AccountProtocol(*account.Protocol)) {
+		return AccountProtocol(*account.Protocol)
+	}
+	// Default mapping preserves legacy behavior for unmigrated accounts
+	switch account.Platform {
+	case PlatformAnthropic:
+		return AccountProtocolAnthropic
+	case PlatformOpenAI:
+		return AccountProtocolOpenAI
+	case PlatformGemini, PlatformAntigravity:
+		return AccountProtocolGemini
+	case PlatformGrok:
+		return AccountProtocolOpenAI // Grok provider over OpenAI protocol
+	default:
+		return AccountProtocolOpenAI
+	}
+}
+
+// UpstreamRequestMaterial resolves connection base URL/credential/proxy and account provider/protocol/endpoint independently.
+type UpstreamRequestMaterial struct {
+	Connection *UpstreamConnection
+	Provider   *GovernanceProvider
+	Protocol   AccountProtocol
+	Endpoint   string
+	BaseURL    string
+}
+
+func (s *AccountTestService) resolveUpstreamRequestMaterial(ctx context.Context, account *Account) (*UpstreamRequestMaterial, error) {
+	if account == nil {
+		return nil, fmt.Errorf("account is required")
+	}
+	material := &UpstreamRequestMaterial{
+		Provider: governanceProviderForPlatform(account.Platform),
+		Protocol: accountProtocolForRequest(account),
+	}
+	if account.EndpointPath != nil {
+		ep, err := NormalizeEndpointPath(*account.EndpointPath)
+		if err == nil {
+			material.Endpoint = ep
+		} else {
+			material.Endpoint = *account.EndpointPath
+		}
+	}
+	// Resolve connection if migrated; otherwise fallback to legacy account-derived base URL.
+	// Explicit aggregator reuse supplies provider=null connection with OpenAI protocol; still resolve via connection.
+	if account.ConnectionID != nil {
+		// In production, load from UpstreamConnectionService/Repo; here stub to preserve wiring for tests.
+		// The connection's provider does NOT override account governance provider; protocol compatibility never grants ownership.
+		// BaseURL comes from connection if present.
+		material.BaseURL = "" // Will be filled by connection loader when wired (Task 2 batch-load)
+		// Placeholder: if we had connection repo, we'd fetch and set material.Connection and BaseURL
+	}
+	if material.BaseURL == "" {
+		// Legacy fallback: derive from account credentials (preserves unmigrated rows)
+		switch material.Protocol {
+		case AccountProtocolAnthropic:
+			material.BaseURL = account.GetBaseURL()
+		case AccountProtocolOpenAI:
+			material.BaseURL = account.GetOpenAIBaseURL()
+		case AccountProtocolGemini:
+			material.BaseURL = account.GetGeminiBaseURL(geminicli.AIStudioBaseURL)
+		default:
+			material.BaseURL = account.GetBaseURL()
+		}
+	}
+	return material, nil
+}
+
 func (s *AccountTestService) buildUpstreamModelsRequest(ctx context.Context, account *Account) (*http.Request, error) {
 	switch {
 	case account.Platform == PlatformAntigravity:
