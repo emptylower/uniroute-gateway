@@ -22,10 +22,6 @@ func NewModelGovernanceConnectionHandler(connSvc *service.UpstreamConnectionServ
 }
 
 func (h *ModelGovernanceConnectionHandler) DesignateAggregator(c *gin.Context) {
-	if h.designation == nil {
-		response.InternalError(c, "designation service not configured")
-		return
-	}
 	connIDStr := c.Param("id")
 	connID, err := strconv.ParseInt(connIDStr, 10, 64)
 	if err != nil {
@@ -45,6 +41,10 @@ func (h *ModelGovernanceConnectionHandler) DesignateAggregator(c *gin.Context) {
 	expectedVersion, err := strconv.ParseInt(ifMatch, 10, 64)
 	if err != nil {
 		response.BadRequest(c, "invalid If-Match")
+		return
+	}
+	if h.designation == nil {
+		response.InternalError(c, "designation service not configured")
 		return
 	}
 	assertion, ok := middleware.PlatformAssertionFromContext(c)
@@ -67,10 +67,6 @@ func (h *ModelGovernanceConnectionHandler) DesignateAggregator(c *gin.Context) {
 }
 
 func (h *ModelGovernanceConnectionHandler) ReuseAggregatorConnection(c *gin.Context) {
-	if h.reuse == nil {
-		response.InternalError(c, "reuse service not configured")
-		return
-	}
 	connIDStr := c.Param("id")
 	connID, err := strconv.ParseInt(connIDStr, 10, 64)
 	if err != nil {
@@ -90,6 +86,10 @@ func (h *ModelGovernanceConnectionHandler) ReuseAggregatorConnection(c *gin.Cont
 	credVersion, err := strconv.ParseInt(ifMatch, 10, 64)
 	if err != nil {
 		response.BadRequest(c, "invalid If-Match")
+		return
+	}
+	if h.reuse == nil {
+		response.InternalError(c, "reuse service not configured")
 		return
 	}
 	// Parse body for provider/protocol/endpoint

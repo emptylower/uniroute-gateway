@@ -284,6 +284,9 @@ func governanceProviderForPlatform(platform string) *GovernanceProvider {
 	case PlatformAnthropic, PlatformOpenAI, PlatformGemini, PlatformGrok:
 		provider := GovernanceProvider(platform)
 		return &provider
+	case "claude":
+		provider := GovernanceProviderAnthropic
+		return &provider
 	default:
 		return nil
 	}
@@ -300,7 +303,7 @@ func accountProtocolForRequest(account *Account) AccountProtocol {
 	}
 	// Default mapping preserves legacy behavior for unmigrated accounts
 	switch account.Platform {
-	case PlatformAnthropic:
+	case PlatformAnthropic, "claude":
 		return AccountProtocolAnthropic
 	case PlatformOpenAI:
 		return AccountProtocolOpenAI

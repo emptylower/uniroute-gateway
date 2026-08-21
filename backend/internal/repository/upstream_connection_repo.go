@@ -21,6 +21,9 @@ func NewUpstreamConnectionRepository(client *dbent.Client, sqlDB *sql.DB) servic
 }
 
 func (r *upstreamConnectionRepository) Create(ctx context.Context, conn *service.UpstreamConnection, encryptedCredential string) error {
+	if r.client == nil {
+		return fmt.Errorf("client not configured")
+	}
 	if conn == nil {
 		return fmt.Errorf("nil connection")
 	}
@@ -48,6 +51,9 @@ func (r *upstreamConnectionRepository) Create(ctx context.Context, conn *service
 }
 
 func (r *upstreamConnectionRepository) GetByID(ctx context.Context, id int64) (*service.UpstreamConnection, string, error) {
+	if r.client == nil {
+		return nil, "", fmt.Errorf("client not configured")
+	}
 	entConn, err := r.client.UpstreamConnection.Query().Where(dbconn.IDEQ(id)).Only(ctx)
 	if err != nil {
 		return nil, "", err
@@ -73,6 +79,9 @@ func (r *upstreamConnectionRepository) GetByID(ctx context.Context, id int64) (*
 }
 
 func (r *upstreamConnectionRepository) UpdateCredential(ctx context.Context, id int64, expectedVersion int64, encryptedCredential string) (int64, error) {
+	if r.client == nil {
+		return 0, fmt.Errorf("client not configured")
+	}
 	// Optimistic locking via credential_version
 	res, err := r.client.UpstreamConnection.Update().
 		Where(dbconn.IDEQ(id), dbconn.CredentialVersionEQ(expectedVersion)).
@@ -89,6 +98,9 @@ func (r *upstreamConnectionRepository) UpdateCredential(ctx context.Context, id 
 }
 
 func (r *upstreamConnectionRepository) BatchGetByIDs(ctx context.Context, ids []int64) (map[int64]*service.UpstreamConnection, error) {
+	if r.client == nil {
+		return map[int64]*service.UpstreamConnection{}, nil
+	}
 	if len(ids) == 0 {
 		return map[int64]*service.UpstreamConnection{}, nil
 	}
@@ -118,6 +130,9 @@ func (r *upstreamConnectionRepository) BatchGetByIDs(ctx context.Context, ids []
 }
 
 func (r *upstreamConnectionRepository) ListAll(ctx context.Context) ([]*service.UpstreamConnection, error) {
+	if r.client == nil {
+		return nil, nil
+	}
 	ents, err := r.client.UpstreamConnection.Query().All(ctx)
 	if err != nil {
 		return nil, err
