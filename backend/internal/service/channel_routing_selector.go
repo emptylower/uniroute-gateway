@@ -79,16 +79,39 @@ type ChannelRoutingSelector struct {
 	channels         ChannelRoutingCatalog
 	apiKeys          ChannelRoutingAccess
 	groupPreferences GroupRoutingPreferences
+	publicationStore ModelAuthorizationStore
 	cfg              *config.Config
+}
+
+func (s *ChannelRoutingSelector) SetPublicationStore(store ModelAuthorizationStore) {
+	if s != nil {
+		s.publicationStore = store
+	}
+}
+
+func (s *ChannelRoutingSelector) isEnforceMode() bool {
+	return s != nil && s.cfg != nil && s.cfg.ModelGovernance.AuthorizationMode == "enforce"
+}
+
+func (s *ChannelRoutingSelector) isModelEligibleForChannel(ctx context.Context, channelID int64, model string) bool {
+	if !s.isEnforceMode() || s.publicationStore == nil || channelID == 0 || model == "" {
+		return true
+	}
+	eligible, err := s.publicationStore.IsChannelModelEligible(ctx, channelID, strings.ToLower(strings.TrimSpace(model)))
+	if err != nil {
+		return false
+	}
+	return eligible
 }
 
 func NewChannelRoutingSelector(channels ChannelRoutingCatalog, apiKeys ChannelRoutingAccess, cfg *config.Config) *ChannelRoutingSelector {
 	return &ChannelRoutingSelector{channels: channels, apiKeys: apiKeys, cfg: cfg}
 }
 
-func ProvideChannelRoutingSelector(channels ChannelRoutingCatalog, apiKeys ChannelRoutingAccess, groupPreferences *ChannelPreferenceService, cfg *config.Config) *ChannelRoutingSelector {
+func ProvideChannelRoutingSelector(channels ChannelRoutingCatalog, apiKeys ChannelRoutingAccess, groupPreferences *ChannelPreferenceService, cfg *config.Config, store ModelAuthorizationStore) *ChannelRoutingSelector {
 	selector := NewChannelRoutingSelector(channels, apiKeys, cfg)
 	selector.groupPreferences = groupPreferences
+	selector.SetPublicationStore(store)
 	return selector
 }
 
@@ -267,6 +290,9 @@ func (s *ChannelRoutingSelector) Candidates(ctx context.Context, apiKey *APIKey,
 			if group.ClaudeCodeOnly || s.channels.IsModelRestricted(ctx, group.ID, model) {
 				continue
 			}
+			if !s.isModelEligibleForChannel(ctx, channel.ID, model) {
+				continue
+			}
 			rate := channelRoutingRate(apiKey, group, rates)
 			candidates = append(candidates, ChannelRoutingCandidate{
 				ChannelID:           channel.ID,
@@ -338,6 +364,9 @@ func (s *ChannelRoutingSelector) automaticCandidates(
 			continue
 		}
 		if group.ClaudeCodeOnly || (s.channels != nil && s.channels.IsModelRestricted(ctx, group.ID, model)) {
+			continue
+		}
+		if !s.isModelEligibleForChannel(ctx, channelByGroup[group.ID], model) {
 			continue
 		}
 		rate := channelRoutingRate(apiKey, group, rates)

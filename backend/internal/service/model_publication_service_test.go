@@ -11,6 +11,7 @@ import (
 type fakePublicationStore struct {
 	decisionFn       func(ctx context.Context, key ModelAuthorizationKey) (ModelAuthorizationDecision, error)
 	recomputeFn      func(ctx context.Context, input RecomputeInput) error
+	channelEligibleFn func(ctx context.Context, channelID int64, canonical string) (bool, error)
 	decisionCalls    int
 	recomputeCalls   int
 	lastRecompute    *RecomputeInput
@@ -30,6 +31,12 @@ func (f *fakePublicationStore) RecomputeBatch(ctx context.Context, input Recompu
 		return f.recomputeFn(ctx, input)
 	}
 	return nil
+}
+func (f *fakePublicationStore) IsChannelModelEligible(ctx context.Context, channelID int64, canonicalModelID string) (bool, error) {
+	if f.channelEligibleFn != nil {
+		return f.channelEligibleFn(ctx, channelID, canonicalModelID)
+	}
+	return true, nil
 }
 
 func TestModelPublicationService_DecisionCachesAndInvalidates(t *testing.T) {

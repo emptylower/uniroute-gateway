@@ -44,6 +44,21 @@ WHERE account_id = $1 AND channel_id = $2 AND canonical_model_id = $3
 	return dec, nil
 }
 
+func (r *modelPublicationRepository) IsChannelModelEligible(ctx context.Context, channelID int64, canonicalModelID string) (bool, error) {
+	if r == nil || r.db == nil {
+		return false, errors.New("model publication repository is not configured")
+	}
+	if channelID <= 0 || strings.TrimSpace(canonicalModelID) == "" {
+		return false, fmt.Errorf("invalid channel eligibility key")
+	}
+	var exists bool
+	err := r.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM model_publication_eligibility WHERE channel_id = $1 AND canonical_model_id = $2 AND eligibility = 'eligible')`, channelID, canonicalModelID).Scan(&exists)
+	if err != nil {
+		return false, err
+	}
+	return exists, nil
+}
+
 func (r *modelPublicationRepository) RecomputeBatch(ctx context.Context, input service.RecomputeInput) (err error) {
 	if r == nil || r.db == nil {
 		return errors.New("model publication repository is not configured")

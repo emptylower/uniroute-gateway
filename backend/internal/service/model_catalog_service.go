@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/config"
 )
 
 const (
@@ -79,11 +81,13 @@ type ChannelCostQuote struct {
 }
 
 type ModelCatalogService struct {
-	channels ChannelRoutingCatalog
-	selector *ChannelRoutingSelector
-	pricing  modelCatalogPricingResolver
-	accounts modelCatalogAccountSource
-	fx       *ExchangeRateService
+	channels         ChannelRoutingCatalog
+	selector         *ChannelRoutingSelector
+	pricing          modelCatalogPricingResolver
+	accounts         modelCatalogAccountSource
+	fx               *ExchangeRateService
+	publicationStore ModelAuthorizationStore
+	cfg              *config.Config
 }
 
 type modelCatalogAccountSource interface {
@@ -104,6 +108,45 @@ func NewModelCatalogService(
 		accounts: accounts,
 		fx:       fx,
 	}
+}
+
+func (s *ModelCatalogService) SetPublicationStore(store ModelAuthorizationStore) {
+	if s != nil {
+		s.publicationStore = store
+	}
+}
+
+func (s *ModelCatalogService) SetConfig(cfg *config.Config) {
+	if s != nil {
+		s.cfg = cfg
+	}
+}
+
+func (s *ModelCatalogService) isEnforceMode() bool {
+	return s != nil && s.cfg != nil && s.cfg.ModelGovernance.AuthorizationMode == "enforce"
+}
+
+func (s *ModelCatalogService) isModelEligibleForChannel(ctx context.Context, channelID int64, canonicalID string) bool {
+	if !s.isEnforceMode() || s.publicationStore == nil || channelID == 0 || canonicalID == "" {
+		return true
+	}
+	eligible, err := s.publicationStore.IsChannelModelEligible(ctx, channelID, strings.ToLower(strings.TrimSpace(canonicalID)))
+	if err != nil {
+		return false
+	}
+	return eligible
+}
+
+func (s *ModelCatalogService) isModelEligibleForAccount(ctx context.Context, accountID, channelID int64, canonicalID string) bool {
+	if !s.isEnforceMode() || s.publicationStore == nil || accountID == 0 || channelID == 0 || canonicalID == "" {
+		return true
+	}
+	key := ModelAuthorizationKey{AccountID: accountID, ChannelID: channelID, CanonicalModelID: strings.ToLower(strings.TrimSpace(canonicalID))}
+	dec, err := s.publicationStore.Decision(ctx, key)
+	if err != nil {
+		return false
+	}
+	return dec.Eligibility == PublicationEligibilityEligible
 }
 
 type catalogModelSeed struct {
@@ -294,6 +337,7 @@ func (s *ModelCatalogService) QuoteChannelCosts(ctx context.Context, userID int6
 		groupPlatform[groups[i].ID] = groups[i].Platform
 	}
 	channelSeeds := make(map[int64]map[string]catalogModelSeed)
+	groupChannels := make(map[int64][]int64)
 	if s.channels != nil {
 		channels, channelErr := s.channels.ListAvailable(ctx)
 		if channelErr != nil {
@@ -309,6 +353,7 @@ func (s *ModelCatalogService) QuoteChannelCosts(ctx context.Context, userID int6
 					seeds = make(map[string]catalogModelSeed)
 					channelSeeds[ref.ID] = seeds
 				}
+				groupChannels[ref.ID] = append(groupChannels[ref.ID], channel.ID)
 				for _, model := range channel.SupportedModels {
 					if model.Pricing != nil && model.Pricing.BillingMode != "" && model.Pricing.BillingMode != BillingModeToken {
 						continue
@@ -362,6 +407,21 @@ func (s *ModelCatalogService) QuoteChannelCosts(ctx context.Context, userID int6
 			}
 			if !supported {
 				continue
+			}
+			if s.isEnforceMode() && s.publicationStore != nil {
+				chs := groupChannels[group.ID]
+				if len(chs) > 0 {
+					eligible := false
+					for _, chID := range chs {
+						if s.isModelEligibleForChannel(ctx, chID, seed.name) {
+							eligible = true
+							break
+						}
+					}
+					if !eligible {
+						continue
+					}
+				}
 			}
 
 			routePricing := s.pricing.Resolve(ctx, PricingInput{Model: seed.name, GroupID: &group.ID})
@@ -499,6 +559,19 @@ func (s *ModelCatalogService) ListText(ctx context.Context, userID int64, now ti
 			}
 		}
 		candidates = pricedCandidates
+		if s.isEnforceMode() && s.publicationStore != nil {
+			filteredGovernance := candidates[:0]
+			for _, c := range candidates {
+				if c.ChannelID == 0 {
+					filteredGovernance = append(filteredGovernance, c)
+					continue
+				}
+				if s.isModelEligibleForChannel(ctx, c.ChannelID, seed.name) {
+					filteredGovernance = append(filteredGovernance, c)
+				}
+			}
+			candidates = filteredGovernance
+		}
 		item := TextModelCatalogItem{
 			ID:                  key,
 			Name:                seed.name,

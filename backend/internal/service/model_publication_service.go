@@ -50,6 +50,7 @@ type RecomputeItem struct {
 type ModelAuthorizationStore interface {
 	Decision(ctx context.Context, key ModelAuthorizationKey) (ModelAuthorizationDecision, error)
 	RecomputeBatch(ctx context.Context, input RecomputeInput) error
+	IsChannelModelEligible(ctx context.Context, channelID int64, canonicalModelID string) (bool, error)
 }
 
 // modelPublicationService is the cache-aware service wrapper.
@@ -102,6 +103,13 @@ func (s *modelPublicationService) RecomputeBatch(ctx context.Context, input Reco
 
 func (s *modelPublicationService) InvalidateKey(key ModelAuthorizationKey) {
 	s.cache.Delete(key)
+}
+
+func (s *modelPublicationService) IsChannelModelEligible(ctx context.Context, channelID int64, canonicalModelID string) (bool, error) {
+	if s.store == nil {
+		return false, fmt.Errorf("publication store is not configured")
+	}
+	return s.store.IsChannelModelEligible(ctx, channelID, canonicalModelID)
 }
 
 func validateRecomputeInput(input RecomputeInput) error {

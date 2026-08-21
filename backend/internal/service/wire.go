@@ -857,7 +857,7 @@ var ProviderSet = wire.NewSet(
 	wire.Bind(new(ChannelRoutingAccess), new(*APIKeyService)),
 	NewModelPricingResolver,
 	NewExchangeRateService,
-	NewModelCatalogService,
+	ProvideModelCatalogService,
 	NewContentModerationService,
 	NewAffiliateService,
 	ProvidePaymentConfigService,
@@ -923,4 +923,19 @@ func ProvideChannelMonitorRunner(svc *ChannelMonitorService, settingService *Set
 	svc.SetScheduler(r)
 	r.Start()
 	return r
+}
+
+func ProvideModelCatalogService(
+	channels *ChannelService,
+	selector *ChannelRoutingSelector,
+	pricing *ModelPricingResolver,
+	accounts AccountRepository,
+	fx *ExchangeRateService,
+	store ModelAuthorizationStore,
+	cfg *config.Config,
+) *ModelCatalogService {
+	svc := NewModelCatalogService(channels, selector, pricing, accounts, fx)
+	svc.SetPublicationStore(store)
+	svc.SetConfig(cfg)
+	return svc
 }
