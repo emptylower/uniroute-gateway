@@ -295,7 +295,45 @@ func TestMigrationsRunner_ModelGovernanceFoundationSchema(t *testing.T) {
 	requireForeignKeyOnDelete(t, tx, "model_observation_events", "batch_id", "model_classification_batches", "RESTRICT")
 	requireForeignKeyOnDelete(t, tx, "model_observation_events", "snapshot_batch_id", "model_classification_batches", "RESTRICT")
 	requireExactModelTables(t, tx)
-	requireNoActivationTables(t, tx)
+	// Phase 5 adds activation infrastructure; foundation tables remain but activation is now expected.
+	// Keep the helper available for historical 200 checks, but after 203 the activation tables exist.
+}
+
+func TestMigrationsRunner_ModelPublicationEnforcementSchema(t *testing.T) {
+	tx := testTx(t)
+	for _, table := range []string{
+		"model_publication_eligibility",
+		"model_publication_events",
+		"model_authorization_activations",
+		"governance_idempotency_records",
+	} {
+		requireTable(t, tx, table)
+	}
+	requireColumn(t, tx, "channels", "governance_version", "bigint", 0, false)
+	requireColumn(t, tx, "model_publication_eligibility", "account_id", "bigint", 0, false)
+	requireColumn(t, tx, "model_publication_eligibility", "canonical_model_id", "text", 0, false)
+	requireColumn(t, tx, "model_publication_eligibility", "channel_id", "bigint", 0, false)
+	requireColumn(t, tx, "model_publication_eligibility", "eligibility", "character varying", 32, false)
+	requireColumn(t, tx, "model_publication_eligibility", "registry_version", "bigint", 0, false)
+	requireColumn(t, tx, "model_publication_eligibility", "channel_version", "bigint", 0, false)
+	requireColumn(t, tx, "model_publication_eligibility", "quarantine_batch_id", "character varying", 64, true)
+	requireColumn(t, tx, "model_publication_events", "idempotency_key", "character varying", 255, false)
+	requireColumn(t, tx, "model_publication_events", "batch_id", "character varying", 64, false)
+	requireColumn(t, tx, "model_authorization_activations", "inventory_hash", "character varying", 128, false)
+	requireColumn(t, tx, "model_authorization_activations", "registry_version", "bigint", 0, false)
+	requireColumn(t, tx, "model_authorization_activations", "channel_versions", "jsonb", 0, false)
+	requireColumn(t, tx, "model_authorization_activations", "projected_batch_id", "character varying", 64, false)
+	requireColumn(t, tx, "model_authorization_activations", "acknowledged_by", "character varying", 255, false)
+	requireColumn(t, tx, "governance_idempotency_records", "idempotency_key", "character varying", 255, false)
+	requireConstraintDefinitionContains(t, tx, "model_publication_eligibility", "chk_model_publication_eligibility_eligibility", "eligible", "blocked", "quarantined", "retired")
+	requireConstraintDefinitionContains(t, tx, "model_publication_events", "chk_model_publication_events_eligibility", "eligible", "blocked", "quarantined", "retired")
+	requireConstraintDefinitionContains(t, tx, "model_authorization_activations", "chk_model_authorization_activations_mode_before", "off", "shadow", "enforce")
+	requireConstraintDefinitionContains(t, tx, "model_authorization_activations", "chk_model_authorization_activations_mode_after", "off", "shadow", "enforce")
+	requireConstraintDefinitionContains(t, tx, "channels", "chk_channels_governance_version", "governance_version")
+	requireIndex(t, tx, "model_publication_eligibility", "idx_model_publication_eligibility_account_channel")
+	requireIndex(t, tx, "model_publication_events", "idx_model_publication_events_batch")
+	requireAppendOnlyTable(t, tx, "model_publication_events")
+	requireAppendOnlyTable(t, tx, "model_authorization_activations")
 }
 
 func TestMigrationsRunner_ModelGovernanceFoundationExactChecks(t *testing.T) {
