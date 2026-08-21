@@ -521,6 +521,20 @@ func unmarshalFeaturesConfig(data []byte) map[string]any {
 	return m
 }
 
+// VerifyGovernanceVersion checks optimistic version for channel governance writes.
+// Returns conflict error if expectedVersion does not match current governance_version.
+func (r *channelRepository) VerifyGovernanceVersion(ctx context.Context, channelID int64, expectedVersion int64) error {
+	var current int64
+	err := r.db.QueryRowContext(ctx, `SELECT governance_version FROM channels WHERE id = $1`, channelID).Scan(&current)
+	if err != nil {
+		return fmt.Errorf("get channel governance version: %w", err)
+	}
+	if current != expectedVersion {
+		return fmt.Errorf("stale channel version conflict: expected %d got %d", expectedVersion, current)
+	}
+	return nil
+}
+
 // GetGroupPlatforms 批量查询分组 ID 对应的平台
 func (r *channelRepository) GetGroupPlatforms(ctx context.Context, groupIDs []int64) (map[int64]string, error) {
 	if len(groupIDs) == 0 {

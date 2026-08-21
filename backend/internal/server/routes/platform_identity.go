@@ -137,6 +137,14 @@ func registerDelegatedGatewayAdminRoutes(
 		connections.POST("/:id/designate-aggregator", h.Admin.ModelGovernanceConnection.DesignateAggregator)
 		connections.POST("/:id/reuse", h.Admin.ModelGovernanceConnection.ReuseAggregatorConnection)
 	}
+	if h.Admin.ModelQuarantine != nil {
+		admin.POST("/model-publication/quarantine", h.Admin.ModelQuarantine.Quarantine)
+		admin.POST("/model-publication/restore", h.Admin.ModelQuarantine.Restore)
+	}
+	if h.Admin.ModelAuthorizationActivation != nil {
+		admin.POST("/model-authorization/activate", h.Admin.ModelAuthorizationActivation.Activate)
+		admin.POST("/model-authorization/deactivate", h.Admin.ModelAuthorizationActivation.Deactivate)
+	}
 	if h.Admin.OAuth != nil {
 		accounts.POST("/generate-auth-url", h.Admin.OAuth.GenerateAuthURL)
 		accounts.POST("/generate-setup-token-url", h.Admin.OAuth.GenerateSetupTokenURL)

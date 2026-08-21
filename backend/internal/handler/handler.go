@@ -41,10 +41,12 @@ type AdminHandlers struct {
 	Affiliate              *admin.AffiliateHandler
 	Compliance             *admin.ComplianceHandler
 	AuditLog               *admin.AuditLogHandler
-	ModelInventory            *admin.ModelGovernanceInventoryHandler
-	ModelRegistry             *admin.ModelRegistryHandler
-	ModelGovernanceProbe      *admin.ModelGovernanceProbeHandler
-	ModelGovernanceConnection *admin.ModelGovernanceConnectionHandler
+	ModelInventory               *admin.ModelGovernanceInventoryHandler
+	ModelRegistry                *admin.ModelRegistryHandler
+	ModelGovernanceProbe         *admin.ModelGovernanceProbeHandler
+	ModelGovernanceConnection    *admin.ModelGovernanceConnectionHandler
+	ModelQuarantine              *admin.ModelQuarantineHandler
+	ModelAuthorizationActivation *admin.ModelAuthorizationActivationHandler
 }
 
 // Handlers contains all HTTP handlers

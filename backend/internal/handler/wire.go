@@ -56,6 +56,8 @@ func ProvideAdminHandlers(
 	accountHandler.SetModelGovernanceService(modelGovernanceService)
 	probeHandler := admin.NewModelGovernanceProbeHandler(nil)
 	connHandler := admin.NewModelGovernanceConnectionHandler(nil, nil, nil)
+	quarantineHandler := admin.NewModelQuarantineHandler(nil)
+	activationHandler := admin.NewModelAuthorizationActivationHandler(nil)
 	return &AdminHandlers{
 		Dashboard:                 dashboardHandler,
 		User:                      userHandler,
@@ -91,10 +93,12 @@ func ProvideAdminHandlers(
 		Affiliate:                 affiliateHandler,
 		Compliance:                complianceHandler,
 		AuditLog:                  auditLogHandler,
-		ModelInventory:            modelGovernanceInventoryHandler,
-		ModelRegistry:             modelRegistryHandler,
-		ModelGovernanceProbe:      probeHandler,
-		ModelGovernanceConnection: connHandler,
+		ModelInventory:               modelGovernanceInventoryHandler,
+		ModelRegistry:                modelRegistryHandler,
+		ModelGovernanceProbe:         probeHandler,
+		ModelGovernanceConnection:    connHandler,
+		ModelQuarantine:              quarantineHandler,
+		ModelAuthorizationActivation: activationHandler,
 	}
 }
 
