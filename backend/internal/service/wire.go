@@ -746,6 +746,7 @@ var ProviderSet = wire.NewSet(
 	ProvideAggregatorConnectionReuseService,
 	ProvideEndpointProbeChecker,
 	ProvideModelGovernanceService,
+	NewModelPublicationService,
 	// Core services
 	NewAuthService,
 	NewUserService,
