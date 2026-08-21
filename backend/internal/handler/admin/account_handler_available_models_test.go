@@ -70,6 +70,10 @@ func (s *syncUpstreamObservationStore) RecordDiscovery(_ context.Context, input 
 	return "handler-test-batch", nil
 }
 
+func (s *syncUpstreamObservationStore) DeleteBatch(_ context.Context, batchID string) error {
+	return nil
+}
+
 func (s *syncUpstreamModelDiscoveryStore) UpdateModelDiscovery(_ context.Context, accountID int64, mapping map[string]any, discovery map[string]any) error {
 	s.accountID = accountID
 	s.mapping = mapping

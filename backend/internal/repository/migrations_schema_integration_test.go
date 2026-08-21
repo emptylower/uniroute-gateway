@@ -584,8 +584,8 @@ func requireAppendOnlyTruncatesRejectedAndRowsPreserved(t *testing.T, label stri
 	registryKey := fmt.Sprintf("%s-registry-%d", label, suffix)
 	_, err = integrationDB.ExecContext(ctx, `
 		INSERT INTO model_registry_events (idempotency_key, event_type, registry_version, actor_id)
-		VALUES ($1, 'created', 1, 'integration-test')
-	`, registryKey)
+		VALUES ($1, 'created', $2, 'integration-test')
+	`, registryKey, suffix)
 	require.NoError(t, err)
 	batchID := fmt.Sprintf("%s-batch-%d", label, suffix)
 	_, err = integrationDB.ExecContext(ctx, `
@@ -659,9 +659,9 @@ func TestMigrationsRunner_ModelGovernanceFoundationEventsRejectActualMutations(t
 	var registryEventID int64
 	require.NoError(t, tx.QueryRowContext(context.Background(), `
 INSERT INTO model_registry_events (idempotency_key, event_type, registry_version, actor_id)
-VALUES ($1, 'created', 1, 'integration-test')
+VALUES ($1, 'created', $2, 'integration-test')
 RETURNING id
-`, fmt.Sprintf("registry-event-%d", suffix)).Scan(&registryEventID))
+`, fmt.Sprintf("registry-event-%d", suffix), suffix).Scan(&registryEventID))
 
 	var observationEventID int64
 	mutationBatchID := fmt.Sprintf("mutation-batch-%d", suffix)
@@ -1289,6 +1289,7 @@ ORDER BY tablename
 		"model_registry",
 		"model_registry_aliases",
 		"model_registry_events",
+		"model_shadow_decisions",
 	}, tables)
 }
 

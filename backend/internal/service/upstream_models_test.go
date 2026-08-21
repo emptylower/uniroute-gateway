@@ -46,6 +46,10 @@ func (s *modelObservationRepositoryStub) RecordDiscovery(_ context.Context, inpu
 	return s.batchID, s.err
 }
 
+func (s *modelObservationRepositoryStub) DeleteBatch(_ context.Context, batchID string) error {
+	return nil
+}
+
 type orderedAccountModelDiscoveryStoreStub struct {
 	accountModelDiscoveryStoreStub
 	callOrder *[]string

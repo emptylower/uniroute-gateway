@@ -32,4 +32,5 @@ type DiscoveryBatchInput struct {
 
 type ModelObservationRepository interface {
 	RecordDiscovery(ctx context.Context, input DiscoveryBatchInput) (string, error)
+	DeleteBatch(ctx context.Context, batchID string) error
 }

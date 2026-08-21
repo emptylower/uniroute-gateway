@@ -47,11 +47,13 @@ func ProvideAdminHandlers(
 	auditLogHandler *admin.AuditLogHandler,
 	modelGovernanceInventoryHandler *admin.ModelGovernanceInventoryHandler,
 	modelRegistryHandler *admin.ModelRegistryHandler,
+	modelGovernanceService service.ModelGovernanceService,
 	upstreamBillingProbe *service.UpstreamBillingProbeService,
 	ollamaCloudUsage *service.OllamaCloudUsageService,
 ) *AdminHandlers {
 	accountHandler.SetUpstreamBillingProbeService(upstreamBillingProbe)
 	accountHandler.SetOllamaCloudUsageService(ollamaCloudUsage)
+	accountHandler.SetModelGovernanceService(modelGovernanceService)
 	return &AdminHandlers{
 		Dashboard:              dashboardHandler,
 		User:                   userHandler,

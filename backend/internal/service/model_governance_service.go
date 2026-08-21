@@ -27,6 +27,7 @@ type modelGovernanceService struct {
 	classifier              ModelClassifier
 	evaluator               PublicationEvaluator
 	shadowDecisionRepo      ShadowDecisionRepository
+	atomicRecorder          AtomicShadowRecorder
 	channelPriceChecker     ChannelPriceChecker
 	billingMappingChecker   BillingMappingChecker
 	endpointProbeChecker    EndpointProbeChecker
@@ -36,6 +37,11 @@ type modelGovernanceService struct {
 // ShadowDecisionRepository persists shadow publication decisions.
 type ShadowDecisionRepository interface {
 	RecordShadowDecisions(ctx context.Context, batchID string, decisions []ShadowDecision) error
+}
+
+// AtomicShadowRecorder persists discovery and shadow decisions atomically in one transaction.
+type AtomicShadowRecorder interface {
+	RecordDiscoveryWithShadow(ctx context.Context, input DiscoveryBatchInput, decisions []ShadowDecision) (string, error)
 }
 
 type ShadowDecision struct {
@@ -74,6 +80,7 @@ type ModelGovernanceServiceConfig struct {
 	Classifier            ModelClassifier
 	Evaluator             PublicationEvaluator
 	ShadowDecisionRepo    ShadowDecisionRepository
+	AtomicRecorder        AtomicShadowRecorder
 	ChannelPriceChecker   ChannelPriceChecker
 	BillingMappingChecker BillingMappingChecker
 	EndpointProbeChecker  EndpointProbeChecker
@@ -93,6 +100,7 @@ func NewModelGovernanceService(cfg ModelGovernanceServiceConfig) ModelGovernance
 		classifier:            cfg.Classifier,
 		evaluator:             cfg.Evaluator,
 		shadowDecisionRepo:    cfg.ShadowDecisionRepo,
+		atomicRecorder:        cfg.AtomicRecorder,
 		channelPriceChecker:   cfg.ChannelPriceChecker,
 		billingMappingChecker: cfg.BillingMappingChecker,
 		endpointProbeChecker:  cfg.EndpointProbeChecker,
@@ -219,7 +227,30 @@ func (s *modelGovernanceService) ClassifyAndPersistShadow(ctx context.Context, i
 	}
 
 	// Commit observations/events/shadow decisions atomically.
-	// First record discovery batch for evidence.
+	if s.atomicRecorder != nil {
+		batchID, err := s.atomicRecorder.RecordDiscoveryWithShadow(ctx, input, shadowDecisions)
+		if err != nil {
+			return nil, fmt.Errorf("record discovery with shadow: %w", err)
+		}
+		// Publishable is eligible count, not discovered count.
+		publishable := 0
+		for _, sd := range shadowDecisions {
+			if sd.Eligibility == PublicationEligibilityEligible {
+				publishable++
+			}
+		}
+		summary := &ClassificationSummary{
+			BatchID:         batchID,
+			RegistryVersion: snapshot.Version,
+			Discovered:      len(decisions),
+			Publishable:     publishable,
+			CrossProvider:   counts[ModelClassificationCrossProvider],
+			Unknown:         counts[ModelClassificationUnknown],
+			Ignored:         counts[ModelClassificationIgnored],
+		}
+		return summary, nil
+	}
+
 	batchID, err := s.observationRepo.RecordDiscovery(ctx, input)
 	if err != nil {
 		return nil, fmt.Errorf("record discovery: %w", err)
@@ -227,6 +258,8 @@ func (s *modelGovernanceService) ClassifyAndPersistShadow(ctx context.Context, i
 
 	if s.shadowDecisionRepo != nil {
 		if err := s.shadowDecisionRepo.RecordShadowDecisions(ctx, batchID, shadowDecisions); err != nil {
+			// Compensating delete to preserve atomicity when atomic recorder not available.
+			_ = s.observationRepo.DeleteBatch(ctx, batchID)
 			return nil, fmt.Errorf("record shadow decisions: %w", err)
 		}
 	}

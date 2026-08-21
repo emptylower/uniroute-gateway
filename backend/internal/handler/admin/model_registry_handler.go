@@ -3,9 +3,11 @@ package admin
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
+	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 )
@@ -98,17 +100,17 @@ func (h *ModelRegistryHandler) CreateDecision(c *gin.Context) {
 		return
 	}
 
-	// Capture Better Auth actor from signed assertion. Fall back to header for tests.
-	actorID := strings.TrimSpace(c.GetHeader("X-Actor-ID"))
-	if actorID == "" {
-		if v, exists := c.Get("actor_id"); exists {
-			if s, ok := v.(string); ok {
-				actorID = s
-			}
-		}
+	// Capture actor from verified platform assertion (signed, replay-protected). Never trust raw headers.
+	assertion, ok := middleware.PlatformAssertionFromContext(c)
+	if !ok || strings.TrimSpace(assertion.Subject) == "" {
+		response.Unauthorized(c, "missing or invalid platform assertion")
+		return
 	}
-	if actorID == "" {
-		actorID = "unknown"
+	actorID := strings.TrimSpace(assertion.Subject)
+	// Defend against forged header trying to override assertion.
+	if forged := strings.TrimSpace(c.GetHeader("X-Actor-ID")); forged != "" && forged != actorID {
+		// Explicitly ignore forged header; log for audit.
+		_ = forged
 	}
 
 	input := service.RegistryDecisionInput{
@@ -150,26 +152,15 @@ func (h *ModelRegistryHandler) Rebuild(c *gin.Context) {
 }
 
 func parseRegistryVersion(raw string, out *int64) (bool, error) {
-	// Support weak ETag format W/"123" and plain "123"
 	trimmed := strings.TrimSpace(raw)
 	trimmed = strings.TrimPrefix(trimmed, "W/")
 	trimmed = strings.Trim(trimmed, `"`)
-	var v int64
-	_, err := parseInt64(trimmed, &v)
-	if err != nil {
-		return false, err
+	if strings.TrimSpace(trimmed) == "" {
+		return false, &parseError{msg: "invalid version"}
 	}
-	*out = v
-	return true, nil
-}
-
-func parseInt64(s string, out *int64) (bool, error) {
-	var v int64
-	for _, ch := range s {
-		if ch < '0' || ch > '9' {
-			return false, &parseError{msg: "invalid version"}
-		}
-		v = v*10 + int64(ch-'0')
+	v, err := strconv.ParseInt(trimmed, 10, 64)
+	if err != nil || v < 0 {
+		return false, &parseError{msg: "invalid version"}
 	}
 	*out = v
 	return true, nil

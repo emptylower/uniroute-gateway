@@ -17,10 +17,9 @@ func TestModelRegistry_ParseGovernanceProvider_AcceptsGovernedProviders(t *testi
 }
 
 func TestModelRegistry_ParseGovernanceProvider_RejectsNonGovernedProviders(t *testing.T) {
-	rejected := []string{"antigravity", "composite", "google", "xai", "Anthropic", "OPENAI", "Gemini", "", "  ", "anthropic ", " anthropic"}
-	// Note: "anthropic " with trim should actually succeed? But case-sensitive after trim – "anthropic " trimmed is "anthropic", so it should succeed.
+	// Note: "anthropic " with trim should actually succeed (case-sensitive after trim), so it must not be in rejected list.
 	// Explicit rejected list per spec: antigravity, composite, google, xai plus case mismatches.
-	rejected = []string{"antigravity", "composite", "google", "xai", "Anthropic", "OPENAI", "Gemini", "XAI", "azure-openai", "unknown", "text"}
+	rejected := []string{"antigravity", "composite", "google", "xai", "Anthropic", "OPENAI", "Gemini", "XAI", "azure-openai", "unknown", "text"}
 	for _, provider := range rejected {
 		if _, err := ParseGovernanceProvider(provider); err == nil {
 			t.Errorf("ParseGovernanceProvider(%q) should be rejected", provider)

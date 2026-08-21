@@ -34,6 +34,10 @@ func (f *fakeObservationRepo) RecordDiscovery(ctx context.Context, input Discove
 	return f.batchID, nil
 }
 
+func (f *fakeObservationRepo) DeleteBatch(ctx context.Context, batchID string) error {
+	return nil
+}
+
 type fakeShadowRepo struct {
 	calls     int
 	decisions []ShadowDecision

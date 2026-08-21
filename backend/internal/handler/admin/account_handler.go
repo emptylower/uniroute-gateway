@@ -56,6 +56,7 @@ type AccountHandler struct {
 	rateLimitService        *service.RateLimitService
 	accountUsageService     *service.AccountUsageService
 	accountTestService      *service.AccountTestService
+	modelGovernanceService  service.ModelGovernanceService
 	concurrencyService      *service.ConcurrencyService
 	crsSyncService          *service.CRSSyncService
 	sessionLimitCache       service.SessionLimitCache
@@ -73,6 +74,10 @@ func (h *AccountHandler) SetUpstreamBillingProbeService(probe *service.UpstreamB
 
 func (h *AccountHandler) SetOllamaCloudUsageService(usage *service.OllamaCloudUsageService) {
 	h.ollamaCloudUsage = usage
+}
+
+func (h *AccountHandler) SetModelGovernanceService(svc service.ModelGovernanceService) {
+	h.modelGovernanceService = svc
 }
 
 // NewAccountHandler creates a new admin account handler
@@ -2579,7 +2584,60 @@ func (h *AccountHandler) SyncUpstreamModels(c *gin.Context) {
 		return
 	}
 
-	syncedAt := time.Now().UTC()
+	syncedAt := service.CanonicalGovernanceTime(time.Now().UTC())
+
+	// Shadow-mode governance path: classify, evaluate, persist without mutating runtime mapping/pricing/routes.
+	if h.modelGovernanceService != nil {
+		var provider *service.GovernanceProvider
+		switch account.Platform {
+		case service.PlatformAnthropic, service.PlatformOpenAI, service.PlatformGemini, service.PlatformGrok:
+			p := service.GovernanceProvider(account.Platform)
+			provider = &p
+		}
+		seen := make(map[string]struct{}, len(discovery.EvidenceModelIDs))
+		deduped := make([]string, 0, len(discovery.EvidenceModelIDs))
+		for _, id := range discovery.EvidenceModelIDs {
+			if strings.TrimSpace(id) == "" {
+				continue
+			}
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			deduped = append(deduped, id)
+		}
+		rawSnapshot := discovery.RawSnapshot
+		idempotencySeed := fmt.Sprintf("%d\n%s\n%s", account.ID, syncedAt.Format(time.RFC3339Nano), rawSnapshot)
+		idempotencyKey := fmt.Sprintf("model-discovery:%x", sha256.Sum256([]byte(idempotencySeed)))
+		input := service.DiscoveryBatchInput{
+			IdempotencyKey:  idempotencyKey,
+			AccountID:       account.ID,
+			AccountProvider: provider,
+			RoutingPlatform: account.Platform,
+			ModelIDs:        deduped,
+			RawSnapshot:     rawSnapshot,
+			ObservedAt:      syncedAt,
+		}
+		summary, err := h.modelGovernanceService.ClassifyAndPersistShadow(c.Request.Context(), input)
+		if err != nil {
+			slog.Warn("sync_upstream_models_governance_failed", "account_id", accountID, "err", err)
+			var syncErr *service.UpstreamModelSyncError
+			if errors.As(err, &syncErr) {
+				switch syncErr.Kind {
+				case service.UpstreamModelSyncErrorConfiguration, service.UpstreamModelSyncErrorUnsupported:
+					response.BadRequest(c, syncErr.SafeMessage())
+				default:
+					response.Error(c, http.StatusBadGateway, syncErr.SafeMessage())
+				}
+				return
+			}
+			response.ErrorFrom(c, err)
+			return
+		}
+		response.Success(c, summary)
+		return
+	}
+
 	if err := h.accountTestService.PersistUpstreamModelDiscovery(c.Request.Context(), account, discovery, syncedAt); err != nil {
 		slog.Warn("sync_upstream_models_persist_failed", "account_id", accountID)
 		var syncErr *service.UpstreamModelSyncError

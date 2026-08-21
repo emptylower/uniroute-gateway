@@ -23,7 +23,6 @@ func (r *modelRegistryRepository) GetSnapshot(ctx context.Context) (*service.Mod
 	if r.db == nil {
 		return &service.ModelRegistrySnapshot{Version: 0, Entries: map[string]service.ModelRegistryEntry{}, Aliases: map[string]string{}}, nil
 	}
-	// Load current version as max registry_version from events
 	var version sql.NullInt64
 	if err := r.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(registry_version), 0) FROM model_registry_events`).Scan(&version); err != nil {
 		return nil, err
@@ -52,21 +51,7 @@ func (r *modelRegistryRepository) GetSnapshot(ctx context.Context) (*service.Mod
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	aliasRows, err := r.db.QueryContext(ctx, `SELECT alias, registry_id FROM model_registry_aliases`)
-	if err != nil {
-		return nil, err
-	}
-	defer aliasRows.Close()
-	// Need to map registry_id -> canonical
-	idToCanonical := make(map[int64]string)
-	for k, v := range snapshot.Entries {
-		// Need id; we didn't load id. Instead query alias with join.
-		_ = k
-		_ = v
-	}
-	// Alternative: join alias to registry canonical_id
-	aliasRows.Close()
-	aliasRows, err = r.db.QueryContext(ctx, `SELECT a.alias, r.canonical_id FROM model_registry_aliases a JOIN model_registry r ON r.id = a.registry_id`)
+	aliasRows, err := r.db.QueryContext(ctx, `SELECT a.alias, r.canonical_id FROM model_registry_aliases a JOIN model_registry r ON r.id = a.registry_id`)
 	if err != nil {
 		return nil, err
 	}
@@ -81,8 +66,6 @@ func (r *modelRegistryRepository) GetSnapshot(ctx context.Context) (*service.Mod
 	if err := aliasRows.Err(); err != nil {
 		return nil, err
 	}
-	// Silence unused var
-	_ = idToCanonical
 	return snapshot, nil
 }
 
@@ -117,16 +100,117 @@ func (r *modelRegistryRepository) RebuildProjection(ctx context.Context) error {
 	if r.db == nil {
 		return errors.New("database is not configured")
 	}
-	// Rebuild is idempotent: replay events to reconstruct projection.
-	// For Phase 3, we simply verify snapshot can be rebuilt without mutation.
-	// Real rebuild logic would truncate projection and replay events.
-	// Here we ensure no error and version consistency.
-	snapshot, err := r.GetSnapshot(ctx)
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	// Verify that replay would produce same count – placeholder for future logic.
-	_ = snapshot
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	// Serialize rebuild against concurrent decisions with a global advisory lock.
+	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('model_registry_global_version'::text, 0))`); err != nil {
+		return err
+	}
+
+	// Load events ordered deterministically by version and id.
+	rows, err := tx.QueryContext(ctx, `SELECT registry_version, payload, actor_id FROM model_registry_events ORDER BY registry_version ASC, id ASC`)
+	if err != nil {
+		return err
+	}
+	type eventRow struct {
+		version int64
+		payload string
+		actorID string
+	}
+	var events []eventRow
+	for rows.Next() {
+		var ev eventRow
+		if err := rows.Scan(&ev.version, &ev.payload, &ev.actorID); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		events = append(events, ev)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	_ = rows.Close()
+
+	// Reconstruct projection purely from events.
+	if _, err = tx.ExecContext(ctx, `DELETE FROM model_registry_aliases`); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM model_registry`); err != nil {
+		return err
+	}
+
+	for _, ev := range events {
+		var payload struct {
+			CanonicalID string   `json:"canonical_id"`
+			Provider    string   `json:"provider"`
+			Modality    string   `json:"modality"`
+			Status      string   `json:"status"`
+			Aliases     []string `json:"aliases"`
+			ActorID     string   `json:"actor_id"`
+			EvidenceRef *string  `json:"evidence_ref"`
+		}
+		if err := json.Unmarshal([]byte(ev.payload), &payload); err != nil {
+			return fmt.Errorf("unmarshal registry event payload: %w", err)
+		}
+		if payload.Status == "deleted" || payload.CanonicalID == "" {
+			// Tombstone: ensure canonical and its aliases are absent.
+			if payload.CanonicalID != "" {
+				var tombID int64
+				if err := tx.QueryRowContext(ctx, `SELECT id FROM model_registry WHERE canonical_id = $1`, payload.CanonicalID).Scan(&tombID); err == nil {
+					if _, err := tx.ExecContext(ctx, `DELETE FROM model_registry_aliases WHERE registry_id = $1`, tombID); err != nil {
+						return err
+					}
+					if _, err := tx.ExecContext(ctx, `DELETE FROM model_registry WHERE id = $1`, tombID); err != nil {
+						return err
+					}
+				} else if !errors.Is(err, sql.ErrNoRows) {
+					return err
+				}
+			}
+			continue
+		}
+		var registryID int64
+		err = tx.QueryRowContext(ctx, `SELECT id FROM model_registry WHERE canonical_id = $1`, payload.CanonicalID).Scan(&registryID)
+		if errors.Is(err, sql.ErrNoRows) {
+			err = tx.QueryRowContext(ctx, `INSERT INTO model_registry (canonical_id, provider, modality, lifecycle, version, decided_by, evidence_ref) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+				payload.CanonicalID, payload.Provider, payload.Modality, payload.Status, ev.version, payload.ActorID, payload.EvidenceRef).Scan(&registryID)
+			if err != nil {
+				return err
+			}
+		} else if err != nil {
+			return err
+		} else {
+			if _, err := tx.ExecContext(ctx, `UPDATE model_registry SET provider=$1, modality=$2, lifecycle=$3, version=$4, decided_by=$5, evidence_ref=$6, updated_at=NOW() WHERE id=$7`,
+				payload.Provider, payload.Modality, payload.Status, ev.version, payload.ActorID, payload.EvidenceRef, registryID); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, `DELETE FROM model_registry_aliases WHERE registry_id=$1`, registryID); err != nil {
+				return err
+			}
+		}
+		for _, alias := range payload.Aliases {
+			alias = strings.TrimSpace(alias)
+			if alias == "" || strings.Contains(alias, "*") {
+				continue
+			}
+			if _, err := tx.ExecContext(ctx, `INSERT INTO model_registry_aliases (registry_id, alias) VALUES ($1, $2)`, registryID, alias); err != nil {
+				return err
+			}
+		}
+	}
+
+	if err = tx.Commit(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -282,6 +366,9 @@ func (r *modelRegistryRepository) CreateDecision(ctx context.Context, input serv
 		INSERT INTO model_registry_events (registry_id, idempotency_key, event_type, registry_version, actor_id, payload)
 		VALUES ($1, $2, $3, $4, $5, $6::jsonb)
 	`, registryID, input.IdempotencyKey, "decision", newVersion, input.ActorID, string(payload)); err != nil {
+		if strings.Contains(err.Error(), "uq_model_registry_events_version") || strings.Contains(err.Error(), "23505") {
+			return nil, 0, fmt.Errorf("stale version conflict: concurrent write for version %d", newVersion)
+		}
 		return nil, 0, err
 	}
 

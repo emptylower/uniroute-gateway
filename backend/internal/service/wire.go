@@ -675,6 +675,22 @@ func ProvideAPIKeyService(
 	return svc
 }
 
+func ProvideModelGovernanceService(
+	registryService ModelRegistryService,
+	observationRepo ModelObservationRepository,
+	shadowRepo ShadowDecisionRepository,
+	classifier ModelClassifier,
+	evaluator PublicationEvaluator,
+) ModelGovernanceService {
+	return NewModelGovernanceService(ModelGovernanceServiceConfig{
+		RegistryService:    registryService,
+		ObservationRepo:    observationRepo,
+		Classifier:         classifier,
+		Evaluator:          evaluator,
+		ShadowDecisionRepo: shadowRepo,
+	})
+}
+
 // ProviderSet is the Wire provider set for all services
 var ProviderSet = wire.NewSet(
 	NewPlatformIdentityService,
@@ -683,7 +699,7 @@ var ProviderSet = wire.NewSet(
 	NewModelClassifier,
 	NewPublicationEvaluator,
 	NewModelRegistryService,
-	NewModelGovernanceService,
+	ProvideModelGovernanceService,
 	// Core services
 	NewAuthService,
 	NewUserService,

@@ -259,6 +259,227 @@ func (r *modelObservationRepository) RecordDiscovery(ctx context.Context, input 
 	return batchID, nil
 }
 
+func (r *modelObservationRepository) RecordDiscoveryWithShadow(ctx context.Context, input service.DiscoveryBatchInput, decisions []service.ShadowDecision) (batchID string, err error) {
+	if r == nil || r.db == nil {
+		return "", errors.New("model observation repository is not configured")
+	}
+	if strings.TrimSpace(input.IdempotencyKey) == "" {
+		return "", errors.New("discovery idempotency key is required")
+	}
+	if input.AccountID <= 0 {
+		return "", errors.New("discovery account ID is required")
+	}
+	if input.ObservedAt.IsZero() {
+		return "", errors.New("discovery observation time is required")
+	}
+	input.ObservedAt = service.CanonicalGovernanceTime(input.ObservedAt)
+	if input.AccountProvider != nil && !validGovernanceProvider(*input.AccountProvider) {
+		return "", fmt.Errorf("invalid account provider %q", *input.AccountProvider)
+	}
+	var rawSnapshotObject map[string]json.RawMessage
+	if err := json.Unmarshal(input.RawSnapshot, &rawSnapshotObject); err != nil || rawSnapshotObject == nil {
+		return "", errors.New("discovery raw snapshot must be a JSON object")
+	}
+	persistedSnapshot, provenanceDigest, err := discoveryPersistenceEnvelope(input)
+	if err != nil {
+		return "", err
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	batchID = uuid.NewString()
+	var lockedAccountID int64
+	if err = tx.QueryRowContext(ctx, `SELECT id FROM accounts WHERE id = $1 FOR UPDATE`, input.AccountID).Scan(&lockedAccountID); err != nil {
+		return "", err
+	}
+	result, err := tx.ExecContext(ctx, `
+		INSERT INTO model_classification_batches (
+			batch_id, idempotency_key, account_id, connection_id, raw_snapshot, observed_at
+		)
+		VALUES ($1, $2, $3, $4, $5::jsonb, $6)
+		ON CONFLICT (idempotency_key) DO NOTHING
+	`, batchID, input.IdempotencyKey, input.AccountID, input.ConnectionID, string(persistedSnapshot), input.ObservedAt.UTC())
+	if err != nil {
+		return "", err
+	}
+	inserted, err := result.RowsAffected()
+	if err != nil {
+		return "", err
+	}
+	if inserted == 0 {
+		var existingDigest string
+		if err = tx.QueryRowContext(ctx, `SELECT batch_id, raw_snapshot->'provenance'->>'digest' FROM model_classification_batches WHERE idempotency_key = $1`, input.IdempotencyKey).Scan(&batchID, &existingDigest); err != nil {
+			return "", err
+		}
+		if existingDigest != provenanceDigest {
+			return "", errors.New("discovery idempotency key collision")
+		}
+		if err = tx.Commit(); err != nil {
+			return "", err
+		}
+		return batchID, nil
+	}
+	var currentWinner discoveryProjectionWinner
+	err = tx.QueryRowContext(ctx, `
+		SELECT b.batch_id, b.observed_at, COALESCE(b.raw_snapshot->'provenance'->>'digest', '')
+		FROM model_classification_batches b
+		WHERE b.account_id = $1 AND b.batch_id <> $2
+		ORDER BY b.observed_at DESC, COALESCE(b.raw_snapshot->'provenance'->>'digest', '') DESC,
+		         EXISTS (SELECT 1 FROM model_observation_events e WHERE e.batch_id = b.batch_id) DESC,
+		         b.id ASC
+		LIMIT 1
+	`, input.AccountID, batchID).Scan(&currentWinner.batchID, &currentWinner.observedAt, &currentWinner.digest)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", err
+	}
+	hasCurrentWinner := err == nil
+	if hasCurrentWinner && (input.ObservedAt.Before(currentWinner.observedAt) ||
+		(input.ObservedAt.Equal(currentWinner.observedAt) && provenanceDigest <= currentWinner.digest)) {
+		// Still need to insert shadow decisions even for stale batch (evidence-only batch still gets shadow decisions)
+		for _, d := range decisions {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO model_shadow_decisions (batch_id, upstream_model_id, canonical_id, provider, classification, eligibility, reason) VALUES ($1, $2, $3, $4, $5, $6, $7)`, batchID, d.UpstreamModelID, d.CanonicalID, nullableProvider(d.Provider), d.Classification, d.Eligibility, d.Reason); err != nil {
+				return "", err
+			}
+		}
+		if err = tx.Commit(); err != nil {
+			return "", err
+		}
+		return batchID, nil
+	}
+	replacesEqualWatermarkWinner := hasCurrentWinner && input.ObservedAt.Equal(currentWinner.observedAt) && provenanceDigest > currentWinner.digest
+	var committedBefore map[string]storedModelObservation
+	if replacesEqualWatermarkWinner {
+		committedBefore, err = lockModelObservations(ctx, tx, input.AccountID)
+		if err != nil {
+			return "", err
+		}
+		if err = rollbackDiscoveryProjection(ctx, tx, currentWinner.batchID, batchID, input, committedBefore); err != nil {
+			return "", err
+		}
+	}
+
+	existing, err := lockModelObservations(ctx, tx, input.AccountID)
+	if err != nil {
+		return "", err
+	}
+	seen := make(map[string]struct{}, len(input.ModelIDs))
+	for _, modelID := range input.ModelIDs {
+		if _, duplicate := seen[modelID]; duplicate {
+			continue
+		}
+		seen[modelID] = struct{}{}
+
+		observation, exists := existing[modelID]
+		if !exists {
+			classification, reason := "discovered", "awaiting_registry_classification"
+			var resolvedRegistryID sql.NullInt64
+			if input.AccountProvider == nil {
+				classification = "ignored"
+				reason = "unsupported_routing_platform"
+			}
+			if restored, restoreErr := loadRemovedAdminState(ctx, tx, input.AccountID, modelID); restoreErr != nil {
+				return "", restoreErr
+			} else if restored != nil {
+				classification = restored.classification
+				reason = restored.reason
+				resolvedRegistryID = restored.resolvedRegistryID
+			}
+			err = tx.QueryRowContext(ctx, `
+				INSERT INTO model_observations (
+					connection_id, account_id, upstream_model_id, snapshot_batch_id, resolved_registry_id, classification,
+					classification_reason, upstream_presence, miss_streak,
+					first_seen_at, last_seen_at
+				)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, 'present', 0, $8, $8)
+				RETURNING id
+			`, input.ConnectionID, input.AccountID, modelID, batchID, resolvedRegistryID, classification, reason,
+				input.ObservedAt.UTC()).Scan(&observation.id)
+			if err != nil {
+				return "", err
+			}
+			observation.classification = classification
+			observation.modelID = modelID
+			observation.reason = reason
+			observation.resolvedRegistryID = resolvedRegistryID
+			observation.presence = "present"
+			observation.missStreak = 0
+			observation.snapshotBatchID = batchID
+			transition := replacementTransition(committedBefore, modelID, "discovered")
+			if err = appendObservationEvent(ctx, tx, observation, batchID, projectionEventType(transition, replacesEqualWatermarkWinner), transition, input); err != nil {
+				return "", err
+			}
+			continue
+		}
+
+		eventType := "observed"
+		if observation.presence == "missing" {
+			eventType = "reappeared"
+		}
+		observation.presence = "present"
+		observation.missStreak = 0
+		_, err = tx.ExecContext(ctx, `
+			UPDATE model_observations
+			SET connection_id = $1, upstream_presence = 'present', miss_streak = 0,
+			    last_seen_at = GREATEST(last_seen_at, $2), snapshot_batch_id = $3,
+			    updated_at = NOW()
+			WHERE id = $4
+		`, input.ConnectionID, input.ObservedAt.UTC(), batchID, observation.id)
+		if err != nil {
+			return "", err
+		}
+		transition := replacementTransition(committedBefore, modelID, eventType)
+		if err = appendObservationEvent(ctx, tx, observation, batchID, projectionEventType(transition, replacesEqualWatermarkWinner), transition, input); err != nil {
+			return "", err
+		}
+	}
+
+	missingModelIDs := make([]string, 0, len(existing))
+	for modelID := range existing {
+		if _, present := seen[modelID]; present {
+			continue
+		}
+		missingModelIDs = append(missingModelIDs, modelID)
+	}
+	sort.Strings(missingModelIDs)
+	for _, modelID := range missingModelIDs {
+		observation := existing[modelID]
+		observation.presence = "missing"
+		observation.missStreak++
+		_, err = tx.ExecContext(ctx, `
+			UPDATE model_observations
+			SET upstream_presence = 'missing', miss_streak = $1, updated_at = NOW()
+			WHERE id = $2
+		`, observation.missStreak, observation.id)
+		if err != nil {
+			return "", err
+		}
+		transition := replacementTransition(committedBefore, modelID, "missing")
+		if err = appendObservationEvent(ctx, tx, observation, batchID, projectionEventType(transition, replacesEqualWatermarkWinner), transition, input); err != nil {
+			return "", err
+		}
+	}
+
+	// Insert shadow decisions atomically before commit
+	for _, d := range decisions {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO model_shadow_decisions (batch_id, upstream_model_id, canonical_id, provider, classification, eligibility, reason) VALUES ($1, $2, $3, $4, $5, $6, $7)`, batchID, d.UpstreamModelID, d.CanonicalID, nullableProvider(d.Provider), d.Classification, d.Eligibility, d.Reason); err != nil {
+			return "", err
+		}
+	}
+
+	if err = tx.Commit(); err != nil {
+		return "", err
+	}
+	return batchID, nil
+}
+
 // Equal-watermark replacement first restores the projection that existed before
 // the superseded batch, then applies the higher-digest catalog. Prior events stay
 // append-only and continue to describe the projection history that actually ran.
@@ -587,6 +808,41 @@ func appendObservationEvent(
 	`, postState.id, batchID, postState.snapshotBatchID, input.AccountID, postState.modelID, eventType, postState.classification,
 		postState.reason, postState.presence, postState.missStreak, string(payload))
 	return err
+}
+
+func (r *modelObservationRepository) DeleteBatch(ctx context.Context, batchID string) error {
+	if r == nil || r.db == nil {
+		return errors.New("model observation repository is not configured")
+	}
+	if strings.TrimSpace(batchID) == "" {
+		return errors.New("batch ID is required")
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	// Delete in dependency order: shadow decisions, observation events, observations, then batch.
+	if _, err = tx.ExecContext(ctx, `DELETE FROM model_shadow_decisions WHERE batch_id = $1`, batchID); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM model_observation_events WHERE batch_id = $1 OR snapshot_batch_id = $1`, batchID); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM model_observations WHERE snapshot_batch_id = $1`, batchID); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM model_classification_batches WHERE batch_id = $1`, batchID); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func nullInt64Value(value sql.NullInt64) any {
