@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -165,3 +166,67 @@ func TestAggregatorConnectionReuseNoCapacityReservation(t *testing.T) {
 		require.Equal(t, agg.ID, *acc.ConnectionID)
 	}
 }
+
+func TestAggregatorConnectionReuseDecryptsCredentialForProbe(t *testing.T) {
+	// Fake encryptor that does enc: + plaintext
+	enc := fakeEncryptor{}
+	plain := "secret-token-123"
+	encrypted, _ := enc.Encrypt(plain)
+	require.Equal(t, "enc:"+plain, encrypted)
+	// Create aggregator connection with encrypted credential
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Probe should receive decrypted credential in Authorization header
+		auth := r.Header.Get("Authorization")
+		require.Equal(t, "Bearer "+plain, auth)
+		w.Write([]byte(`{"id":"test","choices":[{"message":{"content":"hi"}}]}`))
+	}))
+	defer srv.Close()
+	connRepo := newFakeUpstreamConnRepo()
+	agg := &UpstreamConnection{Kind: "aggregator", BaseURL: srv.URL, CredentialVersion: 1, Status: "active"}
+	_ = connRepo.Create(context.Background(), agg, encrypted)
+	accountRepo := newFakeReuseAccountRepo()
+	reuseRepo := newFakeReuseRepo()
+	probeRepo := &fakeProbeRepo{}
+	probeSvc := NewAccountEndpointProbeService(probeRepo, srv.Client())
+	svc := NewAggregatorConnectionReuseServiceWithRepo(connRepo, accountRepo, reuseRepo, probeSvc)
+	svc.SetEncryptor(enc)
+	// Reuse should decrypt and probe with plain, then succeed and activate
+	id, err := svc.Reuse(context.Background(), ReuseAggregatorConnectionInput{ConnectionID: agg.ID, Provider: GovernanceProviderOpenAI, Protocol: AccountProtocolOpenAI, NormalizedEndpoint: "/v1/chat/completions", ClientRequestID: "decrypt-1", CredentialVersion: 1})
+	require.NoError(t, err)
+	require.NotZero(t, id)
+	acc, _ := accountRepo.GetByID(context.Background(), id)
+	require.NotNil(t, acc)
+	// Probe success should have activated account
+	require.Equal(t, "active", acc.Status)
+	// Credentials should be the decrypted plain
+	require.Equal(t, plain, acc.Credentials["api_key"])
+}
+
+func TestAggregatorConnectionReuseDecryptFailureLeavesInactive(t *testing.T) {
+	// Encryptor that fails to decrypt
+	failEnc := fakeFailEncryptor{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("probe should not be called when decrypt fails")
+	}))
+	defer srv.Close()
+	connRepo := newFakeUpstreamConnRepo()
+	agg := &UpstreamConnection{Kind: "aggregator", BaseURL: srv.URL, CredentialVersion: 1, Status: "active"}
+	// Store with a valid encrypted value, but decrypt will fail
+	_ = connRepo.Create(context.Background(), agg, "enc:whatever")
+	accountRepo := newFakeReuseAccountRepo()
+	reuseRepo := newFakeReuseRepo()
+	probeSvc := NewAccountEndpointProbeService(&fakeProbeRepo{}, srv.Client())
+	svc := NewAggregatorConnectionReuseServiceWithRepo(connRepo, accountRepo, reuseRepo, probeSvc)
+	svc.SetEncryptor(failEnc)
+	id, err := svc.Reuse(context.Background(), ReuseAggregatorConnectionInput{ConnectionID: agg.ID, Provider: GovernanceProviderOpenAI, Protocol: AccountProtocolOpenAI, NormalizedEndpoint: "/v1/chat/completions", ClientRequestID: "fail-decrypt", CredentialVersion: 1})
+	require.NoError(t, err)
+	require.NotZero(t, id)
+	acc, _ := accountRepo.GetByID(context.Background(), id)
+	require.NotNil(t, acc)
+	require.Equal(t, "disabled", acc.Status)
+}
+
+type fakeFailEncryptor struct{}
+
+func (fakeFailEncryptor) Encrypt(p string) (string, error) { return "enc:" + p, nil }
+func (fakeFailEncryptor) Decrypt(c string) (string, error) { return "", fmt.Errorf("decrypt failed") }

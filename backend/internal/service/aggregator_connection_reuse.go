@@ -16,6 +16,7 @@ type AggregatorConnectionReuseService struct {
 	accountRepo AccountRepository
 	reuseRepo   AggregatorReuseRepository
 	probeSvc    *AccountEndpointProbeService
+	encryptor   SecretEncryptor
 }
 
 func NewAggregatorConnectionReuseService(connRepo UpstreamConnectionRepository, accountRepo AccountRepository, probeSvc *AccountEndpointProbeService) *AggregatorConnectionReuseService {
@@ -24,6 +25,14 @@ func NewAggregatorConnectionReuseService(connRepo UpstreamConnectionRepository, 
 
 func NewAggregatorConnectionReuseServiceWithRepo(connRepo UpstreamConnectionRepository, accountRepo AccountRepository, reuseRepo AggregatorReuseRepository, probeSvc *AccountEndpointProbeService) *AggregatorConnectionReuseService {
 	return &AggregatorConnectionReuseService{connRepo: connRepo, accountRepo: accountRepo, reuseRepo: reuseRepo, probeSvc: probeSvc}
+}
+
+func NewAggregatorConnectionReuseServiceWithEncryptor(connRepo UpstreamConnectionRepository, accountRepo AccountRepository, reuseRepo AggregatorReuseRepository, probeSvc *AccountEndpointProbeService, encryptor SecretEncryptor) *AggregatorConnectionReuseService {
+	return &AggregatorConnectionReuseService{connRepo: connRepo, accountRepo: accountRepo, reuseRepo: reuseRepo, probeSvc: probeSvc, encryptor: encryptor}
+}
+
+func (s *AggregatorConnectionReuseService) SetEncryptor(enc SecretEncryptor) {
+	s.encryptor = enc
 }
 
 type ReuseAggregatorConnectionInput struct {
@@ -85,19 +94,47 @@ func (s *AggregatorConnectionReuseService) Reuse(ctx context.Context, input Reus
 	if model == "" {
 		return 0, fmt.Errorf("no representative model for provider %s", input.Provider)
 	}
-	// Transactionally create inactive account + reuse request
-	// For Phase 4, we create account with status disabled (inactive) and link to connection
+	// Decrypt connection credential for reuse (R2)
+	var plainCred string
+	if encCred != "" {
+		if s.encryptor != nil {
+			dec, err := s.encryptor.Decrypt(encCred)
+			if err != nil {
+				// Decrypt failure – create inactive account with evidence and return, do not fall back to temp
+				platform := providerToPlatform(input.Provider)
+				failAccount := &Account{
+					Name: fmt.Sprintf("reuse-%s-%d", input.Provider, input.ConnectionID), Platform: platform, Type: "api_key",
+					Credentials: map[string]any{}, Extra: map[string]any{}, Status: "disabled", Schedulable: false, ConnectionID: &input.ConnectionID, ConfigVersion: 1,
+				}
+				protoStrFail := string(input.Protocol)
+				epFail := input.NormalizedEndpoint
+				failAccount.Protocol = &protoStrFail
+				failAccount.EndpointPath = &epFail
+				_ = s.accountRepo.Create(ctx, failAccount)
+				if s.reuseRepo != nil {
+					_ = s.reuseRepo.Create(ctx, input.ConnectionID, input.Provider, input.Protocol, input.NormalizedEndpoint, input.ClientRequestID, failAccount.ID)
+				}
+				return failAccount.ID, nil
+			}
+			plainCred = dec
+		} else {
+			// Test path without encryptor: encCred may be plaintext or prefixed with enc:
+			if strings.HasPrefix(encCred, "enc:") {
+				plainCred = strings.TrimPrefix(encCred, "enc:")
+			} else {
+				plainCred = encCred
+			}
+		}
+	}
+	// Transactionally create inactive account + reuse request with real credential
 	platform := providerToPlatform(input.Provider)
+	creds := map[string]any{}
+	if plainCred != "" {
+		creds["api_key"] = plainCred
+	}
 	newAccount := &Account{
-		Name:        fmt.Sprintf("reuse-%s-%d", input.Provider, input.ConnectionID),
-		Platform:    platform,
-		Type:        "api_key",
-		Credentials: map[string]any{"api_key": "aggregator-cred-temp"},
-		Extra:       map[string]any{},
-		Status:      "disabled",
-		Schedulable: false,
-		ConnectionID: &input.ConnectionID,
-		ConfigVersion: 1,
+		Name: fmt.Sprintf("reuse-%s-%d", input.Provider, input.ConnectionID), Platform: platform, Type: "api_key",
+		Credentials: creds, Extra: map[string]any{}, Status: "disabled", Schedulable: false, ConnectionID: &input.ConnectionID, ConfigVersion: 1,
 	}
 	protoStr := string(input.Protocol)
 	ep := input.NormalizedEndpoint
@@ -109,7 +146,6 @@ func (s *AggregatorConnectionReuseService) Reuse(ctx context.Context, input Reus
 	}
 	// Create inactive
 	if err := s.accountRepo.Create(ctx, newAccount); err != nil {
-		// If unique violation on reuse scope, treat as concurrent idempotency hit
 		if isServiceUniqueViolation(err) && s.reuseRepo != nil {
 			if id, found, _ := s.reuseRepo.FindByScope(ctx, input.ConnectionID, input.Provider, input.Protocol, input.NormalizedEndpoint, input.ClientRequestID); found {
 				return id, nil
@@ -121,12 +157,9 @@ func (s *AggregatorConnectionReuseService) Reuse(ctx context.Context, input Reus
 	if s.reuseRepo != nil {
 		_ = s.reuseRepo.Create(ctx, input.ConnectionID, input.Provider, input.Protocol, input.NormalizedEndpoint, input.ClientRequestID, newAccount.ID)
 	}
-	// Post-commit: run real probe with registry-confirmed model
+	// Post-commit: run real probe with registry-confirmed model using decrypted credential
 	if s.probeSvc != nil && conn != nil {
-		credential := "probe-cred-temp"
-		if encCred != "" {
-			credential = encCred // In production, decrypt via SecretEncryptor
-		}
+		credential := plainCred
 		probe, err := s.probeSvc.Probe(ctx, newAccount.ID, conn, input.Provider, input.Protocol, input.NormalizedEndpoint, credential)
 		if err != nil || probe == nil || probe.Status != "success" {
 			// Probe failed – leave inactive, preserve evidence

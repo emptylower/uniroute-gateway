@@ -139,9 +139,10 @@ func (h *ModelGovernanceProbeHandler) Probe(c *gin.Context) {
 			endpoint = ep
 		}
 	}
-	credential := "probe-cred-temp"
-	if encCred != "" {
-		credential = encCred
+	credential := encCred
+	if strings.TrimSpace(credential) == "" {
+		response.BadRequest(c, "missing credential for probe")
+		return
 	}
 	// Idempotency: probe table's unique trigger will dedup same (account,connection,provider,protocol,endpoint,credVer,configVer)
 	// We also store client idempotency in evidence_ref for audit

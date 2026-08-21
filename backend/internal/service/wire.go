@@ -675,6 +675,30 @@ func ProvideAPIKeyService(
 	return svc
 }
 
+func ProvideAccountEndpointProbeService(repo AccountEndpointProbeRepository) *AccountEndpointProbeService {
+	return NewAccountEndpointProbeService(repo, nil)
+}
+
+func ProvideUpstreamConnectionService(repo UpstreamConnectionRepository, encryptor SecretEncryptor) *UpstreamConnectionService {
+	return NewUpstreamConnectionService(repo, encryptor)
+}
+
+func ProvideAggregatorDesignationService(repo UpstreamConnectionRepository) *AggregatorDesignationService {
+	return NewAggregatorDesignationService(repo)
+}
+
+func ProvideAggregatorConnectionReuseService(
+	connRepo UpstreamConnectionRepository,
+	accountRepo AccountRepository,
+	reuseRepo AggregatorReuseRepository,
+	probeSvc *AccountEndpointProbeService,
+	encryptor SecretEncryptor,
+) *AggregatorConnectionReuseService {
+	svc := NewAggregatorConnectionReuseServiceWithRepo(connRepo, accountRepo, reuseRepo, probeSvc)
+	svc.SetEncryptor(encryptor)
+	return svc
+}
+
 func ProvideEndpointProbeChecker(repo AccountEndpointProbeRepository) EndpointProbeChecker {
 	if repo == nil {
 		return nil
@@ -716,6 +740,10 @@ var ProviderSet = wire.NewSet(
 	NewModelClassifier,
 	NewPublicationEvaluator,
 	NewModelRegistryService,
+	ProvideAccountEndpointProbeService,
+	ProvideUpstreamConnectionService,
+	ProvideAggregatorDesignationService,
+	ProvideAggregatorConnectionReuseService,
 	ProvideEndpointProbeChecker,
 	ProvideModelGovernanceService,
 	// Core services
