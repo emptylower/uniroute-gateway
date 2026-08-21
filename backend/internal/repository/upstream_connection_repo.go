@@ -247,6 +247,23 @@ func (r *upstreamConnectionRepository) TransitionToAggregator(ctx context.Contex
 	return tx.Commit()
 }
 
+func (r *upstreamConnectionRepository) UpdateStatus(ctx context.Context, id int64, status string) error {
+	if r.sql != nil {
+		_, err := r.sql.ExecContext(ctx, `UPDATE upstream_connections SET status=$1, updated_at=NOW() WHERE id=$2`, status, id)
+		if err != nil {
+			return err
+		}
+		// Append event for audit
+		_, _ = r.sql.ExecContext(ctx, `INSERT INTO upstream_connection_events (connection_id, event_type, from_kind, to_kind, actor_id, idempotency_key, evidence_ref, credential_version, payload) VALUES ($1,'status_change','`+status+`','`+status+`','system',$2,'',1,'{}'::jsonb)`, id, fmt.Sprintf("suspend-%d-%s", id, status))
+		return nil
+	}
+	if r.client == nil {
+		return fmt.Errorf("no db")
+	}
+	_, err := r.client.UpstreamConnection.Update().Where(dbconn.IDEQ(id)).SetStatus(status).Save(ctx)
+	return err
+}
+
 func isUpstreamUniqueViolation(err error) bool {
 	if err == nil {
 		return false

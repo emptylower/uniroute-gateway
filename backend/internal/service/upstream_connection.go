@@ -43,6 +43,7 @@ type UpstreamConnectionRepository interface {
 	UpdateCredential(ctx context.Context, id int64, expectedVersion int64, encryptedCredential string) (int64, error)
 	BatchGetByIDs(ctx context.Context, ids []int64) (map[int64]*UpstreamConnection, error)
 	ListAll(ctx context.Context) ([]*UpstreamConnection, error)
+	UpdateStatus(ctx context.Context, id int64, status string) error
 }
 
 // AggregatorDesignationRepository extends connection repo with designation support.

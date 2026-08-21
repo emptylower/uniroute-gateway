@@ -36,9 +36,16 @@ type AccountEndpointProbeRepository interface {
 
 // Probe service performs bounded real requests and evidence redaction.
 type AccountEndpointProbeService struct {
-	probeRepo AccountEndpointProbeRepository
+	probeRepo  AccountEndpointProbeRepository
 	httpClient *http.Client
-	encryptor SecretEncryptor // for evidence redaction
+	encryptor  SecretEncryptor // for evidence redaction
+	connRepo   UpstreamConnectionRepository
+}
+
+func (s *AccountEndpointProbeService) SetConnectionRepository(repo UpstreamConnectionRepository) {
+	if s != nil {
+		s.connRepo = repo
+	}
 }
 
 func NewAccountEndpointProbeService(repo AccountEndpointProbeRepository, client *http.Client) *AccountEndpointProbeService {
@@ -109,12 +116,17 @@ func (s *AccountEndpointProbeService) Probe(ctx context.Context, accountID int64
 		decision := scopeDecider.Decide(resp.StatusCode, string(body), representativeModel, provider)
 		summary["failure_scope"] = decision.Scope
 		summary["decision"] = decision.Scope
-		// Apply connection-wide vs account-local handling would be done here via repo (phase 6)
+		if s.connRepo != nil && decision.Scope == "connection" {
+			_ = s.connRepo.UpdateStatus(ctx, connection.ID, "suspended")
+		}
 		return s.persistProbe(ctx, accountID, connection, provider, protocol, normalizedEndpoint, "failed", summary)
 	case 404:
 		decision := scopeDecider.Decide(resp.StatusCode, string(body), representativeModel, provider)
 		summary["failure_scope"] = decision.Scope
 		summary["decision"] = decision.Scope
+		if s.connRepo != nil && decision.Scope == "connection" {
+			_ = s.connRepo.UpdateStatus(ctx, connection.ID, "suspended")
+		}
 		return s.persistProbe(ctx, accountID, connection, provider, protocol, normalizedEndpoint, "failed", summary)
 	default:
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
