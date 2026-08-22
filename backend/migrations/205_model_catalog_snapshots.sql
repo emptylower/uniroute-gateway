@@ -103,6 +103,7 @@ CREATE TABLE IF NOT EXISTS model_catalog_candidate_evidence (
     display_name TEXT,
     context_window BIGINT,
     capabilities JSONB NOT NULL DEFAULT '[]'::jsonb,
+    aliases JSONB NOT NULL DEFAULT '[]'::jsonb,
     price JSONB,
     raw_ref TEXT NOT NULL DEFAULT '',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -114,6 +115,8 @@ CREATE TABLE IF NOT EXISTS model_catalog_candidate_evidence (
         CHECK (context_window IS NULL OR context_window > 0),
     CONSTRAINT chk_model_catalog_candidate_evidence_capabilities
         CHECK (jsonb_typeof(capabilities) = 'array'),
+    CONSTRAINT chk_model_catalog_candidate_evidence_aliases
+        CHECK (jsonb_typeof(aliases) = 'array'),
     CONSTRAINT chk_model_catalog_candidate_evidence_price
         CHECK (price IS NULL OR jsonb_typeof(price) = 'object'),
     CONSTRAINT uq_model_catalog_candidate_evidence_identity

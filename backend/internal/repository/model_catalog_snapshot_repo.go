@@ -10,8 +10,8 @@ import (
 	"io"
 	"strings"
 
-	"github.com/Wei-Shaw/sub2api/internal/service"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/klauspost/compress/zstd"
 )
 
@@ -233,6 +233,16 @@ func insertCandidateEvidence(ctx context.Context, tx *sql.Tx, snapshotID int64, 
 	if err != nil {
 		return err
 	}
+	aliases := []string{}
+	for _, a := range ev.Aliases {
+		if trimmed := strings.TrimSpace(a); trimmed != "" {
+			aliases = append(aliases, trimmed)
+		}
+	}
+	aliasesJSON, err := json.Marshal(aliases)
+	if err != nil {
+		return err
+	}
 	var hint any
 	if trimmed := strings.TrimSpace(ev.ProviderHint); trimmed != "" {
 		hint = trimmed
@@ -247,10 +257,10 @@ func insertCandidateEvidence(ctx context.Context, tx *sql.Tx, snapshotID int64, 
 	}
 	_, err = tx.ExecContext(ctx, `
 INSERT INTO model_catalog_candidate_evidence
-    (snapshot_id, source, canonical_model_id, provider_hint, display_name, context_window, capabilities, price, raw_ref)
-VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9)
+    (snapshot_id, source, canonical_model_id, provider_hint, display_name, context_window, capabilities, aliases, price, raw_ref)
+VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9::jsonb, $10)
 ON CONFLICT (snapshot_id, canonical_model_id) DO NOTHING
-`, snapshotID, source, canonical, hint, strings.TrimSpace(ev.DisplayName), contextWindow, string(capabilitiesJSON), price, strings.TrimSpace(ev.RawRef))
+`, snapshotID, source, canonical, hint, strings.TrimSpace(ev.DisplayName), contextWindow, string(capabilitiesJSON), string(aliasesJSON), price, strings.TrimSpace(ev.RawRef))
 	return err
 }
 

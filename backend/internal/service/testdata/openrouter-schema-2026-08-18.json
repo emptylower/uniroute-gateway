@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openrouter.ai/api/v1/models#openrouter-schema-2026-08-18",
+  "title": "OpenRouter /api/v1/models payload schema pinned 2026-08-18",
+  "description": "Contract used by sub2api phase 6 ingestion. Required fields are enforced; unknown fields are ignored. Pricing strings are retained verbatim as anomaly evidence only and never become production prices.",
+  "type": "object",
+  "required": ["data"],
+  "properties": {
+    "data": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[^/]+/[^/]+$",
+            "description": "Namespace-limited model id: exactly one slash separating vendor namespace from model name."
+          },
+          "canonical_slug": {
+            "type": ["string", "null"],
+            "description": "Optional alias; retained only when it keeps the same vendor namespace prefix."
+          },
+          "name": { "type": ["string", "null"] },
+          "created": { "type": ["integer", "null"] },
+          "description": { "type": ["string", "null"] },
+          "context_length": { "type": ["integer", "null"], "minimum": 1 },
+          "architecture": {
+            "type": ["object", "null"],
+            "properties": {
+              "modality": { "type": ["string", "null"] },
+              "input_modalities": { "type": ["array", "null"], "items": { "type": "string" } },
+              "output_modalities": { "type": ["array", "null"], "items": { "type": "string" } }
+            }
+          },
+          "pricing": {
+            "type": ["object", "null"],
+            "description": "External price evidence only. Values are USD-per-token strings.",
+            "properties": {
+              "prompt": { "type": ["string", "null"] },
+              "completion": { "type": ["string", "null"] }
+            }
+          },
+          "supported_parameters": {
+            "type": ["array", "null"],
+            "items": { "type": "string" }
+          }
+        }
+      }
+    }
+  }
+}

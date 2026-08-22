@@ -1,0 +1,52 @@
+{
+  "data": [
+    {
+      "id": "anthropic/claude-test-4",
+      "canonical_slug": "anthropic/claude-test-4:thinking",
+      "name": "Claude Test 4",
+      "created": 1755500000,
+      "description": "Test Anthropic model entry",
+      "context_length": 200000,
+      "architecture": {
+        "modality": "text->text",
+        "input_modalities": ["text", "image"],
+        "output_modalities": ["text"],
+        "tokenizer": "Claude"
+      },
+      "pricing": {
+        "prompt": "0.000003",
+        "completion": "0.000015"
+      },
+      "supported_parameters": ["tools", "temperature", "reasoning"]
+    },
+    {
+      "id": "openai/gpt-test-mini",
+      "name": "GPT Test Mini",
+      "context_length": 128000,
+      "pricing": {
+        "prompt": "0.00000015",
+        "completion": "0.0000006"
+      },
+      "supported_parameters": ["tools"]
+    },
+    {
+      "id": "google/gemini-test-pro",
+      "name": "Gemini Test Pro",
+      "context_length": 1000000,
+      "pricing": {
+        "prompt": "0.00000125",
+        "completion": "0.00001"
+      }
+    },
+    {
+      "id": "x-ai/grok-test-beta",
+      "name": "Grok Test Beta",
+      "context_length": 256000
+    },
+    {
+      "id": "mistral/mistral-test-large",
+      "name": "Mistral Test Large",
+      "context_length": 128000
+    }
+  ]
+}

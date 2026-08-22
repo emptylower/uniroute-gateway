@@ -1,0 +1,30 @@
+{
+  "data": [
+    {
+      "id": "anthropic/claude-broken-pricing",
+      "name": "Broken Pricing Model",
+      "context_length": 200000,
+      "pricing": {
+        "prompt": 3,
+        "completion": "0.000015"
+      }
+    },
+    {
+      "name": "Missing ID Model",
+      "context_length": 100000
+    },
+    {
+      "id": "",
+      "name": "Empty ID Model"
+    },
+    {
+      "id": "noslash-model",
+      "name": "No Namespace Model"
+    },
+    {
+      "id": "openai/gpt-test-mini",
+      "name": "GPT Test Mini",
+      "context_length": 128000
+    }
+  ]
+}

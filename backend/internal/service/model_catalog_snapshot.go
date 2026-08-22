@@ -70,7 +70,8 @@ type CatalogCandidateEvidenceInput struct {
 	DisplayName      string
 	ContextWindow    int64 // 0 means unknown
 	Capabilities     []string
-	PriceJSON        string // JSON object string; empty means no price evidence
+	Aliases          []string // namespace-limited alternative identifiers claimed by the source
+	PriceJSON        string   // JSON object string; empty means no price evidence
 	RawRef           string
 }
 

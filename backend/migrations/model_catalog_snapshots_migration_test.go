@@ -68,6 +68,8 @@ func TestModelCatalogSnapshotMigrationContract(t *testing.T) {
 	// Payload integrity columns.
 	require.Contains(t, sql, "PAYLOAD_ZSTD BYTEA NOT NULL")
 	require.Contains(t, sql, "PAYLOAD_SHA256 VARCHAR(80) NOT NULL")
+	// Namespace-limited aliases are stored as a JSON array.
+	require.Contains(t, sql, "ALIASES JSONB NOT NULL DEFAULT '[]'::JSONB")
 
 	// No destructive operations.
 	require.NotContains(t, sql, "DROP TABLE")
