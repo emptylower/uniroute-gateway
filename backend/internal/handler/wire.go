@@ -53,12 +53,28 @@ func ProvideAdminHandlers(
 	quarantineService *service.ModelQuarantineService,
 	activationService *service.ModelAuthorizationActivationService,
 	modelCatalogCandidateHandler *admin.ModelCatalogCandidateHandler,
+	accountEndpointProbeService *service.AccountEndpointProbeService,
+	upstreamConnectionService *service.UpstreamConnectionService,
+	aggregatorDesignationService *service.AggregatorDesignationService,
+	aggregatorConnectionReuseService *service.AggregatorConnectionReuseService,
+	accountRepository service.AccountRepository,
+	upstreamConnectionRepository service.UpstreamConnectionRepository,
 ) *AdminHandlers {
 	accountHandler.SetUpstreamBillingProbeService(upstreamBillingProbe)
 	accountHandler.SetOllamaCloudUsageService(ollamaCloudUsage)
 	accountHandler.SetModelGovernanceService(modelGovernanceService)
-	probeHandler := admin.NewModelGovernanceProbeHandler(nil)
-	connHandler := admin.NewModelGovernanceConnectionHandler(nil, nil, nil)
+	// Governance endpoints must be live in production: never construct these
+	// handlers with nil services (Phase 7 Task 0 G1 regression guard).
+	probeHandler := admin.NewModelGovernanceProbeHandlerWithDeps(
+		accountEndpointProbeService,
+		accountRepository,
+		upstreamConnectionRepository,
+	)
+	connHandler := admin.NewModelGovernanceConnectionHandler(
+		upstreamConnectionService,
+		aggregatorDesignationService,
+		aggregatorConnectionReuseService,
+	)
 	quarantineHandler := admin.NewModelQuarantineHandler(quarantineService)
 	activationHandler := admin.NewModelAuthorizationActivationHandler(activationService)
 	return &AdminHandlers{
