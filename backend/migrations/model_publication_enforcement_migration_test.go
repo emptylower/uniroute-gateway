@@ -101,3 +101,29 @@ func TestModelPublicationEnforcementMigrationNoPriceMutation(t *testing.T) {
 	require.NotContains(t, sql, "DELETE FROM CHANNEL_MODEL_PRICING")
 	require.NotContains(t, sql, "DROP TABLE")
 }
+
+func TestModelPublicationEligibilityTriggerFixMigrationContract(t *testing.T) {
+	raw204, err := os.ReadFile("204_model_publication_eligibility_trigger_fix.sql")
+	require.NoError(t, err)
+
+	// 204 must be additive: it never edits 203 semantics beyond re-scoping its own trigger.
+	sql204 := strings.ToUpper(string(raw204))
+
+	// Drops the 203 trigger before recreating it (idempotent re-runs).
+	require.Contains(t, sql204, "DROP TRIGGER IF EXISTS TRG_MODEL_PUBLICATION_ELIGIBILITY_EXACT_UNIQUE")
+
+	// Recreated firing only on identity-column updates; INSERT is no longer intercepted,
+	// so INSERT ... ON CONFLICT DO UPDATE reaches the unique-constraint arbitration.
+	require.Contains(t, sql204, "CREATE TRIGGER TRG_MODEL_PUBLICATION_ELIGIBILITY_EXACT_UNIQUE")
+	require.Contains(t, sql204, "BEFORE UPDATE OF ACCOUNT_ID, CANONICAL_MODEL_ID, CHANNEL_ID ON MODEL_PUBLICATION_ELIGIBILITY")
+	require.NotContains(t, sql204, "BEFORE INSERT OR UPDATE OF")
+	require.NotContains(t, sql204, "BEFORE INSERT ON MODEL_PUBLICATION_ELIGIBILITY")
+
+	// Reuses the existing guard function from 203 (no second evaluator definition).
+	require.Contains(t, sql204, "EXECUTE FUNCTION ENFORCE_MODEL_PUBLICATION_ELIGIBILITY_EXACT_UNIQUE()")
+	require.NotContains(t, sql204, "CREATE OR REPLACE FUNCTION")
+
+	// No destructive operations.
+	require.NotContains(t, sql204, "DROP TABLE")
+	require.NotContains(t, sql204, "DROP FUNCTION")
+}

@@ -336,6 +336,105 @@ func TestMigrationsRunner_ModelPublicationEnforcementSchema(t *testing.T) {
 	requireAppendOnlyTable(t, tx, "model_authorization_activations")
 }
 
+// Migration 204 re-scoped trg_model_publication_eligibility_exact_unique to fire only
+// BEFORE UPDATE OF the identity columns: a BEFORE INSERT trigger would run before ON
+// CONFLICT arbitration and make the repo's upsert unreachable.
+func TestMigrationsRunner_ModelPublicationEligibilityTriggerScopedToIdentityUpdate(t *testing.T) {
+	ctx := context.Background()
+	tx := testTx(t)
+
+	// Trigger exists and is an UPDATE-only trigger scoped to the identity columns.
+	var tgtype int16
+	var tgattr string
+	require.NoError(t, tx.QueryRowContext(ctx, `
+		SELECT t.tgtype, array_to_string(t.tgattr, ',')
+		FROM pg_trigger t
+		JOIN pg_class c ON c.oid = t.tgrelid
+		WHERE t.tgname = 'trg_model_publication_eligibility_exact_unique'
+		  AND c.relname = 'model_publication_eligibility'
+		  AND NOT t.tgisinternal
+	`).Scan(&tgtype, &tgattr))
+	require.NotZero(t, tgtype&1, "trigger must be row-level")
+	require.NotZero(t, tgtype&2, "trigger must be a BEFORE trigger")
+	require.Zero(t, tgtype&4, "trigger must not fire on INSERT")
+	require.NotZero(t, tgtype&16, "trigger must fire on UPDATE")
+	// attnum 2=account_id, 3=canonical_model_id, 4=channel_id.
+	require.Equal(t, "2,3,4", tgattr, "trigger must be column-scoped to account_id, canonical_model_id, channel_id")
+
+	// Fixtures inside the rolled-back tx.
+	var channelID int64
+	require.NoError(t, tx.QueryRowContext(ctx, `INSERT INTO channels (name, status) VALUES ($1, 'active') RETURNING id`, "trg-scope-ch").Scan(&channelID))
+	var accountID int64
+	require.NoError(t, tx.QueryRowContext(ctx, `INSERT INTO accounts (name, platform, type, status, schedulable) VALUES ($1, 'anthropic', 'apikey', 'active', true) RETURNING id`, "trg-scope-acc").Scan(&accountID))
+	var otherChannelID int64
+	require.NoError(t, tx.QueryRowContext(ctx, `INSERT INTO channels (name, status) VALUES ($1, 'active') RETURNING id`, "trg-scope-ch-other").Scan(&otherChannelID))
+
+	insertIdentity := func(channelID int64) {
+		t.Helper()
+		_, err := tx.ExecContext(ctx, `
+			INSERT INTO model_publication_eligibility
+				(account_id, canonical_model_id, channel_id, eligibility, reason, registry_version, channel_version)
+			VALUES ($1, 'claude-opus-4-6', $2, 'eligible', 'eligible', 1, 1)`, accountID, channelID)
+		require.NoError(t, err)
+	}
+	insertIdentity(channelID)
+	insertIdentity(otherChannelID)
+
+	// Plain duplicate INSERT now reaches unique-constraint arbitration (no trigger raise).
+	_, err := tx.ExecContext(ctx, `SAVEPOINT dup_insert`)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO model_publication_eligibility
+			(account_id, canonical_model_id, channel_id, eligibility, reason, registry_version, channel_version)
+		VALUES ($1, 'claude-opus-4-6', $2, 'blocked', 'blocked', 1, 1)`, accountID, channelID)
+	require.Error(t, err)
+	var pqErr *pq.Error
+	require.ErrorAs(t, err, &pqErr)
+	require.Equal(t, "23505", string(pqErr.Code), "duplicate insert must surface as unique violation from uq_model_publication_eligibility_identity")
+	require.Contains(t, err.Error(), "uq_model_publication_eligibility_identity")
+	_, err = tx.ExecContext(ctx, `ROLLBACK TO SAVEPOINT dup_insert`)
+	require.NoError(t, err)
+
+	// The repo's exact upsert shape must work: same identity updates in place.
+	var eligibility string
+	require.NoError(t, tx.QueryRowContext(ctx, `
+		INSERT INTO model_publication_eligibility
+			(account_id, canonical_model_id, channel_id, eligibility, reason, registry_version, channel_version)
+		VALUES ($1, 'claude-opus-4-6', $2, 'quarantined', 'quarantined', 1, 1)
+		ON CONFLICT (account_id, canonical_model_id, channel_id)
+		DO UPDATE SET eligibility = EXCLUDED.eligibility, reason = EXCLUDED.reason
+		RETURNING eligibility`, accountID, channelID).Scan(&eligibility))
+	require.Equal(t, "quarantined", eligibility)
+
+	var rowCount int
+	require.NoError(t, tx.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM model_publication_eligibility
+		WHERE account_id = $1 AND canonical_model_id = 'claude-opus-4-6' AND channel_id = $2`,
+		accountID, channelID).Scan(&rowCount))
+	require.Equal(t, 1, rowCount, "upsert must update the existing identity row, not add one")
+
+	// Non-identity UPDATE does not fire the exact-unique guard.
+	_, err = tx.ExecContext(ctx, `
+		UPDATE model_publication_eligibility SET eligibility = 'eligible', reason = 'restored'
+		WHERE account_id = $1 AND canonical_model_id = 'claude-opus-4-6' AND channel_id = $2`,
+		accountID, channelID)
+	require.NoError(t, err)
+
+	// Identity UPDATE colliding with another existing row still raises the guard.
+	_, err = tx.ExecContext(ctx, `SAVEPOINT identity_collision`)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(ctx, `
+		UPDATE model_publication_eligibility SET channel_id = $3
+		WHERE account_id = $1 AND canonical_model_id = 'claude-opus-4-6' AND channel_id = $2`,
+		accountID, channelID, otherChannelID)
+	require.Error(t, err)
+	require.ErrorAs(t, err, &pqErr)
+	require.Equal(t, "23505", string(pqErr.Code))
+	require.Contains(t, err.Error(), "duplicate model publication eligibility identity")
+	_, err = tx.ExecContext(ctx, `ROLLBACK TO SAVEPOINT identity_collision`)
+	require.NoError(t, err)
+}
+
 func TestMigrationsRunner_ModelGovernanceFoundationExactChecks(t *testing.T) {
 	tx := testTx(t)
 
