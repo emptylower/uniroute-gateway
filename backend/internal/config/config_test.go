@@ -75,7 +75,7 @@ func TestLoadModelGovernanceAuthorizationModeRejectsUnsupportedValues(t *testing
 		resetViperWithJWTSecret(t)
 		viper.Set("model_governance.authorization_mode", "enforce")
 		_, err := Load()
-		require.ErrorContains(t, err, "enforce requires activation endpoint")
+		require.ErrorContains(t, err, "model_governance.authorization_mode 'enforce' requires activation endpoint; use off or shadow in config")
 	})
 }
 
