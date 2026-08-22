@@ -66,3 +66,48 @@ func TestModelAuthorizationActivationHandler_Validation(t *testing.T) {
 	router.ServeHTTP(w, req)
 	require.NotEqual(t, http.StatusOK, w.Code)
 }
+
+func TestModelAuthorizationActivationHandler_Readiness(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	require.NoError(t, err)
+	defer db.Close()
+	svc := service.NewModelAuthorizationActivationService(db)
+	handler := NewModelAuthorizationActivationHandler(svc)
+
+	t.Run("returns evaluated readiness", func(t *testing.T) {
+		mock.ExpectQuery(`SELECT COALESCE\(MAX\(registry_version\),0\) FROM model_registry_events`).
+			WillReturnRows(sqlmock.NewRows([]string{"max"}).AddRow(int64(7)))
+		mock.ExpectQuery(`SELECT COALESCE\(inventory_hash, ''\) FROM model_inventory_runs`).
+			WillReturnRows(sqlmock.NewRows([]string{"inventory_hash"}).AddRow("hash-1"))
+		mock.ExpectQuery(`SELECT id, governance_version FROM channels`).
+			WillReturnRows(sqlmock.NewRows([]string{"id", "governance_version"}).AddRow(int64(10), int64(3)))
+		mock.ExpectQuery(`SELECT batch_id FROM model_publication_events`).WillReturnError(sql.ErrNoRows)
+		mock.ExpectQuery(`SELECT COUNT\(\*\) FROM accounts WHERE platform IN \('anthropic','openai','gemini','grok'\) AND status = 'active'`).
+			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+		mock.ExpectQuery(`SELECT COUNT\(\*\) FROM accounts WHERE platform IN \(.*\) AND status = 'active' AND connection_id IS NULL`).
+			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+
+		router := gin.New()
+		router.GET("/readiness", handler.Readiness)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/readiness", nil))
+		require.Equal(t, http.StatusOK, w.Code)
+
+		var readiness service.ActivationReadiness
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &readiness))
+		require.True(t, readiness.Ready)
+		require.Equal(t, int64(7), readiness.CurrentRegistryVersion)
+		require.Equal(t, "hash-1", readiness.LatestCompletedInventoryHash)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("nil service is 500", func(t *testing.T) {
+		nilHandler := NewModelAuthorizationActivationHandler(nil)
+		router := gin.New()
+		router.GET("/readiness", nilHandler.Readiness)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/readiness", nil))
+		require.Equal(t, http.StatusInternalServerError, w.Code)
+	})
+}

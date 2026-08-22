@@ -21,6 +21,174 @@ type ActivationInput struct {
 	ActorID          string
 }
 
+// Stable readiness prerequisite codes surfaced to administrators. They mirror
+// the conflicts Activate raises when the same condition fails in-transaction.
+const (
+	ReadinessPrerequisiteRegistryEmpty         = "REGISTRY_EMPTY"
+	ReadinessPrerequisiteInventoryNotCompleted = "INVENTORY_NOT_COMPLETED"
+	ReadinessPrerequisiteShadowCoverage        = "SHADOW_COVERAGE_INCOMPLETE"
+	ReadinessPrerequisiteUnresolvedImpacts     = "UNRESOLVED_IMPACT_REPORTS"
+)
+
+// ActivationReadiness is the read-only evaluation of every enforce activation
+// prerequisite (Phase 7 Task 0 G3). The values are exactly what an
+// administrator needs to prefill an activation request; Activate re-checks
+// everything inside its transaction, so the GET can never be a bypass.
+type ActivationReadiness struct {
+	Ready       bool   `json:"ready"`
+	CurrentMode string `json:"current_mode"`
+
+	CurrentRegistryVersion       int64           `json:"current_registry_version"`
+	LatestCompletedInventoryHash string          `json:"latest_completed_inventory_hash"`
+	ChannelVersions              map[int64]int64 `json:"channel_versions"`
+	ProjectedBatchID             string          `json:"projected_batch_id"`
+
+	EnabledGovernedAccounts    int      `json:"enabled_governed_accounts"`
+	AccountsWithShadowDecision int      `json:"accounts_with_shadow_decision"`
+	UnresolvedImpactAccounts   int      `json:"unresolved_impact_accounts"`
+	UnmetPrerequisites         []string `json:"unmet_prerequisites"`
+}
+
+// querier abstracts the single-statement reads shared by EvaluateReadiness
+// (*sql.DB) and the transactional re-check inside Activate (*sql.Tx).
+type querier interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+func currentRegistryVersion(ctx context.Context, q querier) (int64, error) {
+	var version int64
+	err := q.QueryRowContext(ctx, `SELECT COALESCE(MAX(registry_version),0) FROM model_registry_events`).Scan(&version)
+	return version, err
+}
+
+func channelGovernanceVersion(ctx context.Context, q querier, channelID int64) (int64, error) {
+	var version int64
+	err := q.QueryRowContext(ctx, `SELECT governance_version FROM channels WHERE id = $1`, channelID).Scan(&version)
+	return version, err
+}
+
+func completedInventoryRunCount(ctx context.Context, q querier, inventoryHash string) (int, error) {
+	var count int
+	err := q.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM model_inventory_runs WHERE inventory_hash = $1 AND status = 'completed'`,
+		inventoryHash).Scan(&count)
+	return count, err
+}
+
+func enabledGovernedAccountCount(ctx context.Context, q querier) (int, error) {
+	var count int
+	err := q.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM accounts WHERE platform IN ('anthropic','openai','gemini','grok') AND status = 'active'`).Scan(&count)
+	return count, err
+}
+
+func shadowCoverageAccountCount(ctx context.Context, q querier, registryVersion int64) (int, error) {
+	var count int
+	err := q.QueryRowContext(ctx, `SELECT COUNT(DISTINCT batch.account_id)
+FROM model_shadow_decisions d
+JOIN model_classification_batches batch ON batch.batch_id = d.batch_id
+WHERE batch.registry_version = $1`, registryVersion).Scan(&count)
+	return count, err
+}
+
+func unresolvedImpactAccountCount(ctx context.Context, q querier) (int, error) {
+	var count int
+	err := q.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM accounts WHERE platform IN ('anthropic','openai','gemini','grok') AND status = 'active' AND connection_id IS NULL`).Scan(&count)
+	return count, err
+}
+
+// EvaluateReadiness computes every activation prerequisite read-only so the
+// administrator dialog prefills truthfully and stays disabled until the
+// backend reports ready. It shares its checks with Activate via the querier
+// helpers above; Activate remains the authoritative gate.
+func (s *ModelAuthorizationActivationService) EvaluateReadiness(ctx context.Context) (*ActivationReadiness, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("activation service not configured")
+	}
+	readiness := &ActivationReadiness{
+		CurrentMode:        "shadow",
+		ChannelVersions:    map[int64]int64{},
+		UnmetPrerequisites: []string{},
+	}
+
+	if s.modeProvider != nil {
+		readiness.CurrentMode = s.modeProvider.CurrentMode(ctx)
+	}
+
+	registryVersion, err := currentRegistryVersion(ctx, s.db)
+	if err != nil {
+		return nil, fmt.Errorf("read registry version: %w", err)
+	}
+	readiness.CurrentRegistryVersion = registryVersion
+	if registryVersion <= 0 {
+		readiness.UnmetPrerequisites = append(readiness.UnmetPrerequisites, ReadinessPrerequisiteRegistryEmpty)
+	}
+
+	err = s.db.QueryRowContext(ctx,
+		`SELECT COALESCE(inventory_hash, '') FROM model_inventory_runs WHERE status = 'completed' ORDER BY created_at DESC LIMIT 1`,
+	).Scan(&readiness.LatestCompletedInventoryHash)
+	if err != nil && err != sql.ErrNoRows {
+		return nil, fmt.Errorf("read latest completed inventory: %w", err)
+	}
+	if readiness.LatestCompletedInventoryHash == "" {
+		readiness.UnmetPrerequisites = append(readiness.UnmetPrerequisites, ReadinessPrerequisiteInventoryNotCompleted)
+	}
+
+	rows, err := s.db.QueryContext(ctx, `SELECT id, governance_version FROM channels`)
+	if err != nil {
+		return nil, fmt.Errorf("read channel versions: %w", err)
+	}
+	for rows.Next() {
+		var id, version int64
+		if err := rows.Scan(&id, &version); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("scan channel versions: %w", err)
+		}
+		readiness.ChannelVersions[id] = version
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate channel versions: %w", err)
+	}
+	// Truthful prefill for projected_batch_id: the batch of the most recent
+	// applied publication projection. Activate itself does not validate this
+	// field beyond requiring it to be non-empty.
+	_ = s.db.QueryRowContext(ctx,
+		`SELECT batch_id FROM model_publication_events ORDER BY created_at DESC, id DESC LIMIT 1`,
+	).Scan(&readiness.ProjectedBatchID)
+
+	enabledAccounts, err := enabledGovernedAccountCount(ctx, s.db)
+	if err != nil {
+		return nil, fmt.Errorf("count enabled governed accounts: %w", err)
+	}
+	readiness.EnabledGovernedAccounts = enabledAccounts
+
+	if enabledAccounts > 0 {
+		covered, err := shadowCoverageAccountCount(ctx, s.db, registryVersion)
+		if err != nil {
+			return nil, fmt.Errorf("read shadow coverage: %w", err)
+		}
+		readiness.AccountsWithShadowDecision = covered
+		if covered < enabledAccounts {
+			readiness.UnmetPrerequisites = append(readiness.UnmetPrerequisites, ReadinessPrerequisiteShadowCoverage)
+		}
+	}
+
+	unresolved, err := unresolvedImpactAccountCount(ctx, s.db)
+	if err != nil {
+		return nil, fmt.Errorf("count unresolved impact accounts: %w", err)
+	}
+	readiness.UnresolvedImpactAccounts = unresolved
+	if unresolved > 0 {
+		readiness.UnmetPrerequisites = append(readiness.UnmetPrerequisites, ReadinessPrerequisiteUnresolvedImpacts)
+	}
+
+	readiness.Ready = len(readiness.UnmetPrerequisites) == 0 &&
+		readiness.LatestCompletedInventoryHash != ""
+	return readiness, nil
+}
+
 // ModelAuthorizationActivationService gates enforce activation.
 type ModelAuthorizationActivationService struct {
 	db           *sql.DB
@@ -75,18 +243,16 @@ func (s *ModelAuthorizationActivationService) Activate(ctx context.Context, inpu
 	}
 
 	// Inventory completeness: verify inventory hash exists in recent completed inventory runs.
-	var currentRegistryVersion int64
-	err = tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(registry_version),0) FROM model_registry_events`).Scan(&currentRegistryVersion)
+	currentRegistryVersionValue, err := currentRegistryVersion(ctx, tx)
 	if err != nil {
 		return err
 	}
-	if input.RegistryVersion != currentRegistryVersion {
-		err = infraerrors.Conflict("STALE_REGISTRY_VERSION", fmt.Sprintf("stale registry version expected %d got %d", input.RegistryVersion, currentRegistryVersion))
+	if input.RegistryVersion != currentRegistryVersionValue {
+		err = infraerrors.Conflict("STALE_REGISTRY_VERSION", fmt.Sprintf("stale registry version expected %d got %d", input.RegistryVersion, currentRegistryVersionValue))
 		return err
 	}
 	for chID, expectedVersion := range input.ChannelVersions {
-		var currentVersion int64
-		err = tx.QueryRowContext(ctx, `SELECT governance_version FROM channels WHERE id = $1`, chID).Scan(&currentVersion)
+		currentVersion, err := channelGovernanceVersion(ctx, tx, chID)
 		if err != nil {
 			return err
 		}
@@ -97,8 +263,7 @@ func (s *ModelAuthorizationActivationService) Activate(ctx context.Context, inpu
 	}
 
 	// Inventory completeness: hash must match a completed inventory run.
-	var inventoryCount int
-	err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM model_inventory_runs WHERE inventory_hash = $1 AND status = 'completed'`, input.InventoryHash).Scan(&inventoryCount)
+	inventoryCount, err := completedInventoryRunCount(ctx, tx, input.InventoryHash)
 	if err != nil {
 		return err
 	}
@@ -108,17 +273,12 @@ func (s *ModelAuthorizationActivationService) Activate(ctx context.Context, inpu
 	}
 
 	// Post-registry shadow coverage: every enabled governed account must have a shadow decision at current registry version.
-	var enabledAccounts int
-	err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM accounts WHERE platform IN ('anthropic','openai','gemini','grok') AND status = 'active'`).Scan(&enabledAccounts)
+	enabledAccounts, err := enabledGovernedAccountCount(ctx, tx)
 	if err != nil {
 		return err
 	}
 	if enabledAccounts > 0 {
-		var shadowAccounts int
-		err = tx.QueryRowContext(ctx, `SELECT COUNT(DISTINCT batch.account_id)
-FROM model_shadow_decisions d
-JOIN model_classification_batches batch ON batch.batch_id = d.batch_id
-WHERE batch.registry_version = $1`, input.RegistryVersion).Scan(&shadowAccounts)
+		shadowAccounts, err := shadowCoverageAccountCount(ctx, tx, input.RegistryVersion)
 		if err != nil {
 			return err
 		}
@@ -130,8 +290,7 @@ WHERE batch.registry_version = $1`, input.RegistryVersion).Scan(&shadowAccounts)
 
 	// Unresolved impact reports: for now, check that no unsupported routing-only accounts remain without connection.
 	// If any account has connection_id IS NULL and platform in governed set, it is an unresolved impact.
-	var unresolved int
-	err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM accounts WHERE platform IN ('anthropic','openai','gemini','grok') AND status = 'active' AND connection_id IS NULL`).Scan(&unresolved)
+	unresolved, err := unresolvedImpactAccountCount(ctx, tx)
 	if err != nil {
 		return err
 	}

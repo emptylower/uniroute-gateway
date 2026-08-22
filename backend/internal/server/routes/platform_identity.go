@@ -155,6 +155,7 @@ func registerDelegatedGatewayAdminRoutes(
 		admin.POST("/model-publication/restore", h.Admin.ModelQuarantine.Restore)
 	}
 	if h.Admin.ModelAuthorizationActivation != nil {
+		admin.GET("/model-authorization/readiness", h.Admin.ModelAuthorizationActivation.Readiness)
 		admin.POST("/model-authorization/activate", h.Admin.ModelAuthorizationActivation.Activate)
 		admin.POST("/model-authorization/deactivate", h.Admin.ModelAuthorizationActivation.Deactivate)
 	}

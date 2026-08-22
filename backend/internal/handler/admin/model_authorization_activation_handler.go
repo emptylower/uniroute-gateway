@@ -3,8 +3,8 @@ package admin
 import (
 	"net/http"
 
-	"github.com/gin-gonic/gin"
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/gin-gonic/gin"
 )
 
 type ModelAuthorizationActivationHandler struct {
@@ -16,12 +16,29 @@ func NewModelAuthorizationActivationHandler(svc *service.ModelAuthorizationActiv
 }
 
 type activationRequest struct {
-	InventoryHash    string           `json:"inventory_hash"`
-	RegistryVersion  int64            `json:"registry_version"`
-	ChannelVersions  map[int64]int64  `json:"channel_versions"`
-	ProjectedBatchID string           `json:"projected_batch_id"`
-	AcknowledgedBy   string           `json:"acknowledged_by"`
-	IdempotencyKey   string           `json:"idempotency_key"`
+	InventoryHash    string          `json:"inventory_hash"`
+	RegistryVersion  int64           `json:"registry_version"`
+	ChannelVersions  map[int64]int64 `json:"channel_versions"`
+	ProjectedBatchID string          `json:"projected_batch_id"`
+	AcknowledgedBy   string          `json:"acknowledged_by"`
+	IdempotencyKey   string          `json:"idempotency_key"`
+}
+
+// Readiness exposes the read-only activation prerequisite evaluation so the
+// administrator dialog prefills truthfully and enables activation only when
+// the backend reports ready. The POST activate re-checks everything inside
+// its transaction; this GET can never be a bypass.
+func (h *ModelAuthorizationActivationHandler) Readiness(c *gin.Context) {
+	if h.activationService == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "activation service not configured"})
+		return
+	}
+	readiness, err := h.activationService.EvaluateReadiness(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, readiness)
 }
 
 func (h *ModelAuthorizationActivationHandler) Activate(c *gin.Context) {
