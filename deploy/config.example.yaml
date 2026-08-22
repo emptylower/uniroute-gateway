@@ -1030,6 +1030,19 @@ model_governance:
   # Environment / 环境变量: MODEL_AUTHORIZATION_ENFORCE=off|shadow|enforce
   authorization_mode: "off"
 
+  # External model catalog ingestion (phase 6): immutable evidence only.
+  # Requests are restricted to openrouter.ai, api.github.com, and
+  # raw.githubusercontent.com over HTTPS with bounded redirects.
+  model_catalog:
+    # Scheduled ingestion toggle (default false).
+    ingestion_enabled: false
+    # Per-fetch timeout in seconds (default 20).
+    request_timeout_seconds: 20
+    # Response body cap in bytes (default 33554432 = 32MiB).
+    max_payload_bytes: 33554432
+    # Normalized items per payload cap (default 50000).
+    max_items: 50000
+
 # =============================================================================
 # TOTP (2FA) Configuration
 # TOTP 双因素认证配置

@@ -2661,3 +2661,40 @@ func TestLoad_DefaultGatewayImageStreamConfig(t *testing.T) {
 		t.Fatalf("image stream timeout = %d, want greater than ordinary stream timeout %d", cfg.Gateway.ImageStreamDataIntervalTimeout, cfg.Gateway.StreamDataIntervalTimeout)
 	}
 }
+
+func TestModelCatalogConfigDefaults(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	mc := cfg.ModelGovernance.ModelCatalog
+	if mc.IngestionEnabled {
+		t.Fatalf("ingestion_enabled = true, want false by default")
+	}
+	if mc.RequestTimeoutSeconds != 20 {
+		t.Fatalf("request_timeout_seconds = %d, want 20", mc.RequestTimeoutSeconds)
+	}
+	if mc.MaxPayloadBytes != 32<<20 {
+		t.Fatalf("max_payload_bytes = %d, want %d", mc.MaxPayloadBytes, 32<<20)
+	}
+	if mc.MaxItems != 50000 {
+		t.Fatalf("max_items = %d, want 50000", mc.MaxItems)
+	}
+}
+
+func TestModelCatalogConfigOverrides(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	viper.Set("model_governance.model_catalog.ingestion_enabled", true)
+	viper.Set("model_governance.model_catalog.request_timeout_seconds", 30)
+	viper.Set("model_governance.model_catalog.max_payload_bytes", 64<<20)
+	viper.Set("model_governance.model_catalog.max_items", 10000)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	mc := cfg.ModelGovernance.ModelCatalog
+	if !mc.IngestionEnabled || mc.RequestTimeoutSeconds != 30 || mc.MaxPayloadBytes != 64<<20 || mc.MaxItems != 10000 {
+		t.Fatalf("overrides not applied: %+v", mc)
+	}
+}
