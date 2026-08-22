@@ -123,3 +123,32 @@ func TestModelGovernanceReadRepoIntegration_QuarantinePoolAndEvents(t *testing.T
 		require.Equal(t, service.GovernanceEventStreamRegistry, item.Stream)
 	}
 }
+
+func TestModelGovernanceReadRepoIntegration_ListConnections(t *testing.T) {
+	ctx := context.Background()
+	repo := NewModelGovernanceReadRepository(integrationDB)
+
+	run := fmt.Sprintf("r%d", time.Now().UnixNano())
+	var connectionID int64
+	require.NoError(t, integrationDB.QueryRowContext(ctx,
+		`INSERT INTO upstream_connections (kind, provider, base_url, encrypted_credential, status)
+		 VALUES ('first_party', 'anthropic', concat('https://api.anthropic.com/', $1::text), 'enc-test', 'active') RETURNING id`,
+		run).Scan(&connectionID))
+	defer func() {
+		_, _ = integrationDB.ExecContext(ctx, `DELETE FROM upstream_connections WHERE id = $1`, connectionID)
+	}()
+
+	result, err := repo.ListConnections(ctx, 1, 200)
+	require.NoError(t, err)
+	var found *service.UpstreamConnectionItem
+	for i := range result.Items {
+		if result.Items[i].ConnectionID == connectionID {
+			found = &result.Items[i]
+			break
+		}
+	}
+	require.NotNil(t, found, "seeded connection must be listed")
+	require.Equal(t, "first_party", found.Kind)
+	require.NotNil(t, found.Provider)
+	require.GreaterOrEqual(t, found.CredentialVersion, int64(1))
+}

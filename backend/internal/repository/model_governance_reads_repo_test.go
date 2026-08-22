@@ -154,3 +154,26 @@ func TestModelGovernanceReadRepository_NilDBIsError(t *testing.T) {
 	_, err = nilRepo.ListQuarantinePool(context.Background(), 1, 50)
 	require.Error(t, err)
 }
+
+func TestModelGovernanceReadRepository_ListConnections(t *testing.T) {
+	repo, mock, cleanup := newGovernanceReadRepo(t)
+	defer cleanup()
+
+	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM upstream_connections`).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(1)))
+	mock.ExpectQuery(`FROM upstream_connections`).WithArgs(50, 0).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "kind", "provider", "base_url", "status", "credential_version",
+		}).AddRow(int64(11), "aggregator", nil, "https://agg.example.com", "active", int64(4)))
+
+	result, err := repo.ListConnections(context.Background(), 1, 50)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), result.Total)
+	require.Len(t, result.Items, 1)
+	item := result.Items[0]
+	require.Equal(t, "aggregator", item.Kind)
+	require.Nil(t, item.Provider)
+	require.Equal(t, "https://agg.example.com", item.BaseURL)
+	require.Equal(t, int64(4), item.CredentialVersion)
+	require.NoError(t, mock.ExpectationsWereMet())
+}

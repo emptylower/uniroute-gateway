@@ -36,6 +36,20 @@ func (h *ModelGovernanceReadHandler) Quarantine(c *gin.Context) {
 	response.Success(c, result)
 }
 
+func (h *ModelGovernanceReadHandler) Connections(c *gin.Context) {
+	if h.repo == nil {
+		response.InternalError(c, "model governance read repository is not configured")
+		return
+	}
+	page, pageSize := paginationParams(c)
+	result, err := h.repo.ListConnections(c.Request.Context(), page, pageSize)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, result)
+}
+
 func (h *ModelGovernanceReadHandler) Events(c *gin.Context) {
 	if h.repo == nil {
 		response.InternalError(c, "model governance read repository is not configured")

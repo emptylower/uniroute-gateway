@@ -19,6 +19,7 @@ import (
 type fakeGovernanceReadRepository struct {
 	quarantine    *service.GovernancePage[service.QuarantinePoolItem]
 	events        map[string]*service.GovernancePage[service.GovernanceEventItem]
+	connections   *service.GovernancePage[service.UpstreamConnectionItem]
 	quarantineErr error
 	eventsErr     error
 	lastStream    string
@@ -34,6 +35,13 @@ func (f *fakeGovernanceReadRepository) ListQuarantinePool(
 		return nil, f.quarantineErr
 	}
 	return f.quarantine, nil
+}
+
+func (f *fakeGovernanceReadRepository) ListConnections(
+	_ context.Context, page, pageSize int,
+) (*service.GovernancePage[service.UpstreamConnectionItem], error) {
+	f.lastPage, f.lastSize = page, pageSize
+	return f.connections, nil
 }
 
 func (f *fakeGovernanceReadRepository) ListGovernanceEvents(

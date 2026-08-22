@@ -57,6 +57,19 @@ type GovernanceEventItem struct {
 	CanonicalID string `json:"canonical_id,omitempty"`
 }
 
+// UpstreamConnectionItem is one upstream connection as shown to
+// administrators. Connection metadata only — never credentials or
+// credential material; credential_version is the optimistic-lock value the
+// designate/reuse endpoints expect in If-Match.
+type UpstreamConnectionItem struct {
+	ConnectionID      int64   `json:"connection_id"`
+	Kind              string  `json:"kind"`
+	Provider          *string `json:"provider"`
+	BaseURL           string  `json:"base_url"`
+	Status            string  `json:"status"`
+	CredentialVersion int64   `json:"credential_version"`
+}
+
 // GovernancePage carries the paginated read result using the same shape as
 // the other delegated admin list endpoints (items/total/page/page_size).
 type GovernancePage[T any] struct {
@@ -71,4 +84,5 @@ type GovernancePage[T any] struct {
 type ModelGovernanceReadRepository interface {
 	ListQuarantinePool(ctx context.Context, page, pageSize int) (*GovernancePage[QuarantinePoolItem], error)
 	ListGovernanceEvents(ctx context.Context, stream string, page, pageSize int) (*GovernancePage[GovernanceEventItem], error)
+	ListConnections(ctx context.Context, page, pageSize int) (*GovernancePage[UpstreamConnectionItem], error)
 }

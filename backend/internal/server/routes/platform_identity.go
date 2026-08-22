@@ -100,6 +100,7 @@ func registerDelegatedGatewayAdminRoutes(
 	if h.Admin.ModelGovernanceReads != nil {
 		admin.GET("/model-governance/quarantine", h.Admin.ModelGovernanceReads.Quarantine)
 		admin.GET("/model-governance/events", h.Admin.ModelGovernanceReads.Events)
+		admin.GET("/model-governance/connections", h.Admin.ModelGovernanceReads.Connections)
 	}
 	if h.Admin.ModelRegistry != nil {
 		registry := admin.Group("/model-registry")

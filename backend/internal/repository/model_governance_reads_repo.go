@@ -179,6 +179,55 @@ func (r *modelGovernanceReadRepository) ListGovernanceEvents(
 	}, nil
 }
 
+const connectionsQuery = `
+SELECT id, kind, provider, COALESCE(base_url, ''), status, credential_version
+FROM upstream_connections
+ORDER BY id
+LIMIT $1 OFFSET $2`
+
+func (r *modelGovernanceReadRepository) ListConnections(
+	ctx context.Context, page, pageSize int,
+) (*service.GovernancePage[service.UpstreamConnectionItem], error) {
+	page, pageSize = normalizeGovernancePage(page, pageSize)
+	if r == nil || r.db == nil {
+		return nil, errors.New("model governance read repository is not configured")
+	}
+	var total int64
+	if err := r.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM upstream_connections`,
+	).Scan(&total); err != nil {
+		return nil, fmt.Errorf("count connections: %w", err)
+	}
+	rows, err := r.db.QueryContext(ctx, connectionsQuery, pageSize, (page-1)*pageSize)
+	if err != nil {
+		return nil, fmt.Errorf("list connections: %w", err)
+	}
+	defer rows.Close()
+
+	items := make([]service.UpstreamConnectionItem, 0, pageSize)
+	for rows.Next() {
+		item := service.UpstreamConnectionItem{}
+		var provider sql.NullString
+		if err := rows.Scan(
+			&item.ConnectionID, &item.Kind, &provider, &item.BaseURL,
+			&item.Status, &item.CredentialVersion,
+		); err != nil {
+			return nil, fmt.Errorf("scan connection row: %w", err)
+		}
+		if provider.Valid {
+			v := provider.String
+			item.Provider = &v
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate connections: %w", err)
+	}
+	return &service.GovernancePage[service.UpstreamConnectionItem]{
+		Items: items, Total: total, Page: page, PageSize: pageSize,
+	}, nil
+}
+
 func normalizeGovernancePage(page, pageSize int) (int, int) {
 	if page < 1 {
 		page = 1
