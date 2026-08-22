@@ -815,6 +815,8 @@ var ProviderSet = wire.NewSet(
 	ProvideModelQuarantineService,
 	ProvideModelAuthorizationActivationService,
 	ProvideGovernanceModeProvider,
+	ProvideModelCatalogCandidateService,
+	wire.Bind(new(ModelCatalogCandidateViews), new(*ModelCatalogCandidateService)),
 	// Core services
 	NewAuthService,
 	NewUserService,
@@ -1050,4 +1052,27 @@ func ProvideGatewayService(
 	svc.SetPublicationStore(store)
 	svc.SetGovernanceModeProvider(modeProvider)
 	return svc
+}
+
+// ProvideModelCatalogCandidateService wires the phase 6 catalog aggregation
+// service: bounded fetcher, append-only evidence store, read-only registry
+// projection, audit writer, and grouped alerts.
+func ProvideModelCatalogCandidateService(
+	snapshotRepo ModelCatalogSnapshotStore,
+	reader ModelCatalogEvidenceReader,
+	registryRepo ModelRegistryRepository,
+	auditRepo AuditLogRepository,
+	cfg *config.Config,
+) *ModelCatalogCandidateService {
+	client := NewCatalogHTTPClient(
+		time.Duration(cfg.ModelGovernance.ModelCatalog.RequestTimeoutSeconds)*time.Second,
+		int64(cfg.ModelGovernance.ModelCatalog.MaxPayloadBytes),
+	)
+	return NewModelCatalogCandidateService(ModelCatalogCandidateServiceConfig{
+		Reader:   reader,
+		Writer:   snapshotRepo,
+		Registry: registryRepo,
+		Audit:    auditRepo,
+		Fetcher:  client,
+	})
 }

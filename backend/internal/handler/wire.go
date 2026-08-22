@@ -52,6 +52,7 @@ func ProvideAdminHandlers(
 	ollamaCloudUsage *service.OllamaCloudUsageService,
 	quarantineService *service.ModelQuarantineService,
 	activationService *service.ModelAuthorizationActivationService,
+	modelCatalogCandidateHandler *admin.ModelCatalogCandidateHandler,
 ) *AdminHandlers {
 	accountHandler.SetUpstreamBillingProbeService(upstreamBillingProbe)
 	accountHandler.SetOllamaCloudUsageService(ollamaCloudUsage)
@@ -101,6 +102,7 @@ func ProvideAdminHandlers(
 		ModelGovernanceConnection:    connHandler,
 		ModelQuarantine:              quarantineHandler,
 		ModelAuthorizationActivation: activationHandler,
+		ModelCatalogCandidate:        modelCatalogCandidateHandler,
 	}
 }
 
@@ -301,6 +303,7 @@ var ProviderSet = wire.NewSet(
 	admin.NewAuditLogHandler,
 	admin.NewModelGovernanceInventoryHandler,
 	admin.NewModelRegistryHandler,
+	admin.NewModelCatalogCandidateHandler,
 
 	// AdminHandlers and Handlers constructors
 	ProvideAdminHandlers,

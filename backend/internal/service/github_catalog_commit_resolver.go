@@ -77,13 +77,13 @@ func (r *GitHubCatalogCommitResolver) ResolveCommit(ctx context.Context, owner, 
 // validates it against the catalog URL rules. The ref argument must be a full
 // commit SHA — branch names are rejected because they are mutable.
 func RawGitHubURL(owner, repo, commit, path string) (string, error) {
-	if !commitPattern.MatchString(commit) {
-		return "", fmt.Errorf("ref %q is not an immutable commit sha", commit)
-	}
 	for _, segment := range []string{owner, repo} {
-		if !segmentPattern.MatchString(segment) {
+		if !segmentPattern.MatchString(segment) || segment == "." || segment == ".." {
 			return "", fmt.Errorf("invalid github path segment %q", segment)
 		}
+	}
+	if !commitPattern.MatchString(commit) {
+		return "", fmt.Errorf("ref %q is not an immutable commit sha", commit)
 	}
 	cleanPath := strings.TrimPrefix(path, "/")
 	for _, segment := range strings.Split(cleanPath, "/") {

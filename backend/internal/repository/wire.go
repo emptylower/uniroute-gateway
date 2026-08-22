@@ -83,6 +83,7 @@ var ProviderSet = wire.NewSet(
 	NewUpstreamConnectionMigrationRepository,
 	NewAggregatorReuseRepository,
 	NewModelCatalogSnapshotRepository,
+	NewModelCatalogEvidenceRepository,
 	NewAdminAccountRepository,
 	NewScheduledTestPlanRepository,   // 定时测试计划仓储
 	NewScheduledTestResultRepository, // 定时测试结果仓储

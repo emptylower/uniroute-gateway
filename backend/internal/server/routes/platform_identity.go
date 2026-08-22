@@ -105,6 +105,15 @@ func registerDelegatedGatewayAdminRoutes(
 		registry.POST("/rebuild", h.Admin.ModelRegistry.Rebuild)
 	}
 
+	if h.Admin.ModelCatalogCandidate != nil {
+		catalog := admin.Group("/model-catalog")
+		catalog.GET("/sources", h.Admin.ModelCatalogCandidate.ListSources)
+		catalog.GET("/candidates", h.Admin.ModelCatalogCandidate.ListCandidates)
+		catalog.GET("/retirements", h.Admin.ModelCatalogCandidate.ListRetirements)
+		catalog.GET("/price-anomalies", h.Admin.ModelCatalogCandidate.ListPriceAnomalies)
+		catalog.PUT("/sources/:source/settings", h.Admin.ModelCatalogCandidate.UpdateSourceSettings)
+	}
+
 	accounts := admin.Group("/accounts")
 	accounts.GET("", h.Admin.Account.List)
 	accounts.GET("/antigravity/default-model-mapping", h.Admin.Account.GetAntigravityDefaultModelMapping)

@@ -280,3 +280,163 @@ ON CONFLICT (sync_run_id, canonical_model_id) DO NOTHING
 `, syncRunID, source, canonical, detail)
 	return err
 }
+
+// ---------- read side (phase 6 aggregation views) ----------
+
+func (r *modelCatalogSnapshotRepository) SourceSettings(ctx context.Context) ([]service.CatalogSourceSetting, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("model catalog snapshot repository is not configured")
+	}
+	rows, err := r.db.QueryContext(ctx, `
+SELECT source, enabled, count_drop_threshold_percent, stale_after_hours
+FROM model_catalog_source_settings
+ORDER BY source
+`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	settings := []service.CatalogSourceSetting{}
+	for rows.Next() {
+		var setting service.CatalogSourceSetting
+		if err := rows.Scan(&setting.Source, &setting.Enabled, &setting.CountDropThresholdPercent, &setting.StaleAfterHours); err != nil {
+			return nil, err
+		}
+		settings = append(settings, setting)
+	}
+	return settings, rows.Err()
+}
+
+func (r *modelCatalogSnapshotRepository) UpdateSourceSetting(ctx context.Context, source string, enabled bool, thresholdPercent int) error {
+	if r == nil || r.db == nil {
+		return errors.New("model catalog snapshot repository is not configured")
+	}
+	if !service.ValidCatalogSource(source) {
+		return fmt.Errorf("invalid catalog source: %q", source)
+	}
+	if thresholdPercent < 1 || thresholdPercent > 100 {
+		return fmt.Errorf("count drop threshold must be within 1..100: %d", thresholdPercent)
+	}
+	res, err := r.db.ExecContext(ctx, `
+UPDATE model_catalog_source_settings
+SET enabled = $2, count_drop_threshold_percent = $3
+WHERE source = $1
+`, source, enabled, thresholdPercent)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return infraerrors.NotFound("CATALOG_SOURCE_NOT_FOUND", fmt.Sprintf("catalog source %q not found", source))
+	}
+	return nil
+}
+
+func (r *modelCatalogSnapshotRepository) LatestAcceptedSnapshotPerSource(ctx context.Context) (map[string]service.CatalogSnapshotRef, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("model catalog snapshot repository is not configured")
+	}
+	rows, err := r.db.QueryContext(ctx, `
+SELECT DISTINCT ON (run.source)
+    run.source, snap.id, snap.external_version, run.finished_at, run.item_count, COALESCE(run.resolved_commit, '')
+FROM model_catalog_snapshots snap
+JOIN model_catalog_sync_runs run ON run.id = snap.sync_run_id
+WHERE run.status = 'succeeded' AND run.finished_at IS NOT NULL
+ORDER BY run.source, run.finished_at DESC, snap.id DESC
+`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	refs := make(map[string]service.CatalogSnapshotRef)
+	for rows.Next() {
+		var ref service.CatalogSnapshotRef
+		var source string
+		if err := rows.Scan(&source, &ref.SnapshotID, &ref.ExternalVersion, &ref.AcceptedAt, &ref.ItemCount, &ref.ResolvedCommit); err != nil {
+			return nil, err
+		}
+		refs[source] = ref
+	}
+	return refs, rows.Err()
+}
+
+func (r *modelCatalogSnapshotRepository) ListEvidence(ctx context.Context, snapshotID int64) ([]service.CatalogCandidateEvidenceRow, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("model catalog snapshot repository is not configured")
+	}
+	rows, err := r.db.QueryContext(ctx, `
+SELECT source, canonical_model_id, COALESCE(provider_hint, ''), COALESCE(display_name, ''),
+       COALESCE(context_window, 0), capabilities::text, aliases::text, COALESCE(price::text, '')
+FROM model_catalog_candidate_evidence
+WHERE snapshot_id = $1
+ORDER BY canonical_model_id
+`, snapshotID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []service.CatalogCandidateEvidenceRow{}
+	for rows.Next() {
+		var row service.CatalogCandidateEvidenceRow
+		var capabilities, aliases string
+		if err := rows.Scan(&row.Source, &row.CanonicalModelID, &row.ProviderHint, &row.DisplayName,
+			&row.ContextWindow, &capabilities, &aliases, &row.PriceJSON); err != nil {
+			return nil, err
+		}
+		if row.Capabilities, err = decodeStringArray(capabilities); err != nil {
+			return nil, err
+		}
+		if row.Aliases, err = decodeStringArray(aliases); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+func (r *modelCatalogSnapshotRepository) MissingEvidenceSummary(ctx context.Context) ([]service.CatalogMissingSummaryRow, error) {
+	if r == nil || r.db == nil {
+		return nil, errors.New("model catalog snapshot repository is not configured")
+	}
+	rows, err := r.db.QueryContext(ctx, `
+SELECT m.canonical_model_id, COUNT(DISTINCT m.sync_run_id), MIN(run.started_at), MAX(run.started_at)
+FROM model_catalog_missing_evidence m
+JOIN model_catalog_sync_runs run ON run.id = m.sync_run_id AND run.status = 'succeeded'
+GROUP BY m.canonical_model_id
+ORDER BY m.canonical_model_id
+`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []service.CatalogMissingSummaryRow{}
+	for rows.Next() {
+		var row service.CatalogMissingSummaryRow
+		if err := rows.Scan(&row.CanonicalModelID, &row.AcceptedRunCount, &row.FirstMissingAt, &row.LastMissingAt); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+func decodeStringArray(raw string) ([]string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" || trimmed == "null" {
+		return nil, nil
+	}
+	var out []string
+	if err := json.Unmarshal([]byte(trimmed), &out); err != nil {
+		return nil, fmt.Errorf("decode json string array: %w", err)
+	}
+	return out, nil
+}
+
+// NewModelCatalogEvidenceRepository exposes the read side of the catalog
+// evidence store as its own injectable interface.
+func NewModelCatalogEvidenceRepository(db *sql.DB) service.ModelCatalogEvidenceReader {
+	return &modelCatalogSnapshotRepository{db: db}
+}
