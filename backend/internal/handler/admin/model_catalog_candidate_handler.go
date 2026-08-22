@@ -91,9 +91,10 @@ func (h *ModelCatalogCandidateHandler) UpdateSourceSettings(c *gin.Context) {
 		response.BadRequest(c, "invalid request body: "+err.Error())
 		return
 	}
-	enabled := true
+	var enabled *bool
 	if req.Enabled != nil {
-		enabled = *req.Enabled
+		value := *req.Enabled
+		enabled = &value
 	}
 	var threshold *int
 	if req.ThresholdPercent != nil {
@@ -104,7 +105,8 @@ func (h *ModelCatalogCandidateHandler) UpdateSourceSettings(c *gin.Context) {
 		value := *req.ThresholdPercent
 		threshold = &value
 	}
-	actorID := strings.TrimSpace(c.GetString("platform_user_id"))
+	// The gateway-admin group is scoped by :platform_user_id; use it as the audit actor.
+	actorID := strings.TrimSpace(c.Param("platform_user_id"))
 	if actorID == "" {
 		actorID = "unknown-admin"
 	}
@@ -112,5 +114,5 @@ func (h *ModelCatalogCandidateHandler) UpdateSourceSettings(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	response.Success(c, gin.H{"source": source, "enabled": enabled})
+	response.Success(c, gin.H{"source": source})
 }

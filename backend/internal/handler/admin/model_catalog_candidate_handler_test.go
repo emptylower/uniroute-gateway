@@ -20,10 +20,11 @@ type catalogServiceStub struct {
 	retirements []service.CatalogRetirementSuggestionView
 	anomalies   []service.CatalogPriceAnomalyView
 
-	updatedSource    string
-	updatedEnabled   bool
-	updatedThreshold *int
-	updateErr        error
+	updatedSource     string
+	updatedEnabled    bool
+	updatedEnabledPtr *bool
+	updatedThreshold  *int
+	updateErr         error
 }
 
 func (s *catalogServiceStub) SourceStatus(ctx context.Context) ([]service.CatalogSourceStatusView, error) {
@@ -38,9 +39,12 @@ func (s *catalogServiceStub) RetirementSuggestions(ctx context.Context) ([]servi
 func (s *catalogServiceStub) PriceAnomalies(ctx context.Context) ([]service.CatalogPriceAnomalyView, error) {
 	return s.anomalies, nil
 }
-func (s *catalogServiceStub) UpdateSourceSetting(ctx context.Context, actorID, source string, enabled bool, thresholdPercent *int) error {
+func (s *catalogServiceStub) UpdateSourceSetting(ctx context.Context, actorID, source string, enabled *bool, thresholdPercent *int) error {
 	s.updatedSource = source
-	s.updatedEnabled = enabled
+	if enabled != nil {
+		s.updatedEnabled = *enabled
+	}
+	s.updatedEnabledPtr = enabled
 	s.updatedThreshold = thresholdPercent
 	return s.updateErr
 }
@@ -111,9 +115,20 @@ func TestModelCatalogCandidateHandlerUpdateSettingsContract(t *testing.T) {
 	router.ServeHTTP(recorder, req)
 	require.Equal(t, http.StatusOK, recorder.Code)
 	require.Equal(t, "litellm", stub.updatedSource)
-	require.False(t, stub.updatedEnabled)
+	require.NotNil(t, stub.updatedEnabledPtr)
+	require.False(t, *stub.updatedEnabledPtr)
 	require.NotNil(t, stub.updatedThreshold)
 	require.Equal(t, 30, *stub.updatedThreshold)
+
+	// Omitted fields stay nil: partial updates never clobber.
+	body = `{}`
+	req = httptest.NewRequest(http.MethodPut, "/sources/modelsdev/settings", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	recorder = httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Nil(t, stub.updatedEnabledPtr)
+	require.Nil(t, stub.updatedThreshold)
 
 	// Out-of-range threshold is rejected by the handler before the service.
 	body = `{"count_drop_threshold_percent": 500}`

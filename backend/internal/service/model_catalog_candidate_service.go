@@ -171,6 +171,7 @@ type ModelCatalogCandidateService struct {
 	fetcher  CatalogFetcher
 	clock    func() time.Time
 	interval time.Duration
+	maxItems int
 
 	afterCycle func() // test hook
 
@@ -190,6 +191,9 @@ type ModelCatalogCandidateServiceConfig struct {
 	Fetcher  CatalogFetcher
 	Clock    func() time.Time
 	Interval time.Duration
+	// MaxItems caps normalized items per payload; <=0 falls back to
+	// CatalogMaxItemsDefault.
+	MaxItems int
 }
 
 // NewModelCatalogCandidateService builds the aggregation service.
@@ -206,6 +210,10 @@ func NewModelCatalogCandidateService(cfg ModelCatalogCandidateServiceConfig) *Mo
 	if cfg.Alerts != nil {
 		alerts = cfg.Alerts
 	}
+	maxItems := cfg.MaxItems
+	if maxItems <= 0 {
+		maxItems = CatalogMaxItemsDefault
+	}
 	return &ModelCatalogCandidateService{
 		reader:   cfg.Reader,
 		writer:   cfg.Writer,
@@ -215,6 +223,7 @@ func NewModelCatalogCandidateService(cfg ModelCatalogCandidateServiceConfig) *Mo
 		fetcher:  cfg.Fetcher,
 		clock:    clock,
 		interval: interval,
+		maxItems: maxItems,
 	}
 }
 
@@ -355,7 +364,6 @@ func (s *ModelCatalogCandidateService) CandidateList(ctx context.Context) ([]Cat
 		hints := make(map[string]string, len(perSource))
 		sources := make([]string, 0, len(perSource))
 		prices := make(map[string]string, len(perSource))
-		display := ""
 		var windowMax int64
 		for source, row := range perSource {
 			hints[source] = row.ProviderHint
@@ -363,14 +371,19 @@ func (s *ModelCatalogCandidateService) CandidateList(ctx context.Context) ([]Cat
 			if row.PriceJSON != "" {
 				prices[source] = row.PriceJSON
 			}
-			if row.DisplayName != "" {
-				display = row.DisplayName
-			}
 			if row.ContextWindow > windowMax {
 				windowMax = row.ContextWindow
 			}
 		}
 		sort.Strings(sources)
+		// Deterministic display name: first non-empty in sorted source order.
+		display := ""
+		for _, source := range sources {
+			if perSource[source].DisplayName != "" {
+				display = perSource[source].DisplayName
+				break
+			}
+		}
 
 		confidence, order := ClassifyCatalogConfidence(registryActive, hints)
 		view := CatalogCandidateView{
@@ -540,26 +553,38 @@ func extractInputPrice(priceJSON string) (float64, error) {
 
 // UpdateSourceSetting changes enablement/threshold for one source and appends an
 // audit record. Threshold changes are audited per plan.
-func (s *ModelCatalogCandidateService) UpdateSourceSetting(ctx context.Context, actorID, source string, enabled bool, thresholdPercent *int) error {
+// UpdateSourceSetting changes enablement and/or the drop threshold for one
+// source and appends an audit record. Nil fields mean "leave unchanged": a
+// partial update never clobbers the other setting. Threshold changes are
+// audited per plan.
+func (s *ModelCatalogCandidateService) UpdateSourceSetting(ctx context.Context, actorID, source string, enabled *bool, thresholdPercent *int) error {
 	if !ValidCatalogSource(source) {
 		return fmt.Errorf("invalid catalog source: %q", source)
 	}
-	threshold := CatalogDropThresholdPercentDefault
+	if thresholdPercent != nil && (*thresholdPercent < 1 || *thresholdPercent > 100) {
+		return fmt.Errorf("count drop threshold must be within 1..100: %d", *thresholdPercent)
+	}
+	current, err := s.settingFor(ctx, source)
+	if err != nil {
+		return err
+	}
+	newEnabled := current.Enabled
+	if enabled != nil {
+		newEnabled = *enabled
+	}
+	threshold := current.CountDropThresholdPercent
 	if thresholdPercent != nil {
-		if *thresholdPercent < 1 || *thresholdPercent > 100 {
-			return fmt.Errorf("count drop threshold must be within 1..100: %d", *thresholdPercent)
-		}
 		threshold = *thresholdPercent
 	}
 	if s.audit == nil {
 		return fmt.Errorf("audit repository is not configured")
 	}
-	if err := s.reader.UpdateSourceSetting(ctx, source, enabled, threshold); err != nil {
+	if err := s.reader.UpdateSourceSetting(ctx, source, newEnabled, threshold); err != nil {
 		return err
 	}
 	payload, _ := json.Marshal(map[string]any{
 		"source":            source,
-		"enabled":           enabled,
+		"enabled":           newEnabled,
 		"threshold_percent": threshold,
 	})
 	return s.audit.Insert(ctx, &AuditLog{
@@ -586,7 +611,7 @@ type catalogSourcePlan struct {
 func (s *ModelCatalogCandidateService) planFor(source string) (*catalogSourcePlan, error) {
 	switch source {
 	case CatalogSourceOpenRouter:
-		adapter := NewOpenRouterCatalogAdapter(CatalogMaxItemsDefault)
+		adapter := NewOpenRouterCatalogAdapter(s.maxItems)
 		return &catalogSourcePlan{
 			source: source,
 			url:    openRouterModelsURL,
@@ -601,7 +626,7 @@ func (s *ModelCatalogCandidateService) planFor(source string) (*catalogSourcePla
 			parse: adapter.Parse,
 		}, nil
 	case CatalogSourceModelsDev:
-		adapter := NewModelsDevCatalogAdapter(CatalogMaxItemsDefault)
+		adapter := NewModelsDevCatalogAdapter(s.maxItems)
 		return &catalogSourcePlan{
 			source: source,
 			fetch: func(ctx context.Context) ([]byte, string, string, error) {
@@ -623,7 +648,7 @@ func (s *ModelCatalogCandidateService) planFor(source string) (*catalogSourcePla
 			parse: adapter.Parse,
 		}, nil
 	case CatalogSourceLiteLLM:
-		adapter := NewLiteLLMCatalogAdapter(CatalogMaxItemsDefault)
+		adapter := NewLiteLLMCatalogAdapter(s.maxItems)
 		return &catalogSourcePlan{
 			source: source,
 			fetch: func(ctx context.Context) ([]byte, string, string, error) {
@@ -710,9 +735,11 @@ func (s *ModelCatalogCandidateService) IngestSource(ctx context.Context, source 
 }
 
 func (s *ModelCatalogCandidateService) failRun(ctx context.Context, runID int64, source string, cause error) error {
-	message := cause.Error()
-	if truncated := 800; len(message) > truncated {
-		message = message[:truncated]
+	const truncatedLen = 800
+	runes := []rune(cause.Error())
+	message := string(runes)
+	if len(runes) > truncatedLen {
+		message = string(runes[:truncatedLen])
 	}
 	if err := s.writer.FinishSyncRun(ctx, runID, CatalogSyncStatusFailed, 0, "", message); err != nil {
 		log.Printf("[model-catalog] source %s: finish failed run %d: %v (cause: %s)", source, runID, err, message)
@@ -787,7 +814,7 @@ type ModelCatalogCandidateViews interface {
 	CandidateList(ctx context.Context) ([]CatalogCandidateView, error)
 	RetirementSuggestions(ctx context.Context) ([]CatalogRetirementSuggestionView, error)
 	PriceAnomalies(ctx context.Context) ([]CatalogPriceAnomalyView, error)
-	UpdateSourceSetting(ctx context.Context, actorID, source string, enabled bool, thresholdPercent *int) error
+	UpdateSourceSetting(ctx context.Context, actorID, source string, enabled *bool, thresholdPercent *int) error
 }
 
 var _ ModelCatalogCandidateViews = (*ModelCatalogCandidateService)(nil)

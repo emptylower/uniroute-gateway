@@ -1056,7 +1056,8 @@ func ProvideGatewayService(
 
 // ProvideModelCatalogCandidateService wires the phase 6 catalog aggregation
 // service: bounded fetcher, append-only evidence store, read-only registry
-// projection, audit writer, and grouped alerts.
+// projection, audit writer, and grouped alerts. The scheduled ingestion loop
+// starts only when model_governance.model_catalog.ingestion_enabled is true.
 func ProvideModelCatalogCandidateService(
 	snapshotRepo ModelCatalogSnapshotStore,
 	reader ModelCatalogEvidenceReader,
@@ -1068,11 +1069,16 @@ func ProvideModelCatalogCandidateService(
 		time.Duration(cfg.ModelGovernance.ModelCatalog.RequestTimeoutSeconds)*time.Second,
 		int64(cfg.ModelGovernance.ModelCatalog.MaxPayloadBytes),
 	)
-	return NewModelCatalogCandidateService(ModelCatalogCandidateServiceConfig{
+	svc := NewModelCatalogCandidateService(ModelCatalogCandidateServiceConfig{
 		Reader:   reader,
 		Writer:   snapshotRepo,
 		Registry: registryRepo,
 		Audit:    auditRepo,
 		Fetcher:  client,
+		MaxItems: cfg.ModelGovernance.ModelCatalog.MaxItems,
 	})
+	if cfg.ModelGovernance.ModelCatalog.IngestionEnabled {
+		svc.Start()
+	}
+	return svc
 }

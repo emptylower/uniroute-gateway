@@ -20,6 +20,12 @@ type fakeEvidenceReader struct {
 	snapshots map[string]CatalogSnapshotRef
 	evidence  map[int64][]CatalogCandidateEvidenceRow
 	missing   []CatalogMissingSummaryRow
+
+	updated struct {
+		source    string
+		enabled   bool
+		threshold int
+	}
 }
 
 func (f *fakeEvidenceReader) SourceSettings(ctx context.Context) ([]CatalogSourceSetting, error) {
@@ -35,6 +41,17 @@ func (f *fakeEvidenceReader) MissingEvidenceSummary(ctx context.Context) ([]Cata
 	return f.missing, nil
 }
 func (f *fakeEvidenceReader) UpdateSourceSetting(ctx context.Context, source string, enabled bool, thresholdPercent int) error {
+	for i := range f.settings {
+		if f.settings[i].Source == source {
+			f.settings[i].Enabled = enabled
+			f.settings[i].CountDropThresholdPercent = thresholdPercent
+		}
+	}
+	f.updated = struct {
+		source    string
+		enabled   bool
+		threshold int
+	}{source, enabled, thresholdPercent}
 	return nil
 }
 
@@ -423,19 +440,30 @@ func TestUpdateSourceSettingAuditsAndValidates(t *testing.T) {
 	svc.audit = audit
 
 	newThreshold := 30
-	require.NoError(t, svc.UpdateSourceSetting(context.Background(), "admin-1", CatalogSourceLiteLLM, true, &newThreshold))
+	enabled := true
+	require.NoError(t, svc.UpdateSourceSetting(context.Background(), "admin-1", CatalogSourceLiteLLM, &enabled, &newThreshold))
 	require.Equal(t, 1, audit.inserts)
 	require.Contains(t, audit.last.Action, "model_catalog")
 	require.Contains(t, audit.last.RequestBody, "litellm")
+	require.Equal(t, CatalogSourceLiteLLM, reader.updated.source)
+	require.True(t, reader.updated.enabled)
+	require.Equal(t, 30, reader.updated.threshold)
+
+	// Partial update: nil fields keep current settings instead of clobbering.
+	partial := false
+	require.NoError(t, svc.UpdateSourceSetting(context.Background(), "admin-1", CatalogSourceLiteLLM, &partial, nil))
+	require.Equal(t, CatalogSourceLiteLLM, reader.updated.source)
+	require.False(t, reader.updated.enabled)
+	require.Equal(t, 30, reader.updated.threshold, "omitted threshold must keep the current value")
 
 	// Unknown source rejected without audit.
-	err := svc.UpdateSourceSetting(context.Background(), "admin-1", "huggingface", true, nil)
+	err := svc.UpdateSourceSetting(context.Background(), "admin-1", "huggingface", nil, nil)
 	require.Error(t, err)
-	require.Equal(t, 1, audit.inserts)
+	require.Equal(t, 2, audit.inserts)
 
 	// Threshold bounds enforced.
 	tooBig := 101
-	require.Error(t, svc.UpdateSourceSetting(context.Background(), "admin-1", CatalogSourceOpenRouter, true, &tooBig))
+	require.Error(t, svc.UpdateSourceSetting(context.Background(), "admin-1", CatalogSourceOpenRouter, nil, &tooBig))
 }
 
 func TestModelCatalogCandidateServiceStartStopLoop(t *testing.T) {
