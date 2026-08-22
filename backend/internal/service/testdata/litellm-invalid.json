@@ -1,0 +1,19 @@
+{
+  "broken-cost-type": {
+    "max_input_tokens": 100000,
+    "input_cost_per_token": "should-be-number",
+    "output_cost_per_token": 1e-06,
+    "litellm_provider": "openai",
+    "mode": "chat"
+  },
+  "missing-provider-a": {
+    "max_tokens": 4096
+  },
+  "missing-provider-b": {
+    "max_tokens": 8192
+  },
+  "ok-one": {
+    "litellm_provider": "anthropic",
+    "mode": "chat"
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "anthropic": {
+    "id": "anthropic",
+    "models": {
+      "broken-cost-type": {
+        "name": "Broken Cost Type",
+        "cost": {
+          "input": "should-be-number",
+          "output": 0.000015
+        },
+        "limit": {"context": 100000}
+      },
+      "broken-context": {
+        "name": "Broken Context",
+        "limit": {"context": -5}
+      },
+      "no-name-entry": {},
+      "ok-one": {"name": "OK One"}
+    }
+  },
+  "empty-provider": {
+    "id": "empty-provider"
+  }
+}

@@ -1,0 +1,67 @@
+{
+  "anthropic": {
+    "id": "anthropic",
+    "models": {
+      "claude-test-4-sonnet": {
+        "name": "Claude Test 4 Sonnet",
+        "attachment": true,
+        "reasoning": true,
+        "tool_call": true,
+        "modalities": {
+          "input": ["text", "image"],
+          "output": ["text"]
+        },
+        "cost": {
+          "input": 0.000003,
+          "output": 0.000015
+        },
+        "limit": {"context": 200000, "output": 8192}
+      }
+    }
+  },
+  "openai": {
+    "id": "openai",
+    "models": {
+      "gpt-test-mini": {
+        "name": "GPT Test Mini",
+        "tool_call": true,
+        "modalities": {
+          "input": ["text"],
+          "output": ["text"]
+        },
+        "cost": {
+          "input": 0.00000015,
+          "output": 0.0000006
+        },
+        "limit": {"context": 128000}
+      }
+    }
+  },
+  "mistral": {
+    "id": "mistral",
+    "models": {
+      "mistral-test-large": {
+        "name": "Mistral Test Large",
+        "modalities": {
+          "input": ["text"],
+          "output": ["text"]
+        },
+        "limit": {"context": 128000}
+      }
+    }
+  },
+  "legacy-provider": {
+    "id": "legacy",
+    "models": {
+      "old-model-retired": {
+        "name": "Old Model Retired",
+        "status": "deprecated",
+        "modalities": {
+          "input": ["text"],
+          "output": ["text"]
+        },
+        "limit": {"context": 32000}
+      }
+    }
+  }
+}

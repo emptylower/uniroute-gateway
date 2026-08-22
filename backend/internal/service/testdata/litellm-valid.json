@@ -1,0 +1,41 @@
+{
+  "gpt-test-4o": {
+    "max_tokens": 16384,
+    "max_input_tokens": 128000,
+    "max_output_tokens": 16384,
+    "input_cost_per_token": 2.5e-06,
+    "output_cost_per_token": 1e-05,
+    "litellm_provider": "openai",
+    "mode": "chat",
+    "supports_function_calling": true,
+    "supports_vision": true
+  },
+  "claude-test-opus": {
+    "max_tokens": 32000,
+    "max_input_tokens": 200000,
+    "input_cost_per_token": 1.5e-05,
+    "output_cost_per_token": 7.5e-05,
+    "litellm_provider": "anthropic",
+    "mode": "chat",
+    "supports_function_calling": true,
+    "supports_reasoning": true
+  },
+  "vertex_ai/gemini-test-flash": {
+    "max_input_tokens": 1000000,
+    "input_cost_per_token": 7.5e-08,
+    "litellm_provider": "vertex_ai/gemini",
+    "mode": "chat"
+  },
+  "old-deprecated-model": {
+    "max_input_tokens": 16000,
+    "input_cost_per_token": 1e-06,
+    "output_cost_per_token": 2e-06,
+    "litellm_provider": "openai",
+    "mode": "chat",
+    "deprecation_date": "2026-01-01"
+  },
+  "missing-provider-entry": {
+    "max_tokens": 4096
+  },
+  "_sample_note": {}
+}
