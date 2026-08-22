@@ -82,6 +82,7 @@ var ProviderSet = wire.NewSet(
 	NewUpstreamConnectionRepository,
 	NewUpstreamConnectionMigrationRepository,
 	NewAggregatorReuseRepository,
+	NewModelGovernanceReadRepository,
 	NewModelCatalogSnapshotRepository,
 	NewModelCatalogEvidenceRepository,
 	NewAdminAccountRepository,

@@ -59,6 +59,7 @@ func ProvideAdminHandlers(
 	aggregatorConnectionReuseService *service.AggregatorConnectionReuseService,
 	accountRepository service.AccountRepository,
 	upstreamConnectionRepository service.UpstreamConnectionRepository,
+	modelGovernanceReadRepository service.ModelGovernanceReadRepository,
 ) *AdminHandlers {
 	accountHandler.SetUpstreamBillingProbeService(upstreamBillingProbe)
 	accountHandler.SetOllamaCloudUsageService(ollamaCloudUsage)
@@ -76,6 +77,7 @@ func ProvideAdminHandlers(
 		aggregatorConnectionReuseService,
 	)
 	quarantineHandler := admin.NewModelQuarantineHandler(quarantineService)
+	modelGovernanceReadHandler := admin.NewModelGovernanceReadHandler(modelGovernanceReadRepository)
 	activationHandler := admin.NewModelAuthorizationActivationHandler(activationService)
 	return &AdminHandlers{
 		Dashboard:                 dashboardHandler,
@@ -119,6 +121,7 @@ func ProvideAdminHandlers(
 		ModelQuarantine:              quarantineHandler,
 		ModelAuthorizationActivation: activationHandler,
 		ModelCatalogCandidate:        modelCatalogCandidateHandler,
+		ModelGovernanceReads:         modelGovernanceReadHandler,
 	}
 }
 

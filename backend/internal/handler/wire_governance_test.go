@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/Wei-Shaw/sub2api/internal/handler/admin"
+	"github.com/Wei-Shaw/sub2api/internal/repository"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 )
 
@@ -77,6 +78,7 @@ func TestProvideAdminHandlers_WiresGovernanceHandlersForReal(t *testing.T) {
 		service.NewAggregatorConnectionReuseServiceWithRepo(nil, nil, nil, nil), // aggregatorConnectionReuseService
 		governanceAccountRepositoryStub{},                                       // accountRepository
 		governanceUpstreamConnectionRepositoryStub{},                            // upstreamConnectionRepository
+		repository.NewModelGovernanceReadRepository(nil),                        // modelGovernanceReadRepository
 	)
 	require.NotNil(t, adminHandlers)
 
@@ -86,6 +88,8 @@ func TestProvideAdminHandlers_WiresGovernanceHandlersForReal(t *testing.T) {
 	assertNotNilField(t, adminHandlers.ModelGovernanceConnection, "connService")
 	assertNotNilField(t, adminHandlers.ModelGovernanceConnection, "designation")
 	assertNotNilField(t, adminHandlers.ModelGovernanceConnection, "reuse")
+	require.NotNil(t, adminHandlers.ModelGovernanceReads)
+	assertNotNilField(t, adminHandlers.ModelGovernanceReads, "repo")
 }
 
 func assertNotNilField(t *testing.T, target any, field string) {

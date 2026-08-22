@@ -48,6 +48,7 @@ type AdminHandlers struct {
 	ModelQuarantine              *admin.ModelQuarantineHandler
 	ModelAuthorizationActivation *admin.ModelAuthorizationActivationHandler
 	ModelCatalogCandidate        *admin.ModelCatalogCandidateHandler
+	ModelGovernanceReads         *admin.ModelGovernanceReadHandler
 }
 
 // Handlers contains all HTTP handlers
