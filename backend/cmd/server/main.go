@@ -163,6 +163,15 @@ func runMainServer() {
 		}
 	}
 
+	// Phase 6: external model catalog ingestion. Start is idempotent and
+	// non-blocking; per-source enablement lives in model_catalog_source_settings
+	// (disable via the audited gateway-admin settings endpoint).
+	// F1 evidence: this is the production call site (grep: ModelCatalogCandidate.Start).
+	if app.ModelCatalogCandidate != nil {
+		app.ModelCatalogCandidate.Start()
+		log.Printf("Model catalog ingestion loop started")
+	}
+
 	// 启动服务器
 	go func() {
 		if err := app.Server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

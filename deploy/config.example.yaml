@@ -1031,11 +1031,11 @@ model_governance:
   authorization_mode: "off"
 
   # External model catalog ingestion (phase 6): immutable evidence only.
+  # The loop starts with the server; disable individual sources via the
+  # audited gateway-admin settings endpoint (model_catalog_source_settings).
   # Requests are restricted to openrouter.ai, api.github.com, and
   # raw.githubusercontent.com over HTTPS with bounded redirects.
   model_catalog:
-    # Scheduled ingestion toggle (default false).
-    ingestion_enabled: false
     # Per-fetch timeout in seconds (default 20).
     request_timeout_seconds: 20
     # Response body cap in bytes (default 33554432 = 32MiB).

@@ -109,10 +109,10 @@ type ModelGovernanceConfig struct {
 }
 
 // ModelCatalogConfig bounds external catalog ingestion requests (phase 6).
-// Zero values fall back to the documented defaults at use time.
+// Zero values fall back to the documented defaults at use time. The loop
+// lifecycle is owned by server bootstrap; per-source enablement lives in the
+// model_catalog_source_settings table.
 type ModelCatalogConfig struct {
-	// IngestionEnabled toggles scheduled external catalog ingestion.
-	IngestionEnabled bool `mapstructure:"ingestion_enabled"`
 	// RequestTimeoutSeconds caps each external fetch (default 20).
 	RequestTimeoutSeconds int `mapstructure:"request_timeout_seconds"`
 	// MaxPayloadBytes caps the response body size (default 32MiB).
@@ -1923,7 +1923,6 @@ func configureConfigSource(setConfigFile, addConfigPath func(string)) {
 func setDefaults() {
 	viper.SetDefault("run_mode", RunModeStandard)
 	viper.SetDefault("model_governance.authorization_mode", "off")
-	viper.SetDefault("model_governance.model_catalog.ingestion_enabled", false)
 	viper.SetDefault("model_governance.model_catalog.request_timeout_seconds", 20)
 	viper.SetDefault("model_governance.model_catalog.max_payload_bytes", 32<<20)
 	viper.SetDefault("model_governance.model_catalog.max_items", 50000)

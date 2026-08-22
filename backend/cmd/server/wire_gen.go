@@ -357,11 +357,12 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	paymentOrderExpiryService := service.ProvidePaymentOrderExpiryService(paymentService, leaderLockCache, db)
 	channelMonitorRunner := service.ProvideChannelMonitorRunner(channelMonitorService, settingService)
 	userPlatformQuotaUsageFlusher := service.ProvideUserPlatformQuotaUsageFlusher(configConfig, billingCache, serviceUserPlatformQuotaRepository, timingWheelService)
-	v := provideCleanup(client, redisClient, opsMetricsCollector, opsAggregationService, opsAlertEvaluatorService, opsCleanupService, opsScheduledReportService, opsSystemLogSink, opsService, opsIngressRejectAggregator, apiKeyService, authCacheInvalidationWorker, schedulerSnapshotService, tokenRefreshService, accountExpiryService, proxyExpiryService, subscriptionExpiryService, usageCleanupService, idempotencyCleanupService, batchImageCleanupService, batchImageWorkerRuntime, pricingService, emailQueueService, billingCacheService, usageRecordWorkerPool, subscriptionService, oAuthService, openAIOAuthService, geminiOAuthService, antigravityOAuthService, grokOAuthService, openAIGatewayService, scheduledTestRunnerService, backupService, paymentOrderExpiryService, channelMonitorRunner, userPlatformQuotaUsageFlusher, upstreamBillingProbeService, ollamaCloudUsageService, auditLogService, promptService)
+	v := provideCleanup(client, redisClient, opsMetricsCollector, opsAggregationService, opsAlertEvaluatorService, opsCleanupService, opsScheduledReportService, opsSystemLogSink, opsService, opsIngressRejectAggregator, apiKeyService, authCacheInvalidationWorker, schedulerSnapshotService, tokenRefreshService, accountExpiryService, proxyExpiryService, subscriptionExpiryService, usageCleanupService, idempotencyCleanupService, batchImageCleanupService, batchImageWorkerRuntime, pricingService, emailQueueService, billingCacheService, usageRecordWorkerPool, subscriptionService, oAuthService, openAIOAuthService, geminiOAuthService, antigravityOAuthService, grokOAuthService, openAIGatewayService, scheduledTestRunnerService, backupService, paymentOrderExpiryService, channelMonitorRunner, userPlatformQuotaUsageFlusher, upstreamBillingProbeService, ollamaCloudUsageService, auditLogService, promptService, modelCatalogCandidateService)
 	application := &Application{
-		Server:      httpServer,
-		PromptAudit: promptService,
-		Cleanup:     v,
+		Server:                httpServer,
+		PromptAudit:           promptService,
+		ModelCatalogCandidate: modelCatalogCandidateService,
+		Cleanup:               v,
 	}
 	return application, nil
 }
@@ -369,9 +370,10 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 // wire.go:
 
 type Application struct {
-	Server      *http.Server
-	PromptAudit *securityaudit.PromptService
-	Cleanup     func()
+	Server                *http.Server
+	PromptAudit           *securityaudit.PromptService
+	ModelCatalogCandidate *service.ModelCatalogCandidateService
+	Cleanup               func()
 }
 
 func providePrivacyClientFactory() service.PrivacyClientFactory {
@@ -427,6 +429,7 @@ func provideCleanup(
 	ollamaCloudUsage *service.OllamaCloudUsageService,
 	auditLog *service.AuditLogService,
 	promptAudit *securityaudit.PromptService,
+	modelCatalogCandidate *service.ModelCatalogCandidateService,
 ) func() {
 	return func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -441,6 +444,12 @@ func provideCleanup(
 			{"OpsIngressRejectAggregator", func() error {
 				if opsIngressReject != nil {
 					opsIngressReject.Stop()
+				}
+				return nil
+			}},
+			{"ModelCatalogCandidateIngestion", func() error {
+				if modelCatalogCandidate != nil {
+					modelCatalogCandidate.Stop()
 				}
 				return nil
 			}},

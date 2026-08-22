@@ -25,9 +25,10 @@ import (
 )
 
 type Application struct {
-	Server      *http.Server
-	PromptAudit *securityaudit.PromptService
-	Cleanup     func()
+	Server                *http.Server
+	PromptAudit           *securityaudit.PromptService
+	ModelCatalogCandidate *service.ModelCatalogCandidateService
+	Cleanup               func()
 }
 
 func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
@@ -56,7 +57,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 		provideCleanup,
 
 		// Application struct
-		wire.Struct(new(Application), "Server", "PromptAudit", "Cleanup"),
+		wire.Struct(new(Application), "Server", "PromptAudit", "ModelCatalogCandidate", "Cleanup"),
 	)
 	return nil, nil
 }
@@ -114,6 +115,7 @@ func provideCleanup(
 	ollamaCloudUsage *service.OllamaCloudUsageService,
 	auditLog *service.AuditLogService,
 	promptAudit *securityaudit.PromptService,
+	modelCatalogCandidate *service.ModelCatalogCandidateService,
 ) func() {
 	return func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -129,6 +131,12 @@ func provideCleanup(
 			{"OpsIngressRejectAggregator", func() error {
 				if opsIngressReject != nil {
 					opsIngressReject.Stop()
+				}
+				return nil
+			}},
+			{"ModelCatalogCandidateIngestion", func() error {
+				if modelCatalogCandidate != nil {
+					modelCatalogCandidate.Stop()
 				}
 				return nil
 			}},
