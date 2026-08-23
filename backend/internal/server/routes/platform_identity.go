@@ -130,6 +130,7 @@ func registerDelegatedGatewayAdminRoutes(
 	accounts.PUT("/:id/upstream-billing-probe", h.Admin.Account.SetUpstreamBillingProbeEnabled)
 	if h.Admin.ModelGovernanceConnection != nil {
 		accounts.PUT("/:id/connection", h.Admin.ModelGovernanceConnection.LinkAccount)
+		accounts.POST("/:id/derive-connection", h.Admin.ModelGovernanceConnection.DeriveFromAccount)
 	}
 	accounts.DELETE("/:id", h.Admin.Account.Delete)
 	accounts.POST("/:id/test", h.Admin.Account.Test)

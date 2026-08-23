@@ -238,3 +238,120 @@ func TestLinkAccountNotFoundPaths(t *testing.T) {
 		map[string]any{"connection_id": 1}, map[string]string{"Idempotency-Key": "k"})
 	require.Equal(t, http.StatusNotFound, recorder2.Code)
 }
+
+func TestDeriveFromAccountCreatesAggregatorAndLinks(t *testing.T) {
+	repo := newStubConnLinkRepo()
+	accounts := &linkAccountTestRepo{
+		accounts: map[int64]*service.Account{
+			4: {ID: 4, Platform: "anthropic", Credentials: map[string]any{
+				"base_url": "https://agg.example.com/v1",
+				"api_key":  "sk-aggregator",
+			}},
+		},
+		updated: map[int64]int64{},
+	}
+	handler := newConnectionLinkHandler(repo, accounts)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/accounts/:id/derive-connection", handler.DeriveFromAccount)
+	recorder := httptest.NewRecorder()
+
+	req := httptest.NewRequest(http.MethodPost, "/accounts/4/derive-connection", nil)
+	req.Header.Set("Idempotency-Key", "derive-1")
+	router.ServeHTTP(recorder, req)
+
+	require.Equal(t, http.StatusCreated, recorder.Code)
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &body))
+	require.Equal(t, "aggregator", body["kind"])
+	require.Nil(t, body["provider"], "aggregator must stay provider-less")
+	require.Equal(t, true, body["linked"])
+	require.NotContains(t, recorder.Body.String(), "sk-aggregator", "credential never echoed")
+	connID := int64(body["connection_id"].(float64))
+	require.Equal(t, connID, accounts.updated[4], "account linked to derived connection")
+}
+
+func TestDeriveFromAccountReplayIsIdempotent(t *testing.T) {
+	repo := newStubConnLinkRepo()
+	accounts := &linkAccountTestRepo{
+		accounts: map[int64]*service.Account{
+			4: {ID: 4, Platform: "anthropic", Credentials: map[string]any{
+				"base_url": "https://agg.example.com",
+				"api_key":  "sk-1",
+			}},
+		},
+		updated: map[int64]int64{},
+	}
+	handler := newConnectionLinkHandler(repo, accounts)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/accounts/:id/derive-connection", handler.DeriveFromAccount)
+
+	rec1 := httptest.NewRecorder()
+	req1 := httptest.NewRequest(http.MethodPost, "/accounts/4/derive-connection", nil)
+	req1.Header.Set("Idempotency-Key", "k")
+	router.ServeHTTP(rec1, req1)
+	require.Equal(t, http.StatusCreated, rec1.Code)
+
+	rec2 := httptest.NewRecorder()
+	req2 := httptest.NewRequest(http.MethodPost, "/accounts/4/derive-connection", nil)
+	req2.Header.Set("Idempotency-Key", "k")
+	router.ServeHTTP(rec2, req2)
+	require.Equal(t, http.StatusOK, rec2.Code)
+	require.Len(t, repo.conns, 1, "replay must not duplicate the connection")
+}
+
+func TestDeriveFromAccountRejectsMissingParts(t *testing.T) {
+	base := func(creds map[string]any) *linkAccountTestRepo {
+		return &linkAccountTestRepo{
+			accounts: map[int64]*service.Account{4: {ID: 4, Platform: "anthropic", Credentials: creds}},
+			updated:  map[int64]int64{},
+		}
+	}
+	cases := []struct {
+		name    string
+		creds   map[string]any
+		wantMsg string
+	}{
+		{"no base_url", map[string]any{"api_key": "sk"}, "no custom base_url"},
+		{"no api_key", map[string]any{"base_url": "https://x"}, "no api_key credential"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := newStubConnLinkRepo()
+			handler := newConnectionLinkHandler(repo, base(tc.creds))
+			gin.SetMode(gin.TestMode)
+			router := gin.New()
+			router.POST("/accounts/:id/derive-connection", handler.DeriveFromAccount)
+			recorder := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/accounts/4/derive-connection", nil)
+			req.Header.Set("Idempotency-Key", "k")
+			router.ServeHTTP(recorder, req)
+			require.Equal(t, http.StatusBadRequest, recorder.Code)
+			require.Contains(t, recorder.Body.String(), tc.wantMsg)
+			require.Empty(t, repo.conns)
+		})
+	}
+}
+
+func TestDeriveFromAccountRejectsUngovernedPlatform(t *testing.T) {
+	repo := newStubConnLinkRepo()
+	accounts := &linkAccountTestRepo{
+		accounts: map[int64]*service.Account{
+			7: {ID: 7, Platform: "vertex", Credentials: map[string]any{
+				"base_url": "https://x", "api_key": "sk",
+			}},
+		},
+		updated: map[int64]int64{},
+	}
+	handler := newConnectionLinkHandler(repo, accounts)
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/accounts/:id/derive-connection", handler.DeriveFromAccount)
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/accounts/7/derive-connection", nil)
+	req.Header.Set("Idempotency-Key", "k")
+	router.ServeHTTP(recorder, req)
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	require.Contains(t, recorder.Body.String(), "governed platform")
+}

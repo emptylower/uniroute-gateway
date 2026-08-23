@@ -66,6 +66,80 @@ func (h *ModelGovernanceConnectionHandler) Create(c *gin.Context) {
 	})
 }
 
+// DeriveFromAccount creates an aggregator connection from an account's OWN
+// saved configuration (credentials.base_url + credentials.api_key) and links
+// the account to it. No secret material travels through the request or any
+// response; creation is replay-safe via the natural-identity lookup, so a
+// repeated click returns the existing connection instead of duplicating.
+func (h *ModelGovernanceConnectionHandler) DeriveFromAccount(c *gin.Context) {
+	if h.connService == nil || h.accountRepo == nil {
+		response.InternalError(c, "derive dependencies not configured")
+		return
+	}
+	if strings.TrimSpace(c.GetHeader("Idempotency-Key")) == "" {
+		response.BadRequest(c, "Idempotency-Key header is required")
+		return
+	}
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "invalid account id")
+		return
+	}
+	account, err := h.accountRepo.GetByID(c.Request.Context(), accountID)
+	if err != nil || account == nil {
+		response.NotFound(c, "account not found")
+		return
+	}
+	switch service.GovernanceProvider(account.Platform) {
+	case service.GovernanceProviderAnthropic, service.GovernanceProviderOpenAI,
+		service.GovernanceProviderGemini, service.GovernanceProviderGrok:
+	default:
+		response.BadRequest(c, "derive requires a governed platform account")
+		return
+	}
+	baseURL := strings.TrimSpace(account.GetCredential("base_url"))
+	if baseURL == "" {
+		response.BadRequest(c, "account has no custom base_url configured to derive a connection from")
+		return
+	}
+	apiKey := strings.TrimSpace(account.GetCredential("api_key"))
+	if apiKey == "" {
+		response.BadRequest(c, "account has no api_key credential to derive a connection from")
+		return
+	}
+	conn, created, err := h.connService.GetOrCreateActive(
+		c.Request.Context(), "aggregator", nil, baseURL, apiKey, account.ProxyID,
+	)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	linked := false
+	if account.ConnectionID == nil || *account.ConnectionID != conn.ID {
+		account.ConnectionID = &conn.ID
+		if err := h.accountRepo.Update(c.Request.Context(), account); err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+		linked = true
+	} else {
+		linked = true
+	}
+	status := http.StatusCreated
+	if !created {
+		status = http.StatusOK
+	}
+	c.JSON(status, gin.H{
+		"connection_id":      conn.ID,
+		"kind":               conn.Kind,
+		"base_url":           conn.BaseURL,
+		"credential_version": conn.CredentialVersion,
+		"status":             conn.Status,
+		"account_id":         account.ID,
+		"linked":             linked,
+	})
+}
+
 // LinkAccount attaches an existing account to an upstream connection so the
 // reuse/probe evidence chain covers it. The operation is naturally idempotent
 // (relinking the same connection is a no-op state), so replay safety needs no
