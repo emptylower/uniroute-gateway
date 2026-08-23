@@ -198,6 +198,9 @@ type Account struct {
 	ProxyID                 *int64                         `json:"proxy_id"`
 	ProxyFallbackOriginID   *int64                         `json:"proxy_fallback_origin_id"`
 	ProxyFallbackOriginName *string                        `json:"proxy_fallback_origin_name,omitempty"`
+	// ConnectionID 是 Phase 4 治理连接的挂接标识；前端用它决定账号行渲染
+	// “挂接连接”还是“复用连接”。非敏感（纯外键 id），无凭据泄露风险。
+	ConnectionID *int64 `json:"connection_id,omitempty"`
 	Concurrency             int                            `json:"concurrency"`
 	LoadFactor              *int                           `json:"load_factor,omitempty"`
 	Priority                int                            `json:"priority"`

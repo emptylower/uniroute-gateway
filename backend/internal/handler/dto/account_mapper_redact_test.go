@@ -100,3 +100,22 @@ func TestAccountFromServiceShallow_NilCredentialsOmitsStatus(t *testing.T) {
 	require.Nil(t, got.Credentials)
 	require.Nil(t, got.CredentialsStatus)
 }
+
+func TestAccountFromServiceShallow_MapsConnectionID(t *testing.T) {
+	var connID int64 = 7
+	src := &service.Account{
+		ID:           42,
+		Name:         "linked",
+		Platform:     "anthropic",
+		Type:         "apikey",
+		ConnectionID: &connID,
+		Credentials:  map[string]any{},
+	}
+
+	got := AccountFromServiceShallow(src)
+	require.NotNil(t, got.ConnectionID, "connection_id must reach the list API so the UI can render the reuse entry")
+	require.Equal(t, connID, *got.ConnectionID)
+
+	unlinked := AccountFromServiceShallow(&service.Account{ID: 43, Name: "unlinked", Platform: "anthropic", Type: "apikey", Credentials: map[string]any{}})
+	require.Nil(t, unlinked.ConnectionID)
+}
