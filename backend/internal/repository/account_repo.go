@@ -501,6 +501,12 @@ func (r *accountRepository) updateLockedAccount(ctx context.Context, client *dbe
 		builder.ClearLoadFactor()
 	}
 
+	if account.ConnectionID != nil {
+		builder.SetConnectionID(*account.ConnectionID)
+	} else {
+		builder.ClearConnectionID()
+	}
+
 	if account.ProxyID != nil {
 		builder.SetProxyID(*account.ProxyID)
 	} else {
@@ -3351,8 +3357,8 @@ func accountEntityToService(m *dbent.Account) *service.Account {
 		SessionWindowEnd:        m.SessionWindowEnd,
 		SessionWindowStatus:     derefString(m.SessionWindowStatus),
 		ParentAccountID:         m.ParentAccountID,
-		QuotaDimension:          string(m.QuotaDimension),
 		ConnectionID:            m.ConnectionID,
+		QuotaDimension:          string(m.QuotaDimension),
 		Protocol:                m.Protocol,
 		EndpointPath:            m.EndpointPath,
 		ConfigVersion:           m.ConfigVersion,

@@ -1670,3 +1670,41 @@ func idsOfAccounts(accounts []service.Account) []int64 {
 	}
 	return out
 }
+
+// Regression guard: updateAccount must round-trip connection_id (the link
+// between an account and its upstream connection). Without SetConnectionID on
+// the update builder, linking silently never persisted; without Clear symmetry
+// a plain field update would silently clear the link.
+func (s *AccountRepoSuite) TestUpdate_RoundTripsConnectionID() {
+	ctx := s.ctx
+	conn, err := s.client.UpstreamConnection.Create().
+		SetKind("aggregator").
+		SetBaseURL("https://agg.example.com/roundtrip").
+		SetEncryptedCredential("enc-test").
+		SetStatus("active").
+		Save(ctx)
+	s.Require().NoError(err, "create connection row for FK target")
+
+	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "conn-roundtrip"})
+
+	// Load (mapping must populate ConnectionID, currently nil) then link.
+	loaded, err := s.repo.GetByID(ctx, account.ID)
+	s.Require().NoError(err)
+	s.Require().Nil(loaded.ConnectionID)
+	loaded.ConnectionID = &conn.ID
+	s.Require().NoError(s.repo.Update(ctx, loaded))
+
+	afterLink, err := s.repo.GetByID(ctx, account.ID)
+	s.Require().NoError(err)
+	s.Require().NotNil(afterLink.ConnectionID, "connection_id must persist after Update")
+	s.Require().Equal(conn.ID, *afterLink.ConnectionID)
+
+	// A plain update on an unrelated field must NOT clear the link.
+	afterLink.Name = "conn-roundtrip-renamed"
+	s.Require().NoError(s.repo.Update(ctx, afterLink))
+	afterRename, err := s.repo.GetByID(ctx, account.ID)
+	s.Require().NoError(err)
+	s.Require().Equal("conn-roundtrip-renamed", afterRename.Name)
+	s.Require().NotNil(afterRename.ConnectionID, "plain update must preserve the connection link")
+	s.Require().Equal(conn.ID, *afterRename.ConnectionID)
+}
