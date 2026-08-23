@@ -128,6 +128,9 @@ func registerDelegatedGatewayAdminRoutes(
 	accounts.POST("", h.Admin.Account.Create)
 	accounts.PUT("/:id", h.Admin.Account.Update)
 	accounts.PUT("/:id/upstream-billing-probe", h.Admin.Account.SetUpstreamBillingProbeEnabled)
+	if h.Admin.ModelGovernanceConnection != nil {
+		accounts.PUT("/:id/connection", h.Admin.ModelGovernanceConnection.LinkAccount)
+	}
 	accounts.DELETE("/:id", h.Admin.Account.Delete)
 	accounts.POST("/:id/test", h.Admin.Account.Test)
 	accounts.POST("/:id/recover-state", h.Admin.Account.RecoverState)
@@ -148,6 +151,7 @@ func registerDelegatedGatewayAdminRoutes(
 	}
 	if h.Admin.ModelGovernanceConnection != nil {
 		connections := admin.Group("/connections")
+		connections.POST("", h.Admin.ModelGovernanceConnection.Create)
 		connections.POST("/:id/designate-aggregator", h.Admin.ModelGovernanceConnection.DesignateAggregator)
 		connections.POST("/:id/reuse", h.Admin.ModelGovernanceConnection.ReuseAggregatorConnection)
 	}

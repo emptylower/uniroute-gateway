@@ -75,6 +75,7 @@ func ProvideAdminHandlers(
 		upstreamConnectionService,
 		aggregatorDesignationService,
 		aggregatorConnectionReuseService,
+		accountRepository,
 	)
 	quarantineHandler := admin.NewModelQuarantineHandler(quarantineService)
 	modelGovernanceReadHandler := admin.NewModelGovernanceReadHandler(modelGovernanceReadRepository)

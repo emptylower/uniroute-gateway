@@ -15,10 +15,111 @@ type ModelGovernanceConnectionHandler struct {
 	connService *service.UpstreamConnectionService
 	designation *service.AggregatorDesignationService
 	reuse       *service.AggregatorConnectionReuseService
+	accountRepo service.AccountRepository
 }
 
-func NewModelGovernanceConnectionHandler(connSvc *service.UpstreamConnectionService, desig *service.AggregatorDesignationService, reuse *service.AggregatorConnectionReuseService) *ModelGovernanceConnectionHandler {
-	return &ModelGovernanceConnectionHandler{connService: connSvc, designation: desig, reuse: reuse}
+func NewModelGovernanceConnectionHandler(connSvc *service.UpstreamConnectionService, desig *service.AggregatorDesignationService, reuse *service.AggregatorConnectionReuseService, accountRepo service.AccountRepository) *ModelGovernanceConnectionHandler {
+	return &ModelGovernanceConnectionHandler{connService: connSvc, designation: desig, reuse: reuse, accountRepo: accountRepo}
+}
+
+// Create registers a new upstream connection (kind/provider/base URL plus an
+// at-rest encrypted credential). Replay-safe: submitting the same natural
+// identity twice returns the existing active connection instead of minting a
+// duplicate. The credential never appears in any response payload.
+func (h *ModelGovernanceConnectionHandler) Create(c *gin.Context) {
+	if h.connService == nil {
+		response.InternalError(c, "connection service not configured")
+		return
+	}
+	var req struct {
+		Kind       string  `json:"kind"`
+		Provider   *string `json:"provider"`
+		BaseURL    string  `json:"base_url"`
+		Credential string  `json:"credential"`
+		ProxyID    *int64  `json:"proxy_id"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "invalid request body")
+		return
+	}
+	var provider *service.GovernanceProvider
+	if req.Provider != nil && strings.TrimSpace(*req.Provider) != "" {
+		p := service.GovernanceProvider(strings.TrimSpace(*req.Provider))
+		provider = &p
+	}
+	conn, created, err := h.connService.GetOrCreateActive(c.Request.Context(), req.Kind, provider, req.BaseURL, req.Credential, req.ProxyID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	status := http.StatusCreated
+	if !created {
+		status = http.StatusOK
+	}
+	c.JSON(status, gin.H{
+		"connection_id":       conn.ID,
+		"kind":                conn.Kind,
+		"provider":            conn.Provider,
+		"base_url":            conn.BaseURL,
+		"credential_version":  conn.CredentialVersion,
+		"status":              conn.Status,
+	})
+}
+
+// LinkAccount attaches an existing account to an upstream connection so the
+// reuse/probe evidence chain covers it. The operation is naturally idempotent
+// (relinking the same connection is a no-op state), so replay safety needs no
+// dedupe storage; the Idempotency-Key header stays mandatory for write ritual.
+func (h *ModelGovernanceConnectionHandler) LinkAccount(c *gin.Context) {
+	if h.connService == nil || h.accountRepo == nil {
+		response.InternalError(c, "connection link dependencies not configured")
+		return
+	}
+	if strings.TrimSpace(c.GetHeader("Idempotency-Key")) == "" {
+		response.BadRequest(c, "Idempotency-Key header is required")
+		return
+	}
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "invalid account id")
+		return
+	}
+	var req struct {
+		ConnectionID int64 `json:"connection_id"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.ConnectionID <= 0 {
+		response.BadRequest(c, "invalid request body")
+		return
+	}
+	account, err := h.accountRepo.GetByID(c.Request.Context(), accountID)
+	if err != nil || account == nil {
+		response.NotFound(c, "account not found")
+		return
+	}
+	conn, err := h.connService.Get(c.Request.Context(), req.ConnectionID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if conn == nil {
+		response.NotFound(c, "connection not found")
+		return
+	}
+	if err := h.connService.ValidateAccountLink(account.Platform, conn); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	account.ConnectionID = &req.ConnectionID
+	if err := h.accountRepo.Update(c.Request.Context(), account); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"linked":             true,
+		"account_id":         account.ID,
+		"connection_id":      conn.ID,
+		"credential_version": conn.CredentialVersion,
+	})
 }
 
 func (h *ModelGovernanceConnectionHandler) DesignateAggregator(c *gin.Context) {

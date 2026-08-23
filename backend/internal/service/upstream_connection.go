@@ -192,6 +192,89 @@ type UpstreamConnectionDTO struct {
 	CredentialRedacted bool             `json:"credential_redacted"`
 }
 
+// Get returns a single connection by ID. It returns (nil, nil) when the
+// connection does not exist so callers can map to their own not-found shape.
+func (s *UpstreamConnectionService) Get(ctx context.Context, id int64) (*UpstreamConnection, error) {
+	if s.repo == nil {
+		return nil, fmt.Errorf("connection repository not configured")
+	}
+	conn, _, err := s.repo.GetByID(ctx, id)
+	return conn, err
+}
+
+// GetOrCreateActive makes connection creation replay-safe: when an active
+// connection with the same natural identity (kind, provider, base URL)
+// already exists it is returned with created=false instead of minting a
+// duplicate row. Credential rotation remains explicit via RotateCredential.
+func (s *UpstreamConnectionService) GetOrCreateActive(ctx context.Context, kind string, provider *GovernanceProvider, baseURL string, credential string, proxyID *int64) (*UpstreamConnection, bool, error) {
+	normalizedURL, err := NormalizeBaseURL(baseURL)
+	if err != nil {
+		return nil, false, err
+	}
+	if s.repo != nil {
+		existing, listErr := s.repo.ListAll(ctx)
+		if listErr != nil {
+			return nil, false, listErr
+		}
+		for _, conn := range existing {
+			if conn == nil || conn.Status != "active" || conn.Kind != kind {
+				continue
+			}
+			if conn.BaseURL != normalizedURL {
+				continue
+			}
+			if sameProviderPointer(conn.Provider, provider) {
+				return conn, false, nil
+			}
+		}
+	}
+	conn, err := s.Create(ctx, kind, provider, baseURL, credential, proxyID)
+	if err != nil {
+		return nil, false, err
+	}
+	return conn, true, nil
+}
+
+func sameProviderPointer(a, b *GovernanceProvider) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
+}
+
+// ValidateAccountLink enforces the account→connection compatibility rules:
+// the connection must exist and be active; a first_party connection binds
+// only to accounts of its own provider; an aggregator connection accepts any
+// governed platform. Shared aggregator credentials never imply shared
+// multipliers or cross-provider fallback — linking only records provenance.
+func (s *UpstreamConnectionService) ValidateAccountLink(accountPlatform string, conn *UpstreamConnection) error {
+	if conn == nil {
+		return fmt.Errorf("connection not found")
+	}
+	if conn.Status != "active" {
+		return fmt.Errorf("connection %d is not active", conn.ID)
+	}
+	switch conn.Kind {
+	case "first_party":
+		if conn.Provider == nil || string(*conn.Provider) != accountPlatform {
+			return fmt.Errorf("first_party connection provider does not match account platform %q", accountPlatform)
+		}
+	case "aggregator":
+		switch GovernanceProvider(accountPlatform) {
+		case GovernanceProviderAnthropic, GovernanceProviderOpenAI, GovernanceProviderGemini, GovernanceProviderGrok:
+			return nil
+		default:
+			return fmt.Errorf("aggregator connections require a governed platform account, got %q", accountPlatform)
+		}
+	default:
+		return fmt.Errorf("invalid connection kind %q", conn.Kind)
+	}
+	return nil
+}
+
 func (s *UpstreamConnectionService) ToDTO(conn *UpstreamConnection) *UpstreamConnectionDTO {
 	if conn == nil {
 		return nil
