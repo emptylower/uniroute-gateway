@@ -1405,6 +1405,7 @@ SELECT tablename
 FROM pg_tables
 WHERE schemaname = 'public'
   AND tablename LIKE 'model_%'
+  AND tablename NOT LIKE 'model_catalog_%'
 ORDER BY tablename
 `)
 	require.NoError(t, err)
