@@ -1,10 +1,11 @@
 package admin
 
 import (
+	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"net/http"
 
-	"github.com/gin-gonic/gin"
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/gin-gonic/gin"
 )
 
 type ModelQuarantineHandler struct {
@@ -16,11 +17,11 @@ func NewModelQuarantineHandler(svc *service.ModelQuarantineService) *ModelQuaran
 }
 
 type quarantineRequest struct {
-	BatchID                 string                    `json:"batch_id"`
-	IdempotencyKey          string                    `json:"idempotency_key"`
-	ExpectedRegistryVersion int64                     `json:"expected_registry_version"`
-	ChannelVersions         map[int64]int64           `json:"channel_versions"`
-	Items                   []service.QuarantineItem  `json:"items"`
+	BatchID                 string                   `json:"batch_id"`
+	IdempotencyKey          string                   `json:"idempotency_key"`
+	ExpectedRegistryVersion int64                    `json:"expected_registry_version"`
+	ChannelVersions         map[int64]int64          `json:"channel_versions"`
+	Items                   []service.QuarantineItem `json:"items"`
 }
 
 type restoreRequest struct {
@@ -49,7 +50,7 @@ func (h *ModelQuarantineHandler) Quarantine(c *gin.Context) {
 		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"status": "quarantined"})
+	response.Success(c, gin.H{"status": "quarantined"})
 }
 
 func (h *ModelQuarantineHandler) Restore(c *gin.Context) {
@@ -70,5 +71,5 @@ func (h *ModelQuarantineHandler) Restore(c *gin.Context) {
 		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"status": "restored"})
+	response.Success(c, gin.H{"status": "restored"})
 }

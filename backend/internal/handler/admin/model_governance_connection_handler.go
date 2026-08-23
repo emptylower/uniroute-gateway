@@ -52,18 +52,19 @@ func (h *ModelGovernanceConnectionHandler) Create(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	status := http.StatusCreated
-	if !created {
-		status = http.StatusOK
+	payload := gin.H{
+		"connection_id":      conn.ID,
+		"kind":               conn.Kind,
+		"provider":           conn.Provider,
+		"base_url":           conn.BaseURL,
+		"credential_version": conn.CredentialVersion,
+		"status":             conn.Status,
 	}
-	c.JSON(status, gin.H{
-		"connection_id":       conn.ID,
-		"kind":                conn.Kind,
-		"provider":            conn.Provider,
-		"base_url":            conn.BaseURL,
-		"credential_version":  conn.CredentialVersion,
-		"status":              conn.Status,
-	})
+	if created {
+		response.Created(c, payload)
+	} else {
+		response.Success(c, payload)
+	}
 }
 
 // DeriveFromAccount creates an aggregator connection from an account's OWN
@@ -125,11 +126,7 @@ func (h *ModelGovernanceConnectionHandler) DeriveFromAccount(c *gin.Context) {
 	} else {
 		linked = true
 	}
-	status := http.StatusCreated
-	if !created {
-		status = http.StatusOK
-	}
-	c.JSON(status, gin.H{
+	payload := gin.H{
 		"connection_id":      conn.ID,
 		"kind":               conn.Kind,
 		"base_url":           conn.BaseURL,
@@ -137,7 +134,12 @@ func (h *ModelGovernanceConnectionHandler) DeriveFromAccount(c *gin.Context) {
 		"status":             conn.Status,
 		"account_id":         account.ID,
 		"linked":             linked,
-	})
+	}
+	if created {
+		response.Created(c, payload)
+	} else {
+		response.Success(c, payload)
+	}
 }
 
 // LinkAccount attaches an existing account to an upstream connection so the
@@ -188,7 +190,7 @@ func (h *ModelGovernanceConnectionHandler) LinkAccount(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
+	response.Success(c, gin.H{
 		"linked":             true,
 		"account_id":         account.ID,
 		"connection_id":      conn.ID,
@@ -238,7 +240,7 @@ func (h *ModelGovernanceConnectionHandler) DesignateAggregator(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"status": "designated"})
+	response.Success(c, gin.H{"status": "designated"})
 }
 
 func (h *ModelGovernanceConnectionHandler) ReuseAggregatorConnection(c *gin.Context) {
@@ -301,5 +303,5 @@ func (h *ModelGovernanceConnectionHandler) ReuseAggregatorConnection(c *gin.Cont
 		response.ErrorFrom(c, err)
 		return
 	}
-	c.JSON(http.StatusCreated, gin.H{"account_id": accountID})
+	response.Created(c, gin.H{"account_id": accountID})
 }

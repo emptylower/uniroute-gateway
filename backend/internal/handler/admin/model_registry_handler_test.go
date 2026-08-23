@@ -132,8 +132,13 @@ func TestModelRegistryHandler_CreateDecision_SuccessAndETag(t *testing.T) {
 	handler.CreateDecision(c)
 	require.Equal(t, http.StatusCreated, w.Code)
 	require.Equal(t, `"6"`, w.Header().Get("ETag"))
-	var resp service.ModelRegistryEntry
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	var envelope struct {
+		Code int                         `json:"code"`
+		Data service.ModelRegistryEntry `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &envelope))
+	require.Equal(t, 0, envelope.Code)
+	resp := envelope.Data
 	require.Equal(t, "real-actor", resp.DecidedBy)
 	require.NotEqual(t, "forged", resp.DecidedBy)
 }
@@ -155,8 +160,13 @@ func TestModelRegistryHandler_ActorFromAssertionNotHeader(t *testing.T) {
 
 	handler.CreateDecision(c)
 	require.Equal(t, http.StatusCreated, w.Code)
-	var resp service.ModelRegistryEntry
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	var envelope struct {
+		Code int                         `json:"code"`
+		Data service.ModelRegistryEntry `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &envelope))
+	require.Equal(t, 0, envelope.Code)
+	resp := envelope.Data
 	require.Equal(t, "real-actor", resp.DecidedBy)
 }
 

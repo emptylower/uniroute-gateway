@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"net/http"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -38,7 +39,7 @@ func (h *ModelAuthorizationActivationHandler) Readiness(c *gin.Context) {
 		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, readiness)
+	response.Success(c, readiness)
 }
 
 func (h *ModelAuthorizationActivationHandler) Activate(c *gin.Context) {
@@ -60,7 +61,7 @@ func (h *ModelAuthorizationActivationHandler) Activate(c *gin.Context) {
 		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"status": "activated", "mode": "enforce"})
+	response.Success(c, gin.H{"status": "activated", "mode": "enforce"})
 }
 
 func (h *ModelAuthorizationActivationHandler) Deactivate(c *gin.Context) {
@@ -79,5 +80,5 @@ func (h *ModelAuthorizationActivationHandler) Deactivate(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"status": "deactivated", "mode": "shadow"})
+	response.Success(c, gin.H{"status": "deactivated", "mode": "shadow"})
 }

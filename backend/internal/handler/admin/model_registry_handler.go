@@ -127,7 +127,7 @@ func (h *ModelRegistryHandler) CreateDecision(c *gin.Context) {
 		return
 	}
 	c.Header("ETag", formatRegistryVersion(entry.Version))
-	c.JSON(http.StatusCreated, entry)
+	response.Created(c, entry)
 }
 
 func (h *ModelRegistryHandler) Rebuild(c *gin.Context) {

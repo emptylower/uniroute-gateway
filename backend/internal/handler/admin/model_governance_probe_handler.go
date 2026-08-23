@@ -153,5 +153,5 @@ func (h *ModelGovernanceProbeHandler) Probe(c *gin.Context) {
 	}
 	// Persist idempotency key association if needed (stub: log)
 	_ = idempotencyKey
-	c.JSON(http.StatusOK, gin.H{"status": "probed", "account_id": accountID, "probe_id": probe.ID, "probe_status": probe.Status})
+	response.Success(c, gin.H{"status": "probed", "account_id": accountID, "probe_id": probe.ID, "probe_status": probe.Status})
 }

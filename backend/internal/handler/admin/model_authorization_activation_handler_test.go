@@ -94,8 +94,13 @@ func TestModelAuthorizationActivationHandler_Readiness(t *testing.T) {
 		router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/readiness", nil))
 		require.Equal(t, http.StatusOK, w.Code)
 
-		var readiness service.ActivationReadiness
-		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &readiness))
+		var envelope struct {
+			Code int                          `json:"code"`
+			Data service.ActivationReadiness `json:"data"`
+		}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &envelope))
+		require.Equal(t, 0, envelope.Code)
+		readiness := envelope.Data
 		require.True(t, readiness.Ready)
 		require.Equal(t, int64(7), readiness.CurrentRegistryVersion)
 		require.Equal(t, "hash-1", readiness.LatestCompletedInventoryHash)

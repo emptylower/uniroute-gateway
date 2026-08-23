@@ -128,8 +128,13 @@ func TestCreateConnectionMintsActiveAggregator(t *testing.T) {
 	}, nil)
 
 	require.Equal(t, http.StatusCreated, recorder.Code)
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &body))
+	var envelope struct {
+		Code int            `json:"code"`
+		Data map[string]any `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &envelope))
+	require.Equal(t, 0, envelope.Code)
+	body := envelope.Data
 	require.Equal(t, "aggregator", body["kind"])
 	require.Nil(t, body["provider"])
 	require.Equal(t, "https://agg.example.com", body["base_url"], "trailing slash normalized")
@@ -261,8 +266,13 @@ func TestDeriveFromAccountCreatesAggregatorAndLinks(t *testing.T) {
 	router.ServeHTTP(recorder, req)
 
 	require.Equal(t, http.StatusCreated, recorder.Code)
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &body))
+	var envelope struct {
+		Code int            `json:"code"`
+		Data map[string]any `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &envelope))
+	require.Equal(t, 0, envelope.Code)
+	body := envelope.Data
 	require.Equal(t, "aggregator", body["kind"])
 	require.Nil(t, body["provider"], "aggregator must stay provider-less")
 	require.Equal(t, true, body["linked"])
