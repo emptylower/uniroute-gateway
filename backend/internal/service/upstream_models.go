@@ -284,9 +284,19 @@ func (s *AccountTestService) PersistUpstreamModelDiscovery(ctx context.Context, 
 	}
 
 	mapping := make(map[string]any, len(schedulable))
-	for requestedModel, upstreamModel := range account.GetModelMapping() {
-		if requestedModel != upstreamModel || strings.Contains(requestedModel, "*") {
-			mapping[requestedModel] = upstreamModel
+	// Preserve only ADMIN-CONFIGURED custom entries from the raw stored mapping.
+	// GetModelMapping() injects platform default aliases for grok/antigravity
+	// (grok-latest→grok-4.5, ...) which are runtime conveniences, not customs —
+	// preserving them would publish fake purchasable models (prod: account 12).
+	if raw := rawDiscoveredModelMapping(account); raw != nil {
+		for requestedModel, upstreamModel := range raw {
+			upstreamStr, ok := upstreamModel.(string)
+			if !ok {
+				continue
+			}
+			if requestedModel != upstreamStr || strings.Contains(requestedModel, "*") {
+				mapping[requestedModel] = upstreamStr
+			}
 		}
 	}
 	for _, model := range schedulable {

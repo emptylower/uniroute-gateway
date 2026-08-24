@@ -1016,3 +1016,28 @@ func TestPersistUpstreamModelDiscoveryVendorPlatformKeepsOwnFamily(t *testing.T)
 		"deepseek-v4-pro":   "deepseek-v4-pro",
 	}, store.mapping, "a deepseek platform account stores only the deepseek family")
 }
+
+func TestPersistUpstreamModelDiscoveryGrokAliasesAreNotPreservedAsCustoms(t *testing.T) {
+	t.Parallel()
+	// Real production shape (account 12): grok account with NO raw mapping;
+	// GetModelMapping() injects 16 default aliases (grok→grok-4.5, ...). Those
+	// are runtime translation conveniences, not admin customs — they must NOT
+	// survive into the stored mapping after a sync.
+	store := &accountModelDiscoveryStoreStub{}
+	svc := &AccountTestService{
+		modelDiscoveryStore:        store,
+		modelObservationRepository: &modelObservationRepositoryStub{batchID: "grok-alias"},
+	}
+	err := svc.PersistUpstreamModelDiscovery(context.Background(), &Account{
+		ID: 12, Platform: PlatformGrok, Type: AccountTypeAPIKey,
+	}, UpstreamModelDiscovery{
+		Models:           []string{"grok-4.5", "grok-4.6"},
+		EvidenceModelIDs: []string{"grok-4.5", "grok-4.6"},
+		RawSnapshot:      []byte(`{"payload":{"data":[]},"response":{"source":"http","status_code":200}}`),
+	}, time.Date(2026, time.August, 24, 18, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	require.Equal(t, map[string]any{
+		"grok-4.5": "grok-4.5",
+		"grok-4.6": "grok-4.6",
+	}, store.mapping, "default-injected aliases (grok-latest, composer-2.5...) must not pollute the stored mapping")
+}
