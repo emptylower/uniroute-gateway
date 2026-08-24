@@ -712,20 +712,25 @@ func (s *ModelCatalogCandidateService) IngestSource(ctx context.Context, source 
 	if err != nil {
 		return err
 	}
+	log.Printf("[model-catalog] source %s: run %d started", source, runID)
 
 	raw, version, url, err := plan.fetch(ctx)
 	if err != nil {
+		log.Printf("[model-catalog] source %s: run %d fetch failed: %v", source, runID, err)
 		return s.failRun(ctx, runID, source, err)
 	}
+	log.Printf("[model-catalog] source %s: run %d fetched %d bytes, version %s", source, runID, len(raw), version)
 
 	summary, err := plan.parse(raw)
 	if err != nil {
+		log.Printf("[model-catalog] source %s: run %d parse failed: %v", source, runID, err)
 		return s.failRun(ctx, runID, source, err)
 	}
 
 	// Disappearance evidence: registry-active ids absent from this payload.
 	missing, err := s.missingForPayload(ctx, summary.Candidates)
 	if err != nil {
+		log.Printf("[model-catalog] source %s: run %d missing-check failed: %v", source, runID, err)
 		return s.failRun(ctx, runID, source, err)
 	}
 
@@ -736,12 +741,15 @@ func (s *ModelCatalogCandidateService) IngestSource(ctx context.Context, source 
 		RawPayload:      raw,
 	}, summary.Candidates, missing)
 	if err != nil {
+		log.Printf("[model-catalog] source %s: run %d insert failed: %v", source, runID, err)
 		return s.failRun(ctx, runID, source, err)
 	}
 
 	if err := s.writer.FinishSyncRun(ctx, runID, CatalogSyncStatusSucceeded, len(summary.Candidates), version, ""); err != nil {
+		log.Printf("[model-catalog] source %s: run %d finish-succeeded update failed: %v", source, runID, err)
 		return err
 	}
+	log.Printf("[model-catalog] source %s: run %d succeeded with %d items", source, runID, len(summary.Candidates))
 	_ = url
 	return nil
 }
