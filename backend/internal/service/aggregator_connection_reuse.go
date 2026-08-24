@@ -103,7 +103,7 @@ func (s *AggregatorConnectionReuseService) Reuse(ctx context.Context, input Reus
 				// Decrypt failure – create inactive account with evidence and return, do not fall back to temp
 				platform := providerToPlatform(input.Provider)
 				failAccount := &Account{
-					Name: fmt.Sprintf("reuse-%s-%d", input.Provider, input.ConnectionID), Platform: platform, Type: "api_key",
+					Name: fmt.Sprintf("reuse-%s-%d", input.Provider, input.ConnectionID), Platform: platform, Type: AccountTypeAPIKey,
 					Credentials: map[string]any{}, Extra: map[string]any{}, Status: "disabled", Schedulable: false, ConnectionID: &input.ConnectionID, ConfigVersion: 1,
 				}
 				protoStrFail := string(input.Protocol)
@@ -132,8 +132,15 @@ func (s *AggregatorConnectionReuseService) Reuse(ctx context.Context, input Reus
 	if plainCred != "" {
 		creds["api_key"] = plainCred
 	}
+	// The runtime (scheduling, model sync, usage) only understands
+	// credentials.base_url — governance EndpointPath is metadata. Derive the
+	// runtime base by joining the connection base with the endpoint's path
+	// prefix ("/chatgpt/v1" → base+"/chatgpt", "/v1" → base).
+	if conn != nil {
+		creds["base_url"] = deriveRuntimeBaseURL(conn.BaseURL, input.NormalizedEndpoint)
+	}
 	newAccount := &Account{
-		Name: fmt.Sprintf("reuse-%s-%d", input.Provider, input.ConnectionID), Platform: platform, Type: "api_key",
+		Name: fmt.Sprintf("reuse-%s-%d", input.Provider, input.ConnectionID), Platform: platform, Type: AccountTypeAPIKey,
 		Credentials: creds, Extra: map[string]any{}, Status: "disabled", Schedulable: false, ConnectionID: &input.ConnectionID, ConfigVersion: 1,
 	}
 	protoStr := string(input.Protocol)
@@ -157,24 +164,54 @@ func (s *AggregatorConnectionReuseService) Reuse(ctx context.Context, input Reus
 	if s.reuseRepo != nil {
 		_ = s.reuseRepo.Create(ctx, input.ConnectionID, input.Provider, input.Protocol, input.NormalizedEndpoint, input.ClientRequestID, newAccount.ID)
 	}
-	// Post-commit: run real probe with registry-confirmed model using decrypted credential
+	// Post-commit: probe candidate models in order until one succeeds. Every
+	// attempt persists its own evidence row; first success activates.
 	if s.probeSvc != nil && conn != nil {
 		credential := plainCred
-		probe, err := s.probeSvc.Probe(ctx, newAccount.ID, conn, input.Provider, input.Protocol, input.NormalizedEndpoint, credential)
-		if err != nil || probe == nil || probe.Status != "success" {
-			// Probe failed – leave inactive, preserve evidence
-			return newAccount.ID, nil
+		for _, model := range selectProbeModels(input.Provider) {
+			probe, err := s.probeSvc.ProbeWithModel(ctx, newAccount.ID, conn, input.Provider, input.Protocol, input.NormalizedEndpoint, credential, model)
+			if err != nil || probe == nil || probe.Status != "success" {
+				continue
+			}
+			// Probe success: version-checked activation transition
+			newAccount.Status = "active"
+			newAccount.Schedulable = true
+			// Use optimistic version check: ensure config_version still 1 before activation
+			if err := s.accountRepo.Update(ctx, newAccount); err != nil {
+				return 0, fmt.Errorf("activate account: %w", err)
+			}
+			// After activation, publication recomputation would publish eligible models (Phase 5)
+			break
 		}
-		// Probe success: version-checked activation transition
-		newAccount.Status = "active"
-		newAccount.Schedulable = true
-		// Use optimistic version check: ensure config_version still 1 before activation
-		if err := s.accountRepo.Update(ctx, newAccount); err != nil {
-			return 0, fmt.Errorf("activate account: %w", err)
-		}
-		// After activation, publication recomputation would publish eligible models (Phase 5)
 	}
 	return newAccount.ID, nil
+}
+
+// deriveRuntimeBaseURL derives the runtime API root from the connection base
+// plus the probed endpoint path: everything BEFORE the first version segment
+// ("/v1", "/v1beta", "/v1alpha") is a path prefix the runtime base must carry;
+// from the version segment on, the runtime client appends paths itself.
+// Examples: ("https://h", "/v1/chat/completions") → "https://h";
+// ("https://h", "/chatgpt/v1") → "https://h/chatgpt";
+// ("https://h", "/api/v1beta/models") → "https://h/api".
+func deriveRuntimeBaseURL(baseURL, normalizedEndpoint string) string {
+	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	ep := strings.TrimSpace(normalizedEndpoint)
+	for _, seg := range []string{"/v1beta", "/v1alpha", "/v1"} {
+		if i := strings.Index(ep, seg+"/"); i >= 0 {
+			ep = ep[:i]
+			break
+		}
+		if strings.HasSuffix(ep, seg) {
+			ep = strings.TrimSuffix(ep, seg)
+			break
+		}
+	}
+	ep = strings.Trim(ep, "/")
+	if ep == "" {
+		return base
+	}
+	return base + "/" + ep
 }
 
 func providerToPlatform(p GovernanceProvider) string {

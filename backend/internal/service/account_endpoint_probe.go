@@ -75,6 +75,13 @@ var _ EndpointProbeChecker = (*AccountEndpointProbeService)(nil)
 
 // Probe performs minimal protocol-valid request with timeout, validates success shape, handles 401/403/404 scopes, and persists redacted evidence.
 func (s *AccountEndpointProbeService) Probe(ctx context.Context, accountID int64, connection *UpstreamConnection, provider GovernanceProvider, protocol AccountProtocol, endpoint, credential string) (*AccountEndpointProbe, error) {
+	return s.ProbeWithModel(ctx, accountID, connection, provider, protocol, endpoint, credential, selectProbeModel(provider))
+}
+
+// ProbeWithModel runs the probe with an explicit representative model. The model
+// must come from selectProbeModels (service-side allowlist) — never from the
+// browser. Each attempt persists its own evidence row.
+func (s *AccountEndpointProbeService) ProbeWithModel(ctx context.Context, accountID int64, connection *UpstreamConnection, provider GovernanceProvider, protocol AccountProtocol, endpoint, credential, representativeModel string) (*AccountEndpointProbe, error) {
 	if connection == nil {
 		return nil, fmt.Errorf("connection is required")
 	}
@@ -85,9 +92,6 @@ func (s *AccountEndpointProbeService) Probe(ctx context.Context, accountID int64
 	if err != nil {
 		return nil, err
 	}
-	// Select confirmed representative model – browser cannot supply unknown model.
-	// Use a known text model per provider for probe.
-	representativeModel := selectProbeModel(provider)
 	if representativeModel == "" {
 		return nil, fmt.Errorf("no representative model for provider %s", provider)
 	}
@@ -196,19 +200,31 @@ func (s *AccountEndpointProbeService) buildProbeRequest(ctx context.Context, bas
 	return req, nil
 }
 
-func selectProbeModel(provider GovernanceProvider) string {
+// selectProbeModels returns ordered representative-model candidates per provider,
+// newest first. Probing tries them in order and stops at the first success, so
+// aggregators that only carry newer models still activate. This is a
+// service-side allowlist — the browser can never supply the probe model.
+func selectProbeModels(provider GovernanceProvider) []string {
 	switch provider {
 	case GovernanceProviderAnthropic:
-		return "claude-3-5-sonnet-latest"
+		return []string{"claude-sonnet-5", "claude-opus-5", "claude-3-5-sonnet-latest"}
 	case GovernanceProviderOpenAI:
-		return "gpt-4o-mini"
+		return []string{"gpt-5.5", "gpt-5.4", "gpt-5", "gpt-4o", "gpt-4o-mini"}
 	case GovernanceProviderGemini:
-		return "gemini-2.0-flash"
+		return []string{"gemini-3.5-flash", "gemini-3-pro-preview", "gemini-2.5-pro", "gemini-2.0-flash"}
 	case GovernanceProviderGrok:
-		return "grok-3"
+		return []string{"grok-4.6", "grok-4.5", "grok-3"}
 	default:
+		return nil
+	}
+}
+
+func selectProbeModel(provider GovernanceProvider) string {
+	models := selectProbeModels(provider)
+	if len(models) == 0 {
 		return ""
 	}
+	return models[0]
 }
 
 func isProbeSuccessBody(body []byte, protocol AccountProtocol) bool {

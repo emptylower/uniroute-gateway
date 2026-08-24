@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"encoding/json"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -230,3 +231,61 @@ type fakeFailEncryptor struct{}
 
 func (fakeFailEncryptor) Encrypt(p string) (string, error) { return "enc:" + p, nil }
 func (fakeFailEncryptor) Decrypt(c string) (string, error) { return "", fmt.Errorf("decrypt failed") }
+
+func TestDeriveRuntimeBaseURL(t *testing.T) {
+	cases := []struct{ base, endpoint, want string }{
+		{"https://api.aicodewith.ai", "/v1", "https://api.aicodewith.ai"},
+		{"https://api.aicodewith.ai", "/v1/chat/completions", "https://api.aicodewith.ai"},
+		{"https://api.aicodewith.ai", "/chatgpt/v1", "https://api.aicodewith.ai/chatgpt"},
+		{"https://h/", "/api/v1beta/models", "https://h/api"},
+		{"https://h", "/v1/messages", "https://h"},
+		{"https://h", "/custom/path", "https://h/custom/path"},
+	}
+	for _, c := range cases {
+		require.Equal(t, c.want, deriveRuntimeBaseURL(c.base, c.endpoint), "endpoint %s", c.endpoint)
+	}
+}
+
+func TestAggregatorConnectionReuseFallsBackAcrossProbeModels(t *testing.T) {
+	// Aggregator carries only newer models: rejects gpt-5.5/gpt-5.4, serves gpt-5.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		model, _ := payload["model"].(string)
+		if model == "gpt-5" {
+			w.Write([]byte(`{"id":"ok","choices":[{"message":{"content":"hi"}}]}`))
+			return
+		}
+		w.WriteHeader(400)
+		w.Write([]byte(`{"error":"model ` + model + ` not available"}`))
+	}))
+	defer srv.Close()
+	connRepo := newFakeUpstreamConnRepo()
+	agg := &UpstreamConnection{Kind: "aggregator", BaseURL: srv.URL, CredentialVersion: 1, Status: "active"}
+	_ = connRepo.Create(context.Background(), agg, "enc:agg")
+	accountRepo := newFakeReuseAccountRepo()
+	probeRepo := &fakeProbeRepo{}
+	probeSvc := NewAccountEndpointProbeService(probeRepo, srv.Client())
+	svc := NewAggregatorConnectionReuseServiceWithRepo(connRepo, accountRepo, newFakeReuseRepo(), probeSvc)
+	id, err := svc.Reuse(context.Background(), ReuseAggregatorConnectionInput{
+		ConnectionID: agg.ID, Provider: GovernanceProviderOpenAI, Protocol: AccountProtocolOpenAI,
+		NormalizedEndpoint: "/v1/chat/completions", ClientRequestID: "fallback-1", CredentialVersion: 1,
+	})
+	require.NoError(t, err)
+	acc, err := accountRepo.GetByID(context.Background(), id)
+	require.NoError(t, err)
+	// Activated after the gpt-5 probe succeeded.
+	require.Equal(t, "active", acc.Status)
+	require.True(t, acc.Schedulable)
+	// Runtime-usable shape: legacy apikey type and derived base_url.
+	require.Equal(t, AccountTypeAPIKey, acc.Type)
+	require.Equal(t, srv.URL, acc.Credentials["base_url"])
+	require.NotEmpty(t, acc.Credentials["api_key"])
+	// Every probe attempt persisted its own evidence row.
+	require.Len(t, probeRepo.inserted, 3, "two failed candidates plus the successful one")
+	statuses := []string{}
+	for _, p := range probeRepo.inserted {
+		statuses = append(statuses, p.Status)
+	}
+	require.Equal(t, []string{"failed", "failed", "success"}, statuses)
+}
