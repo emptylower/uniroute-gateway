@@ -163,3 +163,51 @@ func TestAccountEndpointProbeEvidenceRedaction(t *testing.T) {
 	require.NotContains(t, probe.ResponseSummary["body_truncated"], "sk-test123")
 	_ = strings.Contains
 }
+
+func TestAccountEndpointProbeGeminiOpenAISurfaceFallback(t *testing.T) {
+	// Real aggregator shape (api.aicodewith.ai): the gemini surface
+	// (/gemini_cli/v1beta) serves ONLY inference endpoints; any GET models
+	// listing 404s with "不支持的请求路径". The unified catalog is served free
+	// on the openai surface at /v1/models and includes gemini-* models.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			require.Equal(t, "Bearer test-cred", r.Header.Get("Authorization"))
+			w.Write([]byte(`{"data":[{"id":"gemini-3-pro-preview"},{"id":"claude-opus-5"},{"id":"gemini-3.5-flash"},{"id":"gpt-5.5"}]}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(`{"error":"不支持的请求路径，请检查 API 地址是否正确 (request_id: req_x)"}`))
+		}
+	}))
+	defer srv.Close()
+	repo := &fakeProbeRepo{}
+	svc := NewAccountEndpointProbeService(repo, srv.Client())
+	provider := GovernanceProviderGemini
+	conn := &UpstreamConnection{ID: 1, Kind: "first_party", Provider: &provider, BaseURL: srv.URL + "/gemini_cli", CredentialVersion: 1, Status: "active"}
+	probe, err := svc.Probe(context.Background(), 11, conn, provider, AccountProtocolGemini, "/v1beta", "test-cred")
+	require.NoError(t, err)
+	require.NotNil(t, probe)
+	require.Equal(t, "success", probe.Status)
+	require.Equal(t, "openai_surface_fallback", probe.ResponseSummary["via"])
+	require.Equal(t, 2, probe.ResponseSummary["model_count"], "only gemini models kept")
+	ids, ok := probe.ResponseSummary["model_ids"].([]string)
+	require.True(t, ok)
+	require.Equal(t, []string{"gemini-3-pro-preview", "gemini-3.5-flash"}, ids)
+}
+
+func TestAccountEndpointProbeGeminiFallbackAlso404StaysFailed(t *testing.T) {
+	// Aggregator without any openai surface: fallback 404s too → still failed.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(`{"error":"不支持的请求路径"}`))
+	}))
+	defer srv.Close()
+	repo := &fakeProbeRepo{}
+	svc := NewAccountEndpointProbeService(repo, srv.Client())
+	provider := GovernanceProviderGemini
+	conn := &UpstreamConnection{ID: 1, Kind: "first_party", Provider: &provider, BaseURL: srv.URL + "/gemini_cli", CredentialVersion: 1, Status: "active"}
+	probe, err := svc.Probe(context.Background(), 11, conn, provider, AccountProtocolGemini, "/v1beta", "test-cred")
+	require.NoError(t, err)
+	require.Equal(t, "failed", probe.Status)
+	require.Equal(t, 404, probe.ResponseSummary["status"])
+}

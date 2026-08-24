@@ -146,6 +146,21 @@ func (s *AccountTestService) FetchUpstreamModelDiscovery(ctx context.Context, ac
 		return UpstreamModelDiscovery{}, newUpstreamModelSyncUpstreamError("Upstream model list response is too large", fmt.Errorf("response exceeds %d bytes", upstreamModelsBodyLimit))
 	}
 
+	usedOpenAISurfaceFallback := false
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		// Aggregator gemini surfaces (e.g. aicodewith /gemini_cli/v1beta) serve
+		// ONLY inference endpoints and 404 any model listing; the unified
+		// catalog is exposed free on the sibling openai surface at /v1/models.
+		if resp.StatusCode == http.StatusNotFound && account.IsGemini() {
+			if fbResp, fbBody, ok := s.retryGeminiModelsOnOpenAISurface(ctx, req, proxyURL, account); ok {
+				_ = resp.Body.Close()
+				resp = fbResp
+				body = fbBody
+				usedOpenAISurfaceFallback = true
+			}
+		}
+	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		return UpstreamModelDiscovery{}, newUpstreamModelSyncUpstreamError(
 			fmt.Sprintf("Upstream model list request failed with HTTP %d", resp.StatusCode),
@@ -160,6 +175,10 @@ func (s *AccountTestService) FetchUpstreamModelDiscovery(ctx context.Context, ac
 	models, evidenceModelIDs, err := extractModels(body)
 	if err != nil {
 		return UpstreamModelDiscovery{}, newUpstreamModelSyncUpstreamError("Upstream model list response was not valid JSON", err)
+	}
+	if usedOpenAISurfaceFallback {
+		// Unified catalog is cross-family; a gemini connection only serves gemini ids.
+		models = filterGeminiModelIDs(models)
 	}
 	rawSnapshot, err := marshalUpstreamRawSnapshot(body, map[string]any{
 		"source":       "http",
@@ -429,6 +448,43 @@ func (s *AccountTestService) buildRequestFromMaterial(ctx context.Context, mater
 		req.Header.Set("x-api-key", cred)
 	}
 	return req, nil
+}
+
+// retryGeminiModelsOnOpenAISurface re-asks the site origin's openai surface
+// ({origin}/v1/models) for the model list when the gemini surface 404s it.
+// Free endpoint (same contract as the connection probe). Returns the new
+// response and its (already bounded) body.
+func (s *AccountTestService) retryGeminiModelsOnOpenAISurface(ctx context.Context, origReq *http.Request, proxyURL string, account *Account) (*http.Response, []byte, bool) {
+	if origReq == nil || origReq.URL == nil {
+		return nil, nil, false
+	}
+	fallbackURL, ok := geminiOpenAISurfaceFallbackURL(origReq.URL.String())
+	if !ok {
+		return nil, nil, false
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fallbackURL, nil)
+	if err != nil {
+		return nil, nil, false
+	}
+	if cred, ok := account.Credentials["api_key"].(string); ok && cred != "" {
+		req.Header.Set("Authorization", "Bearer "+cred)
+		req.Header.Set("x-api-key", cred)
+	}
+	req.Header.Set("Accept", "application/json")
+	resp, err := s.doUpstreamModelsRequest(req, proxyURL, account)
+	if err != nil {
+		return nil, nil, false
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, upstreamModelsBodyLimit+1))
+	if err != nil || int64(len(body)) > upstreamModelsBodyLimit {
+		_ = resp.Body.Close()
+		return nil, nil, false
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		_ = resp.Body.Close()
+		return nil, nil, false
+	}
+	return resp, body, true
 }
 
 func (s *AccountTestService) buildGrokUpstreamModelsRequest(ctx context.Context, account *Account) (*http.Request, error) {

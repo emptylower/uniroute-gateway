@@ -2,6 +2,9 @@ package service
 
 import (
 	"context"
+	"io"
+	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -108,4 +111,74 @@ func TestBuildUpstreamModelsRequest_LegacyFullModelsPathPreserved(t *testing.T) 
 	req, err := svc.buildUpstreamModelsRequest(context.Background(), account)
 	require.NoError(t, err)
 	require.Equal(t, "https://agg.example.com/v1/models", req.URL.String())
+}
+
+func TestFetchUpstreamModelDiscoveryGeminiOpenAISurfaceFallback(t *testing.T) {
+	// Real aggregator shape: gemini surface 404s the model listing; the unified
+	// catalog on the sibling openai surface (/v1/models) carries gemini-* ids.
+	connID := int64(11)
+	endpoint := "/v1beta"
+	account := &Account{
+		Platform:     PlatformGemini,
+		Type:         AccountTypeAPIKey,
+		Credentials:  map[string]any{"api_key": "sk-test"},
+		ConnectionID: &connID,
+		EndpointPath: &endpoint,
+	}
+	var urls []string
+	upstream := &queuedHTTPUpstreamStub{
+		responses: []*http.Response{
+			{
+				StatusCode: http.StatusNotFound,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(`{"error":"不支持的请求路径，请检查 API 地址是否正确 (request_id: req_x)"}`)),
+			},
+			{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body: io.NopCloser(strings.NewReader(
+					`{"object":"list","data":[{"id":"gemini-3-pro-preview"},{"id":"claude-opus-5"},{"id":"gemini-3.5-flash"}]}`)),
+			},
+		},
+		onCall: func(req *http.Request, _ *queuedHTTPUpstreamStub) { urls = append(urls, req.URL.String()) },
+	}
+	svc := &AccountTestService{
+		httpUpstream: upstream,
+		upstreamConnRepo: &fakeConnRepoForTest{
+			conn: &UpstreamConnection{ID: connID, Kind: "aggregator", BaseURL: "https://agg.example.com/gemini_cli"},
+		},
+		cfg: upstreamModelSyncTestConfig(),
+	}
+	discovery, err := svc.FetchUpstreamModelDiscovery(context.Background(), account)
+	require.NoError(t, err)
+	require.Equal(t, []string{"gemini-3-pro-preview", "gemini-3.5-flash"}, discovery.Models, "fallback must keep only gemini ids")
+	require.Len(t, urls, 2)
+	require.Equal(t, "https://agg.example.com/v1/models", urls[1], "fallback hits the openai surface at the site origin")
+}
+
+func TestFetchUpstreamModelDiscoveryGeminiFallbackAlso404StillFails(t *testing.T) {
+	connID := int64(11)
+	endpoint := "/v1beta"
+	account := &Account{
+		Platform:     PlatformGemini,
+		Type:         AccountTypeAPIKey,
+		Credentials:  map[string]any{"api_key": "sk-test"},
+		ConnectionID: &connID,
+		EndpointPath: &endpoint,
+	}
+	upstream := &queuedHTTPUpstreamStub{
+		responses: []*http.Response{
+			{StatusCode: http.StatusNotFound, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"error":"不支持的请求路径"}`))},
+			{StatusCode: http.StatusNotFound, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"error":"不支持的请求路径"}`))},
+		},
+	}
+	svc := &AccountTestService{
+		httpUpstream: upstream,
+		upstreamConnRepo: &fakeConnRepoForTest{
+			conn: &UpstreamConnection{ID: connID, Kind: "aggregator", BaseURL: "https://agg.example.com/gemini_cli"},
+		},
+		cfg: upstreamModelSyncTestConfig(),
+	}
+	_, err := svc.FetchUpstreamModelDiscovery(context.Background(), account)
+	require.Error(t, err)
 }

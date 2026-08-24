@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -121,6 +122,14 @@ func (s *AccountEndpointProbeService) Probe(ctx context.Context, accountID int64
 		}
 		return s.persistProbe(ctx, accountID, connection, provider, protocol, normalizedEndpoint, "failed", summary)
 	case 404:
+		// Aggregator gemini surfaces (e.g. aicodewith /gemini_cli/v1beta) often
+		// serve ONLY inference endpoints and 404 any model listing. The unified
+		// catalog is usually exposed free on the openai surface at /v1/models.
+		if protocol == AccountProtocolGemini {
+			if fbSummary, ok := s.tryGeminiOpenAISurfaceFallback(ctxTimeout, connection.BaseURL, credential); ok {
+				return s.persistProbe(ctx, accountID, connection, provider, protocol, normalizedEndpoint, "success", fbSummary)
+			}
+		}
 		decision := scopeDecider.Decide(resp.StatusCode, string(body), "", provider)
 		summary["failure_scope"] = decision.Scope
 		summary["decision"] = decision.Scope
@@ -190,8 +199,72 @@ func (s *AccountEndpointProbeService) buildProbeRequest(ctx context.Context, bas
 	return req, nil
 }
 
-// extractProbeModelIDs parses the model-list response into upstream model ids.
-// OpenAI-compatible shape: {"data":[{"id":...}]}; Gemini native:
+// geminiOpenAISurfaceFallbackURL derives the sibling openai-surface model list
+// URL ({origin}/v1/models) from a gemini-surface base URL such as
+// https://host/gemini_cli. Returns false when the base URL is not absolute http(s).
+func geminiOpenAISurfaceFallbackURL(baseURL string) (string, bool) {
+	u, err := url.Parse(strings.TrimSpace(baseURL))
+	if err != nil || u == nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") {
+		return "", false
+	}
+	return u.Scheme + "://" + u.Host + "/v1/models", true
+}
+
+// filterGeminiModelIDs keeps only gemini-family ids from a mixed catalog.
+func filterGeminiModelIDs(ids []string) []string {
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if strings.HasPrefix(strings.ToLower(id), "gemini") {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// tryGeminiOpenAISurfaceFallback fetches the unified catalog from the sibling
+// openai surface when the gemini surface 404s its model listing. Success
+// requires a 2xx response with at least one gemini model id.
+func (s *AccountEndpointProbeService) tryGeminiOpenAISurfaceFallback(ctx context.Context, baseURL, credential string) (map[string]any, bool) {
+	fallbackURL, ok := geminiOpenAISurfaceFallbackURL(baseURL)
+	if !ok {
+		return nil, false
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fallbackURL, nil)
+	if err != nil {
+		return nil, false
+	}
+	if credential != "" {
+		req.Header.Set("Authorization", "Bearer "+credential)
+	}
+	req.Header.Set("Accept", "application/json")
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return nil, false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, false
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
+	ids := filterGeminiModelIDs(extractProbeModelIDs(body, AccountProtocolOpenAI))
+	if len(ids) == 0 {
+		return nil, false
+	}
+	summary := map[string]any{
+		"status":         resp.StatusCode,
+		"via":            "openai_surface_fallback",
+		"primary_status": http.StatusNotFound,
+		"model_count":    len(ids),
+	}
+	const capIDs = 50
+	if len(ids) > capIDs {
+		ids = ids[:capIDs]
+	}
+	summary["model_ids"] = ids
+	return summary, true
+}
+
+// extractProbeModelIDs parses the model-list response into upstream model ids.// OpenAI-compatible shape: {"data":[{"id":...}]}; Gemini native:
 // {"models":[{"name":"models/gemini-..."}]}. Empty means the endpoint did not
 // actually serve a model list (wrong path, HTML error page, etc).
 func extractProbeModelIDs(body []byte, protocol AccountProtocol) []string {
