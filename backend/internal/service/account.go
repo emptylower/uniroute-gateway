@@ -267,6 +267,30 @@ func (a *Account) IsOpenAICompatible() bool {
 	return a != nil && (a.Platform == PlatformOpenAI || a.Platform == PlatformGrok)
 }
 
+// IsOpenAIWireVendorPlatform reports the vendor platforms that speak the
+// OpenAI wire format (chat/completions + /v1/models) while being first-class
+// routing platforms of their own (deepseek/glm/kimi/qwen/longcat/bytedance/
+// minimax). grok also rides the OpenAI wire format yet keeps separate handling
+// (OAuth lifecycle, media generation), so it is deliberately NOT included.
+func IsOpenAIWireVendorPlatform(platform string) bool {
+	switch platform {
+	case PlatformDeepseek, PlatformGLM, PlatformKimi, PlatformQwen,
+		PlatformLongcat, PlatformBytedance, PlatformMinimax:
+		return true
+	default:
+		return false
+	}
+}
+
+// IsOpenAIWireCompatible reports accounts that the OpenAI gateway surface can
+// forward for: openai itself plus the OpenAI-wire vendor platforms (apikey).
+func (a *Account) IsOpenAIWireCompatible() bool {
+	if a == nil {
+		return false
+	}
+	return a.Platform == PlatformOpenAI || IsOpenAIWireVendorPlatform(a.Platform)
+}
+
 func (a *Account) GeminiOAuthType() string {
 	if a.Platform != PlatformGemini || a.Type != AccountTypeOAuth {
 		return ""
@@ -1259,6 +1283,14 @@ func (a *Account) IsOpenAIApiKey() bool {
 }
 
 func (a *Account) GetOpenAIBaseURL() string {
+	if IsOpenAIWireVendorPlatform(a.Platform) {
+		// Vendor platforms have no built-in official endpoint here — the stored
+		// base_url is required (e.g. the aggregator root https://api.aicodewith.ai).
+		if a.Type == AccountTypeAPIKey {
+			return a.GetCredential("base_url")
+		}
+		return ""
+	}
 	if !a.IsOpenAI() {
 		return ""
 	}
@@ -1353,6 +1385,12 @@ func (a *Account) GetOpenAIIDToken() string {
 }
 
 func (a *Account) GetOpenAIApiKey() string {
+	if IsOpenAIWireVendorPlatform(a.Platform) {
+		if a.Type != AccountTypeAPIKey {
+			return ""
+		}
+		return a.GetCredential("api_key")
+	}
 	if !a.IsOpenAIApiKey() {
 		return ""
 	}

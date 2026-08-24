@@ -7,13 +7,21 @@ import (
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 )
 
-// Governed providers are exactly anthropic, openai, gemini, grok.
+// Governed providers: anthropic, openai, gemini, grok plus the OpenAI-wire
+// vendor families (deepseek/glm/kimi/qwen/longcat/bytedance/minimax).
 // Protocol/original provider separation: antigravity, composite, google, xai are rejected as original-provider IDs.
 const (
 	GovernanceProviderAnthropic GovernanceProvider = "anthropic"
 	GovernanceProviderOpenAI    GovernanceProvider = "openai"
 	GovernanceProviderGemini    GovernanceProvider = "gemini"
 	GovernanceProviderGrok      GovernanceProvider = "grok"
+	GovernanceProviderDeepseek  GovernanceProvider = "deepseek"
+	GovernanceProviderGLM       GovernanceProvider = "glm"
+	GovernanceProviderKimi      GovernanceProvider = "kimi"
+	GovernanceProviderQwen      GovernanceProvider = "qwen"
+	GovernanceProviderLongcat   GovernanceProvider = "longcat"
+	GovernanceProviderBytedance GovernanceProvider = "bytedance"
+	GovernanceProviderMinimax   GovernanceProvider = "minimax"
 )
 
 // Classification values exactly as approved specification.
@@ -95,10 +103,12 @@ type PublicationInput struct {
 	UpstreamPresent           bool
 }
 
-// ValidGovernanceProvider reports whether provider is one of the four governed providers.
+// ValidGovernanceProvider reports whether provider is one of the governed providers.
 func ValidGovernanceProvider(provider GovernanceProvider) bool {
 	switch provider {
-	case GovernanceProviderAnthropic, GovernanceProviderOpenAI, GovernanceProviderGemini, GovernanceProviderGrok:
+	case GovernanceProviderAnthropic, GovernanceProviderOpenAI, GovernanceProviderGemini, GovernanceProviderGrok,
+		GovernanceProviderDeepseek, GovernanceProviderGLM, GovernanceProviderKimi, GovernanceProviderQwen,
+		GovernanceProviderLongcat, GovernanceProviderBytedance, GovernanceProviderMinimax:
 		return true
 	default:
 		return false

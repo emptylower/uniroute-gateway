@@ -260,6 +260,20 @@ func providerToPlatform(p GovernanceProvider) string {
 		return PlatformGemini
 	case GovernanceProviderGrok:
 		return PlatformGrok
+	case GovernanceProviderDeepseek:
+		return PlatformDeepseek
+	case GovernanceProviderGLM:
+		return PlatformGLM
+	case GovernanceProviderKimi:
+		return PlatformKimi
+	case GovernanceProviderQwen:
+		return PlatformQwen
+	case GovernanceProviderLongcat:
+		return PlatformLongcat
+	case GovernanceProviderBytedance:
+		return PlatformBytedance
+	case GovernanceProviderMinimax:
+		return PlatformMinimax
 	default:
 		return string(p)
 	}

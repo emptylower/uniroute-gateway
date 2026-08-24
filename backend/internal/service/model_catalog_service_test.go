@@ -404,3 +404,26 @@ func TestQuoteChannelCostsFamilyIsolationRealAccountShapes(t *testing.T) {
 	}
 	require.Equal(t, []string{"claude-opus-5"}, anthropicModels, "glm/grok/gemini can never be served by the anthropic surface")
 }
+
+func TestGroupServesModelVendorPlatforms(t *testing.T) {
+	require.True(t, groupServesModel(PlatformDeepseek, "deepseek-v4-pro"))
+	require.False(t, groupServesModel(PlatformDeepseek, "gpt-5.5"))
+	require.False(t, groupServesModel(PlatformDeepseek, "glm-5"))
+	require.True(t, groupServesModel(PlatformGLM, "glm-5.2"))
+	require.True(t, groupServesModel(PlatformKimi, "kimi-k3"))
+	require.True(t, groupServesModel(PlatformQwen, "qwen3-coder"))
+	require.True(t, groupServesModel(PlatformLongcat, "longcat-flash-chat"))
+	require.True(t, groupServesModel(PlatformBytedance, "seed-oss-36b-instruct"))
+	require.True(t, groupServesModel(PlatformMinimax, "minimax-m3"))
+	require.True(t, groupServesModel(PlatformMinimax, "mimo-v2-flash"), "mimo is minimax family")
+}
+
+func TestValidGovernanceProviderVendorFamilies(t *testing.T) {
+	for _, p := range []GovernanceProvider{
+		GovernanceProviderDeepseek, GovernanceProviderGLM, GovernanceProviderKimi,
+		GovernanceProviderQwen, GovernanceProviderLongcat, GovernanceProviderBytedance, GovernanceProviderMinimax,
+	} {
+		require.True(t, ValidGovernanceProvider(p), "provider %s", p)
+		require.Equal(t, string(p), providerToPlatform(p))
+	}
+}

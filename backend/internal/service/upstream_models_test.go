@@ -961,3 +961,58 @@ func TestPersistUpstreamModelDiscoveryFiltersForeignFamiliesFromStoredMapping(t 
 		[]string{"claude-opus-5", "glm-5", "gpt-5.5", "grok-4.6", "gemini-2.5-pro", "my-custom-fine-tune"},
 		observations.inputs[0].ModelIDs, "observation evidence keeps the full upstream truth")
 }
+
+func TestBuildUpstreamModelsRequestVendorPlatformsUseOpenAIWire(t *testing.T) {
+	t.Parallel()
+	// Real aggregator shape: a deepseek-platform apikey account with the
+	// aggregator root as base_url syncs via GET {base}/v1/models with Bearer.
+	for _, platform := range []string{PlatformDeepseek, PlatformGLM, PlatformKimi, PlatformQwen, PlatformLongcat, PlatformBytedance, PlatformMinimax} {
+		account := &Account{
+			Platform: platform,
+			Type:     AccountTypeAPIKey,
+			Credentials: map[string]any{
+				"api_key":  "sk-acw-test",
+				"base_url": "https://api.aicodewith.ai",
+			},
+		}
+		svc := &AccountTestService{cfg: upstreamModelSyncTestConfig()}
+		req, err := svc.buildUpstreamModelsRequest(context.Background(), account)
+		require.NoError(t, err, "platform %s", platform)
+		require.Equal(t, "https://api.aicodewith.ai/v1/models", req.URL.String(), "platform %s", platform)
+		require.Equal(t, "Bearer sk-acw-test", req.Header.Get("Authorization"))
+	}
+}
+
+func TestBuildUpstreamModelsRequestVendorPlatformRequiresBaseURL(t *testing.T) {
+	t.Parallel()
+	// No built-in official default for vendor platforms in this deployment.
+	account := &Account{
+		Platform:    PlatformDeepseek,
+		Type:        AccountTypeAPIKey,
+		Credentials: map[string]any{"api_key": "sk-x"},
+	}
+	svc := &AccountTestService{cfg: upstreamModelSyncTestConfig()}
+	_, err := svc.buildUpstreamModelsRequest(context.Background(), account)
+	require.Error(t, err)
+}
+
+func TestPersistUpstreamModelDiscoveryVendorPlatformKeepsOwnFamily(t *testing.T) {
+	t.Parallel()
+	store := &accountModelDiscoveryStoreStub{}
+	svc := &AccountTestService{
+		modelDiscoveryStore:        store,
+		modelObservationRepository: &modelObservationRepositoryStub{batchID: "vendor-persist"},
+	}
+	err := svc.PersistUpstreamModelDiscovery(context.Background(), &Account{
+		ID: 20, Platform: PlatformDeepseek, Type: AccountTypeAPIKey,
+	}, UpstreamModelDiscovery{
+		Models:           []string{"deepseek-v4-pro", "deepseek-v4-flash", "gpt-5.5", "claude-opus-5"},
+		EvidenceModelIDs: []string{"deepseek-v4-pro", "deepseek-v4-flash", "gpt-5.5", "claude-opus-5"},
+		RawSnapshot:      []byte(`{"payload":{"data":[]},"response":{"source":"http","status_code":200}}`),
+	}, time.Date(2026, time.August, 24, 17, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	require.Equal(t, map[string]any{
+		"deepseek-v4-flash": "deepseek-v4-flash",
+		"deepseek-v4-pro":   "deepseek-v4-pro",
+	}, store.mapping, "a deepseek platform account stores only the deepseek family")
+}

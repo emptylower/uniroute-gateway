@@ -60,6 +60,20 @@ func (l *ModelPublicationInputLoader) Load(ctx context.Context, accountID, chann
 				input.AccountProvider = GovernanceProviderGemini
 			case "grok", "xai":
 				input.AccountProvider = GovernanceProviderGrok
+			case "deepseek":
+				input.AccountProvider = GovernanceProviderDeepseek
+			case "glm":
+				input.AccountProvider = GovernanceProviderGLM
+			case "kimi":
+				input.AccountProvider = GovernanceProviderKimi
+			case "qwen":
+				input.AccountProvider = GovernanceProviderQwen
+			case "longcat":
+				input.AccountProvider = GovernanceProviderLongcat
+			case "bytedance":
+				input.AccountProvider = GovernanceProviderBytedance
+			case "minimax":
+				input.AccountProvider = GovernanceProviderMinimax
 			default:
 				input.AccountProvider = GovernanceProvider(acc.Platform)
 			}

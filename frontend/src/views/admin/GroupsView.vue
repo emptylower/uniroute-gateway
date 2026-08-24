@@ -4296,6 +4296,13 @@ const platformOptions = computed(() => [
   { value: "gemini", label: "Gemini" },
   { value: "antigravity", label: "Antigravity" },
   { value: "grok", label: "Grok" },
+  { value: "deepseek", label: "DeepSeek" },
+  { value: "glm", label: "GLM" },
+  { value: "kimi", label: "Kimi" },
+  { value: "qwen", label: "Qwen" },
+  { value: "longcat", label: "LongCat" },
+  { value: "bytedance", label: "ByteDance" },
+  { value: "minimax", label: "MiniMax" },
   { value: "composite", label: "Composite" },
 ]);
 
@@ -4306,6 +4313,13 @@ const platformFilterOptions = computed(() => [
   { value: "gemini", label: "Gemini" },
   { value: "antigravity", label: "Antigravity" },
   { value: "grok", label: "Grok" },
+  { value: "deepseek", label: "DeepSeek" },
+  { value: "glm", label: "GLM" },
+  { value: "kimi", label: "Kimi" },
+  { value: "qwen", label: "Qwen" },
+  { value: "longcat", label: "LongCat" },
+  { value: "bytedance", label: "ByteDance" },
+  { value: "minimax", label: "MiniMax" },
   { value: "composite", label: "Composite" },
 ]);
 
@@ -4315,6 +4329,13 @@ const compositeRoutePlatformOptions = computed(() => [
   { value: "gemini", label: "Gemini" },
   { value: "antigravity", label: "Antigravity" },
   { value: "grok", label: "Grok" },
+  { value: "deepseek", label: "DeepSeek" },
+  { value: "glm", label: "GLM" },
+  { value: "kimi", label: "Kimi" },
+  { value: "qwen", label: "Qwen" },
+  { value: "longcat", label: "LongCat" },
+  { value: "bytedance", label: "ByteDance" },
+  { value: "minimax", label: "MiniMax" },
 ]);
 
 const compositeRouteEndpointOptions = computed(() => [

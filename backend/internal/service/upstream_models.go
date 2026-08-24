@@ -306,7 +306,9 @@ func (s *AccountTestService) PersistUpstreamModelDiscovery(ctx context.Context, 
 
 func governanceProviderForPlatform(platform string) *GovernanceProvider {
 	switch platform {
-	case PlatformAnthropic, PlatformOpenAI, PlatformGemini, PlatformGrok:
+	case PlatformAnthropic, PlatformOpenAI, PlatformGemini, PlatformGrok,
+		PlatformDeepseek, PlatformGLM, PlatformKimi, PlatformQwen,
+		PlatformLongcat, PlatformBytedance, PlatformMinimax:
 		provider := GovernanceProvider(platform)
 		return &provider
 	case "claude":
@@ -417,7 +419,9 @@ func (s *AccountTestService) buildUpstreamModelsRequest(ctx context.Context, acc
 		return s.buildAntigravityAPIKeyModelsRequest(ctx, account)
 	case account.IsGrok():
 		return s.buildGrokUpstreamModelsRequest(ctx, account)
-	case account.IsOpenAI():
+	case account.IsOpenAIWireCompatible():
+		// openai platform itself plus OpenAI-wire vendor platforms
+		// (deepseek/glm/kimi/qwen/longcat/bytedance/minimax): GET {base}/v1/models.
 		return s.buildOpenAIUpstreamModelsRequest(ctx, account)
 	case account.IsGemini():
 		return s.buildGeminiUpstreamModelsRequest(ctx, account)
@@ -693,7 +697,15 @@ func (s *AccountTestService) buildOpenAIUpstreamModelsRequest(ctx context.Contex
 
 	baseURL := account.GetOpenAIBaseURL()
 	if strings.TrimSpace(baseURL) == "" {
-		baseURL = "https://api.openai.com"
+		if account.IsOpenAI() {
+			baseURL = "https://api.openai.com"
+		} else {
+			// Vendor platforms require an explicit base_url — there is no safe
+			// built-in default (this deployment talks to an aggregator).
+			return nil, newUpstreamModelSyncConfigError(
+				fmt.Sprintf("No base_url configured for %s account", account.Platform), nil,
+			)
+		}
 	}
 	normalizedBaseURL, err := s.validateUpstreamBaseURL(baseURL)
 	if err != nil {

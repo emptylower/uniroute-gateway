@@ -245,7 +245,9 @@ func groupServesModel(groupPlatform, model string) bool {
 	case PlatformAntigravity:
 		p := vendorPlatform(vendor)
 		return p == PlatformAnthropic || p == PlatformGemini
-	case PlatformAnthropic, PlatformOpenAI, PlatformGemini, PlatformGrok:
+	case PlatformAnthropic, PlatformOpenAI, PlatformGemini, PlatformGrok,
+		PlatformDeepseek, PlatformGLM, PlatformKimi, PlatformQwen,
+		PlatformLongcat, PlatformBytedance, PlatformMinimax:
 		return groupPlatform == vendorPlatform(vendor)
 	default:
 		return true // bespoke/future platforms: allow-all until registered as governed

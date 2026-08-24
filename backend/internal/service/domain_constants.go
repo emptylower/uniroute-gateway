@@ -44,6 +44,14 @@ const (
 	PlatformAntigravity = domain.PlatformAntigravity
 	PlatformGrok        = domain.PlatformGrok
 	PlatformComposite   = domain.PlatformComposite
+
+	PlatformDeepseek  = domain.PlatformDeepseek
+	PlatformGLM       = domain.PlatformGLM
+	PlatformKimi      = domain.PlatformKimi
+	PlatformQwen      = domain.PlatformQwen
+	PlatformLongcat   = domain.PlatformLongcat
+	PlatformBytedance = domain.PlatformBytedance
+	PlatformMinimax   = domain.PlatformMinimax
 )
 
 // AllowedQuotaPlatforms 是允许设置 user × platform quota 的平台列表（单一权威来源）。
@@ -55,6 +63,13 @@ var AllowedQuotaPlatforms = []string{
 	PlatformGemini,
 	PlatformAntigravity,
 	PlatformGrok,
+	PlatformDeepseek,
+	PlatformGLM,
+	PlatformKimi,
+	PlatformQwen,
+	PlatformLongcat,
+	PlatformBytedance,
+	PlatformMinimax,
 }
 
 // IsAllowedQuotaPlatform 报告 s 是否为合法的 quota platform 标识。

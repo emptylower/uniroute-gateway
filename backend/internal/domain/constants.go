@@ -24,6 +24,18 @@ const (
 	PlatformAntigravity = "antigravity"
 	PlatformGrok        = "grok"
 	PlatformComposite   = "composite"
+
+	// Vendor platforms riding the OpenAI-compatible wire format
+	// (chat/completions + /v1/models). Each is a first-class routing platform
+	// so vendor families get their own groups/channels instead of leaking into
+	// anthropic/openai groups via mixed aggregator catalogs.
+	PlatformDeepseek  = "deepseek"
+	PlatformGLM       = "glm"
+	PlatformKimi      = "kimi"
+	PlatformQwen      = "qwen"
+	PlatformLongcat   = "longcat"
+	PlatformBytedance = "bytedance"
+	PlatformMinimax   = "minimax"
 )
 
 // Account type constants
