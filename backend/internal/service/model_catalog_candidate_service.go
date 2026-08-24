@@ -30,6 +30,7 @@ const (
 	retirementMinSpanDays     = 7
 	priceAnomalySpreadPercent = 25.0
 	openRouterModelsURL       = "https://openrouter.ai/api/v1/models"
+	modelsDevAPIURL           = "https://models.dev/api.json"
 )
 
 // ClassifyCatalogConfidence applies the phase 6 confidence rules:
@@ -258,20 +259,34 @@ func (s *ModelCatalogCandidateService) Stop() {
 
 func (s *ModelCatalogCandidateService) run() {
 	defer s.wg.Done()
+	// Startup: close orphaned "running" rows left by a previous process, then
+	// ingest immediately — a deploy must be verifiable now, not 6h from now.
+	if s.writer != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if _, err := s.writer.FailStaleRunningSyncRuns(ctx, "process restarted mid-run"); err != nil {
+			log.Printf("model catalog: stale run sweep failed: %v", err)
+		}
+		cancel()
+	}
+	s.ingestCycle()
 	timer := time.NewTimer(s.interval)
 	defer timer.Stop()
 	for {
 		select {
 		case <-timer.C:
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-			s.IngestAll(ctx)
-			cancel()
-			s.notifyCycle()
+			s.ingestCycle()
 			timer.Reset(s.interval)
 		case <-s.stopCh:
 			return
 		}
 	}
+}
+
+func (s *ModelCatalogCandidateService) ingestCycle() {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	s.IngestAll(ctx)
+	s.notifyCycle()
 }
 
 func (s *ModelCatalogCandidateService) notifyCycle() {
@@ -629,21 +644,18 @@ func (s *ModelCatalogCandidateService) planFor(source string) (*catalogSourcePla
 		adapter := NewModelsDevCatalogAdapter(s.maxItems)
 		return &catalogSourcePlan{
 			source: source,
+			url:    modelsDevAPIURL,
 			fetch: func(ctx context.Context) ([]byte, string, string, error) {
-				resolver := NewGitHubCatalogCommitResolver(s.fetcher)
-				commit, err := resolver.ResolveCommit(ctx, ModelsDevOwner, ModelsDevRepo, ModelsDevBranch)
+				// models.dev no longer publishes api.json via GitHub (repo moved
+				// to anomalyco/models.dev and dropped the root api.json). The
+				// canonical published surface is the hosted endpoint; integrity
+				// is pinned by content digest, same as the OpenRouter source.
+				raw, err := s.fetcher.Get(ctx, modelsDevAPIURL)
 				if err != nil {
 					return nil, "", "", err
 				}
-				rawURL, err := RawGitHubURL(ModelsDevOwner, ModelsDevRepo, commit, ModelsDevDataPath)
-				if err != nil {
-					return nil, "", "", err
-				}
-				raw, err := s.fetcher.Get(ctx, rawURL)
-				if err != nil {
-					return nil, "", "", err
-				}
-				return raw, commit, rawURL, nil
+				sum := sha256.Sum256(raw)
+				return raw, fmt.Sprintf("sha256:%x", sum), modelsDevAPIURL, nil
 			},
 			parse: adapter.Parse,
 		}, nil

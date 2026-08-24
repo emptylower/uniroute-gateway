@@ -46,15 +46,35 @@ func NewLiteLLMCatalogAdapter(maxItems int) *LiteLLMCatalogAdapter {
 
 // Parse validates and normalizes one raw LiteLLM payload.
 func (a *LiteLLMCatalogAdapter) Parse(raw []byte) (*CatalogParseSummary, error) {
-	var payload litellmCatalogPayload
-	if err := json.Unmarshal(raw, &payload); err != nil {
+	// Two-phase decode: the upstream file carries documentation pseudo-entries
+	// (e.g. "sample_spec" with description strings in numeric fields) whose
+	// schema drift must not kill the whole catalog. Decode per entry and skip
+	// the ones that do not parse.
+	var rawEntries map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &rawEntries); err != nil {
 		return nil, fmt.Errorf("invalid litellm catalog payload: %w", err)
 	}
-	if len(payload) == 0 {
+	if len(rawEntries) == 0 {
 		return nil, fmt.Errorf("invalid litellm catalog payload: empty model map")
 	}
-	if len(payload) > a.maxItems {
-		return nil, fmt.Errorf("litellm catalog payload has %d items, over limit of %d", len(payload), a.maxItems)
+	if len(rawEntries) > a.maxItems {
+		return nil, fmt.Errorf("litellm catalog payload has %d items, over limit of %d", len(rawEntries), a.maxItems)
+	}
+
+	payload := make(litellmCatalogPayload, len(rawEntries))
+	for key, entryRaw := range rawEntries {
+		if strings.HasPrefix(key, "_") || key == "sample_spec" {
+			continue
+		}
+		var entry litellmModelEntry
+		if err := json.Unmarshal(entryRaw, &entry); err != nil {
+			// Schema drift in a single entry: skip it, keep the catalog.
+			continue
+		}
+		payload[key] = entry
+	}
+	if len(payload) == 0 {
+		return nil, fmt.Errorf("invalid litellm catalog payload: no parseable entries")
 	}
 
 	summary := &CatalogParseSummary{Total: len(payload)}

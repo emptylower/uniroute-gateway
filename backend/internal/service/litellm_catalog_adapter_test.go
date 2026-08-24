@@ -110,3 +110,21 @@ func TestLiteLLMCatalogMalformedEnvelope(t *testing.T) {
 	_, err = adapter.Parse([]byte(`[]`))
 	require.Error(t, err)
 }
+
+func TestLiteLLMCatalogSkipsDocumentationPseudoEntries(t *testing.T) {
+	// Real payload (2026-08): the "sample_spec" key carries description strings
+	// in numeric fields ("max_input_tokens": "max input tokens, if..."). One
+	// bad entry must not kill the whole catalog sync.
+	raw := []byte(`{
+		"sample_spec": {"max_input_tokens": "max input tokens, if the provider specifies it. if not default to max_tokens", "litellm_provider": ""},
+		"gpt-5.5": {"max_tokens": 4096, "max_input_tokens": 128000, "litellm_provider": "openai", "mode": "chat"},
+		"claude-opus-5": {"max_tokens": 8192, "litellm_provider": "anthropic", "mode": "chat"}
+	}`)
+	summary, err := NewLiteLLMCatalogAdapter(0).Parse(raw)
+	require.NoError(t, err)
+	ids := []string{}
+	for _, c := range summary.Candidates {
+		ids = append(ids, c.CanonicalModelID)
+	}
+	require.ElementsMatch(t, []string{"gpt-5.5", "claude-opus-5"}, ids)
+}

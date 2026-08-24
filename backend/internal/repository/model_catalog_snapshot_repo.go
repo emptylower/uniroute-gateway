@@ -46,6 +46,30 @@ RETURNING id
 	return id, nil
 }
 
+// FailStaleRunningSyncRuns closes orphaned "running" rows left by a process
+// that died or restarted mid-run. The ingestion loop is single-process: at
+// startup every running row is orphaned by definition. Same sanctioned
+// mutation channel as FinishSyncRun — a status transition, never an edit of
+// recorded evidence.
+func (r *modelCatalogSnapshotRepository) FailStaleRunningSyncRuns(ctx context.Context, reason string) (int64, error) {
+	if r == nil || r.db == nil {
+		return 0, errors.New("model catalog snapshot repository is not configured")
+	}
+	res, err := r.db.ExecContext(ctx, `
+UPDATE model_catalog_sync_runs
+SET status = 'failed', error_message = $1, finished_at = NOW()
+WHERE status = 'running'
+`, reason)
+	if err != nil {
+		return 0, err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return affected, nil
+}
+
 func (r *modelCatalogSnapshotRepository) FinishSyncRun(ctx context.Context, runID int64, status string, itemCount int, resolvedCommit string, errorMessage string) error {
 	if r == nil || r.db == nil {
 		return errors.New("model catalog snapshot repository is not configured")

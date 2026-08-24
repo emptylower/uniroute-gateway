@@ -88,6 +88,10 @@ func (f *fakeSnapshotWriter) FinishSyncRun(ctx context.Context, runID int64, sta
 	}{runID, status, itemCount, errorMessage, resolvedCommit})
 	return nil
 }
+func (f *fakeSnapshotWriter) FailStaleRunningSyncRuns(ctx context.Context, reason string) (int64, error) {
+	return 0, nil
+}
+
 func (f *fakeSnapshotWriter) InsertSnapshotWithEvidence(ctx context.Context, input CatalogSnapshotInput, evidence []CatalogCandidateEvidenceInput, missing []CatalogMissingEvidenceInput) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -336,6 +340,30 @@ func defaultCatalogSettings() []CatalogSourceSetting {
 }
 
 // ---------- ingestion ----------
+
+func TestIngestModelsDevUsesHostedAPIWithDigestPinning(t *testing.T) {
+	// models.dev no longer publishes api.json via GitHub; the hosted endpoint
+	// is canonical. Version pinning is by content digest (OpenRouter pattern).
+	payload := []byte(`{"openai":{"models":{"gpt-5.5":{"id":"gpt-5.5","name":"GPT-5.5","attachment":false,"reasoning":true,"tool_call":true,"release_date":"2026-01-01","last_updated":"2026-01-02","modalities":{"input":["text"],"output":["text"]},"cost":{"input":1.0,"output":2.0},"limit":{"context":128000,"output":4096}}}}}`)
+	reader := &fakeEvidenceReader{settings: defaultCatalogSettings()}
+	writer := &fakeSnapshotWriter{}
+	svc := NewModelCatalogCandidateService(ModelCatalogCandidateServiceConfig{
+		Reader:   reader,
+		Writer:   writer,
+		Registry: &registryReadSpy{},
+		Audit:    &auditRepoSpy{},
+		Alerts:   &countingAlertSink{},
+		Fetcher: &fakeCatalogFetcher{responses: map[string][]byte{
+			"https://models.dev/api.json": payload,
+		}},
+		Clock: func() time.Time { return time.Now().UTC() },
+	})
+
+	require.NoError(t, svc.IngestSource(context.Background(), CatalogSourceModelsDev))
+	require.Len(t, writer.snapshots, 1)
+	sum := sha256.Sum256(payload)
+	require.Equal(t, fmt.Sprintf("sha256:%x", sum), writer.snapshots[0].ExternalVersion)
+}
 
 func TestIngestOpenRouterWritesSnapshotEvidenceAndMissing(t *testing.T) {
 	payload := []byte(`{"data":[{"id":"anthropic/new-candidate","name":"New Candidate","context_length":100000,"pricing":{"prompt":"0.000001","completion":"0.000002"}}]}`)

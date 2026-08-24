@@ -88,6 +88,8 @@ type CatalogMissingEvidenceInput struct {
 type ModelCatalogSnapshotStore interface {
 	StartSyncRun(ctx context.Context, input StartCatalogSyncRunInput) (int64, error)
 	FinishSyncRun(ctx context.Context, runID int64, status string, itemCount int, resolvedCommit string, errorMessage string) error
+	// FailStaleRunningSyncRuns closes orphaned running rows at startup.
+	FailStaleRunningSyncRuns(ctx context.Context, reason string) (int64, error)
 	InsertSnapshotWithEvidence(ctx context.Context, input CatalogSnapshotInput, evidence []CatalogCandidateEvidenceInput, missing []CatalogMissingEvidenceInput) (int64, error)
 }
 
