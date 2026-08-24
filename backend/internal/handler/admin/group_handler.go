@@ -98,7 +98,7 @@ func NewGroupHandler(adminService service.AdminService, dashboardService *servic
 type CreateGroupRequest struct {
 	Name              string             `json:"name" binding:"required"`
 	Description       string             `json:"description"`
-	Platform          string             `json:"platform" binding:"omitempty,oneof=anthropic openai gemini antigravity grok composite"`
+	Platform          string             `json:"platform" binding:"omitempty,oneof=anthropic openai gemini antigravity grok composite deepseek glm kimi qwen longcat bytedance minimax"`
 	RateMultiplier    float64            `json:"rate_multiplier"`
 	RateMultiplierCNY *float64           `json:"rate_multiplier_cny"`
 	RateMultiplierUSD *float64           `json:"rate_multiplier_usd"`
@@ -158,7 +158,7 @@ type CreateGroupRequest struct {
 type UpdateGroupRequest struct {
 	Name              string             `json:"name"`
 	Description       *string            `json:"description"`
-	Platform          string             `json:"platform" binding:"omitempty,oneof=anthropic openai gemini antigravity grok composite"`
+	Platform          string             `json:"platform" binding:"omitempty,oneof=anthropic openai gemini antigravity grok composite deepseek glm kimi qwen longcat bytedance minimax"`
 	RateMultiplier    *float64           `json:"rate_multiplier"`
 	RateMultiplierCNY *float64           `json:"rate_multiplier_cny"`
 	RateMultiplierUSD *float64           `json:"rate_multiplier_usd"`
@@ -218,7 +218,7 @@ type UpdateGroupRequest struct {
 type CompositeRouteRequest struct {
 	PublicModel    string `json:"public_model" binding:"required"`
 	MatchType      string `json:"match_type" binding:"omitempty,oneof=exact prefix"`
-	TargetPlatform string `json:"target_platform" binding:"required,oneof=anthropic openai gemini antigravity grok"`
+	TargetPlatform string `json:"target_platform" binding:"required,oneof=anthropic openai gemini antigravity grok deepseek glm kimi qwen longcat bytedance minimax"`
 	UpstreamModel  string `json:"upstream_model"`
 	Endpoint       string `json:"endpoint" binding:"omitempty,oneof=any messages count_tokens responses chat_completions embeddings images gemini"`
 	Priority       int    `json:"priority"`
