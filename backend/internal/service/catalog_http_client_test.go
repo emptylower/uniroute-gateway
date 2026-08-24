@@ -48,6 +48,7 @@ func TestCatalogHTTPClientValidateURL(t *testing.T) {
 
 func TestCatalogHTTPClientAllowlistedHosts(t *testing.T) {
 	require.True(t, IsAllowedCatalogHost("openrouter.ai"))
+	require.True(t, IsAllowedCatalogHost("models.dev"))
 	require.True(t, IsAllowedCatalogHost("api.github.com"))
 	require.True(t, IsAllowedCatalogHost("raw.githubusercontent.com"))
 	require.False(t, IsAllowedCatalogHost(""))

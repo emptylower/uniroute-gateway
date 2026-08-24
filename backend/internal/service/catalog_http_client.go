@@ -22,16 +22,17 @@ const (
 	maxCatalogRedirects           = 3
 
 	catalogHostOpenRouter    = "openrouter.ai"
+	catalogHostModelsDev     = "models.dev"
 	catalogHostGitHubAPI     = "api.github.com"
 	catalogHostGitHubRawData = "raw.githubusercontent.com"
 )
 
-// IsAllowedCatalogHost reports whether host is one of the three allowlisted
+// IsAllowedCatalogHost reports whether host is one of the allowlisted
 // catalog sources. Comparison is case-insensitive; ports are not part of the
 // host allowlist.
 func IsAllowedCatalogHost(host string) bool {
 	switch strings.ToLower(host) {
-	case catalogHostOpenRouter, catalogHostGitHubAPI, catalogHostGitHubRawData:
+	case catalogHostOpenRouter, catalogHostModelsDev, catalogHostGitHubAPI, catalogHostGitHubRawData:
 		return true
 	default:
 		return false
