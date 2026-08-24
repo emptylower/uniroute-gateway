@@ -201,3 +201,48 @@ func TestModelCatalogSnapshotStore_RejectsInvalidInputs(t *testing.T) {
 	_, err = repo.InsertSnapshotWithEvidence(ctx, emptyVersion, nil, nil)
 	require.Error(t, err)
 }
+
+func TestModelCatalogSnapshotStore_AcceptanceByContentIdentity(t *testing.T) {
+	catalogSnapshotMu.Lock()
+	defer catalogSnapshotMu.Unlock()
+
+	ctx := context.Background()
+	repo := NewModelCatalogSnapshotRepository(integrationDB)
+	reader := NewModelCatalogEvidenceRepository(integrationDB)
+
+	// Run A ingests the content but its run fails afterwards (e.g. the process
+	// died before finish): the snapshot row exists but is tied to a failed run.
+	input, _ := newCatalogSnapshotTestInput(t)
+	input.Source = service.CatalogSourceModelsDev
+	runA, err := repo.StartSyncRun(ctx, service.StartCatalogSyncRunInput{
+		Source: service.CatalogSourceModelsDev, TriggeredBy: service.CatalogSyncTriggerScheduled, RequestURL: "https://models.dev/api.json",
+	})
+	require.NoError(t, err)
+	input.SyncRunID = runA
+	_, err = repo.InsertSnapshotWithEvidence(ctx, input, nil, nil)
+	require.NoError(t, err)
+	require.NoError(t, repo.FinishSyncRun(ctx, runA, service.CatalogSyncStatusFailed, 0, "", "process restarted mid-run"))
+
+	// Not accepted: the owning run failed.
+	refs, err := reader.LatestAcceptedSnapshotPerSource(ctx)
+	require.NoError(t, err)
+	_, accepted := refs[service.CatalogSourceModelsDev]
+	require.False(t, accepted)
+
+	// Run B fetches the SAME content (digest dedupe stores no new snapshot) and
+	// succeeds. Acceptance must follow the content identity.
+	runB, err := repo.StartSyncRun(ctx, service.StartCatalogSyncRunInput{
+		Source: service.CatalogSourceModelsDev, TriggeredBy: service.CatalogSyncTriggerScheduled, RequestURL: "https://models.dev/api.json",
+	})
+	require.NoError(t, err)
+	replayID, err := repo.InsertSnapshotWithEvidence(ctx, input, nil, nil)
+	require.NoError(t, err)
+	require.Greater(t, replayID, int64(0))
+	require.NoError(t, repo.FinishSyncRun(ctx, runB, service.CatalogSyncStatusSucceeded, 3, input.ExternalVersion, ""))
+
+	refs, err = reader.LatestAcceptedSnapshotPerSource(ctx)
+	require.NoError(t, err)
+	ref, accepted := refs[service.CatalogSourceModelsDev]
+	require.True(t, accepted, "content proven successful by any run must be accepted")
+	require.Equal(t, input.ExternalVersion, ref.ExternalVersion)
+}

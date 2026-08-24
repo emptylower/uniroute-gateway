@@ -363,13 +363,20 @@ func (r *modelCatalogSnapshotRepository) LatestAcceptedSnapshotPerSource(ctx con
 	if r == nil || r.db == nil {
 		return nil, errors.New("model catalog snapshot repository is not configured")
 	}
+	// Acceptance attaches to immutable CONTENT, not to a single run row: a
+	// snapshot is accepted when any succeeded run shares its source+version.
+	// Content-addressed dedupe means a re-run with unchanged payload stores no
+	// new snapshot — the existing one must still count as accepted.
 	rows, err := r.db.QueryContext(ctx, `
-SELECT DISTINCT ON (run.source)
-    run.source, snap.id, snap.external_version, run.finished_at, run.item_count, COALESCE(run.resolved_commit, '')
+SELECT DISTINCT ON (snap.source)
+    snap.source, snap.id, snap.external_version, run.finished_at, run.item_count, COALESCE(run.resolved_commit, '')
 FROM model_catalog_snapshots snap
-JOIN model_catalog_sync_runs run ON run.id = snap.sync_run_id
-WHERE run.status = 'succeeded' AND run.finished_at IS NOT NULL
-ORDER BY run.source, run.finished_at DESC, snap.id DESC
+JOIN model_catalog_sync_runs run
+  ON run.source = snap.source
+ AND run.resolved_commit = snap.external_version
+ AND run.status = 'succeeded'
+ AND run.finished_at IS NOT NULL
+ORDER BY snap.source, run.finished_at DESC, snap.id DESC
 `)
 	if err != nil {
 		return nil, err
