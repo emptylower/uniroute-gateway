@@ -303,5 +303,10 @@ func (h *ModelGovernanceConnectionHandler) ReuseAggregatorConnection(c *gin.Cont
 		response.ErrorFrom(c, err)
 		return
 	}
-	response.Created(c, gin.H{"account_id": accountID})
+	response.Created(c, gin.H{
+		"account_id":   accountID.AccountID,
+		"activated":    accountID.Activated,
+		"probe_status": accountID.ProbeStatus,
+		"probe_detail": accountID.ProbeDetail,
+	})
 }

@@ -45,23 +45,33 @@ type ReuseAggregatorConnectionInput struct {
 	ActorID            string
 }
 
+// ReuseOutcome reports what the caller must surface to the operator: whether
+// the account was activated and, when probing failed, the sanitized upstream
+// reason (never the credential). A silent disabled account is a defect.
+type ReuseOutcome struct {
+	AccountID   int64
+	Activated   bool
+	ProbeStatus string // "success" | "failed" | "" when no probe was attempted
+	ProbeDetail string // sanitized upstream message from the last attempt
+}
+
 // Reuse creates an account inactive transactionally, runs probe after commit, then version-checked activation.
 // Only after activation may current-gate recomputation publish eligible models; failed probe leaves inactive and preserves evidence.
-func (s *AggregatorConnectionReuseService) Reuse(ctx context.Context, input ReuseAggregatorConnectionInput) (int64, error) {
+func (s *AggregatorConnectionReuseService) Reuse(ctx context.Context, input ReuseAggregatorConnectionInput) (*ReuseOutcome, error) {
 	if input.ConnectionID == 0 {
-		return 0, fmt.Errorf("connection_id is required")
+		return nil, fmt.Errorf("connection_id is required")
 	}
 	if !ValidGovernanceProvider(input.Provider) {
-		return 0, fmt.Errorf("invalid provider")
+		return nil, fmt.Errorf("invalid provider")
 	}
 	if !ValidAccountProtocol(input.Protocol) {
-		return 0, fmt.Errorf("invalid protocol")
+		return nil, fmt.Errorf("invalid protocol")
 	}
 	if strings.TrimSpace(input.NormalizedEndpoint) == "" {
-		return 0, fmt.Errorf("endpoint is required")
+		return nil, fmt.Errorf("endpoint is required")
 	}
 	if strings.TrimSpace(input.ClientRequestID) == "" {
-		return 0, fmt.Errorf("client_request_id is required")
+		return nil, fmt.Errorf("client_request_id is required")
 	}
 	// First-party rejection
 	var conn *UpstreamConnection
@@ -69,30 +79,35 @@ func (s *AggregatorConnectionReuseService) Reuse(ctx context.Context, input Reus
 	if s.connRepo != nil {
 		c, cred, err := s.connRepo.GetByID(ctx, input.ConnectionID)
 		if err != nil {
-			return 0, err
+			return nil, err
 		}
 		conn = c
 		encCred = cred
 		if conn.Kind != "aggregator" {
-			return 0, fmt.Errorf("first-party connections cannot be reused as aggregator")
+			return nil, fmt.Errorf("first-party connections cannot be reused as aggregator")
 		}
 		if conn.Provider != nil {
-			return 0, fmt.Errorf("aggregator connection must have null provider")
+			return nil, fmt.Errorf("aggregator connection must have null provider")
 		}
 		if conn.CredentialVersion != input.CredentialVersion {
-			return 0, fmt.Errorf("credential version conflict")
+			return nil, fmt.Errorf("credential version conflict")
 		}
 	}
 	// Idempotency: check existing reuse request
 	if s.reuseRepo != nil {
 		if id, found, err := s.reuseRepo.FindByScope(ctx, input.ConnectionID, input.Provider, input.Protocol, input.NormalizedEndpoint, input.ClientRequestID); err == nil && found {
-			return id, nil
+			outcome := &ReuseOutcome{AccountID: id}
+			if s.accountRepo != nil {
+				if acc, aerr := s.accountRepo.GetByID(ctx, id); aerr == nil && acc != nil {
+					outcome.Activated = acc.Status == "active"
+				}
+			}
+			return outcome, nil
 		}
 	}
 	// Confirmed-model-only selection
-	model := selectProbeModel(input.Provider)
-	if model == "" {
-		return 0, fmt.Errorf("no representative model for provider %s", input.Provider)
+	if len(selectProbeModels(input.Provider)) == 0 {
+		return nil, fmt.Errorf("no representative model for provider %s", input.Provider)
 	}
 	// Decrypt connection credential for reuse (R2)
 	var plainCred string
@@ -114,7 +129,7 @@ func (s *AggregatorConnectionReuseService) Reuse(ctx context.Context, input Reus
 				if s.reuseRepo != nil {
 					_ = s.reuseRepo.Create(ctx, input.ConnectionID, input.Provider, input.Protocol, input.NormalizedEndpoint, input.ClientRequestID, failAccount.ID)
 				}
-				return failAccount.ID, nil
+				return &ReuseOutcome{AccountID: failAccount.ID, Activated: false, ProbeStatus: "failed", ProbeDetail: "connection credential could not be decrypted"}, nil
 			}
 			plainCred = dec
 		} else {
@@ -149,16 +164,16 @@ func (s *AggregatorConnectionReuseService) Reuse(ctx context.Context, input Reus
 	newAccount.EndpointPath = &ep
 
 	if s.accountRepo == nil {
-		return 0, fmt.Errorf("account repository not configured")
+		return nil, fmt.Errorf("account repository not configured")
 	}
 	// Create inactive
 	if err := s.accountRepo.Create(ctx, newAccount); err != nil {
 		if isServiceUniqueViolation(err) && s.reuseRepo != nil {
 			if id, found, _ := s.reuseRepo.FindByScope(ctx, input.ConnectionID, input.Provider, input.Protocol, input.NormalizedEndpoint, input.ClientRequestID); found {
-				return id, nil
+				return &ReuseOutcome{AccountID: id}, nil
 			}
 		}
-		return 0, fmt.Errorf("create inactive account: %w", err)
+		return nil, fmt.Errorf("create inactive account: %w", err)
 	}
 	// Record reuse request
 	if s.reuseRepo != nil {
@@ -166,11 +181,14 @@ func (s *AggregatorConnectionReuseService) Reuse(ctx context.Context, input Reus
 	}
 	// Post-commit: probe candidate models in order until one succeeds. Every
 	// attempt persists its own evidence row; first success activates.
+	outcome := &ReuseOutcome{AccountID: newAccount.ID}
 	if s.probeSvc != nil && conn != nil {
 		credential := plainCred
 		for _, model := range selectProbeModels(input.Provider) {
 			probe, err := s.probeSvc.ProbeWithModel(ctx, newAccount.ID, conn, input.Provider, input.Protocol, input.NormalizedEndpoint, credential, model)
 			if err != nil || probe == nil || probe.Status != "success" {
+				outcome.ProbeStatus = "failed"
+				outcome.ProbeDetail = probeFailureDetail(probe, err)
 				continue
 			}
 			// Probe success: version-checked activation transition
@@ -178,13 +196,34 @@ func (s *AggregatorConnectionReuseService) Reuse(ctx context.Context, input Reus
 			newAccount.Schedulable = true
 			// Use optimistic version check: ensure config_version still 1 before activation
 			if err := s.accountRepo.Update(ctx, newAccount); err != nil {
-				return 0, fmt.Errorf("activate account: %w", err)
+				return nil, fmt.Errorf("activate account: %w", err)
 			}
+			outcome.Activated = true
+			outcome.ProbeStatus = "success"
+			outcome.ProbeDetail = ""
 			// After activation, publication recomputation would publish eligible models (Phase 5)
 			break
 		}
 	}
-	return newAccount.ID, nil
+	return outcome, nil
+}
+
+// probeFailureDetail extracts the sanitized upstream reason from a failed probe
+// (body_truncated is already secret-scrubbed by the probe service). The detail
+// is operator-facing evidence, never credential material.
+func probeFailureDetail(probe *AccountEndpointProbe, err error) string {
+	if probe != nil && probe.ResponseSummary != nil {
+		if msg, ok := probe.ResponseSummary["body_truncated"].(string); ok && msg != "" {
+			return msg
+		}
+		if code, ok := probe.ResponseSummary["status"]; ok {
+			return fmt.Sprintf("upstream returned status %v", code)
+		}
+	}
+	if err != nil {
+		return err.Error()
+	}
+	return "probe failed"
 }
 
 // deriveRuntimeBaseURL derives the runtime API root from the connection base
@@ -217,13 +256,13 @@ func deriveRuntimeBaseURL(baseURL, normalizedEndpoint string) string {
 func providerToPlatform(p GovernanceProvider) string {
 	switch p {
 	case GovernanceProviderAnthropic:
-		return "claude"
+		return PlatformAnthropic
 	case GovernanceProviderOpenAI:
-		return "openai"
+		return PlatformOpenAI
 	case GovernanceProviderGemini:
-		return "gemini"
+		return PlatformGemini
 	case GovernanceProviderGrok:
-		return "grok"
+		return PlatformGrok
 	default:
 		return string(p)
 	}
