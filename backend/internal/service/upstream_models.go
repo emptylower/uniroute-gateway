@@ -408,11 +408,16 @@ func (s *AccountTestService) buildUpstreamModelsRequest(ctx context.Context, acc
 func (s *AccountTestService) buildRequestFromMaterial(ctx context.Context, material *UpstreamRequestMaterial, account *Account) (*http.Request, error) {
 	// Connection-sourced material takes precedence; legacy per-platform switches are fallback only.
 	baseURL := strings.TrimRight(material.BaseURL, "/")
-	endpoint := material.Endpoint
+	// EndpointPath is the API root ("/v1", "/v1beta"); the model list lives at
+	// {root}/models. Tolerate legacy rows that stored the full path already.
+	endpoint := strings.TrimRight(material.Endpoint, "/")
 	if endpoint == "" {
-		endpoint = "/v1/models"
+		endpoint = "/v1"
 	}
 	fullURL := baseURL + endpoint
+	if !strings.HasSuffix(fullURL, "/models") {
+		fullURL += "/models"
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fullURL, nil)
 	if err != nil {
 		return nil, err

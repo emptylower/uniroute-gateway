@@ -66,3 +66,46 @@ func TestResolveUpstreamRequestMaterial_ConnectionBaseURLOverridesAccount(t *tes
 }
 
 func connTestStrPtr(s string) *string { return &s }
+
+func TestBuildUpstreamModelsRequest_EndpointRootGetsModelsSuffix(t *testing.T) {
+	// Regression: governance EndpointPath is the API ROOT ("/v1"); the model
+	// list must be fetched at {base}{root}/models, not at the root itself.
+	connID := int64(7)
+	endpoint := "/v1"
+	account := &Account{
+		Platform:     PlatformOpenAI,
+		Type:         AccountTypeAPIKey,
+		Credentials:  map[string]any{"api_key": "sk-test"},
+		ConnectionID: &connID,
+		EndpointPath: &endpoint,
+	}
+	svc := &AccountTestService{
+		upstreamConnRepo: &fakeConnRepoForTest{
+			conn: &UpstreamConnection{ID: connID, Kind: "aggregator", BaseURL: "https://api.aicodewith.ai"},
+		},
+	}
+	req, err := svc.buildUpstreamModelsRequest(context.Background(), account)
+	require.NoError(t, err)
+	require.Equal(t, "https://api.aicodewith.ai/v1/models", req.URL.String())
+	require.Equal(t, "Bearer sk-test", req.Header.Get("Authorization"))
+}
+
+func TestBuildUpstreamModelsRequest_LegacyFullModelsPathPreserved(t *testing.T) {
+	connID := int64(7)
+	endpoint := "/v1/models"
+	account := &Account{
+		Platform:     PlatformOpenAI,
+		Type:         AccountTypeAPIKey,
+		Credentials:  map[string]any{"api_key": "sk-test"},
+		ConnectionID: &connID,
+		EndpointPath: &endpoint,
+	}
+	svc := &AccountTestService{
+		upstreamConnRepo: &fakeConnRepoForTest{
+			conn: &UpstreamConnection{ID: connID, Kind: "aggregator", BaseURL: "https://agg.example.com"},
+		},
+	}
+	req, err := svc.buildUpstreamModelsRequest(context.Background(), account)
+	require.NoError(t, err)
+	require.Equal(t, "https://agg.example.com/v1/models", req.URL.String())
+}

@@ -2637,7 +2637,21 @@ func (h *AccountHandler) SyncUpstreamModels(c *gin.Context) {
 			response.ErrorFrom(c, err)
 			return
 		}
-		response.Success(c, summary)
+		// Keep the response shape compatible with the non-shadow path: callers
+		// (and the operator-facing toast) need the pulled model list to
+		// distinguish "upstream returned nothing" from "nothing new".
+		response.Success(c, gin.H{
+			"batch_id":         summary.BatchID,
+			"registry_version": summary.RegistryVersion,
+			"discovered":       summary.Discovered,
+			"publishable":      summary.Publishable,
+			"cross_provider":   summary.CrossProvider,
+			"unknown":          summary.Unknown,
+			"ignored":          summary.Ignored,
+			"total_fetched":    len(deduped),
+			"models":           deduped,
+			"synced_at":        syncedAt.Format(time.RFC3339),
+		})
 		return
 	}
 
