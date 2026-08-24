@@ -2637,6 +2637,25 @@ func (h *AccountHandler) SyncUpstreamModels(c *gin.Context) {
 			response.ErrorFrom(c, err)
 			return
 		}
+		// Shadow mode = governance observes in parallel; the legacy data plane
+		// must keep its historical behavior. Persist the model snapshot/mapping
+		// so account groups and the user-facing model list keep populating.
+		// Observation recording replays harmlessly on the same idempotency key.
+		if perr := h.accountTestService.PersistUpstreamModelDiscovery(c.Request.Context(), account, discovery, syncedAt); perr != nil {
+			slog.Warn("sync_upstream_models_persist_failed", "account_id", accountID)
+			var syncErr *service.UpstreamModelSyncError
+			if errors.As(perr, &syncErr) {
+				switch syncErr.Kind {
+				case service.UpstreamModelSyncErrorConfiguration, service.UpstreamModelSyncErrorUnsupported:
+					response.BadRequest(c, syncErr.SafeMessage())
+				default:
+					response.Error(c, http.StatusBadGateway, syncErr.SafeMessage())
+				}
+				return
+			}
+			response.ErrorFrom(c, perr)
+			return
+		}
 		// Keep the response shape compatible with the non-shadow path: callers
 		// (and the operator-facing toast) need the pulled model list to
 		// distinguish "upstream returned nothing" from "nothing new".

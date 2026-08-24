@@ -438,6 +438,79 @@ func TestAccountHandlerSyncUpstreamModelsPersistsLatestSnapshot(t *testing.T) {
 	require.JSONEq(t, `{"code":0,"message":"success","data":{"models":["gpt-5.6-sol","gpt-5.6-terra"],"synced_at":"`+store.discovery["synced_at"].(string)+`"}}`, rec.Body.String())
 }
 
+type shadowGovernanceStub struct {
+	inputs []service.DiscoveryBatchInput
+}
+
+func (g *shadowGovernanceStub) ClassifyAndPersistShadow(_ context.Context, input service.DiscoveryBatchInput) (*service.ClassificationSummary, error) {
+	g.inputs = append(g.inputs, input)
+	return &service.ClassificationSummary{BatchID: "shadow-batch", Discovered: len(input.ModelIDs)}, nil
+}
+
+func TestAccountHandlerSyncUpstreamModelsShadowDualWritesLegacySnapshot(t *testing.T) {
+	svc := &availableModelsAdminService{
+		stubAdminService: newStubAdminService(),
+		account: service.Account{
+			ID:       48,
+			Name:     "openai-shadow",
+			Platform: service.PlatformOpenAI,
+			Type:     service.AccountTypeAPIKey,
+			Status:   service.StatusActive,
+			Credentials: map[string]any{
+				"api_key":  "openai-key",
+				"base_url": "https://openai.example.com/v1",
+			},
+		},
+	}
+	upstream := &syncUpstreamHTTPUpstream{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"object":"list","data":[{"id":"gpt-5.6-sol"}]}`)),
+	}}
+	store := &syncUpstreamModelDiscoveryStore{}
+	observations := &syncUpstreamObservationStore{}
+	router := setupSyncUpstreamModelsRouter(svc, upstream, observations, store)
+	governance := &shadowGovernanceStub{}
+	// Rebuild the handler with governance attached (shadow branch).
+	accountTestSvc := service.NewAccountTestService(
+		nil, nil, nil, nil, nil, upstream,
+		&config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
+		nil,
+	)
+	accountTestSvc.SetModelDiscoveryStore(store)
+	accountTestSvc.SetModelObservationRepository(observations)
+	handler := NewAccountHandler(svc, nil, nil, nil, nil, nil, nil, nil, accountTestSvc, nil, nil, nil, nil, nil)
+	handler.SetModelGovernanceService(governance)
+	gin.SetMode(gin.TestMode)
+	router = gin.New()
+	router.POST("/api/v1/admin/accounts/:id/models/sync-upstream", handler.SyncUpstreamModels)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/accounts/48/models/sync-upstream", nil)
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	// Shadow classification ran.
+	require.Len(t, governance.inputs, 1)
+	// Legacy snapshot/mapping dual-write happened: shadow must not break the
+	// legacy data plane that populates groups and the user-facing model list.
+	require.Equal(t, int64(48), store.accountID)
+	require.Equal(t, map[string]any{"gpt-5.6-sol": "gpt-5.6-sol"}, store.mapping)
+	// Response carries the pulled list so the UI can show the honest total.
+	var resp struct {
+		Code int `json:"code"`
+		Data struct {
+			Models       []string `json:"models"`
+			TotalFetched int      `json:"total_fetched"`
+			Discovered   int      `json:"discovered"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.Equal(t, 0, resp.Code)
+	require.Equal(t, []string{"gpt-5.6-sol"}, resp.Data.Models)
+	require.Equal(t, 1, resp.Data.TotalFetched)
+}
+
 func TestAccountHandlerSyncUpstreamModelsRecordsEmptyEvidenceBeforeLegacyFailure(t *testing.T) {
 	svc := &availableModelsAdminService{
 		stubAdminService: newStubAdminService(),
