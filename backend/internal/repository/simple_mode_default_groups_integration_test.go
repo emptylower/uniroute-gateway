@@ -176,3 +176,37 @@ func TestEnsureSimpleModeDefaultGroups_AntigravityNeedsTwoGroupsOnlyByCount(t *t
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, count, 2)
 }
+
+func TestEnsureSimpleModeDefaultGroups_DeletionStaysDeletedAfterFirstSeed(t *testing.T) {
+	// Regression: previously every app restart resurrected admin-deleted
+	// <platform>-default groups (seed-on-every-boot). Seeding must run once
+	// per database; deletions afterwards are sticky.
+	ctx := context.Background()
+	tx := testEntTx(t)
+	client := tx.Client()
+
+	seedCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	// First-ever seed creates defaults and persists the marker.
+	require.NoError(t, ensureSimpleModeDefaultGroups(seedCtx, client))
+	count, err := client.Group.Query().
+		Where(group.NameEQ(service.PlatformAnthropic+"-default"), group.DeletedAtIsNil()).
+		Count(seedCtx)
+	require.NoError(t, err)
+	require.Equal(t, 1, count)
+
+	// Admin deletes it.
+	_, err = client.Group.Delete().
+		Where(group.NameEQ(service.PlatformAnthropic+"-default"), group.DeletedAtIsNil()).
+		Exec(seedCtx)
+	require.NoError(t, err)
+
+	// Second boot: marker present → no resurrection.
+	require.NoError(t, ensureSimpleModeDefaultGroups(seedCtx, client))
+	count, err = client.Group.Query().
+		Where(group.NameEQ(service.PlatformAnthropic+"-default"), group.DeletedAtIsNil()).
+		Count(seedCtx)
+	require.NoError(t, err)
+	require.Equal(t, 0, count, "deleted default group must stay deleted")
+}

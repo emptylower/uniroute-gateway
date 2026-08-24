@@ -261,7 +261,11 @@ func TestModelCatalogMergesNewProviderIntoRouteWithExplicitModels(t *testing.T) 
 			1: {{ID: 1, Platform: PlatformOpenAI, Status: StatusActive, Schedulable: true, Credentials: map[string]any{
 				"model_mapping": map[string]any{"gpt-5.4": "gpt-5.4"},
 			}}},
-			2: {{ID: 2, Platform: PlatformAnthropic, Status: StatusActive, Schedulable: true}},
+			// Synced account shape: catalog truth comes from the discovered
+			// upstream model list, not from hardcoded platform defaults.
+			2: {{ID: 2, Platform: PlatformAnthropic, Status: StatusActive, Schedulable: true, Credentials: map[string]any{
+				"model_mapping": map[string]any{"claude-opus-4-6": "claude-opus-4-6"},
+			}}},
 		}},
 	}
 
@@ -276,4 +280,31 @@ func TestModelCatalogMergesNewProviderIntoRouteWithExplicitModels(t *testing.T) 
 	}
 	require.True(t, providers["openai"])
 	require.True(t, providers["anthropic"])
+}
+
+func TestCatalogAccountModelsEmptyMappingPublishesNothing(t *testing.T) {
+	// Strict truth: unsynced accounts (no discovered model_mapping) must not
+	// emit hardcoded platform defaults — that surfaced models the upstream
+	// does not carry (fake catalog). Applies to every platform now.
+	for _, platform := range []string{PlatformAnthropic, PlatformGemini, PlatformGrok, PlatformOpenAI, PlatformAntigravity} {
+		account := &Account{Platform: platform, Status: StatusActive, Schedulable: true}
+		require.Empty(t, catalogAccountModels(account), "platform %s must publish nothing when unsynced", platform)
+		require.False(t, catalogAccountSupportsModel(account, defaultModelsListCandidateIDs(platform)[0]))
+	}
+
+	// Synced account publishes exactly its discovered models.
+	synced := &Account{Platform: PlatformGrok, Status: StatusActive, Schedulable: true, Credentials: map[string]any{
+		"model_mapping": map[string]any{"grok-4.6": "grok-4.6", "grok-4.5": "grok-4.5"},
+	}}
+	seeds := catalogAccountModels(synced)
+	require.Len(t, seeds, 2)
+	require.True(t, catalogAccountSupportsModel(synced, "grok-4.6"))
+	require.False(t, catalogAccountSupportsModel(synced, "grok-4.3"), "not in upstream mapping → not published")
+}
+
+func TestModelCatalogProviderGrokPlatformUnifiesToXAI(t *testing.T) {
+	// grok and xAI are one vendor; the catalog must never emit "grok".
+	require.Equal(t, "xai", modelCatalogProvider(PlatformGrok, "grok-4.5"))
+	require.Equal(t, "xai", modelCatalogProvider(PlatformGrok, "grok-composer-2.5-fast"))
+	require.Equal(t, "xai", modelCatalogProvider(PlatformGrok, "anything-else-on-grok-platform"))
 }

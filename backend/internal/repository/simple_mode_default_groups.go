@@ -6,14 +6,30 @@ import (
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/ent/group"
+	"github.com/Wei-Shaw/sub2api/ent/setting"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 )
 
 const simpleModeDefaultGroupDescription = "Auto-created default group"
 
+// simpleModeDefaultGroupsSeededKey makes default-group seeding run ONCE per
+// database. Previously every startup resurrected <platform>-default groups the
+// admin had deliberately deleted (soft-delete + restart = brand new row).
+const simpleModeDefaultGroupsSeededKey = "simple_mode_default_groups_seeded"
+
 func ensureSimpleModeDefaultGroups(ctx context.Context, client *dbent.Client) error {
 	if client == nil {
 		return fmt.Errorf("nil ent client")
+	}
+
+	seeded, err := client.Setting.Query().
+		Where(setting.KeyEQ(simpleModeDefaultGroupsSeededKey)).
+		Exist(ctx)
+	if err != nil {
+		return fmt.Errorf("check default groups seed marker: %w", err)
+	}
+	if seeded {
+		return nil
 	}
 
 	if err := backfillSimpleModeGrokDefaultImageGeneration(ctx, client); err != nil {
@@ -53,6 +69,17 @@ func ensureSimpleModeDefaultGroups(ctx context.Context, client *dbent.Client) er
 		if err := createGroupIfNotExists(ctx, client, name, platform); err != nil {
 			return err
 		}
+	}
+
+	// Persist the seed marker so future restarts never resurrect deleted
+	// default groups. DoNothing keeps concurrent first-boots benign.
+	if err := client.Setting.Create().
+		SetKey(simpleModeDefaultGroupsSeededKey).
+		SetValue("true").
+		OnConflictColumns("key").
+		DoNothing().
+		Exec(ctx); err != nil {
+		return fmt.Errorf("persist default groups seed marker: %w", err)
 	}
 
 	return nil

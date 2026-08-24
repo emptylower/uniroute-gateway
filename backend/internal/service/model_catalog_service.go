@@ -169,6 +169,9 @@ func modelCatalogProvider(platform, model string) string {
 		return "google"
 	case strings.HasPrefix(name, "grok-"):
 		return "xai"
+	case platform == PlatformGrok:
+		// grok platform IS xAI — never emit "grok" as a separate vendor.
+		return "xai"
 	default:
 		return platform
 	}
@@ -254,21 +257,39 @@ func addCatalogModelSeed(seeds map[string]catalogModelSeed, model, platform stri
 	}
 }
 
+// rawDiscoveredModelMapping returns the mapping actually stored by upstream
+// model discovery (credentials.model_mapping). GetModelMapping() is NOT safe
+// for catalog truth: it silently substitutes hardcoded platform default
+// mappings (grok aliases, antigravity passthroughs) when nothing was synced.
+func rawDiscoveredModelMapping(account *Account) map[string]any {
+	if account == nil {
+		return nil
+	}
+	raw, _ := account.Credentials["model_mapping"].(map[string]any)
+	if len(raw) == 0 {
+		return nil
+	}
+	return raw
+}
+
 func catalogAccountModels(account *Account) []catalogModelSeed {
 	if account == nil {
 		return nil
 	}
+	mapping := rawDiscoveredModelMapping(account)
+	if len(mapping) == 0 {
+		// Strict truth: an account whose upstream model list was never
+		// discovered publishes NOTHING to the catalog. Previously non-openai
+		// platforms fell back to hardcoded default lists, surfacing models the
+		// upstream does not actually carry (fake catalog entries).
+		return nil
+	}
 	seeds := make(map[string]catalogModelSeed)
-	mapping := account.GetModelMapping()
 	for model := range mapping {
 		addCatalogModelSeed(seeds, model, account.Platform)
 	}
-	if account.Platform == PlatformOpenAI && len(mapping) == 0 {
-		return nil
-	}
-	// Platform defaults make empty mappings enumerable and also resolve concrete
-	// models covered by wildcard mappings. OpenAI accounts are excluded above:
-	// their catalog is the last successfully discovered account entitlement set.
+	// Platform defaults resolve concrete models covered by wildcard mappings
+	// (e.g. {"*": ...}); they never apply to unsynced accounts (handled above).
 	for _, model := range defaultModelsListCandidateIDs(account.Platform) {
 		if account.IsModelSupported(model) {
 			addCatalogModelSeed(seeds, model, account.Platform)
@@ -285,7 +306,8 @@ func catalogAccountSupportsModel(account *Account, model string) bool {
 	if account == nil {
 		return false
 	}
-	if account.Platform == PlatformOpenAI && len(account.GetModelMapping()) == 0 {
+	if rawDiscoveredModelMapping(account) == nil {
+		// Unsynced account: nothing is published (was: openai-only rule).
 		return false
 	}
 	return account.IsModelSupported(model)
