@@ -105,10 +105,6 @@ func (s *AggregatorConnectionReuseService) Reuse(ctx context.Context, input Reus
 			return outcome, nil
 		}
 	}
-	// Confirmed-model-only selection
-	if len(selectProbeModels(input.Provider)) == 0 {
-		return nil, fmt.Errorf("no representative model for provider %s", input.Provider)
-	}
 	// Decrypt connection credential for reuse (R2)
 	var plainCred string
 	if encCred != "" {
@@ -179,31 +175,32 @@ func (s *AggregatorConnectionReuseService) Reuse(ctx context.Context, input Reus
 	if s.reuseRepo != nil {
 		_ = s.reuseRepo.Create(ctx, input.ConnectionID, input.Provider, input.Protocol, input.NormalizedEndpoint, input.ClientRequestID, newAccount.ID)
 	}
-	// Post-commit: probe candidate models in order until one succeeds. Every
-	// attempt persists its own evidence row; first success activates.
+	// Post-commit: free model-list probe (liveness + auth + discovery evidence).
+	// Success activates; failure leaves the account inactive with evidence.
 	outcome := &ReuseOutcome{AccountID: newAccount.ID}
 	if s.probeSvc != nil && conn != nil {
 		credential := plainCred
-		for _, model := range selectProbeModels(input.Provider) {
-			probe, err := s.probeSvc.ProbeWithModel(ctx, newAccount.ID, conn, input.Provider, input.Protocol, input.NormalizedEndpoint, credential, model)
-			if err != nil || probe == nil || probe.Status != "success" {
-				outcome.ProbeStatus = "failed"
-				outcome.ProbeDetail = probeFailureDetail(probe, err)
-				continue
-			}
-			// Probe success: version-checked activation transition
-			newAccount.Status = "active"
-			newAccount.Schedulable = true
-			// Use optimistic version check: ensure config_version still 1 before activation
-			if err := s.accountRepo.Update(ctx, newAccount); err != nil {
-				return nil, fmt.Errorf("activate account: %w", err)
-			}
-			outcome.Activated = true
-			outcome.ProbeStatus = "success"
-			outcome.ProbeDetail = ""
-			// After activation, publication recomputation would publish eligible models (Phase 5)
-			break
+		probe, err := s.probeSvc.Probe(ctx, newAccount.ID, conn, input.Provider, input.Protocol, input.NormalizedEndpoint, credential)
+		if err != nil || probe == nil || probe.Status != "success" {
+			outcome.ProbeStatus = "failed"
+			outcome.ProbeDetail = probeFailureDetail(probe, err)
+			return outcome, nil
 		}
+		// Probe success: version-checked activation transition
+		newAccount.Status = "active"
+		newAccount.Schedulable = true
+		// Use optimistic version check: ensure config_version still 1 before activation
+		if err := s.accountRepo.Update(ctx, newAccount); err != nil {
+			return nil, fmt.Errorf("activate account: %w", err)
+		}
+		outcome.Activated = true
+		outcome.ProbeStatus = "success"
+		if probe.ResponseSummary != nil {
+			if count, ok := probe.ResponseSummary["model_count"].(int); ok {
+				outcome.ProbeDetail = fmt.Sprintf("model list fetched: %d models", count)
+			}
+		}
+		// After activation, publication recomputation would publish eligible models (Phase 5)
 	}
 	return outcome, nil
 }

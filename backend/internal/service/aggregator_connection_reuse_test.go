@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"encoding/json"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -121,10 +120,10 @@ func TestAggregatorConnectionReuseInactiveThenProbeThenActivation(t *testing.T) 
 	probeRepo := &fakeProbeRepo{}
 	probeSvc := NewAccountEndpointProbeService(probeRepo, srv.Client())
 	svc := NewAggregatorConnectionReuseServiceWithRepo(connRepo, accountRepo, reuseRepo, probeSvc)
-	_, err := svc.Reuse(context.Background(), ReuseAggregatorConnectionInput{ConnectionID: fpConn.ID, Provider: GovernanceProviderOpenAI, Protocol: AccountProtocolOpenAI, NormalizedEndpoint: "/v1/chat/completions", ClientRequestID: "req-1", CredentialVersion: 1})
+	_, err := svc.Reuse(context.Background(), ReuseAggregatorConnectionInput{ConnectionID: fpConn.ID, Provider: GovernanceProviderOpenAI, Protocol: AccountProtocolOpenAI, NormalizedEndpoint: "/v1", ClientRequestID: "req-1", CredentialVersion: 1})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "first-party")
-	outcome, err := svc.Reuse(context.Background(), ReuseAggregatorConnectionInput{ConnectionID: aggID, Provider: GovernanceProviderOpenAI, Protocol: AccountProtocolOpenAI, NormalizedEndpoint: "/v1/chat/completions", ClientRequestID: "req-2", CredentialVersion: 1})
+	outcome, err := svc.Reuse(context.Background(), ReuseAggregatorConnectionInput{ConnectionID: aggID, Provider: GovernanceProviderOpenAI, Protocol: AccountProtocolOpenAI, NormalizedEndpoint: "/v1", ClientRequestID: "req-2", CredentialVersion: 1})
 	require.NoError(t, err)
 	require.NotNil(t, outcome)
 	require.NotZero(t, outcome.AccountID)
@@ -143,7 +142,7 @@ func TestAggregatorConnectionReuseIdempotency(t *testing.T) {
 	reuseRepo := newFakeReuseRepo()
 	probeSvc := NewAccountEndpointProbeService(&fakeProbeRepo{}, srv.Client())
 	svc := NewAggregatorConnectionReuseServiceWithRepo(connRepo, accountRepo, reuseRepo, probeSvc)
-	input := ReuseAggregatorConnectionInput{ConnectionID: agg.ID, Provider: GovernanceProviderGemini, Protocol: AccountProtocolGemini, NormalizedEndpoint: "/v1beta/models", ClientRequestID: "idem-1", CredentialVersion: 5}
+	input := ReuseAggregatorConnectionInput{ConnectionID: agg.ID, Provider: GovernanceProviderGemini, Protocol: AccountProtocolGemini, NormalizedEndpoint: "/v1beta", ClientRequestID: "idem-1", CredentialVersion: 5}
 	outcome1, err := svc.Reuse(context.Background(), input)
 	require.NoError(t, err)
 	outcome2, err := svc.Reuse(context.Background(), input)
@@ -160,8 +159,8 @@ func TestAggregatorConnectionReuseNoCapacityReservation(t *testing.T) {
 	accountRepo := newFakeReuseAccountRepo()
 	reuseRepo := newFakeReuseRepo()
 	svc := NewAggregatorConnectionReuseServiceWithRepo(connRepo, accountRepo, reuseRepo, NewAccountEndpointProbeService(&fakeProbeRepo{}, srv.Client()))
-	_, _ = svc.Reuse(context.Background(), ReuseAggregatorConnectionInput{ConnectionID: agg.ID, Provider: GovernanceProviderOpenAI, Protocol: AccountProtocolOpenAI, NormalizedEndpoint: "/v1/chat/completions", ClientRequestID: "c1", CredentialVersion: 1})
-	_, _ = svc.Reuse(context.Background(), ReuseAggregatorConnectionInput{ConnectionID: agg.ID, Provider: GovernanceProviderGemini, Protocol: AccountProtocolGemini, NormalizedEndpoint: "/v1beta/models", ClientRequestID: "c2", CredentialVersion: 1})
+	_, _ = svc.Reuse(context.Background(), ReuseAggregatorConnectionInput{ConnectionID: agg.ID, Provider: GovernanceProviderOpenAI, Protocol: AccountProtocolOpenAI, NormalizedEndpoint: "/v1", ClientRequestID: "c1", CredentialVersion: 1})
+	_, _ = svc.Reuse(context.Background(), ReuseAggregatorConnectionInput{ConnectionID: agg.ID, Provider: GovernanceProviderGemini, Protocol: AccountProtocolGemini, NormalizedEndpoint: "/v1beta", ClientRequestID: "c2", CredentialVersion: 1})
 	require.Len(t, accountRepo.accounts, 2)
 	for _, acc := range accountRepo.accounts {
 		require.NotNil(t, acc.ConnectionID)
@@ -180,7 +179,8 @@ func TestAggregatorConnectionReuseDecryptsCredentialForProbe(t *testing.T) {
 		// Probe should receive decrypted credential in Authorization header
 		auth := r.Header.Get("Authorization")
 		require.Equal(t, "Bearer "+plain, auth)
-		w.Write([]byte(`{"id":"test","choices":[{"message":{"content":"hi"}}]}`))
+		require.Equal(t, http.MethodGet, r.Method)
+		w.Write([]byte(`{"data":[{"id":"gpt-5.5"}]}`))
 	}))
 	defer srv.Close()
 	connRepo := newFakeUpstreamConnRepo()
@@ -193,7 +193,7 @@ func TestAggregatorConnectionReuseDecryptsCredentialForProbe(t *testing.T) {
 	svc := NewAggregatorConnectionReuseServiceWithRepo(connRepo, accountRepo, reuseRepo, probeSvc)
 	svc.SetEncryptor(enc)
 	// Reuse should decrypt and probe with plain, then succeed and activate
-	outcome, err := svc.Reuse(context.Background(), ReuseAggregatorConnectionInput{ConnectionID: agg.ID, Provider: GovernanceProviderOpenAI, Protocol: AccountProtocolOpenAI, NormalizedEndpoint: "/v1/chat/completions", ClientRequestID: "decrypt-1", CredentialVersion: 1})
+	outcome, err := svc.Reuse(context.Background(), ReuseAggregatorConnectionInput{ConnectionID: agg.ID, Provider: GovernanceProviderOpenAI, Protocol: AccountProtocolOpenAI, NormalizedEndpoint: "/v1", ClientRequestID: "decrypt-1", CredentialVersion: 1})
 	require.NoError(t, err)
 	require.NotNil(t, outcome)
 	require.NotZero(t, outcome.AccountID)
@@ -221,7 +221,7 @@ func TestAggregatorConnectionReuseDecryptFailureLeavesInactive(t *testing.T) {
 	probeSvc := NewAccountEndpointProbeService(&fakeProbeRepo{}, srv.Client())
 	svc := NewAggregatorConnectionReuseServiceWithRepo(connRepo, accountRepo, reuseRepo, probeSvc)
 	svc.SetEncryptor(failEnc)
-	outcome, err := svc.Reuse(context.Background(), ReuseAggregatorConnectionInput{ConnectionID: agg.ID, Provider: GovernanceProviderOpenAI, Protocol: AccountProtocolOpenAI, NormalizedEndpoint: "/v1/chat/completions", ClientRequestID: "fail-decrypt", CredentialVersion: 1})
+	outcome, err := svc.Reuse(context.Background(), ReuseAggregatorConnectionInput{ConnectionID: agg.ID, Provider: GovernanceProviderOpenAI, Protocol: AccountProtocolOpenAI, NormalizedEndpoint: "/v1", ClientRequestID: "fail-decrypt", CredentialVersion: 1})
 	require.NoError(t, err)
 	require.NotNil(t, outcome)
 	require.NotZero(t, outcome.AccountID)
@@ -249,18 +249,13 @@ func TestDeriveRuntimeBaseURL(t *testing.T) {
 	}
 }
 
-func TestAggregatorConnectionReuseFallsBackAcrossProbeModels(t *testing.T) {
-	// Aggregator carries only newer models: rejects gpt-5.5/gpt-5.4, serves gpt-5.
+func TestAggregatorConnectionReuseModelListProbeActivates(t *testing.T) {
+	// Aggregator serves the free model list at {endpoint}/models; zero balance
+	// must not block account registration.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var payload map[string]any
-		_ = json.NewDecoder(r.Body).Decode(&payload)
-		model, _ := payload["model"].(string)
-		if model == "gpt-5" {
-			w.Write([]byte(`{"id":"ok","choices":[{"message":{"content":"hi"}}]}`))
-			return
-		}
-		w.WriteHeader(400)
-		w.Write([]byte(`{"error":"model ` + model + ` not available"}`))
+		require.Equal(t, http.MethodGet, r.Method)
+		require.Equal(t, "/chatgpt/v1/models", r.URL.Path)
+		w.Write([]byte(`{"data":[{"id":"gpt-5.5"},{"id":"gpt-5.4"}]}`))
 	}))
 	defer srv.Close()
 	connRepo := newFakeUpstreamConnRepo()
@@ -272,23 +267,47 @@ func TestAggregatorConnectionReuseFallsBackAcrossProbeModels(t *testing.T) {
 	svc := NewAggregatorConnectionReuseServiceWithRepo(connRepo, accountRepo, newFakeReuseRepo(), probeSvc)
 	outcome, err := svc.Reuse(context.Background(), ReuseAggregatorConnectionInput{
 		ConnectionID: agg.ID, Provider: GovernanceProviderOpenAI, Protocol: AccountProtocolOpenAI,
-		NormalizedEndpoint: "/v1/chat/completions", ClientRequestID: "fallback-1", CredentialVersion: 1,
+		NormalizedEndpoint: "/chatgpt/v1", ClientRequestID: "list-probe-1", CredentialVersion: 1,
 	})
 	require.NoError(t, err)
+	require.True(t, outcome.Activated)
+	require.Equal(t, "success", outcome.ProbeStatus)
 	acc, err := accountRepo.GetByID(context.Background(), outcome.AccountID)
 	require.NoError(t, err)
-	// Activated after the gpt-5 probe succeeded.
 	require.Equal(t, "active", acc.Status)
 	require.True(t, acc.Schedulable)
-	// Runtime-usable shape: legacy apikey type and derived base_url.
+	// Runtime-usable shape: legacy apikey type, platform constant, and the
+	// runtime base derived from the endpoint prefix.
 	require.Equal(t, AccountTypeAPIKey, acc.Type)
-	require.Equal(t, srv.URL, acc.Credentials["base_url"])
+	require.Equal(t, PlatformOpenAI, acc.Platform)
+	require.Equal(t, srv.URL+"/chatgpt", acc.Credentials["base_url"])
 	require.NotEmpty(t, acc.Credentials["api_key"])
-	// Every probe attempt persisted its own evidence row.
-	require.Len(t, probeRepo.inserted, 3, "two failed candidates plus the successful one")
-	statuses := []string{}
-	for _, p := range probeRepo.inserted {
-		statuses = append(statuses, p.Status)
-	}
-	require.Equal(t, []string{"failed", "failed", "success"}, statuses)
+	// Evidence carries the discovered model list.
+	require.Len(t, probeRepo.inserted, 1)
+	require.Equal(t, "success", probeRepo.inserted[0].Status)
+	require.Equal(t, 2, probeRepo.inserted[0].ResponseSummary["model_count"])
+}
+
+func TestAggregatorConnectionReuseModelListProbeFailureLeavesInactive(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(404)
+		w.Write([]byte(`{"error":"unsupported path"}`))
+	}))
+	defer srv.Close()
+	connRepo := newFakeUpstreamConnRepo()
+	agg := &UpstreamConnection{Kind: "aggregator", BaseURL: srv.URL, CredentialVersion: 1, Status: "active"}
+	_ = connRepo.Create(context.Background(), agg, "enc:agg")
+	accountRepo := newFakeReuseAccountRepo()
+	svc := NewAggregatorConnectionReuseServiceWithRepo(connRepo, accountRepo, newFakeReuseRepo(), NewAccountEndpointProbeService(&fakeProbeRepo{}, srv.Client()))
+	outcome, err := svc.Reuse(context.Background(), ReuseAggregatorConnectionInput{
+		ConnectionID: agg.ID, Provider: GovernanceProviderOpenAI, Protocol: AccountProtocolOpenAI,
+		NormalizedEndpoint: "/v1", ClientRequestID: "list-probe-2", CredentialVersion: 1,
+	})
+	require.NoError(t, err)
+	require.False(t, outcome.Activated)
+	require.Equal(t, "failed", outcome.ProbeStatus)
+	require.NotEmpty(t, outcome.ProbeDetail, "operator must see WHY activation did not happen")
+	acc, _ := accountRepo.GetByID(context.Background(), outcome.AccountID)
+	require.Equal(t, "disabled", acc.Status)
+	require.False(t, acc.Schedulable)
 }

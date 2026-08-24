@@ -38,19 +38,25 @@ func TestAccountEndpointProbeMinimalProtocolRequests(t *testing.T) {
 		provider GovernanceProvider
 		endpoint string
 	}{
-		{AccountProtocolAnthropic, GovernanceProviderAnthropic, "/v1/messages"},
-		{AccountProtocolOpenAI, GovernanceProviderOpenAI, "/v1/chat/completions"},
-		{AccountProtocolGemini, GovernanceProviderGemini, "/v1beta/models"},
+		{AccountProtocolAnthropic, GovernanceProviderAnthropic, "/v1"},
+		{AccountProtocolOpenAI, GovernanceProviderOpenAI, "/v1"},
+		{AccountProtocolGemini, GovernanceProviderGemini, "/v1beta"},
 	} {
-		// Mock server that returns success shape per protocol
+		// Mock server serves the free model list at {endpoint}/models
 		var handler http.HandlerFunc
 		switch tc.protocol {
-		case AccountProtocolAnthropic:
-			handler = func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(`{"id":"test","content":[{"type":"text","text":"hi"}]}`)) }
-		case AccountProtocolOpenAI:
-			handler = func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(`{"id":"chatcmpl-123","choices":[{"message":{"content":"hi"}}]}`)) }
 		case AccountProtocolGemini:
-			handler = func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"hi"}]}}]}`)) }
+			handler = func(w http.ResponseWriter, r *http.Request) {
+				require.Equal(t, http.MethodGet, r.Method)
+				require.True(t, strings.HasSuffix(r.URL.Path, "/models"), "path %s", r.URL.Path)
+				w.Write([]byte(`{"models":[{"name":"models/gemini-3.5-flash"}]}`))
+			}
+		default:
+			handler = func(w http.ResponseWriter, r *http.Request) {
+				require.Equal(t, http.MethodGet, r.Method)
+				require.True(t, strings.HasSuffix(r.URL.Path, "/models"), "path %s", r.URL.Path)
+				w.Write([]byte(`{"data":[{"id":"gpt-5.5","object":"model"}]}`))
+			}
 		}
 		srv := httptest.NewServer(handler)
 		repo := &fakeProbeRepo{}
@@ -61,6 +67,7 @@ func TestAccountEndpointProbeMinimalProtocolRequests(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, probe)
 		require.Equal(t, "success", probe.Status)
+		require.Equal(t, 1, probe.ResponseSummary["model_count"])
 		require.True(t, probe.ExpiresAt.After(probe.ProbedAt))
 		require.Equal(t, 24*time.Hour, probe.ExpiresAt.Sub(probe.ProbedAt))
 	}
@@ -76,7 +83,7 @@ func TestAccountEndpointProbeTimeout(t *testing.T) {
 	// Use client with short timeout via service's 10s bound; we simulate timeout by using context with 50ms
 	svc := NewAccountEndpointProbeService(repo, &http.Client{Timeout: 50 * time.Millisecond})
 	conn := &UpstreamConnection{ID: 1, Kind: "first_party", Provider: func() *GovernanceProvider { p := GovernanceProviderOpenAI; return &p }(), BaseURL: srv.URL, CredentialVersion: 1, Status: "active"}
-	probe, err := svc.Probe(context.Background(), 1, conn, GovernanceProviderOpenAI, AccountProtocolOpenAI, "/v1/chat/completions", "cred")
+	probe, err := svc.Probe(context.Background(), 1, conn, GovernanceProviderOpenAI, AccountProtocolOpenAI, "/v1", "cred")
 	require.NoError(t, err)
 	require.Equal(t, "failed", probe.Status)
 }
@@ -89,7 +96,7 @@ func TestAccountEndpointProbeMalformedSuccess(t *testing.T) {
 	repo := &fakeProbeRepo{}
 	svc := NewAccountEndpointProbeService(repo, srv.Client())
 	conn := &UpstreamConnection{ID: 1, Kind: "first_party", Provider: func() *GovernanceProvider { p := GovernanceProviderOpenAI; return &p }(), BaseURL: srv.URL, CredentialVersion: 1, Status: "active"}
-	probe, _ := svc.Probe(context.Background(), 1, conn, GovernanceProviderOpenAI, AccountProtocolOpenAI, "/v1/chat/completions", "cred")
+	probe, _ := svc.Probe(context.Background(), 1, conn, GovernanceProviderOpenAI, AccountProtocolOpenAI, "/v1", "cred")
 	require.Equal(t, "failed", probe.Status)
 	require.True(t, probe.ResponseSummary["malformed"] == true)
 }
@@ -103,7 +110,7 @@ func TestAccountEndpointProbe401Scope(t *testing.T) {
 	repo := &fakeProbeRepo{}
 	svc := NewAccountEndpointProbeService(repo, srv.Client())
 	conn := &UpstreamConnection{ID: 1, Kind: "first_party", Provider: func() *GovernanceProvider { p := GovernanceProviderOpenAI; return &p }(), BaseURL: srv.URL, CredentialVersion: 1, Status: "active"}
-	probe, _ := svc.Probe(context.Background(), 1, conn, GovernanceProviderOpenAI, AccountProtocolOpenAI, "/v1/chat/completions", "cred")
+	probe, _ := svc.Probe(context.Background(), 1, conn, GovernanceProviderOpenAI, AccountProtocolOpenAI, "/v1", "cred")
 	require.Equal(t, "failed", probe.Status)
 	require.NotEmpty(t, probe.ResponseSummary["failure_scope"])
 }
@@ -117,7 +124,7 @@ func TestAccountEndpointProbeModel404Scope(t *testing.T) {
 	repo := &fakeProbeRepo{}
 	svc := NewAccountEndpointProbeService(repo, srv.Client())
 	conn := &UpstreamConnection{ID: 1, Kind: "first_party", Provider: func() *GovernanceProvider { p := GovernanceProviderOpenAI; return &p }(), BaseURL: srv.URL, CredentialVersion: 1, Status: "active"}
-	probe, _ := svc.Probe(context.Background(), 1, conn, GovernanceProviderOpenAI, AccountProtocolOpenAI, "/v1/chat/completions", "cred")
+	probe, _ := svc.Probe(context.Background(), 1, conn, GovernanceProviderOpenAI, AccountProtocolOpenAI, "/v1", "cred")
 	require.Equal(t, "failed", probe.Status)
 	require.Equal(t, "model", probe.ResponseSummary["failure_scope"])
 }

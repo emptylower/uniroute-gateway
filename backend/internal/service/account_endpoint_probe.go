@@ -73,15 +73,12 @@ func (s *AccountEndpointProbeService) IsValid(ctx context.Context, accountID int
 // Ensure Implements EndpointProbeChecker
 var _ EndpointProbeChecker = (*AccountEndpointProbeService)(nil)
 
-// Probe performs minimal protocol-valid request with timeout, validates success shape, handles 401/403/404 scopes, and persists redacted evidence.
+// Probe verifies endpoint liveness + credential validity by fetching the FREE
+// model list (GET {base}{endpoint}/models). Account registration must never
+// spend upstream balance: a chat-completion probe bills the operator and fails
+// on zero-balance accounts even when everything is configured correctly. The
+// discovered model ids are persisted as redacted evidence.
 func (s *AccountEndpointProbeService) Probe(ctx context.Context, accountID int64, connection *UpstreamConnection, provider GovernanceProvider, protocol AccountProtocol, endpoint, credential string) (*AccountEndpointProbe, error) {
-	return s.ProbeWithModel(ctx, accountID, connection, provider, protocol, endpoint, credential, selectProbeModel(provider))
-}
-
-// ProbeWithModel runs the probe with an explicit representative model. The model
-// must come from selectProbeModels (service-side allowlist) — never from the
-// browser. Each attempt persists its own evidence row.
-func (s *AccountEndpointProbeService) ProbeWithModel(ctx context.Context, accountID int64, connection *UpstreamConnection, provider GovernanceProvider, protocol AccountProtocol, endpoint, credential, representativeModel string) (*AccountEndpointProbe, error) {
 	if connection == nil {
 		return nil, fmt.Errorf("connection is required")
 	}
@@ -92,11 +89,8 @@ func (s *AccountEndpointProbeService) ProbeWithModel(ctx context.Context, accoun
 	if err != nil {
 		return nil, err
 	}
-	if representativeModel == "" {
-		return nil, fmt.Errorf("no representative model for provider %s", provider)
-	}
-	// Build minimal protocol-valid request
-	req, err := s.buildProbeRequest(ctx, connection.BaseURL, normalizedEndpoint, protocol, representativeModel, credential)
+	// Build free model-list request
+	req, err := s.buildProbeRequest(ctx, connection.BaseURL, normalizedEndpoint, protocol, credential)
 	if err != nil {
 		return nil, err
 	}
@@ -109,7 +103,7 @@ func (s *AccountEndpointProbeService) ProbeWithModel(ctx context.Context, accoun
 		return s.persistProbe(ctx, accountID, connection, provider, protocol, normalizedEndpoint, "failed", map[string]any{"error": err.Error()})
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
 	truncated := string(body[:probeMin(512, len(body))])
 	truncated = scrubSecrets(truncated)
 	summary := map[string]any{"status": resp.StatusCode, "body_truncated": truncated}
@@ -117,7 +111,7 @@ func (s *AccountEndpointProbeService) ProbeWithModel(ctx context.Context, accoun
 	scopeDecider := NewUpstreamConnectionFailureScope()
 	switch resp.StatusCode {
 	case 401, 403:
-		decision := scopeDecider.Decide(resp.StatusCode, string(body), representativeModel, provider)
+		decision := scopeDecider.Decide(resp.StatusCode, string(body), "", provider)
 		summary["failure_scope"] = decision.Scope
 		summary["decision"] = decision.Scope
 		if s.connRepo != nil && decision.Scope == "connection" {
@@ -127,7 +121,7 @@ func (s *AccountEndpointProbeService) ProbeWithModel(ctx context.Context, accoun
 		}
 		return s.persistProbe(ctx, accountID, connection, provider, protocol, normalizedEndpoint, "failed", summary)
 	case 404:
-		decision := scopeDecider.Decide(resp.StatusCode, string(body), representativeModel, provider)
+		decision := scopeDecider.Decide(resp.StatusCode, string(body), "", provider)
 		summary["failure_scope"] = decision.Scope
 		summary["decision"] = decision.Scope
 		if s.connRepo != nil && decision.Scope == "connection" {
@@ -138,11 +132,17 @@ func (s *AccountEndpointProbeService) ProbeWithModel(ctx context.Context, accoun
 		return s.persistProbe(ctx, accountID, connection, provider, protocol, normalizedEndpoint, "failed", summary)
 	default:
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-			// Validate success shape minimal
-			if !isProbeSuccessBody(body, protocol) {
+			modelIDs := extractProbeModelIDs(body, protocol)
+			if len(modelIDs) == 0 {
 				summary["malformed"] = true
 				return s.persistProbe(ctx, accountID, connection, provider, protocol, normalizedEndpoint, "failed", summary)
 			}
+			summary["model_count"] = len(modelIDs)
+			const capIDs = 50
+			if len(modelIDs) > capIDs {
+				modelIDs = modelIDs[:capIDs]
+			}
+			summary["model_ids"] = modelIDs
 			return s.persistProbe(ctx, accountID, connection, provider, protocol, normalizedEndpoint, "success", summary)
 		}
 		return s.persistProbe(ctx, accountID, connection, provider, protocol, normalizedEndpoint, "failed", summary)
@@ -171,86 +171,60 @@ func (s *AccountEndpointProbeService) persistProbe(ctx context.Context, accountI
 	return probe, nil
 }
 
-func (s *AccountEndpointProbeService) buildProbeRequest(ctx context.Context, baseURL, endpoint string, protocol AccountProtocol, model, credential string) (*http.Request, error) {
-	full := strings.TrimRight(baseURL, "/") + endpoint
-	var body io.Reader
-	switch protocol {
-	case AccountProtocolAnthropic:
-		payload := map[string]any{"model": model, "max_tokens": 1, "messages": []map[string]any{{"role": "user", "content": "probe"}}}
-		b, _ := json.Marshal(payload)
-		body = strings.NewReader(string(b))
-	case AccountProtocolOpenAI:
-		payload := map[string]any{"model": model, "max_tokens": 1, "messages": []map[string]any{{"role": "user", "content": "probe"}}}
-		b, _ := json.Marshal(payload)
-		body = strings.NewReader(string(b))
-	case AccountProtocolGemini:
-		payload := map[string]any{"contents": []map[string]any{{"parts": []map[string]any{{"text": "probe"}}}}}
-		b, _ := json.Marshal(payload)
-		body = strings.NewReader(string(b))
-	default:
-		return nil, fmt.Errorf("unsupported protocol %s", protocol)
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, full, body)
+func (s *AccountEndpointProbeService) buildProbeRequest(ctx context.Context, baseURL, endpoint string, protocol AccountProtocol, credential string) (*http.Request, error) {
+	// Model list: openai/anthropic/grok-compatible surfaces serve
+	// {root}/models; gemini native serves {root}/models too (v1beta/models).
+	full := strings.TrimRight(baseURL, "/") + strings.TrimRight(endpoint, "/") + "/models"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, full, nil)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+credential)
-	req.Header.Set("Content-Type", "application/json")
-	// Minimal headers, bounded
+	if credential != "" {
+		req.Header.Set("Authorization", "Bearer "+credential)
+	}
+	if protocol == AccountProtocolAnthropic {
+		req.Header.Set("x-api-key", credential)
+		req.Header.Set("anthropic-version", "2023-06-01")
+	}
+	req.Header.Set("Accept", "application/json")
 	return req, nil
 }
 
-// selectProbeModels returns ordered representative-model candidates per provider,
-// newest first. Probing tries them in order and stops at the first success, so
-// aggregators that only carry newer models still activate. This is a
-// service-side allowlist — the browser can never supply the probe model.
-func selectProbeModels(provider GovernanceProvider) []string {
-	switch provider {
-	case GovernanceProviderAnthropic:
-		return []string{"claude-sonnet-5", "claude-opus-5", "claude-3-5-sonnet-latest"}
-	case GovernanceProviderOpenAI:
-		return []string{"gpt-5.5", "gpt-5.4", "gpt-5", "gpt-4o", "gpt-4o-mini"}
-	case GovernanceProviderGemini:
-		return []string{"gemini-3.5-flash", "gemini-3-pro-preview", "gemini-2.5-pro", "gemini-2.0-flash"}
-	case GovernanceProviderGrok:
-		return []string{"grok-4.6", "grok-4.5", "grok-3"}
-	default:
-		return nil
-	}
-}
-
-func selectProbeModel(provider GovernanceProvider) string {
-	models := selectProbeModels(provider)
-	if len(models) == 0 {
-		return ""
-	}
-	return models[0]
-}
-
-func isProbeSuccessBody(body []byte, protocol AccountProtocol) bool {
+// extractProbeModelIDs parses the model-list response into upstream model ids.
+// OpenAI-compatible shape: {"data":[{"id":...}]}; Gemini native:
+// {"models":[{"name":"models/gemini-..."}]}. Empty means the endpoint did not
+// actually serve a model list (wrong path, HTML error page, etc).
+func extractProbeModelIDs(body []byte, protocol AccountProtocol) []string {
 	if len(body) == 0 {
-		return false
+		return nil
 	}
 	var m map[string]any
 	if err := json.Unmarshal(body, &m); err != nil {
-		return false
+		return nil
 	}
-	// Very minimal: for openai/anthropic, check for id or content field
-	switch protocol {
-	case AccountProtocolOpenAI:
-		_, hasChoices := m["choices"]
-		_, hasID := m["id"]
-		return hasChoices || hasID
-	case AccountProtocolAnthropic:
-		_, hasContent := m["content"]
-		_, hasID := m["id"]
-		return hasContent || hasID
-	case AccountProtocolGemini:
-		_, hasCandidates := m["candidates"]
-		return hasCandidates
-	default:
-		return true
+	var items []any
+	if data, ok := m["data"].([]any); ok {
+		items = data
+	} else if models, ok := m["models"].([]any); ok {
+		items = models
+	} else {
+		return nil
 	}
+	ids := make([]string, 0, len(items))
+	for _, item := range items {
+		obj, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if id, ok := obj["id"].(string); ok && id != "" {
+			ids = append(ids, id)
+			continue
+		}
+		if name, ok := obj["name"].(string); ok && name != "" {
+			ids = append(ids, strings.TrimPrefix(name, "models/"))
+		}
+	}
+	return ids
 }
 
 func scrubSecrets(s string) string {
