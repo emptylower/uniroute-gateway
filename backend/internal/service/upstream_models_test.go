@@ -1041,3 +1041,20 @@ func TestPersistUpstreamModelDiscoveryGrokAliasesAreNotPreservedAsCustoms(t *tes
 		"grok-4.6": "grok-4.6",
 	}, store.mapping, "default-injected aliases (grok-latest, composer-2.5...) must not pollute the stored mapping")
 }
+
+func TestGovernanceProviderForPlatformCoversAllVendorPlatforms(t *testing.T) {
+	t.Parallel()
+	// Regression: the shadow classification input and the legacy dual-write
+	// share one idempotency key; a platform missing here made the handler pass
+	// provider=nil while persistence computed a real provider → digest collision
+	// → 500 on every sync of a vendor-platform account (prod: accounts 14/15/16).
+	for _, platform := range []string{
+		PlatformAnthropic, PlatformOpenAI, PlatformGemini, PlatformGrok,
+		PlatformDeepseek, PlatformGLM, PlatformKimi, PlatformQwen,
+		PlatformLongcat, PlatformBytedance, PlatformMinimax,
+	} {
+		p := GovernanceProviderForPlatform(platform)
+		require.NotNil(t, p, "platform %s", platform)
+		require.True(t, ValidGovernanceProvider(*p), "platform %s → provider %s", platform, *p)
+	}
+}

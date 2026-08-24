@@ -314,6 +314,14 @@ func (s *AccountTestService) PersistUpstreamModelDiscovery(ctx context.Context, 
 	return s.modelDiscoveryStore.UpdateModelDiscovery(ctx, account.ID, mapping, discovery)
 }
 
+// GovernanceProviderForPlatform maps an account routing platform to its
+// governed provider (nil for ungoverned platforms). Single source of truth —
+// the shadow classification input and the legacy discovery persistence MUST
+// agree on this value, otherwise their shared idempotency key collides.
+func GovernanceProviderForPlatform(platform string) *GovernanceProvider {
+	return governanceProviderForPlatform(platform)
+}
+
 func governanceProviderForPlatform(platform string) *GovernanceProvider {
 	switch platform {
 	case PlatformAnthropic, PlatformOpenAI, PlatformGemini, PlatformGrok,

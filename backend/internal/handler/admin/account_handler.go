@@ -2591,12 +2591,10 @@ func (h *AccountHandler) SyncUpstreamModels(c *gin.Context) {
 
 	// Shadow-mode governance path: classify, evaluate, persist without mutating runtime mapping/pricing/routes.
 	if h.modelGovernanceService != nil {
-		var provider *service.GovernanceProvider
-		switch account.Platform {
-		case service.PlatformAnthropic, service.PlatformOpenAI, service.PlatformGemini, service.PlatformGrok:
-			p := service.GovernanceProvider(account.Platform)
-			provider = &p
-		}
+		// Provider must come from the shared platform mapping: the shadow batch
+		// and the legacy dual-write share one idempotency key, and any provider
+		// divergence (e.g. vendor platforms) makes the digests collide.
+		provider := service.GovernanceProviderForPlatform(account.Platform)
 		seen := make(map[string]struct{}, len(discovery.EvidenceModelIDs))
 		deduped := make([]string, 0, len(discovery.EvidenceModelIDs))
 		for _, id := range discovery.EvidenceModelIDs {
