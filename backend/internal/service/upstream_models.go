@@ -251,6 +251,11 @@ func (s *AccountTestService) PersistUpstreamModelDiscovery(ctx context.Context, 
 		)
 	}
 	models := dedupeAndSortModelIDs(discoveryInput.Models)
+	// Family filter at rest: an account only publishes the model families its
+	// platform can actually serve (the anthropic surface provably 400s foreign
+	// families). Raw fetched IDs remain in the observation evidence above; the
+	// stored mapping is the schedulable truth.
+	schedulable := SchedulableModelsForPlatform(account.Platform, models)
 	if s.modelObservationRepository == nil {
 		return newUpstreamModelSyncConfigError("Model observation repository is not configured", nil)
 	}
@@ -274,17 +279,17 @@ func (s *AccountTestService) PersistUpstreamModelDiscovery(ctx context.Context, 
 	}); err != nil {
 		return fmt.Errorf("record upstream model observation: %w", err)
 	}
-	if len(models) == 0 {
+	if len(schedulable) == 0 {
 		return newUpstreamModelSyncUpstreamError("Upstream returned no supported models", nil)
 	}
 
-	mapping := make(map[string]any, len(models))
+	mapping := make(map[string]any, len(schedulable))
 	for requestedModel, upstreamModel := range account.GetModelMapping() {
 		if requestedModel != upstreamModel || strings.Contains(requestedModel, "*") {
 			mapping[requestedModel] = upstreamModel
 		}
 	}
-	for _, model := range models {
+	for _, model := range schedulable {
 		if _, customized := mapping[model]; !customized {
 			mapping[model] = model
 		}
@@ -293,6 +298,7 @@ func (s *AccountTestService) PersistUpstreamModelDiscovery(ctx context.Context, 
 	discovery := map[string]any{
 		"source":    "upstream",
 		"models":    models,
+		"schedulable_models": schedulable,
 		"synced_at": syncedAt.Format(time.RFC3339),
 	}
 	return s.modelDiscoveryStore.UpdateModelDiscovery(ctx, account.ID, mapping, discovery)

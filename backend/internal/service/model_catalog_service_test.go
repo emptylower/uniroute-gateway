@@ -308,3 +308,99 @@ func TestModelCatalogProviderGrokPlatformUnifiesToXAI(t *testing.T) {
 	require.Equal(t, "xai", modelCatalogProvider(PlatformGrok, "grok-composer-2.5-fast"))
 	require.Equal(t, "xai", modelCatalogProvider(PlatformGrok, "anything-else-on-grok-platform"))
 }
+
+func TestModelVendorFamilyRealAggregatorCatalog(t *testing.T) {
+	// Real shape: the 29-model list returned by api.aicodewith.ai /v1/models.
+	cases := map[string]string{
+		"claude-haiku-4-5-20251001": "anthropic", "claude-opus-4-6": "anthropic", "claude-opus-4-7": "anthropic",
+		"claude-opus-4-8": "anthropic", "claude-sonnet-4-6": "anthropic", "claude-sonnet-5": "anthropic",
+		"claude-opus-5": "anthropic", "claude-fable-5": "anthropic",
+		"gpt-5.4": "openai", "gpt-5.5": "openai", "gpt-5.6-sol": "openai", "gpt-5.6-terra": "openai",
+		"gpt-5.6-luna": "openai", "gpt-image-2": "openai", "gpt-image-2-beta": "openai",
+		"gemini-2.5-pro": "google", "gemini-3-pro-preview": "google", "gemini-3.1-pro-preview": "google",
+		"gemini-3.5-flash": "google",
+		"grok-4.5": "xai", "grok-4.6": "xai",
+		"glm-5.1": "glm", "glm-5.2": "glm",
+		"deepseek-v4-flash": "deepseek", "deepseek-v4-pro": "deepseek", "deepseek-v4-flash-vision-exp": "deepseek",
+		"kimi-k3": "kimi", "kimi-k2.7-code": "kimi", "kimi-k2.6": "kimi",
+	}
+	for model, vendor := range cases {
+		require.Equal(t, vendor, modelVendorFamily(model), "model %s", model)
+	}
+	require.Equal(t, "qwen", modelVendorFamily("qwen3.5-397b-a17b"))
+	require.Equal(t, "longcat", modelVendorFamily("longcat-flash-chat"))
+	require.Equal(t, "bytedance", modelVendorFamily("seed-oss-36b-instruct"))
+	require.Equal(t, "minimax", modelVendorFamily("minimax-m3"))
+	require.Equal(t, "minimax", modelVendorFamily("mimo-v2-flash"))
+	require.Equal(t, "", modelVendorFamily("my-custom-fine-tune"))
+	require.Equal(t, "openai", modelVendorFamily("GPT-5.5"))
+	require.Equal(t, "anthropic", modelVendorFamily("anthropic/claude-opus-5"))
+}
+
+func TestGroupServesModelFamilyIsolation(t *testing.T) {
+	require.True(t, groupServesModel(PlatformAnthropic, "claude-opus-5"))
+	require.False(t, groupServesModel(PlatformAnthropic, "glm-5"))
+	require.False(t, groupServesModel(PlatformOpenAI, "claude-opus-5"))
+	require.False(t, groupServesModel(PlatformOpenAI, "grok-4.5"), "grok has its own platform despite riding openai wire format")
+	require.True(t, groupServesModel(PlatformGrok, "grok-4.5"))
+	require.True(t, groupServesModel(PlatformGemini, "gemini-2.5-pro"))
+	require.True(t, groupServesModel(PlatformAnthropic, "my-custom-fine-tune"))
+	require.True(t, groupServesModel(PlatformComposite, "glm-5"))
+	require.True(t, groupServesModel(PlatformAntigravity, "claude-opus-5"))
+	require.True(t, groupServesModel(PlatformAntigravity, "gemini-2.5-pro"))
+	require.False(t, groupServesModel(PlatformAntigravity, "gpt-5.5"))
+}
+
+func TestQuoteChannelCostsFamilyIsolationRealAccountShapes(t *testing.T) {
+	// Real production shape: openai-platform account 8 carried the FULL 37-model
+	// aggregator catalog (claude/gemini/grok/glm...); anthropic account 4 too.
+	// The square must attribute each model to its true vendor and scope each
+	// group's channels to the families that platform actually serves.
+	now := time.Date(2026, time.August, 24, 15, 0, 0, 0, time.UTC)
+	pricing := &ModelPricing{InputPricePerToken: 1e-6, OutputPricePerToken: 2e-6}
+	mixedMapping := map[string]any{
+		"model_mapping": map[string]any{
+			"claude-opus-5": "claude-opus-5", "gpt-5.5": "gpt-5.5", "glm-5": "glm-5",
+			"grok-4.6": "grok-4.6", "gemini-2.5-pro": "gemini-2.5-pro",
+		},
+	}
+	access := &channelRoutingAccessFake{groups: []Group{
+		{ID: 1, Name: "openai订阅", Platform: PlatformOpenAI, RateMultiplier: 1, Status: StatusActive},
+		{ID: 2, Name: "aws云厂商渠道", Platform: PlatformAnthropic, RateMultiplier: 1, Status: StatusActive},
+	}}
+	selector := NewChannelRoutingSelector(&channelRoutingCatalogFake{}, access, channelRoutingConfig(true, 3))
+	svc := &ModelCatalogService{
+		channels: &channelRoutingCatalogFake{},
+		selector: selector,
+		pricing: &modelCatalogPricingFake{
+			byGroup:  map[int64]*ResolvedPricing{1: {Mode: BillingModeToken, BasePricing: pricing}, 2: {Mode: BillingModeToken, BasePricing: pricing}},
+			official: &ResolvedPricing{Mode: BillingModeToken, BasePricing: pricing},
+		},
+		accounts: &modelCatalogAccountFake{byGroup: map[int64][]Account{
+			1: {{ID: 8, Platform: PlatformOpenAI, Status: StatusActive, Schedulable: true, Credentials: mixedMapping}},
+			2: {{ID: 4, Platform: PlatformAnthropic, Status: StatusActive, Schedulable: true, Credentials: mixedMapping}},
+		}},
+		fx: &ExchangeRateService{bootstrapRate: 7.2, ttl: time.Minute, staleTTL: time.Hour, cache: make(map[string]ExchangeRateSnapshot)},
+	}
+
+	quote, err := svc.QuoteChannelCosts(context.Background(), 42, now, CurrencyUSD)
+	require.NoError(t, err)
+	require.Len(t, quote.Groups, 2)
+	byID := map[int64]RoutingGroupModelCosts{}
+	for _, g := range quote.Groups {
+		byID[g.GroupID] = g
+	}
+	openaiModels := []string{}
+	for _, m := range byID[1].Models {
+		openaiModels = append(openaiModels, m.ID)
+		require.Equal(t, "openai", m.Provider, "openai group must only carry openai-family models")
+	}
+	require.Equal(t, []string{"gpt-5.5"}, openaiModels, "claude/glm/grok/gemini entries are foreign to an openai group")
+
+	anthropicModels := []string{}
+	for _, m := range byID[2].Models {
+		anthropicModels = append(anthropicModels, m.ID)
+		require.Equal(t, "anthropic", m.Provider)
+	}
+	require.Equal(t, []string{"claude-opus-5"}, anthropicModels, "glm/grok/gemini can never be served by the anthropic surface")
+}

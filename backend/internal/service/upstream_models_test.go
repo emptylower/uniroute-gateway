@@ -313,9 +313,10 @@ func TestPersistDiscoveredModelsReplacesAutomaticSnapshotAndPreservesAliases(t *
 		"gpt-5.6-terra": "gpt-5.6-terra",
 	}, store.mapping)
 	require.Equal(t, map[string]any{
-		"source":    "upstream",
-		"models":    []string{"gpt-5.6-sol", "gpt-5.6-terra"},
-		"synced_at": "2026-08-17T12:30:00Z",
+		"source":             "upstream",
+		"models":             []string{"gpt-5.6-sol", "gpt-5.6-terra"},
+		"schedulable_models": []string{"gpt-5.6-sol", "gpt-5.6-terra"},
+		"synced_at":          "2026-08-17T12:30:00Z",
 	}, store.discovery)
 	require.Contains(t, account.GetModelMapping(), "old-auto", "persistence must not mutate the loaded account")
 }
@@ -929,4 +930,34 @@ func TestFetchUpstreamSupportedModelsDoesNotExposeUpstreamBody(t *testing.T) {
 	require.Equal(t, UpstreamModelSyncErrorUpstream, syncErr.Kind)
 	require.NotContains(t, syncErr.SafeMessage(), "SECRET_TOKEN")
 	require.Contains(t, syncErr.SafeMessage(), "HTTP 502")
+}
+
+func TestPersistUpstreamModelDiscoveryFiltersForeignFamiliesFromStoredMapping(t *testing.T) {
+	t.Parallel()
+
+	// Real shape: aggregator /v1/models returns a 37-model ALL-family catalog;
+	// an anthropic account must only store claude-* in its mapping while the
+	// observation evidence keeps the full raw truth.
+	store := &accountModelDiscoveryStoreStub{}
+	observations := &modelObservationRepositoryStub{batchID: "family-filter"}
+	svc := &AccountTestService{modelDiscoveryStore: store, modelObservationRepository: observations}
+
+	err := svc.PersistUpstreamModelDiscovery(context.Background(), &Account{
+		ID:       4,
+		Platform: PlatformAnthropic,
+	}, UpstreamModelDiscovery{
+		Models:           []string{"claude-opus-5", "glm-5", "gpt-5.5", "grok-4.6", "gemini-2.5-pro", "my-custom-fine-tune"},
+		EvidenceModelIDs: []string{"claude-opus-5", "glm-5", "gpt-5.5", "grok-4.6", "gemini-2.5-pro", "my-custom-fine-tune"},
+		RawSnapshot:      []byte(`{"payload":{"data":[]},"response":{"source":"http","status_code":200}}`),
+	}, time.Date(2026, time.August, 24, 15, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	require.Equal(t, int64(4), store.accountID)
+	require.Equal(t, map[string]any{
+		"claude-opus-5":        "claude-opus-5",
+		"my-custom-fine-tune":  "my-custom-fine-tune", // unknown vendor: legacy passthrough
+	}, store.mapping, "foreign families must not enter the schedulable mapping")
+	require.Len(t, observations.inputs, 1)
+	require.ElementsMatch(t,
+		[]string{"claude-opus-5", "glm-5", "gpt-5.5", "grok-4.6", "gemini-2.5-pro", "my-custom-fine-tune"},
+		observations.inputs[0].ModelIDs, "observation evidence keeps the full upstream truth")
 }

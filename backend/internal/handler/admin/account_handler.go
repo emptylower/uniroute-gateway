@@ -2668,7 +2668,7 @@ func (h *AccountHandler) SyncUpstreamModels(c *gin.Context) {
 			"unknown":          summary.Unknown,
 			"ignored":          summary.Ignored,
 			"total_fetched":    len(deduped),
-			"models":           deduped,
+			"models":           service.SchedulableModelsForPlatform(account.Platform, deduped),
 			"synced_at":        syncedAt.Format(time.RFC3339),
 		})
 		return

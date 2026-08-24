@@ -158,23 +158,109 @@ func modelCatalogKey(model string) string {
 	return strings.ToLower(strings.TrimSpace(model))
 }
 
-func modelCatalogProvider(platform, model string) string {
+// modelVendorFamily classifies a model id into its vendor family.
+// NOTE: the governance catalog's provider_hint is the RETAILER
+// (aihubmix/llmgateway/abacus...), not the vendor — vendor truth is derived
+// from the model family itself. Returns "" for unknown/custom models.
+func modelVendorFamily(model string) string {
 	name := modelCatalogKey(model)
+	if i := strings.LastIndex(name, "/"); i >= 0 {
+		name = name[i+1:] // openrouter-style "vendor/model" prefixes
+	}
 	switch {
-	case strings.HasPrefix(name, "gpt-"), strings.HasPrefix(name, "o1"), strings.HasPrefix(name, "o3"), strings.HasPrefix(name, "o4"):
-		return "openai"
 	case strings.HasPrefix(name, "claude-"):
 		return "anthropic"
+	case strings.HasPrefix(name, "gpt-"), strings.HasPrefix(name, "o1"),
+		strings.HasPrefix(name, "o3"), strings.HasPrefix(name, "o4"),
+		strings.HasPrefix(name, "codex-"), strings.HasPrefix(name, "chatgpt-"):
+		return "openai"
 	case strings.HasPrefix(name, "gemini-"):
 		return "google"
 	case strings.HasPrefix(name, "grok-"):
 		return "xai"
-	case platform == PlatformGrok:
+	case strings.HasPrefix(name, "deepseek-"):
+		return "deepseek"
+	case strings.HasPrefix(name, "glm-"):
+		return "glm"
+	case strings.HasPrefix(name, "kimi-"):
+		return "kimi"
+	case strings.HasPrefix(name, "qwen"):
+		return "qwen"
+	case strings.HasPrefix(name, "longcat-"):
+		return "longcat"
+	case strings.HasPrefix(name, "seed-"):
+		return "bytedance"
+	case strings.HasPrefix(name, "minimax-"), strings.HasPrefix(name, "mimo-"):
+		return "minimax"
+	default:
+		return ""
+	}
+}
+
+// vendorPlatform maps a vendor family to the routing platform that serves it.
+// Protocol is decoupled from platform: grok models ride the openai wire format
+// yet are served exclusively by grok-platform groups. Vendor families without
+// a registered platform (deepseek/glm/kimi/...) map to themselves — no groups
+// exist for them until an admin registers one.
+func vendorPlatform(vendor string) string {
+	switch vendor {
+	case "anthropic":
+		return PlatformAnthropic
+	case "openai":
+		return PlatformOpenAI
+	case "google":
+		return PlatformGemini
+	case "xai":
+		return PlatformGrok
+	default:
+		return vendor
+	}
+}
+
+// SchedulableModelsForPlatform filters a fetched upstream model list to the
+// families the platform can actually serve. Shared by sync persistence
+// (stored mapping) and the admin sync response (what was actually stored).
+func SchedulableModelsForPlatform(platform string, models []string) []string {
+	out := make([]string, 0, len(models))
+	for _, model := range models {
+		if groupServesModel(platform, model) {
+			out = append(out, model)
+		}
+	}
+	return out
+}
+
+// groupServesModel gates a group's catalog/scheduling surface to the model
+// families that platform can actually serve. Unknown/custom models (vendor "")
+// keep legacy passthrough so admin-curated mappings still work.
+func groupServesModel(groupPlatform, model string) bool {
+	if groupPlatform == "" || groupPlatform == PlatformComposite {
+		return true
+	}
+	vendor := modelVendorFamily(model)
+	if vendor == "" {
+		return true
+	}
+	switch groupPlatform {
+	case PlatformAntigravity:
+		p := vendorPlatform(vendor)
+		return p == PlatformAnthropic || p == PlatformGemini
+	case PlatformAnthropic, PlatformOpenAI, PlatformGemini, PlatformGrok:
+		return groupPlatform == vendorPlatform(vendor)
+	default:
+		return true // bespoke/future platforms: allow-all until registered as governed
+	}
+}
+
+func modelCatalogProvider(platform, model string) string {
+	if vendor := modelVendorFamily(model); vendor != "" {
+		return vendor
+	}
+	if platform == PlatformGrok {
 		// grok platform IS xAI — never emit "grok" as a separate vendor.
 		return "xai"
-	default:
-		return platform
 	}
+	return platform
 }
 
 func isCatalogTextModel(model string) bool {
@@ -409,6 +495,14 @@ func (s *ModelCatalogService) QuoteChannelCosts(ctx context.Context, userID int6
 				addCatalogModelSeed(seeds, seed.name, seed.platform)
 			}
 		}
+		// Family isolation: a group publishes only models its platform can
+		// actually serve (the anthropic surface 400s foreign families; grok
+		// models belong to grok-platform groups despite the openai wire format).
+		for key := range seeds {
+			if !groupServesModel(group.Platform, key) {
+				delete(seeds, key)
+			}
+		}
 
 		effectiveMultiplier := group.RateMultiplierForCurrency(quoteCurrency)
 		if override, ok := rates[group.ID]; ok {
@@ -560,6 +654,9 @@ func (s *ModelCatalogService) ListText(ctx context.Context, userID int64, now ti
 		if s.accounts != nil {
 			filtered := candidates[:0]
 			for _, candidate := range candidates {
+				if !groupServesModel(candidate.Group.Platform, seed.name) {
+					continue // family isolation: same rule as QuoteChannelCosts
+				}
 				accounts, accountErr := loadAccounts(candidate.Group.ID)
 				if accountErr != nil {
 					return nil, accountErr
