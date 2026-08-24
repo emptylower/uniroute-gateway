@@ -704,12 +704,9 @@ func dedupeModelIDsInOrder(modelIDs []string) []string {
 }
 
 func validGovernanceProvider(provider service.GovernanceProvider) bool {
-	switch provider {
-	case "anthropic", "openai", "gemini", "grok":
-		return true
-	default:
-		return false
-	}
+	// Single source of truth: service.ValidGovernanceProvider (vendor families
+	// deepseek/glm/kimi/qwen/longcat/bytedance/minimax are governed too).
+	return service.ValidGovernanceProvider(provider)
 }
 
 func lockModelObservations(ctx context.Context, tx *sql.Tx, accountID int64) (map[string]storedModelObservation, error) {
