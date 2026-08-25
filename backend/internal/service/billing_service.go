@@ -485,6 +485,14 @@ func (s *BillingService) initFallbackPricing() {
 	//       交叉验证：https://www.tmtpost.com/7961404.html (USD 口径)
 	// Moonshot V1 (¥2/¥5/¥10 多 tier) 公开页未直接标注 USD 价，本分支不覆盖，避免误计价。
 	// K2-0905 / K2-0711 官方页面未保留定价，不覆盖。
+	// K3 官方定价（https://platform.kimi.com/docs/pricing/chat-k3）：
+	// 输入 ¥20/百万（缓存未命中）、缓存命中 ¥2/百万、输出 ¥100/百万，按 k2.6 同口径 6.84 折算。
+	s.fallbackPrices["kimi-k3"] = &ModelPricing{
+		InputPricePerToken:     2.92e-6, // $2.92 per MTok (cache miss, ¥20)
+		OutputPricePerToken:    14.62e-6, // $14.62 per MTok (¥100)
+		CacheReadPricePerToken: 0.29e-6, // $0.29 per MTok (cache hit, ¥2)
+		SupportsCacheBreakdown: false,
+	}
 	s.fallbackPrices["kimi-k2.6"] = &ModelPricing{
 		InputPricePerToken:     0.95e-6, // $0.95 per MTok (cache miss)
 		OutputPricePerToken:    4e-6,    // $4.00 per MTok
@@ -707,6 +715,9 @@ func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
 	// K2-0905 / K2-0711 官方未保留定价，不进入 fallback。
 	if strings.Contains(modelLower, "kimi-for-coding") {
 		return s.fallbackPrices["kimi-for-coding"]
+	}
+	if strings.Contains(modelLower, "kimi-k3") || strings.Contains(modelLower, "kimi-k-3") {
+		return s.fallbackPrices["kimi-k3"]
 	}
 	if strings.Contains(modelLower, "kimi-k2.6") || strings.Contains(modelLower, "kimi-k2-6") {
 		return s.fallbackPrices["kimi-k2.6"]

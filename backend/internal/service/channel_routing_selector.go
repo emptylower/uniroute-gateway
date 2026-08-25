@@ -115,9 +115,14 @@ func ProvideChannelRoutingSelector(channels ChannelRoutingCatalog, apiKeys Chann
 	return selector
 }
 
+// ChannelRoutingFamilyForPlatform maps a group's platform to the compatibility
+// handler family that can serve it. OpenAI-wire vendor platforms (deepseek/glm/
+// kimi/qwen/longcat/bytedance/minimax) speak the OpenAI Chat Completions wire
+// format, so they belong to the OpenAI family — consistent with the route-level
+// dispatch in isOpenAIResponsesCompatibleGatewayPlatform.
 func ChannelRoutingFamilyForPlatform(platform string) string {
-	switch platform {
-	case PlatformOpenAI, PlatformGrok:
+	switch {
+	case platform == PlatformOpenAI || platform == PlatformGrok || IsOpenAIWireVendorPlatform(platform):
 		return ChannelRoutingFamilyOpenAI
 	default:
 		return ChannelRoutingFamilyAnthropic
@@ -136,9 +141,15 @@ func channelRoutingFamilyForModel(model string) (string, bool) {
 		return ChannelRoutingFamilyOpenAI, true
 	case strings.HasPrefix(name, "claude-"), strings.HasPrefix(name, "gemini-"):
 		return ChannelRoutingFamilyAnthropic, true
-	default:
-		return "", false
 	}
+	// Vendor families (deepseek/glm/kimi/qwen/longcat/bytedance/minimax) must
+	// not fall through to the price-based fallback: it would bind them to the
+	// Anthropic family (Anthropic Messages conversion), which vendor upstreams
+	// cannot serve. They ride the OpenAI wire format instead.
+	if vendor := modelVendorFamily(name); vendor != "" && IsOpenAIWireVendorPlatform(vendorPlatform(vendor)) {
+		return ChannelRoutingFamilyOpenAI, true
+	}
+	return "", false
 }
 
 func IsChannelRoutingEndpoint(path string) bool {

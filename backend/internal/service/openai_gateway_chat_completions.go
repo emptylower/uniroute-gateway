@@ -85,6 +85,15 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 		return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel)
 	}
 
+	// OpenAI-wire vendor 平台（deepseek/glm/kimi/qwen/longcat/bytedance/minimax）：
+	// 上游是厂商官方 API 的聚合透传，只有 /v1/chat/completions，没有 /v1/responses。
+	// 默认走 CC 原样透传，不做 CC→Responses 转换；仅当账号显式配置 force_responses
+	// （探测确认支持）时才落入下方 Responses 转换路径。
+	if IsOpenAIWireVendorPlatform(account.Platform) &&
+		openai_compat.ResolveResponsesSupport(account.Extra) != openai_compat.ResponsesSupportYes {
+		return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel)
+	}
+
 	// 入口分流：APIKey 账号 + 强制或已探测确认上游不支持 Responses，走 CC 直转。
 	// 自动模式下标记缺失（未探测）按"现状即证据"原则继续走下方原 Responses 转换路径。
 	if account.Type == AccountTypeAPIKey && !openai_compat.ShouldUseResponsesAPI(account.Extra) {

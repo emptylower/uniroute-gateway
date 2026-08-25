@@ -590,6 +590,13 @@ func TestGetFallbackPricing_FamilyMatching(t *testing.T) {
 
 		// ---- 月之暗面 Kimi ----
 		{
+			name:              "kimi k3 flagship official pricing",
+			model:             "kimi-k3",
+			expectedInput:     2.92e-6, // $2.92 per MTok（官方 ¥20/百万 按 6.84 折算）
+			expectedOutput:    floatPtr(14.62e-6),
+			expectedCacheRead: floatPtr(0.29e-6),
+		},
+		{
 			name:              "kimi k2.6 flagship",
 			model:             "kimi-k2.6",
 			expectedInput:     0.95e-6,

@@ -204,6 +204,52 @@ func TestChannelRoutingSelector_PreferredFamilyUsesRequestModelWithoutAnchor(t *
 	require.Equal(t, ChannelRoutingFamilyAnthropic, anthropicFamily)
 }
 
+func TestChannelRoutingFamilyForPlatform_VendorPlatformsUseOpenAIWire(t *testing.T) {
+	// OpenAI-wire vendor 平台（deepseek/glm/kimi/qwen/longcat/bytedance/minimax）
+	// 必须归入 OpenAI family，与路由层 isOpenAIResponsesCompatibleGatewayPlatform 保持一致；
+	// 否则 vendor 分组会被 Anthropic family 的 CC→Messages 转换链路错误接管。
+	for _, platform := range []string{
+		PlatformOpenAI, PlatformGrok,
+		PlatformDeepseek, PlatformGLM, PlatformKimi, PlatformQwen,
+		PlatformLongcat, PlatformBytedance, PlatformMinimax,
+	} {
+		require.Equal(t, ChannelRoutingFamilyOpenAI, ChannelRoutingFamilyForPlatform(platform), "platform=%s", platform)
+	}
+	for _, platform := range []string{PlatformAnthropic, PlatformGemini, PlatformAntigravity, PlatformComposite} {
+		require.Equal(t, ChannelRoutingFamilyAnthropic, ChannelRoutingFamilyForPlatform(platform), "platform=%s", platform)
+	}
+}
+
+func TestChannelRoutingFamilyForModel_VendorPrefixesUseOpenAIWire(t *testing.T) {
+	// vendor 模型前缀直连 OpenAI family，不得落入"最便宜 family"兜底抽签——
+	// 生产事故：deepseek/glm/kimi 模型被路由到 Anthropic 特价分组，候选截断后 502。
+	for model, want := range map[string]string{
+		"deepseek-v4-flash":            ChannelRoutingFamilyOpenAI,
+		"deepseek-v4-pro":              ChannelRoutingFamilyOpenAI,
+		"glm-5.2":                      ChannelRoutingFamilyOpenAI,
+		"kimi-k2.6":                    ChannelRoutingFamilyOpenAI,
+		"kimi-k3":                      ChannelRoutingFamilyOpenAI,
+		"qwen3-coder":                  ChannelRoutingFamilyOpenAI,
+		"longcat-flash-chat":           ChannelRoutingFamilyOpenAI,
+		"seed-oss-36b-instruct":        ChannelRoutingFamilyOpenAI,
+		"minimax-m3":                   ChannelRoutingFamilyOpenAI,
+		"mimo-v2-flash":                ChannelRoutingFamilyOpenAI,
+		"openrouter/deepseek-v4-flash": ChannelRoutingFamilyOpenAI,
+		"gpt-5.5":                      ChannelRoutingFamilyOpenAI,
+		"grok-4.6":                     ChannelRoutingFamilyOpenAI,
+		"claude-opus-5":                ChannelRoutingFamilyAnthropic,
+		"gemini-3.5-flash":             ChannelRoutingFamilyAnthropic,
+	} {
+		family, ok := channelRoutingFamilyForModel(model)
+		require.True(t, ok, "model=%s should resolve a family", model)
+		require.Equal(t, want, family, "model=%s", model)
+	}
+
+	// 未知模型名保持无家族判定（走现有兜底）
+	_, ok := channelRoutingFamilyForModel("company-custom-alias")
+	require.False(t, ok)
+}
+
 func TestChannelRoutingSelector_PreferredFamilyUsesLiveCandidatesForCustomAlias(t *testing.T) {
 	now := time.Date(2026, time.August, 11, 8, 0, 0, 0, time.Local)
 	anthropic := Group{ID: 1, Platform: PlatformAnthropic, RateMultiplier: 0.8, Status: StatusActive}
