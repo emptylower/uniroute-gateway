@@ -317,3 +317,25 @@ func TestHandleGrokAccountUpstreamError403ConfiguredUnmatchedKeepsDefaultCooldow
 	require.Equal(t, "grok access or entitlement denied", repo.lastTempUnschedReason)
 	require.True(t, svc.isOpenAIAccountRuntimeBlocked(account))
 }
+
+// OpenAI-wire vendor 平台（deepseek/glm/kimi/...）上游 402（聚合站余额不足）：
+// 必须走 grok 同款 30 分钟临时停调（自愈），而不是把账号硬置 error 需人工复活。
+func TestVendorPlatformPaymentRequiredTemporarilyUnschedules(t *testing.T) {
+	repo := &grokQuotaAccountRepo{}
+	svc := &OpenAIGatewayService{accountRepo: repo}
+	account := &Account{ID: 9901, Platform: PlatformDeepseek, Type: AccountTypeAPIKey}
+	body := []byte(`{"error":"余额不足，请充值"}`)
+
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	resp := &http.Response{StatusCode: http.StatusPaymentRequired, Header: http.Header{}}
+
+	failoverErr := svc.failoverOpenAIUpstreamHTTPError(context.Background(), c, account, resp, body, "余额不足", "deepseek-v4-flash")
+
+	require.Equal(t, 1, repo.tempUnschedCalls, "vendor 402 应临时停调而非硬置 error")
+	require.Equal(t, int64(9901), repo.lastTempUnschedID)
+	require.Contains(t, repo.lastTempUnschedReason, "payment required")
+	require.NotNil(t, failoverErr, "402 仍应向上返回 failover 以尝试下一候选")
+}

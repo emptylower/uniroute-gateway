@@ -118,7 +118,13 @@ func (s *OpenAIGatewayService) failoverOpenAIUpstreamHTTPError(
 	})
 	shouldDisable := false
 	if account.Platform != PlatformGrok {
-		shouldDisable = s.handleOpenAIAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, upstreamModel)
+		if IsOpenAIWireVendorPlatform(account.Platform) && resp.StatusCode == http.StatusPaymentRequired {
+			// vendor 上游 402（聚合站余额不足等）：硬置 error 会把单账号 vendor 分组
+			// 整体摘除且需人工复活；改为 grok 同款 30 分钟临时停调，到期自愈。
+			s.tempUnscheduleGrok(ctx, account, 30*time.Minute, "vendor upstream payment required")
+		} else {
+			shouldDisable = s.handleOpenAIAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, upstreamModel)
+		}
 	}
 	return newOpenAIUpstreamFailoverError(
 		resp.StatusCode,
