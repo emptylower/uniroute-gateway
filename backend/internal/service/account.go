@@ -264,7 +264,7 @@ func (a *Account) IsGrokOAuth() bool {
 }
 
 func (a *Account) IsOpenAICompatible() bool {
-	return a != nil && (a.Platform == PlatformOpenAI || a.Platform == PlatformGrok)
+	return a != nil && (a.Platform == PlatformOpenAI || a.Platform == PlatformGrok || IsOpenAIWireVendorPlatform(a.Platform))
 }
 
 // IsOpenAIWireVendorPlatform reports the vendor platforms that speak the

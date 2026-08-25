@@ -165,8 +165,11 @@ func wrapUsageRecordTaskContext(parent context.Context, task service.UsageRecord
 
 func openAICompatibleRequestPlatform(ctx context.Context, apiKey *service.APIKey) string {
 	if platform, ok := service.ResolvedTargetPlatformFromContext(ctx); ok {
-		if platform == service.PlatformGrok {
-			return service.PlatformGrok
+		// grok 与 OpenAI-wire vendor 平台按真实组平台透传，确保调度器能匹配到
+		// vendor 分组内的同平台账号（此前一律压成 openai，vendor 账号被
+		// platform_mismatch 全部排除）。
+		if platform == service.PlatformGrok || service.IsOpenAIWireVendorPlatform(platform) {
+			return platform
 		}
 		return service.PlatformOpenAI
 	}

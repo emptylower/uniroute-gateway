@@ -192,9 +192,12 @@ func (s *OpenAIGatewayService) SelectAccountForModelWithExclusions(ctx context.C
 
 // noAvailableOpenAISelectionError builds the standard "no account available" error
 // while preserving the compact-specific error when applicable.
+// normalizeOpenAICompatiblePlatform 归一化调度平台：grok 与 OpenAI-wire vendor
+// 平台（deepseek/glm/kimi/...）保持原值，使调度器按组内真实平台精确匹配账号；
+// 其余（openai 及历史空值）归一到 openai。
 func normalizeOpenAICompatiblePlatform(platform string) string {
-	if platform == PlatformGrok {
-		return PlatformGrok
+	if platform == PlatformGrok || IsOpenAIWireVendorPlatform(platform) {
+		return platform
 	}
 	return PlatformOpenAI
 }
