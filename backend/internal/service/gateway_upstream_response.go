@@ -303,6 +303,11 @@ func extractUpstreamErrorMessage(body []byte) string {
 		return d
 	}
 
+	// 聚合站风格：{"error":"余额不足..."}（error 为纯字符串而非对象）
+	if e := gjson.GetBytes(body, "error"); e.Type == gjson.String && strings.TrimSpace(e.String()) != "" {
+		return e.String()
+	}
+
 	// 兜底：尝试顶层 message
 	return gjson.GetBytes(body, "message").String()
 }
