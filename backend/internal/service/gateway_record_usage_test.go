@@ -805,3 +805,58 @@ func TestGatewayServiceRecordUsage_ReasoningEffortNil(t *testing.T) {
 	require.NotNil(t, usageRepo.lastLog)
 	require.Nil(t, usageRepo.lastLog.ReasoningEffort)
 }
+
+func TestGatewayServiceRecordUsage_UserCurrencyModeSettlesInCNY(t *testing.T) {
+	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+	svc := newGatewayRecordUsageServiceForTest(usageRepo, &openAIRecordUsageUserRepoStub{}, &openAIRecordUsageSubRepoStub{})
+	svc.cfg.Billing.Settlement.CurrencyMode = SettlementCurrencyModeUser
+	svc.cfg.Billing.ExchangeRate.BootstrapUSDToCNY = 7.2
+	svc.exchangeRates = NewExchangeRateService(svc.cfg)
+
+	err := svc.RecordUsage(context.Background(), &RecordUsageInput{
+		Result: &ForwardResult{
+			RequestID: "gateway_settle_cny",
+			Usage:     ClaudeUsage{InputTokens: 10, OutputTokens: 6},
+			Model:     "claude-sonnet-4",
+			Duration:  time.Second,
+		},
+		APIKey:  &APIKey{ID: 501, Quota: 100},
+		User:    &User{ID: 601, BillingCurrency: CurrencyCNY},
+		Account: &Account{ID: 701},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, usageRepo.lastLog)
+	require.Equal(t, CurrencyUSD, usageRepo.lastLog.SourceCurrency)
+	require.Equal(t, CurrencyCNY, usageRepo.lastLog.SettlementCurrency)
+	require.InDelta(t, 7.2, usageRepo.lastLog.ExchangeRate, 1e-12)
+	require.Equal(t, "bootstrap_config", usageRepo.lastLog.ExchangeRateSource)
+	require.Greater(t, usageRepo.lastLog.SourceCost, 0.0)
+	// actual = source × FX rate × effective multiplier (default rate multiplier 1.1)
+	require.InDelta(t, usageRepo.lastLog.SourceCost*7.2*1.1, usageRepo.lastLog.ActualCost, 1e-9)
+}
+
+func TestGatewayServiceRecordUsage_UserCurrencyModeWithoutRateFailsClosed(t *testing.T) {
+	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+	userRepo := &openAIRecordUsageUserRepoStub{}
+	svc := newGatewayRecordUsageServiceForTest(usageRepo, userRepo, &openAIRecordUsageSubRepoStub{})
+	svc.cfg.Billing.Settlement.CurrencyMode = SettlementCurrencyModeUser
+	// bootstrap 0 + no provider → no obtainable USD/CNY rate
+	svc.exchangeRates = NewExchangeRateService(&config.Config{})
+
+	err := svc.RecordUsage(context.Background(), &RecordUsageInput{
+		Result: &ForwardResult{
+			RequestID: "gateway_settle_no_rate",
+			Usage:     ClaudeUsage{InputTokens: 10, OutputTokens: 6},
+			Model:     "claude-sonnet-4",
+			Duration:  time.Second,
+		},
+		APIKey:  &APIKey{ID: 501, Quota: 100},
+		User:    &User{ID: 601, BillingCurrency: CurrencyCNY},
+		Account: &Account{ID: 701},
+	})
+
+	require.Error(t, err)
+	require.Equal(t, 0, usageRepo.calls)
+	require.Equal(t, 0, userRepo.deductCalls)
+}

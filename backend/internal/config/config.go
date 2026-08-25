@@ -843,9 +843,18 @@ type ProxyProbeConfig struct {
 	InsecureSkipVerify bool `mapstructure:"insecure_skip_verify"` // 已禁用：禁止跳过 TLS 证书验证
 }
 
+type SettlementConfig struct {
+	// CurrencyMode decouples settlement currency from RunMode.
+	// "" follows RunMode (legacy: simple pins USD, standard settles in the
+	// user's billing currency), "fixed_usd" always pins USD 1:1, "user"
+	// always settles in the user's billing currency via ExchangeRateService.
+	CurrencyMode string `mapstructure:"currency_mode"`
+}
+
 type BillingConfig struct {
 	CircuitBreaker CircuitBreakerConfig `mapstructure:"circuit_breaker"`
 	ExchangeRate   ExchangeRateConfig   `mapstructure:"exchange_rate"`
+	Settlement     SettlementConfig     `mapstructure:"settlement"`
 	// MinimumBalanceReserve is the conservative preflight floor for balance billing.
 	// Requests in balance mode are rejected when the cached balance is below this
 	// amount, even if it is still positive. Set to 0 to keep the legacy balance > 0 gate.
@@ -2014,6 +2023,7 @@ func setDefaults() {
 	viper.SetDefault("billing.exchange_rate.max_future_seconds", 300)
 	viper.SetDefault("billing.exchange_rate.cache_ttl_seconds", 900)
 	viper.SetDefault("billing.exchange_rate.stale_ttl_seconds", 86400)
+	viper.SetDefault("billing.settlement.currency_mode", "")
 	viper.SetDefault("billing.exchange_rate.timeout_seconds", 2)
 	viper.SetDefault("billing.user_platform_quota_cache_ttl_seconds", 86400)
 	viper.SetDefault("billing.user_platform_quota_sentinel_ttl_seconds", 3600)

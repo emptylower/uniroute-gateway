@@ -3,8 +3,11 @@ package service
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/config"
 )
 
 type billingSettlementContextKey struct{}
@@ -62,6 +65,69 @@ func pinnedBillingSettlementSnapshot(ctx context.Context, base, quote string) (E
 	snapshot, ok := holder.snapshots[base+"/"+quote]
 	holder.mu.RUnlock()
 	return snapshot, ok
+}
+
+const (
+	// SettlementCurrencyModeFixedUSD pins settlement to USD at rate 1.0,
+	// regardless of the user's billing currency.
+	SettlementCurrencyModeFixedUSD = "fixed_usd"
+	// SettlementCurrencyModeUser settles in the user's billing currency via
+	// the exchange-rate service.
+	SettlementCurrencyModeUser = "user"
+)
+
+const (
+	exchangeRateSourceSimpleMode = "simple_mode"
+	exchangeRateSourceFixedUSD   = "fixed_usd"
+)
+
+// NormalizeSettlementCurrencyMode trims/lowercases the configured mode and
+// maps unknown values to "" (follow RunMode, the legacy behavior).
+func NormalizeSettlementCurrencyMode(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case SettlementCurrencyModeFixedUSD:
+		return SettlementCurrencyModeFixedUSD
+	case SettlementCurrencyModeUser:
+		return SettlementCurrencyModeUser
+	default:
+		return ""
+	}
+}
+
+// ResolveCostSettlement decides the settlement currency strategy for a usage
+// record. Historically this was hard-wired to RunMode (simple => pinned USD);
+// billing.settlement.currency_mode decouples the two concerns: unset follows
+// RunMode (legacy behavior, zero change for existing deployments), fixed_usd
+// pins USD 1:1, user settles in the user's billing currency.
+func ResolveCostSettlement(ctx context.Context, cost *CostBreakdown, user *User, subscriptionBilling bool, fx *ExchangeRateService, cfg *config.Config) (CostSettlementSnapshot, error) {
+	mode := ""
+	runMode := ""
+	if cfg != nil {
+		mode = NormalizeSettlementCurrencyMode(cfg.Billing.Settlement.CurrencyMode)
+		runMode = cfg.RunMode
+	}
+	if mode == "" {
+		if runMode == config.RunModeSimple {
+			return fixedUSDSettlement(cost, exchangeRateSourceSimpleMode), nil
+		}
+		mode = SettlementCurrencyModeUser
+	}
+	if mode == SettlementCurrencyModeFixedUSD {
+		return fixedUSDSettlement(cost, exchangeRateSourceFixedUSD), nil
+	}
+	return settleUsageCost(ctx, cost, user, subscriptionBilling, fx)
+}
+
+func fixedUSDSettlement(cost *CostBreakdown, source string) CostSettlementSnapshot {
+	settlement := CostSettlementSnapshot{
+		SourceCurrency: CurrencyUSD, SettlementCurrency: CurrencyUSD,
+		ExchangeRate: 1, ExchangeRateSource: source, ExchangeRateAsOf: time.Now().UTC(),
+	}
+	if cost != nil {
+		settlement.SourceCost = cost.TotalCost
+		settlement.BaseCost = cost.TotalCost
+	}
+	return settlement
 }
 
 type CostSettlementSnapshot struct {

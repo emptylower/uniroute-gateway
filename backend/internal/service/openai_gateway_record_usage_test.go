@@ -2719,3 +2719,31 @@ func TestGatewayServiceCalculateRecordUsageCost_ChannelImageBillingNormalizesMis
 	require.InDelta(t, 0.44, cost.TotalCost, 1e-12)
 	require.InDelta(t, 0.44, cost.ActualCost, 1e-12)
 }
+
+func TestOpenAIGatewayServiceRecordUsage_UserCurrencyModeWithoutRateFailsClosed(t *testing.T) {
+	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+	billingRepo := &openAIRecordUsageBillingRepoStub{result: &UsageBillingApplyResult{Applied: true}}
+	userRepo := &openAIRecordUsageUserRepoStub{}
+	subRepo := &openAIRecordUsageSubRepoStub{}
+	svc := newOpenAIRecordUsageServiceWithBillingRepoForTest(usageRepo, billingRepo, userRepo, subRepo, nil)
+	svc.cfg.Billing.Settlement.CurrencyMode = SettlementCurrencyModeUser
+	// bootstrap 0 + no provider → no obtainable USD/CNY rate
+	svc.exchangeRates = NewExchangeRateService(&config.Config{})
+
+	err := svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{
+		Result: &OpenAIForwardResult{
+			RequestID: "openai_settle_no_rate",
+			Usage:     OpenAIUsage{InputTokens: 10, OutputTokens: 6},
+			Model:     "gpt-5.1",
+			Duration:  time.Second,
+		},
+		APIKey:  &APIKey{ID: 1000, Quota: 100, Group: &Group{RateMultiplier: 1}},
+		User:    &User{ID: 2000, BillingCurrency: CurrencyCNY},
+		Account: &Account{ID: 3000, Type: AccountTypeAPIKey},
+	})
+
+	require.Error(t, err)
+	require.Equal(t, 0, usageRepo.calls)
+	require.Equal(t, 0, billingRepo.calls)
+	require.Equal(t, 0, userRepo.deductCalls)
+}

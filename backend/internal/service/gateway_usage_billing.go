@@ -793,16 +793,9 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	if isSubscriptionBilling {
 		billingType = BillingTypeSubscription
 	}
-	settlement := CostSettlementSnapshot{
-		SourceCurrency: CurrencyUSD, SettlementCurrency: CurrencyUSD,
-		ExchangeRate: 1, ExchangeRateSource: "simple_mode", ExchangeRateAsOf: time.Now().UTC(),
-		SourceCost: cost.TotalCost, BaseCost: cost.TotalCost,
-	}
-	if s.cfg == nil || s.cfg.RunMode != config.RunModeSimple {
-		settlement, err = settleUsageCost(ctx, cost, user, isSubscriptionBilling, s.exchangeRates)
-		if err != nil {
-			return err
-		}
+	settlement, err := ResolveCostSettlement(ctx, cost, user, isSubscriptionBilling, s.exchangeRates, s.cfg)
+	if err != nil {
+		return err
 	}
 
 	// 创建使用日志
