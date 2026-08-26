@@ -279,7 +279,7 @@ func (b *CanonicalWalletBridge) ObserveSettlement(event CanonicalWalletSettlemen
 		event.OccurredAt = time.Now().UTC()
 	}
 	if event.EventID == "" {
-		event.EventID = CanonicalWalletSettlementEventID(event.GatewayRequestID, event.PlatformUserID, event.Currency, event.AmountUnits)
+		event.EventID = CanonicalWalletSettlementEventID(event.GatewayRequestID, event.PlatformUserID, event.Currency)
 	}
 	select {
 	case b.queue <- event:
@@ -298,7 +298,7 @@ func (b *CanonicalWalletBridge) CheckAndReserve(ctx context.Context, event Canon
 		return true, nil
 	}
 	if event.EventID == "" {
-		event.EventID = CanonicalWalletSettlementEventID(event.GatewayRequestID, event.PlatformUserID, event.Currency, event.AmountUnits)
+		event.EventID = CanonicalWalletSettlementEventID(event.GatewayRequestID, event.PlatformUserID, event.Currency)
 	}
 	_, err := b.ensureLease(ctx, event.PlatformUserID, event.Currency, event.AmountUnits)
 	if err == nil {
@@ -388,8 +388,8 @@ func (b *CanonicalWalletBridge) ensureLease(ctx context.Context, platformUserID,
 	return lease, nil
 }
 
-func CanonicalWalletSettlementEventID(requestID, platformUserID, currency string, amountMicros int64) string {
-	raw := fmt.Sprintf("v1|%s|%s|%s|%d", strings.TrimSpace(requestID), strings.TrimSpace(platformUserID), NormalizeUserBillingCurrency(currency), amountMicros)
+func CanonicalWalletSettlementEventID(requestID, platformUserID, currency string) string {
+	raw := fmt.Sprintf("v1|%s|%s|%s", strings.TrimSpace(requestID), strings.TrimSpace(platformUserID), NormalizeUserBillingCurrency(currency))
 	sum := sha256.Sum256([]byte(raw))
 	return "gwusg_" + hex.EncodeToString(sum[:])
 }

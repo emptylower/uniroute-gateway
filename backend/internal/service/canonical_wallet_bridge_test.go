@@ -110,10 +110,26 @@ func TestCanonicalWalletHTTPClientUsesShortScopedAssertion(t *testing.T) {
 	require.Equal(t, "lease-1", lease.LeaseID)
 }
 
-func TestCanonicalWalletSettlementEventIDIsStableAndSensitive(t *testing.T) {
-	a := CanonicalWalletSettlementEventID("req-1", "user-1", "CNY", 10)
-	require.Equal(t, a, CanonicalWalletSettlementEventID("req-1", "user-1", "CNY", 10))
-	require.NotEqual(t, a, CanonicalWalletSettlementEventID("req-1", "user-1", "CNY", 11))
+func TestCanonicalWalletSettlementEventIDIsStableAcrossRepricing(t *testing.T) {
+	// Same request, two different computed amounts (e.g. a pricing
+	// correction) — the amount must NOT be part of the identity. This test
+	// only proves the ID function's own stability (the corrected signature
+	// takes no amount argument at all — that's the fix). The full repricing
+	// scenario, INCLUDING the fixture's actual amount_units values, is
+	// proven end-to-end by Task 4's
+	// TestWalletOutboxRejectsConflictingPayloadUnderSameEventID, which loads
+	// them from the shared fixture file rather than hardcoding matching
+	// literals.
+	const requestID = "req_fixture_repricing_0001"
+	idA := CanonicalWalletSettlementEventID(requestID, "user-1", "CNY")
+	idB := CanonicalWalletSettlementEventID(requestID, "user-1", "CNY")
+	require.Equal(t, idA, idB, "identical request identity must always produce the identical event ID regardless of amount")
+
+	differentRequest := CanonicalWalletSettlementEventID("req-other", "user-1", "CNY")
+	require.NotEqual(t, idA, differentRequest, "different request identity must produce a different event ID")
+
+	differentUser := CanonicalWalletSettlementEventID(requestID, "user-2", "CNY")
+	require.NotEqual(t, idA, differentUser, "different platform_user_id must produce a different event ID")
 }
 
 func TestCanonicalWalletUnitsFromCNYMatchesUnitsPerCNYConstant(t *testing.T) {
