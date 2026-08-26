@@ -736,10 +736,18 @@ func canonicalWalletLeaseBindingIsStale(err error) bool {
 //
 // Falling back to a fresh lease when the bound one is gone or expired is
 // safe, and this is the reason: the reservation marker is written with
-// `SET KEYS[2] <lease_id> PX ttl` where ttl is the bound lease's own
-// remaining lifetime, so the marker's absolute deadline IS that lease's
-// expiry. A dead lease implies a dead marker — there is nothing left for a
-// fresh lease's reservation to collide with.
+// `SET KEYS[2] <lease_id>` followed by `PEXPIREAT KEYS[2] expires_at` — the
+// SAME absolute deadline the lease hash itself carries. Both keys expire
+// against one clock, Redis's, so a dead lease implies a dead marker and
+// there is nothing left for a fresh lease's reservation to collide with.
+//
+// This was not always true, and the history is worth keeping: the marker
+// used to get a RELATIVE `PX expires_at - gateway_now`, which Redis applied
+// at its own execution instant, so every marker outlived its lease by the
+// round-trip latency plus any clock offset. Inside that window this fallback
+// rebound the event to a fresh lease while the old marker still pointed at
+// the previous one, producing a cross-lease conflict on every retry until
+// the row dead-lettered. Do not reintroduce a relative TTL here.
 func (b *CanonicalWalletBridge) resolveOutboxEventLease(ctx context.Context, e CanonicalWalletOutboxEvent) (*CanonicalWalletLease, error) {
 	if e.LeaseID == "" {
 		return b.ensureLease(ctx, e.PlatformUserID, e.Currency, e.AmountUnits)

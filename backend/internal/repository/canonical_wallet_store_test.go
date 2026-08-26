@@ -352,24 +352,50 @@ func TestCanonicalWalletReservationMarkerCannotOutliveItsLease(t *testing.T) {
 	store := NewGatewayCache(client).(service.CanonicalWalletLeaseStore)
 
 	now := time.Now().UTC().Truncate(time.Millisecond)
+	// Freeze the store's clock. miniredis does not advance TTLs on its own,
+	// so without this the two PTTLs below are read against an unpinned clock
+	// and cannot be compared for equality — only for inequality, which is
+	// exactly the weakness this test used to have.
+	mr.SetTime(now)
+
 	lease := service.CanonicalWalletLease{
 		LeaseID: "lease-deadline", PlatformUserID: "shipany-user-deadline", Currency: "CNY",
 		BudgetUnits: 1_000, ExpiresAt: now.Add(time.Minute),
 	}
 	require.NoError(t, store.InstallCanonicalWalletLease(ctx, lease))
 
-	// A gateway clock five seconds behind the store's. Under the old relative
-	// ttl this handed the marker five extra seconds of life.
+	// A gateway clock five seconds behind the store's — the same shape as the
+	// round-trip latency and clock offset that used to hand the marker extra
+	// life under the old relative ttl.
 	skewed := now.Add(-5 * time.Second)
 	_, err := store.ReserveCanonicalWalletLease(ctx, lease.PlatformUserID, lease.LeaseID, "CNY", "event-deadline", 10, skewed)
 	require.NoError(t, err)
 
-	leasePTTL, err := client.PTTL(ctx, canonicalWalletLeaseKey(lease.PlatformUserID, lease.LeaseID)).Result()
+	leaseKey := canonicalWalletLeaseKey(lease.PlatformUserID, lease.LeaseID)
+	markerKey := canonicalWalletReservationKey(lease.PlatformUserID, "event-deadline")
+
+	leasePTTL, err := client.PTTL(ctx, leaseKey).Result()
 	require.NoError(t, err)
-	markerPTTL, err := client.PTTL(ctx, canonicalWalletReservationKey(lease.PlatformUserID, "event-deadline")).Result()
+	markerPTTL, err := client.PTTL(ctx, markerKey).Result()
 	require.NoError(t, err)
 
-	require.Positive(t, leasePTTL, "the lease must still be alive for this assertion to mean anything")
-	require.LessOrEqual(t, markerPTTL, leasePTTL,
-		"the reservation marker must never outlive the lease it belongs to: once the lease is gone the dispatcher rebinds the event to a fresh lease, and a surviving marker makes that reservation conflict until the row dead-letters")
+	// Positive, not merely "no greater than the lease": PTTL returns -1 for a
+	// key with no expiry and -2 for a missing one, and BOTH are less than any
+	// positive lease PTTL. Without this assertion, deleting the marker's
+	// PEXPIREAT entirely — leaving every marker persistent forever, the worst
+	// form of this bug — would pass.
+	require.Positive(t, leasePTTL, "the lease must still be alive for the rest of this test to mean anything")
+	require.Positive(t, markerPTTL, "the marker must carry an expiry at all: a persistent marker outlives every lease")
+	require.Equal(t, leasePTTL, markerPTTL,
+		"the marker and its lease must share one absolute deadline: once the lease is gone the dispatcher rebinds the event to a fresh lease, and a surviving marker makes that reservation conflict until the row dead-letters")
+
+	// And the property the dispatcher actually depends on, stated directly:
+	// past the lease's expiry, neither key is left behind.
+	mr.FastForward(61 * time.Second)
+	leaseExists, err := client.Exists(ctx, leaseKey).Result()
+	require.NoError(t, err)
+	markerExists, err := client.Exists(ctx, markerKey).Result()
+	require.NoError(t, err)
+	require.Equal(t, int64(0), leaseExists, "the lease must be gone once its deadline passes")
+	require.Equal(t, int64(0), markerExists, "a dead lease must imply a dead marker — this is the invariant resolveOutboxEventLease relies on when it releases a stale binding")
 }
