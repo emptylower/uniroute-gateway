@@ -1010,8 +1010,8 @@ canonical_wallet:
   secret: ""
   version: "v1"
   lease_ttl_seconds: 300
-  # Exact unit: 1 CNY = 1,000,000 micros; 1 ShipAny credit = 10,000 micros.
-  lease_budget_micros: 5000000
+  # Exact unit: 1 CNY = 100,000,000 units (cny-e8-v1); 1 ShipAny credit = 1,000,000 units.
+  lease_budget_units: 500000000
   request_timeout_ms: 300
   settlement_queue_size: 2048
   settlement_workers: 2

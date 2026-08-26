@@ -1577,7 +1577,7 @@ type CanonicalWalletConfig struct {
 	Secret              string `mapstructure:"secret"`
 	Version             string `mapstructure:"version"`
 	LeaseTTLSeconds     int    `mapstructure:"lease_ttl_seconds"`
-	LeaseBudgetMicros   int64  `mapstructure:"lease_budget_micros"`
+	LeaseBudgetUnits    int64  `mapstructure:"lease_budget_units"`
 	RequestTimeoutMS    int    `mapstructure:"request_timeout_ms"`
 	SettlementQueueSize int    `mapstructure:"settlement_queue_size"`
 	SettlementWorkers   int    `mapstructure:"settlement_workers"`
@@ -2036,7 +2036,7 @@ func setDefaults() {
 	viper.SetDefault("canonical_wallet.secret", "")
 	viper.SetDefault("canonical_wallet.version", "v1")
 	viper.SetDefault("canonical_wallet.lease_ttl_seconds", 300)
-	viper.SetDefault("canonical_wallet.lease_budget_micros", int64(5_000_000))
+	viper.SetDefault("canonical_wallet.lease_budget_units", int64(500_000_000))
 	viper.SetDefault("canonical_wallet.request_timeout_ms", 300)
 	viper.SetDefault("canonical_wallet.settlement_queue_size", 2048)
 	viper.SetDefault("canonical_wallet.settlement_workers", 2)
@@ -2673,9 +2673,6 @@ func (c *Config) Validate() error {
 	case "", CanonicalWalletModeDisabled:
 		c.CanonicalWallet.Mode = CanonicalWalletModeDisabled
 	case CanonicalWalletModeShadow, CanonicalWalletModeEnforce:
-		if c.CanonicalWallet.Mode == CanonicalWalletModeEnforce {
-			return fmt.Errorf("canonical_wallet enforce mode is unavailable until gateway admission is wired")
-		}
 		if err := ValidateAbsoluteHTTPURL(c.CanonicalWallet.ControlPlaneURL); err != nil {
 			return fmt.Errorf("canonical_wallet.control_plane_url invalid: %w", err)
 		}
@@ -2691,8 +2688,8 @@ func (c *Config) Validate() error {
 		if c.CanonicalWallet.LeaseTTLSeconds < 30 || c.CanonicalWallet.LeaseTTLSeconds > 3600 {
 			return fmt.Errorf("canonical_wallet.lease_ttl_seconds must be between 30 and 3600")
 		}
-		if c.CanonicalWallet.LeaseBudgetMicros <= 0 {
-			return fmt.Errorf("canonical_wallet.lease_budget_micros must be positive")
+		if c.CanonicalWallet.LeaseBudgetUnits <= 0 {
+			return fmt.Errorf("canonical_wallet.lease_budget_units must be positive")
 		}
 		if c.CanonicalWallet.RequestTimeoutMS < 50 || c.CanonicalWallet.RequestTimeoutMS > 5000 {
 			return fmt.Errorf("canonical_wallet.request_timeout_ms must be between 50 and 5000")

@@ -72,7 +72,9 @@ func (o *outboxStoreForTest) ClaimPendingOutboxEvents(ctx context.Context, worke
 	}
 	return events, rows.Err()
 }
-func (o *outboxStoreForTest) MarkOutboxEventDelivered(context.Context, int64, string) error { panic("not used by this test") }
+func (o *outboxStoreForTest) MarkOutboxEventDelivered(context.Context, int64, string) error {
+	panic("not used by this test")
+}
 func (o *outboxStoreForTest) MarkOutboxEventFailed(context.Context, int64, string, time.Time) error {
 	panic("not used by this test")
 }
@@ -91,7 +93,23 @@ func TestCanonicalWalletObserveSettlementIsDurableAndGetsDelivered(t *testing.T)
 	ctx := context.Background()
 	db := startCanonicalWalletTestPostgres(t, ctx)
 	outbox := &outboxStoreForTest{db: db}
-	bridge := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeEnforce), &canonicalWalletStoreStub{}, &canonicalWalletControlStub{}, db, outbox)
+	// Constructed as a direct struct literal, NOT via newCanonicalWalletBridge:
+	// the constructor always starts runOutboxDispatcher when outbox deps are
+	// non-nil, and this test's outboxStoreForTest panics on
+	// ReclaimStaleInFlightEvents/MarkOutboxEvent* — the dispatcher's first
+	// tick (RequestTimeoutMS after construction) would crash the whole test
+	// binary AFTER this test had already passed (found by actually running
+	// the full integration suite). This test verifies ObserveSettlement's
+	// synchronous durable insert only; the dispatcher is proven for real by
+	// repository's wallet_outbox_integration_test.go.
+	bridge := &CanonicalWalletBridge{
+		cfg:      canonicalWalletTestConfig(config.CanonicalWalletModeEnforce),
+		store:    &canonicalWalletStoreStub{},
+		control:  &canonicalWalletControlStub{},
+		outboxDB: db,
+		outbox:   outbox,
+		workerID: "test-worker-no-dispatcher",
+	}
 
 	event := CanonicalWalletSettlementEvent{
 		GatewayRequestID: "req-" + uuid.NewString(), PlatformUserID: "shipany-user-" + uuid.NewString(),

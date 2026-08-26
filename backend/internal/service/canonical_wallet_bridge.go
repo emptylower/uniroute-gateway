@@ -88,9 +88,9 @@ type CanonicalWalletSettlementEvent struct {
 }
 
 type CanonicalWalletSettlementResult struct {
-	Accepted               bool   `json:"accepted"`
-	Duplicate              bool   `json:"duplicate"`
-	CanonicalBalanceUnits  *int64 `json:"-"`
+	Accepted              bool   `json:"accepted"`
+	Duplicate             bool   `json:"duplicate"`
+	CanonicalBalanceUnits *int64 `json:"-"`
 }
 
 // CanonicalWalletOutboxEvent carries every field the outbox dispatcher needs
@@ -467,9 +467,10 @@ func (b *CanonicalWalletBridge) ObserveSettlement(event CanonicalWalletSettlemen
 	canonicalWalletBridgeMetrics.queued.Add(1)
 }
 
-// CheckAndReserve is the future request-preflight state machine. Shadow mode
+// CheckAndReserve is the real request-preflight state machine. Shadow mode
 // observes a denial but always allows the request; enforce mode fails closed.
-// It is intentionally not wired into gateway admission in this migration.
+// A retry carrying an explicit event.LeaseID resolves against THAT lease —
+// never silently against whatever lease is current now.
 func (b *CanonicalWalletBridge) CheckAndReserve(ctx context.Context, event CanonicalWalletSettlementEvent) (bool, error) {
 	if b == nil || b.cfg.Mode == config.CanonicalWalletModeDisabled {
 		return true, nil
@@ -477,17 +478,106 @@ func (b *CanonicalWalletBridge) CheckAndReserve(ctx context.Context, event Canon
 	if event.EventID == "" {
 		event.EventID = CanonicalWalletSettlementEventID(event.GatewayRequestID, event.PlatformUserID, event.Currency)
 	}
-	lease, err := b.ensureLease(ctx, event.PlatformUserID, event.Currency, event.AmountUnits)
-	if err == nil {
-		_, err = b.store.ReserveCanonicalWalletLease(ctx, event.PlatformUserID, lease.LeaseID, event.Currency, event.EventID, event.AmountUnits, time.Now().UTC())
+	var lease *CanonicalWalletLease
+	var err error
+	if strings.TrimSpace(event.LeaseID) != "" {
+		// A retry supplies the exact lease id it was reserved against the
+		// first time — resolve THAT lease specifically.
+		lease, err = b.store.GetCanonicalWalletLeaseByID(ctx, event.PlatformUserID, event.LeaseID)
+	} else {
+		lease, err = b.ensureLease(ctx, event.PlatformUserID, event.Currency, event.AmountUnits)
 	}
+	if err != nil {
+		if b.cfg.Mode == config.CanonicalWalletModeShadow {
+			return true, nil
+		}
+		return false, err
+	}
+	reservation, err := b.store.ReserveCanonicalWalletLease(ctx, event.PlatformUserID, lease.LeaseID, event.Currency, event.EventID, event.AmountUnits, time.Now().UTC())
 	if b.cfg.Mode == config.CanonicalWalletModeShadow {
 		return true, nil
 	}
 	if err != nil {
 		return false, err
 	}
+	event.LeaseID = reservation.Lease.LeaseID
 	return true, nil
+}
+
+// EnsureCanonicalWalletHeadroom atomically extends an already-admitted
+// request's reservation by additionalUnits — used when a streaming
+// response's actual cost is running ahead of the original pre-authorized
+// estimate. Returns false (never an error for the ordinary insufficient-
+// budget case) when the lease cannot cover the extension, so the caller's
+// only correct response is to stop generation, not retry.
+//
+// Each distinct top-up attempt gets its own identity via the caller-supplied
+// incrementing topUpSequence (a FIXED per-request event id would make a
+// second, larger top-up a silent duplicate of the first); a genuine retry
+// (same sequence, same amount) still hits the duplicate path. The caller
+// must pass the explicit leaseID it received from its own CheckAndReserve
+// call — resolving "whatever is current" would anchor the extension to the
+// wrong lease after a renewal. No production caller yet (Phase 3's in-stream
+// overrun work).
+func (b *CanonicalWalletBridge) EnsureCanonicalWalletHeadroom(ctx context.Context, gatewayRequestID, platformUserID, leaseID, currency string, topUpSequence int, additionalUnits int64) (bool, error) {
+	if b == nil || b.cfg.Mode == config.CanonicalWalletModeDisabled {
+		return true, nil
+	}
+	topUpEventID := CanonicalWalletSettlementEventID(
+		fmt.Sprintf("%s:topup:%d", gatewayRequestID, topUpSequence), platformUserID, currency,
+	)
+	_, err := b.store.ReserveCanonicalWalletLease(ctx, platformUserID, leaseID, currency, topUpEventID, additionalUnits, time.Now().UTC())
+	if b.cfg.Mode == config.CanonicalWalletModeShadow {
+		return true, nil
+	}
+	if errors.Is(err, ErrCanonicalWalletLeaseExhausted) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// Mode reports the bridge's configured mode — exported so callers outside
+// this package's own methods (billing_cache_service.go, same `service`
+// package but a different file) have a stable accessor rather than reaching
+// into the unexported cfg field directly.
+func (b *CanonicalWalletBridge) Mode() string {
+	if b == nil {
+		return config.CanonicalWalletModeDisabled
+	}
+	return b.cfg.Mode
+}
+
+// HasCanonicalWalletHeadroom is a READ-ONLY admission gate — it does not
+// reserve anything and does not touch the Redis reservation script at all.
+// It deliberately does NOT call ensureLease: ensureLease can synchronously
+// call ShipAny's AcquireLease and INSTALL a brand-new lease when none
+// exists or the current one is exhausted, and ShipAny's issueShadowLease
+// only reads available credits and inserts a lease row (it does not
+// atomically transfer credits into a leased ledger) — so repeatedly calling
+// such a check against an exhausted lease could mint overlapping shadow
+// budgets across concurrent requests. A pure GetCanonicalWalletLease read
+// never writes anything. If no lease has ever been issued for this user
+// (or Redis evicted it), there is no data to check and this method fails
+// CLOSED in enforce mode rather than fabricating one — pre-warming leases
+// at purchase/recharge/key-creation is later-phase work.
+func (b *CanonicalWalletBridge) HasCanonicalWalletHeadroom(ctx context.Context, platformUserID, currency string) (bool, error) {
+	if b == nil || b.cfg.Mode == config.CanonicalWalletModeDisabled {
+		return true, nil
+	}
+	lease, err := b.store.GetCanonicalWalletLease(ctx, platformUserID)
+	if b.cfg.Mode == config.CanonicalWalletModeShadow {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if lease.Currency != currency || !lease.ExpiresAt.After(time.Now().UTC()) {
+		return false, nil
+	}
+	return lease.RemainingUnits() > 0, nil
 }
 
 // runOutboxDispatcher polls for durably-persisted pending events instead of
@@ -594,20 +684,16 @@ func (b *CanonicalWalletBridge) ensureLease(ctx context.Context, platformUserID,
 	if err == nil && lease != nil && lease.Currency == currency && lease.ExpiresAt.After(time.Now().UTC()) && lease.RemainingUnits() >= amountUnits {
 		return lease, nil
 	}
-	// Interim until Task 5's config rename (LeaseBudgetMicros ->
-	// LeaseBudgetUnits with a rescaled default): the configured budget is
-	// still expressed in ShipAny's wire-level micros, so the comparison and
-	// the ceiling conversion happen in micros here.
-	requestedMicros := b.cfg.LeaseBudgetMicros
-	// Ceiling division: cny-e8-v1 units -> ShipAny's coarser wire-level
-	// micros scale (1 micro = 100 units). Rounding up means the lease
-	// ACTUALLY requested is never smaller than amountUnits demanded —
-	// at most 99 units (0.99 millionths of a CNY) of extra headroom is
-	// requested, never a shortfall.
-	amountMicros := (amountUnits + 99) / 100
-	if amountMicros > requestedMicros {
-		requestedMicros = amountMicros
+	// The configured budget is cny-e8-v1 units; convert to ShipAny's
+	// wire-level micros scale with ceiling division at this one boundary —
+	// rounding up means the lease ACTUALLY requested is never smaller than
+	// requestedUnits demanded: at most 99 units (0.99 millionths of a CNY)
+	// of extra headroom is requested, never a shortfall.
+	requestedUnits := b.cfg.LeaseBudgetUnits
+	if amountUnits > requestedUnits {
+		requestedUnits = amountUnits
 	}
+	requestedMicros := (requestedUnits + 99) / 100
 	lease, err = b.control.AcquireLease(ctx, canonicalWalletLeaseRequest{
 		PlatformUserID: platformUserID, Currency: currency, RequestedMicros: requestedMicros, RequestedTTLSeconds: b.cfg.LeaseTTLSeconds,
 	})

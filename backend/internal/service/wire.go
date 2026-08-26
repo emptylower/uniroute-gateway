@@ -655,8 +655,21 @@ func ProvideBillingCacheService(
 	rateRepo UserGroupRateRepository,
 	cfg *config.Config,
 	userPlatformQuotaRepo UserPlatformQuotaRepository,
+	db *sql.DB,
+	outbox CanonicalWalletOutboxStore,
 ) *BillingCacheService {
-	return NewBillingCacheService(cache, userRepo, subRepo, apiKeyRepo, rpmCache, rateRepo, cfg, userPlatformQuotaRepo)
+	// This process's THIRD *CanonicalWalletBridge instance (the two gateway
+	// services each build their own internally) — same construction pattern
+	// as the gateways: derive the lease store from the shared GatewayCache
+	// and only build the bridge when the cache actually implements it. All
+	// three talk to the SAME underlying Redis/Postgres state, so this is
+	// correctness-neutral; a shared-singleton refactor is a legitimate
+	// follow-up.
+	var canonicalWallet *CanonicalWalletBridge
+	if walletStore, ok := cache.(CanonicalWalletLeaseStore); ok {
+		canonicalWallet = NewCanonicalWalletBridge(cfg, walletStore, db, outbox)
+	}
+	return NewBillingCacheService(cache, userRepo, subRepo, apiKeyRepo, rpmCache, rateRepo, cfg, userPlatformQuotaRepo, canonicalWallet)
 }
 
 // ProvideAPIKeyService wires APIKeyService and connects rate-limit cache invalidation.

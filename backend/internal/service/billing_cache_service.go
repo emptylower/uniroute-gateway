@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -115,6 +116,7 @@ type BillingCacheService struct {
 	circuitBreaker        *billingCircuitBreaker
 	userPlatformQuotaRepo UserPlatformQuotaRepository
 	exchangeRates         *ExchangeRateService
+	canonicalWallet       *CanonicalWalletBridge
 
 	cacheWriteChan     chan cacheWriteTask
 	cacheWriteWg       sync.WaitGroup
@@ -140,6 +142,7 @@ func NewBillingCacheService(
 	userGroupRateRepo UserGroupRateRepository,
 	cfg *config.Config,
 	userPlatformQuotaRepo UserPlatformQuotaRepository,
+	canonicalWallet *CanonicalWalletBridge,
 ) *BillingCacheService {
 	svc := &BillingCacheService{
 		cache:                 cache,
@@ -151,6 +154,7 @@ func NewBillingCacheService(
 		cfg:                   cfg,
 		userPlatformQuotaRepo: userPlatformQuotaRepo,
 		exchangeRates:         NewExchangeRateService(cfg),
+		canonicalWallet:       canonicalWallet,
 	}
 	svc.circuitBreaker = newBillingCircuitBreaker(cfg.Billing.CircuitBreaker)
 	svc.startCacheWriteWorkers()
@@ -752,7 +756,7 @@ func (s *BillingCacheService) CheckBillingEligibility(ctx context.Context, user 
 			return err
 		}
 	} else {
-		if err := s.checkBalanceEligibility(ctx, user.ID); err != nil {
+		if err := s.checkBalanceEligibility(ctx, user); err != nil {
 			return err
 		}
 	}
@@ -889,13 +893,60 @@ func (s *BillingCacheService) balanceBelowEligibilityThreshold(balance float64) 
 }
 
 // checkBalanceEligibility 检查余额模式资格
-func (s *BillingCacheService) checkBalanceEligibility(ctx context.Context, userID int64) error {
-	balance, err := s.GetUserBalance(ctx, userID)
+// checkBalanceEligibility 检查余额模式资格。
+//
+// Under canonical_wallet enforce mode the check is a READ-ONLY headroom
+// gate against the user's current lease (no reservation — see
+// HasCanonicalWalletHeadroom's doc comment for why a reservation probe here
+// was found broken and scrapped); the single real, atomic debit per request
+// stays in ObserveSettlement's post-hoc settlement once actual usage is
+// known. The legacy float64 balance path below remains the admission
+// decision for every other mode.
+func (s *BillingCacheService) checkBalanceEligibility(ctx context.Context, user *User) error {
+	if s.canonicalWallet != nil && s.canonicalWallet.Mode() == config.CanonicalWalletModeEnforce {
+		platformUserID := strings.TrimSpace(user.PlatformUserID)
+		if platformUserID == "" {
+			// No canonical identity to check against — fail closed rather
+			// than silently bypassing the new mechanism for a user it
+			// can't identify.
+			return ErrBillingServiceUnavailable
+		}
+		currency := strings.ToUpper(strings.TrimSpace(user.BillingCurrency))
+		if currency != CurrencyCNY {
+			// cny-e8-v1 is CNY-only by definition; coercing here would
+			// silently admit a request under the WRONG currency's wallet.
+			canonicalWalletBridgeMetrics.unsupportedCurrency.Add(1)
+			return ErrBillingServiceUnavailable
+		}
+		allowed, err := s.canonicalWallet.HasCanonicalWalletHeadroom(ctx, platformUserID, currency)
+		if err != nil {
+			// An expected "lease exhausted" denial is NOT an infrastructure
+			// failure: it maps to ErrInsufficientBalance and must not trip
+			// the circuit breaker (enough exhausted users would otherwise
+			// open the circuit for EVERY user).
+			if errors.Is(err, ErrCanonicalWalletLeaseExhausted) {
+				return ErrInsufficientBalance
+			}
+			if s.circuitBreaker != nil {
+				s.circuitBreaker.OnFailure(err)
+			}
+			return ErrBillingServiceUnavailable.WithCause(err)
+		}
+		if s.circuitBreaker != nil {
+			s.circuitBreaker.OnSuccess()
+		}
+		if !allowed {
+			return ErrInsufficientBalance
+		}
+		return nil
+	}
+
+	balance, err := s.GetUserBalance(ctx, user.ID)
 	if err != nil {
 		if s.circuitBreaker != nil {
 			s.circuitBreaker.OnFailure(err)
 		}
-		logger.LegacyPrintf("service.billing_cache", "ALERT: billing balance check failed for user %d: %v", userID, err)
+		logger.LegacyPrintf("service.billing_cache", "ALERT: billing balance check failed for user %d: %v", user.ID, err)
 		return ErrBillingServiceUnavailable.WithCause(err)
 	}
 	if s.circuitBreaker != nil {

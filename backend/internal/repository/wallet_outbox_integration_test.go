@@ -34,7 +34,6 @@ func resetWalletOutboxTable(t *testing.T) {
 	require.NoError(t, err)
 }
 
-
 // What these two tests prove for real: the outbox's own INSERT genuinely
 // commits (or rolls back) as one atomic unit on the `*sql.Tx` it's given —
 // real, just smaller than a "same transaction as the capture" name would

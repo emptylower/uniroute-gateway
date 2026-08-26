@@ -66,7 +66,7 @@ func (s *canonicalWalletControlStub) SubmitSettlement(context.Context, Canonical
 func canonicalWalletTestConfig(mode string) config.CanonicalWalletConfig {
 	return config.CanonicalWalletConfig{
 		Mode: mode, ControlPlaneURL: "https://control.example.test", Issuer: "gateway", Audience: "control",
-		Secret: strings.Repeat("w", 32), Version: "v1", LeaseTTLSeconds: 300, LeaseBudgetMicros: 1000,
+		Secret: strings.Repeat("w", 32), Version: "v1", LeaseTTLSeconds: 300, LeaseBudgetUnits: 100000,
 		RequestTimeoutMS: 300, SettlementQueueSize: 1, SettlementWorkers: 1, EnforceReady: mode == config.CanonicalWalletModeEnforce,
 	}
 }

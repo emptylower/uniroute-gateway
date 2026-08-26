@@ -45,7 +45,7 @@ func TestCheckBillingEligibility_RejectsBalanceBelowMinimumReserve(t *testing.T)
 	cache := &balanceEligibilityCacheStub{balance: 0.005}
 	cfg := &config.Config{}
 	cfg.Billing.MinimumBalanceReserve = 0.01
-	svc := NewBillingCacheService(cache, nil, nil, nil, nil, nil, cfg, nil)
+	svc := NewBillingCacheService(cache, nil, nil, nil, nil, nil, cfg, nil, nil)
 	t.Cleanup(svc.Stop)
 
 	err := svc.CheckBillingEligibility(context.Background(), &User{ID: 1}, nil, nil, nil, "")
@@ -56,7 +56,7 @@ func TestCheckBillingEligibility_AllowsBalanceAtMinimumReserve(t *testing.T) {
 	cache := &balanceEligibilityCacheStub{balance: 0.01}
 	cfg := &config.Config{}
 	cfg.Billing.MinimumBalanceReserve = 0.01
-	svc := NewBillingCacheService(cache, nil, nil, nil, nil, nil, cfg, nil)
+	svc := NewBillingCacheService(cache, nil, nil, nil, nil, nil, cfg, nil, nil)
 	t.Cleanup(svc.Stop)
 
 	err := svc.CheckBillingEligibility(context.Background(), &User{ID: 1}, nil, nil, nil, "")
@@ -66,7 +66,7 @@ func TestCheckBillingEligibility_AllowsBalanceAtMinimumReserve(t *testing.T) {
 func TestCheckBillingEligibilityRejectsBeforeUpstreamWhenFXUnavailable(t *testing.T) {
 	cache := &balanceEligibilityCacheStub{balance: 10}
 	cfg := &config.Config{}
-	svc := NewBillingCacheService(cache, nil, nil, nil, nil, nil, cfg, nil)
+	svc := NewBillingCacheService(cache, nil, nil, nil, nil, nil, cfg, nil, nil)
 	t.Cleanup(svc.Stop)
 	svc.exchangeRates = &ExchangeRateService{cache: make(map[string]ExchangeRateSnapshot)}
 
@@ -81,7 +81,7 @@ func TestCheckBillingEligibilityRejectsBeforeUpstreamWhenFXUnavailable(t *testin
 func TestCheckBillingEligibilityPinsFXSnapshotForAsyncBilling(t *testing.T) {
 	cache := &balanceEligibilityCacheStub{balance: 10}
 	cfg := &config.Config{}
-	svc := NewBillingCacheService(cache, nil, nil, nil, nil, nil, cfg, nil)
+	svc := NewBillingCacheService(cache, nil, nil, nil, nil, nil, cfg, nil, nil)
 	t.Cleanup(svc.Stop)
 	provider := &exchangeRateProviderFake{snapshot: ExchangeRateSnapshot{
 		Rate: 7.2, Source: "test_live", AsOf: time.Now().UTC(),
@@ -106,7 +106,7 @@ func TestSyncBalanceCacheAfterDeduction_InvalidatesExhaustedBalance(t *testing.T
 	userRepo := &balanceLoadUserRepoStub{balance: -0.25}
 	cfg := &config.Config{}
 	cfg.Billing.MinimumBalanceReserve = 0.01
-	svc := NewBillingCacheService(cache, userRepo, nil, nil, nil, nil, cfg, nil)
+	svc := NewBillingCacheService(cache, userRepo, nil, nil, nil, nil, cfg, nil, nil)
 	t.Cleanup(svc.Stop)
 
 	newBalance := -0.25
@@ -130,7 +130,7 @@ func TestSyncBalanceCacheAfterDeduction_InvalidatesWhenBalanceFallsBelowReserve(
 	cache := &balanceEligibilityCacheStub{balance: 0.50}
 	cfg := &config.Config{}
 	cfg.Billing.MinimumBalanceReserve = 0.01
-	svc := NewBillingCacheService(cache, nil, nil, nil, nil, nil, cfg, nil)
+	svc := NewBillingCacheService(cache, nil, nil, nil, nil, nil, cfg, nil, nil)
 	t.Cleanup(svc.Stop)
 
 	newBalance := 0.005
@@ -147,7 +147,7 @@ func TestSyncBalanceCacheAfterDeduction_QueuesDeductWhenBalanceStillEligible(t *
 	cache := &balanceEligibilityCacheStub{balance: 1}
 	cfg := &config.Config{}
 	cfg.Billing.MinimumBalanceReserve = 0.01
-	svc := NewBillingCacheService(cache, nil, nil, nil, nil, nil, cfg, nil)
+	svc := NewBillingCacheService(cache, nil, nil, nil, nil, nil, cfg, nil, nil)
 	t.Cleanup(svc.Stop)
 
 	newBalance := 0.75

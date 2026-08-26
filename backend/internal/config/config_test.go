@@ -150,17 +150,14 @@ func TestLoadCanonicalWalletShadowRequiresIndependentSecret(t *testing.T) {
 	require.ErrorContains(t, err, "must be independent")
 }
 
-func TestLoadCanonicalWalletEnforceIsRejectedUntilAdmissionIsWired(t *testing.T) {
+func TestLoadCanonicalWalletEnforceIsAcceptedNowThatAdmissionIsWired(t *testing.T) {
 	resetViperWithJWTSecret(t)
 	t.Setenv("CANONICAL_WALLET_MODE", CanonicalWalletModeEnforce)
 	t.Setenv("CANONICAL_WALLET_CONTROL_PLANE_URL", "https://control.example.test")
 	t.Setenv("CANONICAL_WALLET_SECRET", strings.Repeat("w", 32))
-	_, err := Load()
-	require.ErrorContains(t, err, "enforce mode is unavailable")
-
-	t.Setenv("CANONICAL_WALLET_ENFORCE_READY", "true")
-	_, err = Load()
-	require.ErrorContains(t, err, "enforce mode is unavailable")
+	cfg, err := Load()
+	require.NoError(t, err, "enforce mode must be a valid configuration now that the headroom check is actually wired into billing eligibility")
+	require.Equal(t, CanonicalWalletModeEnforce, cfg.CanonicalWallet.Mode)
 }
 
 func TestLoadDataPlaneOnlyRequiresPlatformIdentity(t *testing.T) {

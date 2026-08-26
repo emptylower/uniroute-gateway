@@ -277,7 +277,7 @@ func TestRecordCyberPolicyIfMarked_DetachesConcreteEvidenceFromBaselineQuotaPlat
 			cfg.Default.RateMultiplier = 1
 			usageRepo := &cyberDetachedUsageRepoStub{created: make(chan *service.UsageLog, 1)}
 			quotaRepo := &cyberDetachedPlatformQuotaRepoStub{}
-			billingCache := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, quotaRepo)
+			billingCache := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, quotaRepo, nil)
 			t.Cleanup(billingCache.Stop)
 			gateway := service.NewOpenAIGatewayService(
 				nil, usageRepo, nil, &cyberDetachedUserRepoStub{}, nil, nil, nil, cfg, nil, nil,
