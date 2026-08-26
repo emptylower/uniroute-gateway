@@ -28,6 +28,7 @@ var (
 	ErrCanonicalWalletLeaseExhausted        = errors.New("canonical wallet lease is exhausted")
 	ErrCanonicalWalletLeaseCurrencyMismatch = errors.New("canonical wallet lease currency mismatch")
 	ErrCanonicalWalletReservationConflict   = errors.New("canonical wallet event was reserved against a different lease")
+	ErrCanonicalWalletOutboxClaimLost       = errors.New("canonical wallet outbox row is no longer claimed by this dispatcher")
 )
 
 const (
@@ -122,6 +123,19 @@ type CanonicalWalletOutboxStore interface {
 	ClaimPendingOutboxEvents(ctx context.Context, workerID string, limit int) ([]CanonicalWalletOutboxEvent, error)
 	MarkOutboxEventDelivered(ctx context.Context, id int64, workerID string) error
 	MarkOutboxEventFailed(ctx context.Context, id int64, workerID string, simulatedNow time.Time) error
+	// BindOutboxEventLease durably records WHICH lease this event's
+	// reservation is anchored to, and is called BEFORE the reservation is
+	// attempted — never after. The Redis reservation marker is keyed by
+	// (platform_user_id, event_id) and remembers the lease the reservation
+	// landed on; a retry that reserves against "whatever lease is current
+	// now" gets a cross-lease conflict on every attempt until the row
+	// dead-letters. Binding first means no crash point can leave a
+	// reservation whose lease the row does not know. Passing an empty
+	// leaseID releases the binding — only legal when the reservation itself
+	// proved no marker exists on that lease (see deliverOutboxEvent).
+	// Ownership-guarded like every other resolve method: a row this worker
+	// no longer owns returns ErrCanonicalWalletOutboxClaimLost.
+	BindOutboxEventLease(ctx context.Context, id int64, workerID, leaseID string) error
 	// ReclaimStaleInFlightEvents recovers rows a crashed dispatcher left
 	// stuck in_flight.
 	ReclaimStaleInFlightEvents(ctx context.Context, staleAfter time.Duration) (int64, error)
@@ -351,6 +365,7 @@ type canonicalWalletMetrics struct {
 	queueDropped        atomic.Int64
 	leaseAcquireOK      atomic.Int64
 	leaseAcquireError   atomic.Int64
+	leaseBindError      atomic.Int64
 	reserveOK           atomic.Int64
 	reserveError        atomic.Int64
 	settlementOK        atomic.Int64
@@ -367,6 +382,7 @@ func CanonicalWalletBridgeStats() map[string]int64 {
 	return map[string]int64{
 		"queued": m.queued.Load(), "queue_dropped": m.queueDropped.Load(),
 		"lease_acquire_ok": m.leaseAcquireOK.Load(), "lease_acquire_error": m.leaseAcquireError.Load(),
+		"lease_bind_error": m.leaseBindError.Load(),
 		"reserve_ok": m.reserveOK.Load(), "reserve_error": m.reserveError.Load(),
 		"settlement_ok": m.settlementOK.Load(), "settlement_error": m.settlementError.Load(),
 		"balance_mismatch": m.balanceMismatch.Load(), "missing_platform_user_id": m.missingPlatformID.Load(),
@@ -639,14 +655,43 @@ func (b *CanonicalWalletBridge) deliverOutboxEvent(ctx context.Context, e Canoni
 		LeaseID: e.LeaseID, Currency: e.Currency, AmountUnits: e.AmountUnits,
 		LocalBalanceAfterUnits: e.LocalBalanceAfterUnits, OccurredAt: e.OccurredAt,
 	}
-	lease, err := b.ensureLease(ctx, event.PlatformUserID, event.Currency, event.AmountUnits)
+	lease, err := b.resolveOutboxEventLease(ctx, e)
 	if err != nil {
 		canonicalWalletBridgeMetrics.leaseAcquireError.Add(1)
 		_ = b.outbox.MarkOutboxEventFailed(ctx, e.ID, b.workerID, time.Now().UTC())
 		return
 	}
+	// Bind BEFORE reserving, never after. Binding afterwards leaves a crash
+	// window in which a reservation exists in Redis but the row does not know
+	// its lease — the retry then reserves against a different lease and
+	// conflicts forever.
+	if lease.LeaseID != e.LeaseID {
+		if err := b.outbox.BindOutboxEventLease(ctx, e.ID, b.workerID, lease.LeaseID); err != nil {
+			if errors.Is(err, ErrCanonicalWalletOutboxClaimLost) {
+				// Another dispatcher owns this row now and will deliver it.
+				// Not this call's outcome to report — do NOT mark it failed,
+				// that would burn an attempt against the other worker's claim.
+				return
+			}
+			canonicalWalletBridgeMetrics.leaseBindError.Add(1)
+			_ = b.outbox.MarkOutboxEventFailed(ctx, e.ID, b.workerID, time.Now().UTC())
+			return
+		}
+	}
 	reservation, err := b.store.ReserveCanonicalWalletLease(ctx, event.PlatformUserID, lease.LeaseID, event.Currency, event.EventID, event.AmountUnits, time.Now().UTC())
 	if err != nil {
+		// A bound lease that has since gone missing, expired, or run out can
+		// never accept this event. The Lua script checks the event's
+		// reservation marker BEFORE it checks the budget, so any of these
+		// three outcomes proves no marker for this event exists on that lease
+		// — releasing the binding is safe, and lets the next attempt acquire
+		// a fresh lease instead of retrying the same dead one until
+		// dead-letter. A cross-lease CONFLICT is deliberately excluded: there
+		// the marker does exist and points elsewhere, so the binding must
+		// stand.
+		if canonicalWalletLeaseBindingIsStale(err) {
+			_ = b.outbox.BindOutboxEventLease(ctx, e.ID, b.workerID, "")
+		}
 		canonicalWalletBridgeMetrics.reserveError.Add(1)
 		_ = b.outbox.MarkOutboxEventFailed(ctx, e.ID, b.workerID, time.Now().UTC())
 		return
@@ -674,6 +719,45 @@ func (b *CanonicalWalletBridge) deliverOutboxEvent(ctx context.Context, e Canoni
 	}
 	slog.Info("canonical wallet settlement delivered", attrs...)
 	_ = b.outbox.MarkOutboxEventDelivered(ctx, e.ID, b.workerID)
+}
+
+// canonicalWalletLeaseBindingIsStale reports whether a reservation failure
+// against an ALREADY-BOUND lease proves that binding can never succeed, so it
+// must be released. See the call site for why conflict is excluded.
+func canonicalWalletLeaseBindingIsStale(err error) bool {
+	return errors.Is(err, ErrCanonicalWalletLeaseMissing) ||
+		errors.Is(err, ErrCanonicalWalletLeaseExpired) ||
+		errors.Is(err, ErrCanonicalWalletLeaseExhausted)
+}
+
+// resolveOutboxEventLease returns the lease this event's reservation must be
+// anchored to: the lease already bound to the row if it is still usable,
+// otherwise a freshly acquired one.
+//
+// Falling back to a fresh lease when the bound one is gone or expired is
+// safe, and this is the reason: the reservation marker is written with
+// `SET KEYS[2] <lease_id> PX ttl` where ttl is the bound lease's own
+// remaining lifetime, so the marker's absolute deadline IS that lease's
+// expiry. A dead lease implies a dead marker — there is nothing left for a
+// fresh lease's reservation to collide with.
+func (b *CanonicalWalletBridge) resolveOutboxEventLease(ctx context.Context, e CanonicalWalletOutboxEvent) (*CanonicalWalletLease, error) {
+	if e.LeaseID == "" {
+		return b.ensureLease(ctx, e.PlatformUserID, e.Currency, e.AmountUnits)
+	}
+	if b.store == nil {
+		return nil, errors.New("canonical wallet bridge dependencies unavailable")
+	}
+	lease, err := b.store.GetCanonicalWalletLeaseByID(ctx, e.PlatformUserID, e.LeaseID)
+	if err != nil && !errors.Is(err, ErrCanonicalWalletLeaseMissing) {
+		// A real transport failure — do NOT silently fall through to a new
+		// lease, or a Redis blip would rebind an event that still has a live
+		// marker somewhere.
+		return nil, err
+	}
+	if err == nil && lease != nil && lease.Currency == e.Currency && lease.ExpiresAt.After(time.Now().UTC()) {
+		return lease, nil
+	}
+	return b.ensureLease(ctx, e.PlatformUserID, e.Currency, e.AmountUnits)
 }
 
 func (b *CanonicalWalletBridge) ensureLease(ctx context.Context, platformUserID, currency string, amountUnits int64) (*CanonicalWalletLease, error) {

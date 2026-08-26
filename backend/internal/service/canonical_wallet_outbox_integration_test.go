@@ -81,9 +81,11 @@ func (o *outboxStoreForTest) ClaimPendingOutboxEvents(ctx context.Context, worke
 	var events []CanonicalWalletOutboxEvent
 	for rows.Next() {
 		var e CanonicalWalletOutboxEvent
-		if err := rows.Scan(&e.ID, &e.EventID, &e.PlatformUserID, &e.LeaseID, &e.GatewayRequestID, &e.Currency, &e.AmountUnits, &e.LocalBalanceAfterUnits, &e.OccurredAt, &e.AttemptCount); err != nil {
+		var leaseID sql.NullString
+		if err := rows.Scan(&e.ID, &e.EventID, &e.PlatformUserID, &leaseID, &e.GatewayRequestID, &e.Currency, &e.AmountUnits, &e.LocalBalanceAfterUnits, &e.OccurredAt, &e.AttemptCount); err != nil {
 			return nil, err
 		}
+		e.LeaseID = leaseID.String
 		events = append(events, e)
 	}
 	return events, rows.Err()
@@ -119,6 +121,23 @@ func (o *outboxStoreForTest) MarkOutboxEventFailed(ctx context.Context, id int64
 	next := simulatedNow.Add(time.Duration(1<<uint(attempts)) * time.Second)
 	_, err = o.db.ExecContext(ctx, `UPDATE wallet_settlement_outbox SET status = 'pending', next_attempt_at = $3, claimed_at = NULL, claimed_by = NULL WHERE id = $1 AND status = 'in_flight' AND claimed_by = $2`, id, workerID, next)
 	return err
+}
+
+func (o *outboxStoreForTest) BindOutboxEventLease(ctx context.Context, id int64, workerID, leaseID string) error {
+	result, err := o.db.ExecContext(ctx, `
+		UPDATE wallet_settlement_outbox SET lease_id = $3
+		WHERE id = $1 AND status = 'in_flight' AND claimed_by = $2`, id, workerID, leaseID)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return ErrCanonicalWalletOutboxClaimLost
+	}
+	return nil
 }
 
 func (o *outboxStoreForTest) OutboxEventStatus(ctx context.Context, id int64) (string, error) {

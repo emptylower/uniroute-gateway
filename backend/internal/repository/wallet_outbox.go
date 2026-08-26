@@ -222,6 +222,39 @@ func (s *WalletOutboxStore) MarkOutboxEventFailed(ctx context.Context, id int64,
 	return err
 }
 
+// BindOutboxEventLease durably anchors this event to `leaseID` before its
+// reservation is attempted, so a retry reserves against the SAME lease the
+// first attempt used rather than whatever lease is current at retry time.
+//
+// It deliberately does NOT touch payload_hash. That hash is the identity
+// check for a RE-INSERT of the same event_id under a different payload
+// (repricing), and it was computed from the event exactly as
+// ObserveSettlement saw it. Rewriting it here would make a genuine repricing
+// conflict compare equal and silently double-settle — the precise failure
+// Task 2 exists to prevent.
+//
+// Ownership-guarded like every other resolve method. Unlike them, a zero-row
+// result is reported rather than swallowed: the caller is about to reserve
+// real money against this lease, and must not do so on a row it no longer
+// owns.
+func (s *WalletOutboxStore) BindOutboxEventLease(ctx context.Context, id int64, workerID, leaseID string) error {
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE wallet_settlement_outbox SET lease_id = $3
+		WHERE id = $1 AND status = 'in_flight' AND claimed_by = $2`, id, workerID, leaseID)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return service.ErrCanonicalWalletOutboxClaimLost
+	}
+	return nil
+}
+
+
 func (s *WalletOutboxStore) OutboxEventStatus(ctx context.Context, id int64) (string, error) {
 	var status string
 	err := s.db.QueryRowContext(ctx, `SELECT status FROM wallet_settlement_outbox WHERE id = $1`, id).Scan(&status)
