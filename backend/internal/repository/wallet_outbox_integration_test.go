@@ -4,6 +4,7 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"os"
 	"testing"
@@ -326,4 +327,47 @@ func findWalletOutboxFixtureCase(t *testing.T, fixture walletOutboxFixture, name
 	}
 	t.Fatalf("wallet lease fixture is missing case %q", name)
 	return walletOutboxFixtureCase{}
+}
+
+func TestProvideWalletOutboxStoreSatisfiesServiceInterface(t *testing.T) {
+	var provided service.CanonicalWalletOutboxStore = ProvideWalletOutboxStore(integrationDB)
+	require.NotNil(t, provided)
+	// The Wire-facing provider returns the interface; the concrete type
+	// keeps OutboxEventStatus for test observability.
+	concrete := NewWalletOutboxStore(integrationDB)
+	_, err := concrete.OutboxEventStatus(ctx0(), 1)
+	require.Error(t, err, "a missing row surfaces sql.ErrNoRows rather than a fake status")
+}
+
+func ctx0() context.Context { return context.Background() }
+
+func TestWalletOutboxInsertSurfacesRealTransactionErrors(t *testing.T) {
+	ctx := context.Background()
+	store := NewWalletOutboxStore(integrationDB)
+	event := service.CanonicalWalletSettlementEvent{
+		EventID: "gwusg_" + uuid.NewString(), GatewayRequestID: "req-" + uuid.NewString(),
+		PlatformUserID: "shipany-user-" + uuid.NewString(), Currency: "CNY",
+		AmountUnits: 1, OccurredAt: time.Now().UTC(),
+	}
+	tx, err := integrationDB.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	// Abort the transaction with a real PostgreSQL error first — after that,
+	// even SAVEPOINT execution fails, and InsertOutboxEventTx must surface
+	// that error instead of pretending the insert succeeded or conflicted.
+	_, abortErr := tx.ExecContext(ctx, `SELECT 1/0`)
+	require.Error(t, abortErr, "division by zero aborts a real Postgres transaction")
+	err = store.InsertOutboxEventTx(ctx, tx, event)
+	require.Error(t, err)
+	_ = tx.Rollback()
+
+	// A dead database surfaces real driver errors from claim and reclaim
+	// paths too — no silent empty batches over a broken connection.
+	deadDB, err := sql.Open("postgres", "host=127.0.0.1 port=1 user=postgres dbname=postgres sslmode=disable connect_timeout=1")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = deadDB.Close() })
+	dead := NewWalletOutboxStore(deadDB)
+	_, err = dead.ClaimPendingOutboxEvents(ctx, testWalletOutboxWorkerID, 10)
+	require.Error(t, err)
+	_, err = dead.ReclaimStaleInFlightEvents(ctx, time.Minute)
+	require.Error(t, err)
 }

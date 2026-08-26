@@ -417,3 +417,210 @@ func (c *gatewayCacheAdapterForTest) ReserveCanonicalWalletLease(ctx context.Con
 }
 
 var _ CanonicalWalletLeaseStore = (*gatewayCacheAdapterForTest)(nil)
+
+// TestCanonicalWalletShadowModeAllowsEverythingAndReservesNothing proves the
+// disclosed Phase-2 contract for shadow mode across ALL THREE entry points:
+// every request is allowed regardless of lease state, and nothing is ever
+// reserved (the Redis keyspace stays empty of reservation markers).
+func TestCanonicalWalletShadowModeAllowsEverythingAndReservesNothing(t *testing.T) {
+	ctx := context.Background()
+	rdb := startCanonicalWalletTestRedis(t, ctx)
+	store := &gatewayCacheAdapterForTest{rdb: rdb}
+	platformUserID := "shipany-user-" + uuid.NewString()
+	leaseID := "lease-" + uuid.NewString()
+
+	bridge := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeShadow), store, &canonicalWalletControlStub{}, nil, nil)
+
+	allowed, err := bridge.CheckAndReserve(ctx, CanonicalWalletSettlementEvent{
+		GatewayRequestID: "req-shadow", PlatformUserID: platformUserID, Currency: "CNY", AmountUnits: 999_000000,
+	})
+	require.NoError(t, err)
+	require.True(t, allowed, "shadow mode observes but always allows")
+
+	topUpOK, err := bridge.EnsureCanonicalWalletHeadroom(ctx, "req-shadow", platformUserID, leaseID, "CNY", 1, 500_000000)
+	require.NoError(t, err)
+	require.True(t, topUpOK, "shadow mode never blocks a mid-stream top-up")
+
+	headroom, err := bridge.HasCanonicalWalletHeadroom(ctx, platformUserID, "CNY")
+	require.NoError(t, err)
+	require.True(t, headroom, "shadow mode never denies admission")
+
+	keys, err := rdb.Keys(ctx, "*canonical_wallet*").Result()
+	require.NoError(t, err)
+	require.Empty(t, keys, "shadow mode must not write any lease or reservation state")
+}
+
+func TestHasCanonicalWalletHeadroomEnforceBranches(t *testing.T) {
+	ctx := context.Background()
+	rdb := startCanonicalWalletTestRedis(t, ctx)
+	store := &gatewayCacheAdapterForTest{rdb: rdb}
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	bridge := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeEnforce), store, &canonicalWalletControlStub{}, nil, nil)
+
+	// No lease ever issued: fail closed with the store's own error.
+	_, err := bridge.HasCanonicalWalletHeadroom(ctx, "shipany-user-"+uuid.NewString(), "CNY")
+	require.ErrorIs(t, err, ErrCanonicalWalletLeaseMissing, "with no lease data there is nothing to admit against — fail closed in enforce mode")
+
+	// NOTE on the `!lease.ExpiresAt.After(now)` branch: it is
+	// defense-in-depth against Redis/Go clock skew and is NOT reachable
+	// through the public store contract — Install writes ONE expires_at_ms
+	// used both as the hash field and as PEXPIREAT, so a lease whose embedded
+	// expiry has passed is already evicted by Redis itself (a past PEXPIREAT
+	// deletes the key immediately). Fabricating contradictory raw state to
+	// cover that line would be a coverage-only assertion.
+
+	// Fully consumed current lease: not admissible.
+	exhaustedUser := "shipany-user-" + uuid.NewString()
+	require.NoError(t, store.InstallCanonicalWalletLease(ctx, CanonicalWalletLease{
+		LeaseID: "lease-exh-" + uuid.NewString(), PlatformUserID: exhaustedUser, Currency: "CNY",
+		BudgetUnits: 1, ConsumedUnits: 1, ExpiresAt: now.Add(time.Minute),
+	}))
+	allowed, err := bridge.HasCanonicalWalletHeadroom(ctx, exhaustedUser, "CNY")
+	require.NoError(t, err)
+	require.False(t, allowed, "a fully consumed lease has zero remaining units")
+
+	// Real headroom: admissible.
+	fundedUser := "shipany-user-" + uuid.NewString()
+	require.NoError(t, store.InstallCanonicalWalletLease(ctx, CanonicalWalletLease{
+		LeaseID: "lease-ok-" + uuid.NewString(), PlatformUserID: fundedUser, Currency: "CNY",
+		BudgetUnits: 100_000000, ConsumedUnits: 0, ExpiresAt: now.Add(time.Minute),
+	}))
+	allowed, err = bridge.HasCanonicalWalletHeadroom(ctx, fundedUser, "CNY")
+	require.NoError(t, err)
+	require.True(t, allowed)
+}
+
+func TestCheckBalanceEligibilityEnforceBranchesThroughRealEntryPoints(t *testing.T) {
+	ctx := context.Background()
+	rdb := startCanonicalWalletTestRedis(t, ctx)
+	store := &gatewayCacheAdapterForTest{rdb: rdb}
+
+	newBridge := func() *CanonicalWalletBridge {
+		return newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeEnforce), store, &canonicalWalletControlStub{}, nil, nil)
+	}
+	cfg := &config.Config{RunMode: config.RunModeStandard}
+	cfg.Billing.ExchangeRate.BootstrapUSDToCNY = 7.2
+
+	// Blank platform identity under enforce mode fails closed.
+	blankIDUser := &User{ID: 11, PlatformUserID: "   ", BillingCurrency: "CNY"}
+	blankIDSvc := NewBillingCacheService(&billingCacheWorkerStub{}, nil, nil, nil, nil, nil, cfg, nil, newBridge())
+	err := blankIDSvc.CheckBillingEligibility(ctx, blankIDUser, nil, nil, nil, "")
+	require.ErrorIs(t, err, ErrBillingServiceUnavailable, "a user without a canonical identity cannot be checked — fail closed")
+
+	// A non-CNY billing currency is rejected outright, never coerced to CNY.
+	usdUser := &User{ID: 12, PlatformUserID: "shipany-user-" + uuid.NewString(), BillingCurrency: "USD"}
+	usdSvc := NewBillingCacheService(&billingCacheWorkerStub{}, nil, nil, nil, nil, nil, cfg, nil, newBridge())
+	err = usdSvc.CheckBillingEligibility(ctx, usdUser, nil, nil, nil, "")
+	require.ErrorIs(t, err, ErrBillingServiceUnavailable, "cny-e8-v1 is CNY-only — reject instead of admitting under the wrong wallet")
+
+	// A user with NO lease data: genuine store error -> infrastructure
+	// classification (not the ordinary insufficient-balance denial).
+	noLeaseSvc := NewBillingCacheService(&billingCacheWorkerStub{}, nil, nil, nil, nil, nil, cfg, nil, newBridge())
+	noLeaseUser := &User{ID: 13, PlatformUserID: "shipany-user-" + uuid.NewString(), BillingCurrency: "CNY"}
+	err = noLeaseSvc.CheckBillingEligibility(ctx, noLeaseUser, nil, nil, nil, "")
+	require.ErrorIs(t, err, ErrBillingServiceUnavailable, "a missing lease fails closed as unavailable, not as insufficient balance")
+
+	// The LEGACY float64 path still decides when no canonical wallet is
+	// wired at all: an empty cache balance denies, a funded one admits.
+	// (fixedBalanceCache is DI plumbing only — the reserve path above runs
+	// on the real Redis store.)
+	legacyDeny := NewBillingCacheService(&fixedBalanceCache{balance: 0}, nil, nil, nil, nil, nil, cfg, nil, nil)
+	err = legacyDeny.CheckBillingEligibility(ctx, &User{ID: 14, BillingCurrency: "CNY"}, nil, nil, nil, "")
+	require.ErrorIs(t, err, ErrInsufficientBalance, "the legacy path still denies a zero balance")
+
+	legacyAllow := NewBillingCacheService(&fixedBalanceCache{balance: 100}, nil, nil, nil, nil, nil, cfg, nil, nil)
+	require.NoError(t, legacyAllow.CheckBillingEligibility(ctx, &User{ID: 15, BillingCurrency: "CNY"}, nil, nil, nil, ""))
+}
+
+// fixedBalanceCache implements the BillingCache interface with a constant
+// balance — used only to exercise the LEGACY float64 eligibility branch,
+// which reads a plain cached balance and has no canonical-wallet semantics.
+type fixedBalanceCache struct{ balance float64 }
+
+func (c *fixedBalanceCache) GetUserBalance(context.Context, int64) (float64, error) {
+	return c.balance, nil
+}
+func (c *fixedBalanceCache) SetUserBalance(context.Context, int64, float64) error { return nil }
+func (c *fixedBalanceCache) DeductUserBalance(context.Context, int64, float64) error {
+	return nil
+}
+func (c *fixedBalanceCache) InvalidateUserBalance(context.Context, int64) error {
+	return nil
+}
+func (c *fixedBalanceCache) GetSubscriptionCache(context.Context, int64, int64) (*SubscriptionCacheData, error) {
+	return nil, nil
+}
+func (c *fixedBalanceCache) SetSubscriptionCache(context.Context, int64, int64, *SubscriptionCacheData) error {
+	return nil
+}
+func (c *fixedBalanceCache) UpdateSubscriptionUsage(context.Context, int64, int64, float64) error {
+	return nil
+}
+func (c *fixedBalanceCache) InvalidateSubscriptionCache(context.Context, int64, int64) error {
+	return nil
+}
+func (c *fixedBalanceCache) GetUserPlatformQuotaCache(context.Context, int64, string) (*UserPlatformQuotaCacheEntry, bool, error) {
+	return nil, false, nil
+}
+func (c *fixedBalanceCache) SetUserPlatformQuotaCache(context.Context, int64, string, *UserPlatformQuotaCacheEntry, time.Duration) error {
+	return nil
+}
+func (c *fixedBalanceCache) DeleteUserPlatformQuotaCache(context.Context, int64, string) error {
+	return nil
+}
+func (c *fixedBalanceCache) IncrUserPlatformQuotaUsageCache(context.Context, int64, string, float64, time.Duration, bool) error {
+	return nil
+}
+func (c *fixedBalanceCache) PopDirtyUserPlatformQuotaKeys(context.Context, int) ([]UserPlatformQuotaKey, error) {
+	return nil, nil
+}
+func (c *fixedBalanceCache) ReaddDirtyUserPlatformQuotaKeys(context.Context, []UserPlatformQuotaKey) error {
+	return nil
+}
+func (c *fixedBalanceCache) BatchGetUserPlatformQuotaCache(context.Context, []UserPlatformQuotaKey) ([]*UserPlatformQuotaCacheEntry, error) {
+	return nil, nil
+}
+func (c *fixedBalanceCache) GetAPIKeyRateLimit(context.Context, int64) (*APIKeyRateLimitCacheData, error) {
+	return nil, nil
+}
+func (c *fixedBalanceCache) SetAPIKeyRateLimit(context.Context, int64, *APIKeyRateLimitCacheData) error {
+	return nil
+}
+func (c *fixedBalanceCache) UpdateAPIKeyRateLimitUsage(context.Context, int64, float64) error {
+	return nil
+}
+func (c *fixedBalanceCache) InvalidateAPIKeyRateLimit(context.Context, int64) error {
+	return nil
+}
+
+func TestProvideBillingCacheServiceDerivesCanonicalWalletBridge(t *testing.T) {
+	ctx := context.Background()
+	cfg := &config.Config{RunMode: config.RunModeStandard}
+	cfg.CanonicalWallet = canonicalWalletTestConfig(config.CanonicalWalletModeEnforce)
+	cfg.Billing.ExchangeRate.BootstrapUSDToCNY = 7.2 // keep the downstream currency step out of the way
+
+	// A cache that ALSO implements CanonicalWalletLeaseStore yields a wired
+	// bridge: enforce mode then consults the real Redis lease store.
+	rdb := startCanonicalWalletTestRedis(t, ctx)
+	leaseStore := &gatewayCacheAdapterForTest{rdb: rdb}
+	dual := struct {
+		*fixedBalanceCache
+		*gatewayCacheAdapterForTest
+	}{&fixedBalanceCache{balance: 5}, leaseStore}
+	svc := ProvideBillingCacheService(dual, nil, nil, nil, nil, nil, cfg, nil, nil, nil)
+	require.NotNil(t, svc)
+	platformUserID := "shipany-user-" + uuid.NewString()
+	require.NoError(t, leaseStore.InstallCanonicalWalletLease(ctx, CanonicalWalletLease{
+		LeaseID: "lease-" + uuid.NewString(), PlatformUserID: platformUserID, Currency: "CNY",
+		BudgetUnits: 100_000000, ExpiresAt: time.Now().UTC().Add(time.Minute),
+	}))
+	require.NoError(t, svc.CheckBillingEligibility(ctx, &User{ID: 21, PlatformUserID: platformUserID, BillingCurrency: "CNY"}, nil, nil, nil, ""),
+		"the derived bridge must actually gate eligibility through the real lease store")
+
+	// A cache WITHOUT the lease-store interface leaves the canonical wallet
+	// unwired: the legacy balance path decides instead.
+	plain := ProvideBillingCacheService(&fixedBalanceCache{balance: 0}, nil, nil, nil, nil, nil, cfg, nil, nil, nil)
+	err := plain.CheckBillingEligibility(ctx, &User{ID: 22, BillingCurrency: "CNY"}, nil, nil, nil, "")
+	require.ErrorIs(t, err, ErrInsufficientBalance, "without a derivable lease store, eligibility falls back to the legacy balance check")
+}

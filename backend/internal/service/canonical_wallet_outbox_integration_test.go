@@ -5,6 +5,7 @@ package service
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"testing"
 	"time"
 
@@ -57,7 +58,22 @@ func (o *outboxStoreForTest) InsertOutboxEventTx(ctx context.Context, tx *sql.Tx
 	return err
 }
 func (o *outboxStoreForTest) ClaimPendingOutboxEvents(ctx context.Context, workerID string, limit int) ([]CanonicalWalletOutboxEvent, error) {
-	rows, err := o.db.QueryContext(ctx, `SELECT id, event_id, platform_user_id, lease_id, gateway_request_id, currency, amount_units, local_balance_after_units, occurred_at, attempt_count FROM wallet_settlement_outbox WHERE status = 'pending' LIMIT $1`, limit)
+	// REAL atomic claim, mirroring repository.WalletOutboxStore: transition
+	// to in_flight under the caller's claim token IN THE SAME statement, so
+	// the full runOutboxDispatcher loop (TestCanonicalWalletOutboxDispatcherDeliversEndToEnd)
+	// exercises genuine claiming semantics instead of re-reading the same
+	// pending rows forever.
+	rows, err := o.db.QueryContext(ctx, `
+		UPDATE wallet_settlement_outbox
+		SET status = 'in_flight', claimed_at = now(), claimed_by = $2
+		WHERE id IN (
+			SELECT id FROM wallet_settlement_outbox
+			WHERE status = 'pending' AND next_attempt_at <= now()
+			ORDER BY next_attempt_at
+			LIMIT $1
+			FOR UPDATE SKIP LOCKED
+		)
+		RETURNING id, event_id, platform_user_id, lease_id, gateway_request_id, currency, amount_units, local_balance_after_units, occurred_at, attempt_count`, limit, workerID)
 	if err != nil {
 		return nil, err
 	}
@@ -72,20 +88,59 @@ func (o *outboxStoreForTest) ClaimPendingOutboxEvents(ctx context.Context, worke
 	}
 	return events, rows.Err()
 }
-func (o *outboxStoreForTest) MarkOutboxEventDelivered(context.Context, int64, string) error {
-	panic("not used by this test")
-}
-func (o *outboxStoreForTest) MarkOutboxEventFailed(context.Context, int64, string, time.Time) error {
-	panic("not used by this test")
+// The three resolve/reclaim methods below are REAL SQL implementations
+// mirroring repository.WalletOutboxStore's semantics — required so the full
+// runOutboxDispatcher loop can execute against this store in
+// TestCanonicalWalletOutboxDispatcherDeliversEndToEnd without a
+// service->repository import.
+
+func (o *outboxStoreForTest) MarkOutboxEventDelivered(ctx context.Context, id int64, workerID string) error {
+	_, err := o.db.ExecContext(ctx, `UPDATE wallet_settlement_outbox SET status = 'delivered', delivered_at = now(), claimed_at = NULL, claimed_by = NULL WHERE id = $1 AND status = 'in_flight' AND claimed_by = $2`, id, workerID)
+	return err
 }
 
-// ReclaimStaleInFlightEvents is part of the CanonicalWalletOutboxStore
-// interface but is not exercised by
-// TestCanonicalWalletObserveSettlementIsDurableAndGetsDelivered below,
-// which only calls ObserveSettlement, not the dispatcher.
-func (o *outboxStoreForTest) ReclaimStaleInFlightEvents(context.Context, time.Duration) (int64, error) {
-	panic("not used by this test")
+func (o *outboxStoreForTest) MarkOutboxEventFailed(ctx context.Context, id int64, workerID string, simulatedNow time.Time) error {
+	var attempts int
+	err := o.db.QueryRowContext(ctx, `
+		UPDATE wallet_settlement_outbox SET attempt_count = attempt_count + 1
+		WHERE id = $1 AND status = 'in_flight' AND claimed_by = $2
+		RETURNING attempt_count`, id, workerID).Scan(&attempts)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	const maxAttempts = 8
+	if attempts >= maxAttempts {
+		_, err := o.db.ExecContext(ctx, `UPDATE wallet_settlement_outbox SET status = 'dead_letter', claimed_at = NULL, claimed_by = NULL WHERE id = $1 AND status = 'in_flight' AND claimed_by = $2`, id, workerID)
+		return err
+	}
+	next := simulatedNow.Add(time.Duration(1<<uint(attempts)) * time.Second)
+	_, err = o.db.ExecContext(ctx, `UPDATE wallet_settlement_outbox SET status = 'pending', next_attempt_at = $3, claimed_at = NULL, claimed_by = NULL WHERE id = $1 AND status = 'in_flight' AND claimed_by = $2`, id, workerID, next)
+	return err
 }
+
+func (o *outboxStoreForTest) OutboxEventStatus(ctx context.Context, id int64) (string, error) {
+	var status string
+	err := o.db.QueryRowContext(ctx, `SELECT status FROM wallet_settlement_outbox WHERE id = $1`, id).Scan(&status)
+	return status, err
+}
+
+func (o *outboxStoreForTest) ReclaimStaleInFlightEvents(ctx context.Context, staleAfter time.Duration) (int64, error) {
+	result, err := o.db.ExecContext(ctx, `
+		UPDATE wallet_settlement_outbox
+		SET status = 'pending', claimed_at = NULL, claimed_by = NULL
+		WHERE status = 'in_flight' AND claimed_at < $1`,
+		time.Now().UTC().Add(-staleAfter),
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+var _ CanonicalWalletOutboxStore = (*outboxStoreForTest)(nil)
 
 var _ CanonicalWalletOutboxStore = (*outboxStoreForTest)(nil)
 
