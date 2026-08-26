@@ -66,7 +66,7 @@ func canonicalWalletTestConfig(mode string) config.CanonicalWalletConfig {
 
 func TestCanonicalWalletCheckAndReserveFailsClosedOnlyInEnforceMode(t *testing.T) {
 	failure := errors.New("control plane unavailable")
-	event := CanonicalWalletSettlementEvent{GatewayRequestID: "req-1", PlatformUserID: "user-1", Currency: "CNY", AmountMicros: 1}
+	event := CanonicalWalletSettlementEvent{GatewayRequestID: "req-1", PlatformUserID: "user-1", Currency: "CNY", AmountUnits: 1}
 
 	shadow := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeShadow), &canonicalWalletStoreStub{}, &canonicalWalletControlStub{leaseErr: failure})
 	allowed, err := shadow.CheckAndReserve(context.Background(), event)
@@ -116,8 +116,9 @@ func TestCanonicalWalletSettlementEventIDIsStableAndSensitive(t *testing.T) {
 	require.NotEqual(t, a, CanonicalWalletSettlementEventID("req-1", "user-1", "CNY", 11))
 }
 
-func TestCanonicalWalletCNYMicrosMatchesShipAnyCredits(t *testing.T) {
-	micros, err := canonicalWalletMicros(0.01)
+func TestCanonicalWalletUnitsFromCNYMatchesUnitsPerCNYConstant(t *testing.T) {
+	units, err := canonicalWalletUnitsFromCNY(1.0) // 1 CNY
 	require.NoError(t, err)
-	require.Equal(t, int64(canonicalWalletCNYMicrosPerCredit), micros)
+	require.Equal(t, int64(canonicalWalletUnitsPerCNY), units)
+	require.Equal(t, int64(100_000_000), units, "cny-e8-v1: 1 CNY must be exactly 100,000,000 units, not 1,000,000")
 }

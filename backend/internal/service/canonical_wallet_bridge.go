@@ -30,10 +30,8 @@ var (
 )
 
 const (
-	canonicalWalletLeaseScope         = "wallet:lease"
-	canonicalWalletSettlementScope    = "wallet:settlement"
-	canonicalWalletCNYMicrosPerUnit   = 1_000_000
-	canonicalWalletCNYMicrosPerCredit = 10_000
+	canonicalWalletLeaseScope      = "wallet:lease"
+	canonicalWalletSettlementScope = "wallet:settlement"
 )
 
 type CanonicalWalletLease struct {
@@ -67,14 +65,14 @@ type CanonicalWalletLeaseStore interface {
 }
 
 type CanonicalWalletSettlementEvent struct {
-	EventID                 string    `json:"event_id"`
-	GatewayRequestID        string    `json:"gateway_request_id"`
-	PlatformUserID          string    `json:"platform_user_id"`
-	LeaseID                 string    `json:"lease_id"`
-	Currency                string    `json:"currency"`
-	AmountMicros            int64     `json:"amount_micros"`
-	LocalBalanceAfterMicros *int64    `json:"local_balance_after_micros,omitempty"`
-	OccurredAt              time.Time `json:"occurred_at"`
+	EventID                string    `json:"event_id"`
+	GatewayRequestID       string    `json:"gateway_request_id"`
+	PlatformUserID         string    `json:"platform_user_id"`
+	LeaseID                string    `json:"lease_id"`
+	Currency               string    `json:"currency"`
+	AmountUnits            int64     `json:"amount_units"`
+	LocalBalanceAfterUnits *int64    `json:"local_balance_after_units,omitempty"`
+	OccurredAt             time.Time `json:"occurred_at"`
 }
 
 type CanonicalWalletSettlementResult struct {
@@ -260,7 +258,7 @@ func newCanonicalWalletBridge(cfg config.CanonicalWalletConfig, store CanonicalW
 // ObserveSettlement is a bounded, non-blocking shadow hook. It never returns an
 // error to the existing billing path.
 func (b *CanonicalWalletBridge) ObserveSettlement(event CanonicalWalletSettlementEvent) {
-	if b == nil || b.cfg.Mode == config.CanonicalWalletModeDisabled || event.AmountMicros <= 0 {
+	if b == nil || b.cfg.Mode == config.CanonicalWalletModeDisabled || event.AmountUnits <= 0 {
 		return
 	}
 	event.PlatformUserID = strings.TrimSpace(event.PlatformUserID)
@@ -268,16 +266,20 @@ func (b *CanonicalWalletBridge) ObserveSettlement(event CanonicalWalletSettlemen
 		canonicalWalletBridgeMetrics.missingPlatformID.Add(1)
 		return
 	}
-	event.Currency = NormalizeUserBillingCurrency(event.Currency)
-	if event.Currency != CurrencyCNY {
+	// Strict boundary: reject a non-CNY currency outright instead of
+	// coercing it to CNY first (which would make the check below unable to
+	// ever observe the invalid value).
+	currency, err := RequireCNYBillingCurrency(event.Currency)
+	if err != nil {
 		canonicalWalletBridgeMetrics.unsupportedCurrency.Add(1)
 		return
 	}
+	event.Currency = currency
 	if event.OccurredAt.IsZero() {
 		event.OccurredAt = time.Now().UTC()
 	}
 	if event.EventID == "" {
-		event.EventID = CanonicalWalletSettlementEventID(event.GatewayRequestID, event.PlatformUserID, event.Currency, event.AmountMicros)
+		event.EventID = CanonicalWalletSettlementEventID(event.GatewayRequestID, event.PlatformUserID, event.Currency, event.AmountUnits)
 	}
 	select {
 	case b.queue <- event:
@@ -296,11 +298,11 @@ func (b *CanonicalWalletBridge) CheckAndReserve(ctx context.Context, event Canon
 		return true, nil
 	}
 	if event.EventID == "" {
-		event.EventID = CanonicalWalletSettlementEventID(event.GatewayRequestID, event.PlatformUserID, event.Currency, event.AmountMicros)
+		event.EventID = CanonicalWalletSettlementEventID(event.GatewayRequestID, event.PlatformUserID, event.Currency, event.AmountUnits)
 	}
-	_, err := b.ensureLease(ctx, event.PlatformUserID, event.Currency, event.AmountMicros)
+	_, err := b.ensureLease(ctx, event.PlatformUserID, event.Currency, event.AmountUnits)
 	if err == nil {
-		_, err = b.store.ReserveCanonicalWalletLease(ctx, event.PlatformUserID, event.Currency, event.EventID, event.AmountMicros, time.Now().UTC())
+		_, err = b.store.ReserveCanonicalWalletLease(ctx, event.PlatformUserID, event.Currency, event.EventID, event.AmountUnits, time.Now().UTC())
 	}
 	if b.cfg.Mode == config.CanonicalWalletModeShadow {
 		return true, nil
@@ -320,13 +322,13 @@ func (b *CanonicalWalletBridge) runWorker() {
 }
 
 func (b *CanonicalWalletBridge) processSettlement(ctx context.Context, event CanonicalWalletSettlementEvent) {
-	lease, err := b.ensureLease(ctx, event.PlatformUserID, event.Currency, event.AmountMicros)
+	lease, err := b.ensureLease(ctx, event.PlatformUserID, event.Currency, event.AmountUnits)
 	if err != nil {
 		canonicalWalletBridgeMetrics.leaseAcquireError.Add(1)
 		slog.Warn("canonical wallet shadow lease unavailable", "event_id", event.EventID, "platform_user_id", event.PlatformUserID, "error", err)
 		return
 	}
-	reservation, err := b.store.ReserveCanonicalWalletLease(ctx, event.PlatformUserID, event.Currency, event.EventID, event.AmountMicros, time.Now().UTC())
+	reservation, err := b.store.ReserveCanonicalWalletLease(ctx, event.PlatformUserID, event.Currency, event.EventID, event.AmountUnits, time.Now().UTC())
 	if err != nil {
 		canonicalWalletBridgeMetrics.reserveError.Add(1)
 		slog.Warn("canonical wallet shadow reservation failed", "event_id", event.EventID, "lease_id", lease.LeaseID, "error", err)
@@ -341,12 +343,20 @@ func (b *CanonicalWalletBridge) processSettlement(ctx context.Context, event Can
 		return
 	}
 	canonicalWalletBridgeMetrics.settlementOK.Add(1)
-	attrs := []any{"event_id", event.EventID, "lease_id", event.LeaseID, "duplicate", result.Duplicate, "amount_micros", event.AmountMicros}
-	if result.CanonicalBalanceMicros != nil && event.LocalBalanceAfterMicros != nil {
-		delta := *result.CanonicalBalanceMicros - *event.LocalBalanceAfterMicros
-		if delta != 0 {
-			canonicalWalletBridgeMetrics.balanceMismatch.Add(1)
-			attrs = append(attrs, "balance_delta_micros", delta, "canonical_balance_micros", *result.CanonicalBalanceMicros, "local_balance_after_micros", *event.LocalBalanceAfterMicros)
+	attrs := []any{"event_id", event.EventID, "lease_id", event.LeaseID, "duplicate", result.Duplicate, "amount_units", event.AmountUnits}
+	if result.CanonicalBalanceMicros != nil && event.LocalBalanceAfterUnits != nil {
+		// result.CanonicalBalanceMicros is still ShipAny's wire-level micros
+		// scale (renamed/converted in Task 4's SubmitSettlement fix); convert
+		// x100 (exact) so both sides of the drift comparison are cny-e8-v1
+		// units — comparing across the two scales directly would report a
+		// spurious 100x "mismatch" on every settlement.
+		canonicalBalanceUnits, convErr := MulUnits(*result.CanonicalBalanceMicros, 100)
+		if convErr == nil {
+			delta := canonicalBalanceUnits - *event.LocalBalanceAfterUnits
+			if delta != 0 {
+				canonicalWalletBridgeMetrics.balanceMismatch.Add(1)
+				attrs = append(attrs, "balance_delta_units", delta, "canonical_balance_units", canonicalBalanceUnits, "local_balance_after_units", *event.LocalBalanceAfterUnits)
+			}
 		}
 	}
 	slog.Info("canonical wallet shadow settlement observed", attrs...)
@@ -384,33 +394,63 @@ func CanonicalWalletSettlementEventID(requestID, platformUserID, currency string
 	return "gwusg_" + hex.EncodeToString(sum[:])
 }
 
-func canonicalWalletMicros(amount float64) (int64, error) {
-	if math.IsNaN(amount) || math.IsInf(amount, 0) || amount < 0 || amount > float64(math.MaxInt64)/1_000_000 {
-		return 0, errors.New("canonical wallet amount is invalid")
+// canonicalWalletUnitsFromCNY converts a CNY float64 to cny-e8-v1 units
+// (1 CNY = 100,000,000 units — canonicalWalletUnitsPerCNY from
+// canonical_wallet_units.go; do NOT redeclare it here). Rejects non-finite
+// and negative inputs, and rejects any scaled value at or beyond int64's
+// ceiling BEFORE converting — a bare int64(...) cast of an out-of-range
+// float64 is implementation-defined behavior in Go, not a panic.
+func canonicalWalletUnitsFromCNY(amount float64) (int64, error) {
+	if amount < 0 || math.IsNaN(amount) || math.IsInf(amount, 0) {
+		return 0, errors.New("canonical wallet amount must be a finite, non-negative number")
 	}
-	return int64(math.Round(amount * canonicalWalletCNYMicrosPerUnit)), nil
+	scaled := amount * canonicalWalletUnitsPerCNY
+	if scaled >= math.MaxInt64 {
+		return 0, ErrCanonicalWalletUnitsOverflow
+	}
+	return int64(math.Round(scaled)), nil
+}
+
+// RequireCNYBillingCurrency is the STRICT counterpart to
+// NormalizeUserBillingCurrency, exported so other packages (repository,
+// same as CanonicalWalletLeaseStore's other cross-package uses) and other
+// call sites in this package can reject an invalid currency outright
+// instead of silently treating it as CNY. NormalizeUserBillingCurrency
+// coerces ANY unrecognized value to CNY (confirmed by reading currency.go's
+// normalizeBillingCurrencyOrDefault), so a check performed AFTER that
+// coercion can never observe an invalid currency — every genuine
+// admission/reservation/settlement boundary must reject BEFORE coercing.
+func RequireCNYBillingCurrency(value string) (string, error) {
+	normalized := strings.ToUpper(strings.TrimSpace(value))
+	if normalized != CurrencyCNY {
+		return "", fmt.Errorf("cny-e8-v1 requires CNY, got %q", value)
+	}
+	return normalized, nil
 }
 
 func observeCanonicalWalletSettlement(bridge *CanonicalWalletBridge, requestID string, user *User, cost *CostBreakdown, subscriptionBilling, billingApplied bool, billingResult *UsageBillingApplyResult) {
 	if bridge == nil || user == nil || cost == nil || subscriptionBilling || !billingApplied || cost.ActualCost <= 0 {
 		return
 	}
-	amountMicros, err := canonicalWalletMicros(cost.ActualCost)
-	if err != nil || amountMicros <= 0 {
+	amountUnits, err := canonicalWalletUnitsFromCNY(cost.ActualCost)
+	if err != nil || amountUnits <= 0 {
 		return
 	}
 	localBalance := user.Balance - cost.ActualCost
 	if billingResult != nil && billingResult.NewBalance != nil {
 		localBalance = *billingResult.NewBalance
 	}
-	localBalanceAfter, balanceErr := canonicalWalletMicros(localBalance)
+	localBalanceAfterUnits, balanceErr := canonicalWalletUnitsFromCNY(localBalance)
 	var localBalanceAfterPtr *int64
 	if balanceErr == nil {
-		localBalanceAfterPtr = &localBalanceAfter
+		localBalanceAfterPtr = &localBalanceAfterUnits
 	}
-	currency := NormalizeUserBillingCurrency(user.BillingCurrency)
+	// Pass the raw BillingCurrency through and let ObserveSettlement's own
+	// RequireCNYBillingCurrency be the single authoritative boundary —
+	// coercing here first would force every value to "CNY" before that
+	// check ever runs, so it could never reject a real non-CNY user.
 	bridge.ObserveSettlement(CanonicalWalletSettlementEvent{
-		GatewayRequestID: requestID, PlatformUserID: user.PlatformUserID, Currency: currency,
-		AmountMicros: amountMicros, LocalBalanceAfterMicros: localBalanceAfterPtr, OccurredAt: time.Now().UTC(),
+		GatewayRequestID: requestID, PlatformUserID: user.PlatformUserID, Currency: user.BillingCurrency,
+		AmountUnits: amountUnits, LocalBalanceAfterUnits: localBalanceAfterPtr, OccurredAt: time.Now().UTC(),
 	})
 }
