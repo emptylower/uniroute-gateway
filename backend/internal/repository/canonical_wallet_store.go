@@ -128,8 +128,14 @@ var reserveCanonicalWalletLeaseScript = redis.NewScript(`
 	if amount <= 0 or consumed + amount > budget then return {4} end
 	local updated = consumed + amount
 	redis.call('HSET', KEYS[1], 'consumed_units', updated)
-	local ttl = expires_at - tonumber(ARGV[4])
-	redis.call('SET', KEYS[2], stored_lease_id, 'PX', ttl)
+	-- ABSOLUTE deadline, matching the lease hash's own PEXPIREAT. A relative
+	-- PX computed from the GATEWAY's clock (ARGV[4]) is applied at REDIS's
+	-- execution instant, so the marker outlived its lease by the round-trip
+	-- latency plus any clock offset. Both keys now expire against one clock,
+	-- which is what lets the dispatcher treat "lease gone" as "marker gone"
+	-- when it releases a stale binding.
+	redis.call('SET', KEYS[2], stored_lease_id)
+	redis.call('PEXPIREAT', KEYS[2], expires_at)
 	return {0, stored_lease_id, currency, budget, updated, expires_at}
 `)
 

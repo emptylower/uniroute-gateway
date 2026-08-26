@@ -330,3 +330,46 @@ func TestCanonicalWalletReserveSurfacesRedisTransportFailure(t *testing.T) {
 	require.NotErrorIs(t, err, service.ErrCanonicalWalletLeaseMissing, "a transport failure is not a missing lease — conflating them would let a retry rebind the event to a different lease")
 }
 
+// The dispatcher's stale-binding release (Phase R Fix 2) is only safe if an
+// event's reservation marker cannot outlive the lease it belongs to: when the
+// bound lease is gone, resolveOutboxEventLease falls back to a fresh lease, and
+// a surviving marker would make that reservation conflict.
+//
+// The marker used to be given a RELATIVE ttl computed from the GATEWAY's clock
+// (`PX expires_at - ARGV[4]`) while the lease hash was given an ABSOLUTE one
+// (`PEXPIREAT expires_at`). Redis applies a relative ttl at ITS execution
+// instant, so the marker outlived its lease by the round-trip latency plus any
+// clock offset.
+//
+// Passing a gateway timestamp deliberately behind Redis's clock reproduces
+// exactly that skew — no mock, no fake driver, just the real script told the
+// truth about a clock that is behind.
+func TestCanonicalWalletReservationMarkerCannotOutliveItsLease(t *testing.T) {
+	ctx := context.Background()
+	mr := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	store := NewGatewayCache(client).(service.CanonicalWalletLeaseStore)
+
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	lease := service.CanonicalWalletLease{
+		LeaseID: "lease-deadline", PlatformUserID: "shipany-user-deadline", Currency: "CNY",
+		BudgetUnits: 1_000, ExpiresAt: now.Add(time.Minute),
+	}
+	require.NoError(t, store.InstallCanonicalWalletLease(ctx, lease))
+
+	// A gateway clock five seconds behind the store's. Under the old relative
+	// ttl this handed the marker five extra seconds of life.
+	skewed := now.Add(-5 * time.Second)
+	_, err := store.ReserveCanonicalWalletLease(ctx, lease.PlatformUserID, lease.LeaseID, "CNY", "event-deadline", 10, skewed)
+	require.NoError(t, err)
+
+	leasePTTL, err := client.PTTL(ctx, canonicalWalletLeaseKey(lease.PlatformUserID, lease.LeaseID)).Result()
+	require.NoError(t, err)
+	markerPTTL, err := client.PTTL(ctx, canonicalWalletReservationKey(lease.PlatformUserID, "event-deadline")).Result()
+	require.NoError(t, err)
+
+	require.Positive(t, leasePTTL, "the lease must still be alive for this assertion to mean anything")
+	require.LessOrEqual(t, markerPTTL, leasePTTL,
+		"the reservation marker must never outlive the lease it belongs to: once the lease is gone the dispatcher rebinds the event to a fresh lease, and a surviving marker makes that reservation conflict until the row dead-letters")
+}
