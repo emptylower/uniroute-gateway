@@ -743,11 +743,15 @@ func canonicalWalletLeaseBindingIsStale(err error) bool {
 //
 // This was not always true, and the history is worth keeping: the marker
 // used to get a RELATIVE `PX expires_at - gateway_now`, which Redis applied
-// at its own execution instant, so every marker outlived its lease by the
-// round-trip latency plus any clock offset. Inside that window this fallback
-// rebound the event to a fresh lease while the old marker still pointed at
-// the previous one, producing a cross-lease conflict on every retry until
-// the row dead-lettered. Do not reintroduce a relative TTL here.
+// at its own execution instant. That shifted the marker's deadline by
+// `redis_now - gateway_now` — round-trip latency plus clock offset — so a
+// marker COULD outlive its lease, and did whenever that shift was positive,
+// which is the ordinary case. Inside such a window this fallback rebound the
+// event to a fresh lease while the old marker still pointed at the previous
+// one, so every retry hit a cross-lease conflict until the marker finally
+// expired. Retries recovered on their own after that; the row dead-lettered
+// only when the attempt budget ran out first — which is exactly what made it
+// a money bug rather than a delay. Do not reintroduce a relative TTL here.
 func (b *CanonicalWalletBridge) resolveOutboxEventLease(ctx context.Context, e CanonicalWalletOutboxEvent) (*CanonicalWalletLease, error) {
 	if e.LeaseID == "" {
 		return b.ensureLease(ctx, e.PlatformUserID, e.Currency, e.AmountUnits)
