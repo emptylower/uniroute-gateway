@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -459,6 +460,8 @@ func NewOpenAIGatewayService(
 	userGroupRateRepo UserGroupRateRepository,
 	cache GatewayCache,
 	cfg *config.Config,
+	db *sql.DB,
+	outbox CanonicalWalletOutboxStore,
 	schedulerSnapshot *SchedulerSnapshotService,
 	concurrencyService *ConcurrencyService,
 	billingService *BillingService,
@@ -514,7 +517,7 @@ func NewOpenAIGatewayService(
 		openaiModelTransient:  newOpenAIAccountModelTransientState(openAIModelTransientDefaultMax),
 	}
 	if walletStore, ok := cache.(CanonicalWalletLeaseStore); ok {
-		svc.canonicalWallet = NewCanonicalWalletBridge(cfg, walletStore)
+		svc.canonicalWallet = NewCanonicalWalletBridge(cfg, walletStore, db, outbox)
 	} else if cfg != nil && (cfg.CanonicalWallet.Mode == config.CanonicalWalletModeShadow || cfg.CanonicalWallet.Mode == config.CanonicalWalletModeEnforce) {
 		slog.Error("canonical wallet bridge configured without a Redis lease store; OpenAI shadow observations are disabled")
 	}

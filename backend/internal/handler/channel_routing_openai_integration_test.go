@@ -186,7 +186,7 @@ func newChannelRoutingOpenAIHandler(t *testing.T, streamSuccess, failCheap, part
 	cfg.Gateway.ChannelRoutingMaxCandidates = 3
 	pricing := service.NewBillingService(cfg, nil)
 	gateway := service.NewOpenAIGatewayService(
-		channelRoutingAccountRepo{accounts: accounts}, nil, nil, nil, nil, nil, nil, cfg,
+		channelRoutingAccountRepo{accounts: accounts}, nil, nil, nil, nil, nil, nil, cfg, nil, nil,
 		nil, nil, pricing, nil, nil, upstream, nil, nil, nil, nil, nil, nil, nil, nil,
 	)
 	billing := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)

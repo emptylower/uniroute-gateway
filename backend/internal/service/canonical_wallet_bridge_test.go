@@ -75,12 +75,12 @@ func TestCanonicalWalletCheckAndReserveFailsClosedOnlyInEnforceMode(t *testing.T
 	failure := errors.New("control plane unavailable")
 	event := CanonicalWalletSettlementEvent{GatewayRequestID: "req-1", PlatformUserID: "user-1", Currency: "CNY", AmountUnits: 1}
 
-	shadow := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeShadow), &canonicalWalletStoreStub{}, &canonicalWalletControlStub{leaseErr: failure})
+	shadow := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeShadow), &canonicalWalletStoreStub{}, &canonicalWalletControlStub{leaseErr: failure}, nil, nil)
 	allowed, err := shadow.CheckAndReserve(context.Background(), event)
 	require.NoError(t, err)
 	require.True(t, allowed)
 
-	enforce := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeEnforce), &canonicalWalletStoreStub{}, &canonicalWalletControlStub{leaseErr: failure})
+	enforce := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeEnforce), &canonicalWalletStoreStub{}, &canonicalWalletControlStub{leaseErr: failure}, nil, nil)
 	allowed, err = enforce.CheckAndReserve(context.Background(), event)
 	require.ErrorIs(t, err, failure)
 	require.False(t, allowed)

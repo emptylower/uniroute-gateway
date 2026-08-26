@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -89,7 +90,41 @@ type CanonicalWalletSettlementEvent struct {
 type CanonicalWalletSettlementResult struct {
 	Accepted               bool   `json:"accepted"`
 	Duplicate              bool   `json:"duplicate"`
-	CanonicalBalanceMicros *int64 `json:"canonical_balance_micros,omitempty"`
+	CanonicalBalanceUnits  *int64 `json:"-"`
+}
+
+// CanonicalWalletOutboxEvent carries every field the outbox dispatcher needs
+// to reconstruct the original settlement event for delivery — including
+// GatewayRequestID/OccurredAt (SubmitSettlement requires them) and
+// LocalBalanceAfterUnits (the drift-detection signal the pre-outbox inline
+// path already had).
+type CanonicalWalletOutboxEvent struct {
+	ID                     int64
+	EventID                string
+	PlatformUserID         string
+	LeaseID                string
+	GatewayRequestID       string
+	Currency               string
+	AmountUnits            int64
+	LocalBalanceAfterUnits *int64
+	OccurredAt             time.Time
+	AttemptCount           int
+}
+
+// CanonicalWalletOutboxStore is implemented by repository.WalletOutboxStore.
+// Defined here (same pattern as CanonicalWalletLeaseStore) so the bridge can
+// depend on the outbox without a service<->repository import cycle.
+type CanonicalWalletOutboxStore interface {
+	InsertOutboxEventTx(ctx context.Context, tx *sql.Tx, event CanonicalWalletSettlementEvent) error
+	// Every claim/resolve method carries an opaque workerID claim token.
+	// A dispatcher may only resolve rows it currently owns — see
+	// WalletOutboxStore's implementations and runOutboxDispatcher below.
+	ClaimPendingOutboxEvents(ctx context.Context, workerID string, limit int) ([]CanonicalWalletOutboxEvent, error)
+	MarkOutboxEventDelivered(ctx context.Context, id int64, workerID string) error
+	MarkOutboxEventFailed(ctx context.Context, id int64, workerID string, simulatedNow time.Time) error
+	// ReclaimStaleInFlightEvents recovers rows a crashed dispatcher left
+	// stuck in_flight.
+	ReclaimStaleInFlightEvents(ctx context.Context, staleAfter time.Duration) (int64, error)
 }
 
 type canonicalWalletLeaseRequest struct {
@@ -183,15 +218,67 @@ func (c *canonicalWalletHTTPClient) AcquireLease(ctx context.Context, request ca
 	}, nil
 }
 
+// canonicalWalletSettlementWireRequest matches ShipAny's actual current
+// request shape for POST /api/internal/v1/wallet/settlements (still
+// *_micros, unchanged by this phase) — kept separate from the internal
+// CanonicalWalletSettlementEvent type for the same reason
+// canonicalWalletLeaseWireResponse is kept separate from CanonicalWalletLease.
+type canonicalWalletSettlementWireRequest struct {
+	PlatformUserID          string `json:"platform_user_id"`
+	EventID                 string `json:"event_id"`
+	LeaseID                 string `json:"lease_id"`
+	Currency                string `json:"currency"`
+	AmountMicros            int64  `json:"amount_micros"`
+	LocalBalanceAfterMicros *int64 `json:"local_balance_after_micros,omitempty"`
+	GatewayRequestID        string `json:"gateway_request_id,omitempty"`
+	OccurredAt              string `json:"occurred_at"`
+}
+
+// canonicalWalletSettlementWireResponse matches ShipAny's actual current
+// response shape (still canonical_balance_micros, unchanged by this phase).
+type canonicalWalletSettlementWireResponse struct {
+	Accepted               bool   `json:"accepted"`
+	Duplicate              bool   `json:"duplicate"`
+	CanonicalBalanceMicros *int64 `json:"canonical_balance_micros,omitempty"`
+}
+
 func (c *canonicalWalletHTTPClient) SubmitSettlement(ctx context.Context, event CanonicalWalletSettlementEvent) (*CanonicalWalletSettlementResult, error) {
-	var result CanonicalWalletSettlementResult
-	if err := c.doJSON(ctx, http.MethodPost, "/api/internal/v1/wallet/settlements", canonicalWalletSettlementScope, event.EventID, event, &result); err != nil {
+	// Ceiling division, same direction and same reasoning as ensureLease's
+	// requestedMicros conversion: rounding up means ShipAny is never told
+	// to settle LESS than the lease actually reserved for this event, only
+	// possibly up to 99 units (0.99 millionths of a CNY) more.
+	amountMicros := (event.AmountUnits + 99) / 100
+	var localBalanceAfterMicros *int64
+	if event.LocalBalanceAfterUnits != nil {
+		v := (*event.LocalBalanceAfterUnits + 99) / 100
+		localBalanceAfterMicros = &v
+	}
+	wireRequest := canonicalWalletSettlementWireRequest{
+		PlatformUserID: event.PlatformUserID, EventID: event.EventID, LeaseID: event.LeaseID, Currency: event.Currency,
+		AmountMicros: amountMicros, LocalBalanceAfterMicros: localBalanceAfterMicros,
+		GatewayRequestID: event.GatewayRequestID, OccurredAt: event.OccurredAt.UTC().Format(time.RFC3339Nano),
+	}
+	var wireResponse canonicalWalletSettlementWireResponse
+	if err := c.doJSON(ctx, http.MethodPost, "/api/internal/v1/wallet/settlements", canonicalWalletSettlementScope, event.EventID, wireRequest, &wireResponse); err != nil {
 		return nil, err
 	}
-	if !result.Accepted && !result.Duplicate {
+	if !wireResponse.Accepted && !wireResponse.Duplicate {
 		return nil, errors.New("control plane rejected canonical wallet settlement")
 	}
-	return &result, nil
+	result := &CanonicalWalletSettlementResult{Accepted: wireResponse.Accepted, Duplicate: wireResponse.Duplicate}
+	if wireResponse.CanonicalBalanceMicros != nil {
+		// Multiplying UP in scale (micros -> cny-e8-v1 units) is always
+		// exact, the same non-lossy direction already established in
+		// AcquireLease's wire conversion — the lossy rounding boundary is
+		// only ever the OTHER direction (units -> the wire's coarser micros
+		// scale, handled above with ceiling division).
+		balanceUnits, err := MulUnits(*wireResponse.CanonicalBalanceMicros, 100)
+		if err != nil {
+			return nil, fmt.Errorf("convert control plane canonical balance to cny-e8-v1 units: %w", err)
+		}
+		result.CanonicalBalanceUnits = &balanceUnits
+	}
+	return result, nil
 }
 
 func (c *canonicalWalletHTTPClient) doJSON(ctx context.Context, method, path, scope, idempotencyKey string, requestBody, responseBody any) error {
@@ -288,31 +375,57 @@ func CanonicalWalletBridgeStats() map[string]int64 {
 }
 
 type CanonicalWalletBridge struct {
-	cfg     config.CanonicalWalletConfig
-	store   CanonicalWalletLeaseStore
-	control canonicalWalletControlPlane
-	queue   chan CanonicalWalletSettlementEvent
+	cfg      config.CanonicalWalletConfig
+	store    CanonicalWalletLeaseStore
+	control  canonicalWalletControlPlane
+	outboxDB *sql.DB
+	outbox   CanonicalWalletOutboxStore
+	workerID string
 }
 
-func NewCanonicalWalletBridge(cfg *config.Config, store CanonicalWalletLeaseStore) *CanonicalWalletBridge {
+func NewCanonicalWalletBridge(cfg *config.Config, store CanonicalWalletLeaseStore, outboxDB *sql.DB, outbox CanonicalWalletOutboxStore) *CanonicalWalletBridge {
 	if cfg == nil || cfg.CanonicalWallet.Mode == "" || cfg.CanonicalWallet.Mode == config.CanonicalWalletModeDisabled {
 		return nil
 	}
-	return newCanonicalWalletBridge(cfg.CanonicalWallet, store, newCanonicalWalletHTTPClient(cfg.CanonicalWallet, nil))
+	return newCanonicalWalletBridge(cfg.CanonicalWallet, store, newCanonicalWalletHTTPClient(cfg.CanonicalWallet, nil), outboxDB, outbox)
 }
 
-func newCanonicalWalletBridge(cfg config.CanonicalWalletConfig, store CanonicalWalletLeaseStore, control canonicalWalletControlPlane) *CanonicalWalletBridge {
-	b := &CanonicalWalletBridge{cfg: cfg, store: store, control: control, queue: make(chan CanonicalWalletSettlementEvent, cfg.SettlementQueueSize)}
-	for i := 0; i < cfg.SettlementWorkers; i++ {
-		go b.runWorker()
+func newCanonicalWalletBridge(cfg config.CanonicalWalletConfig, store CanonicalWalletLeaseStore, control canonicalWalletControlPlane, outboxDB *sql.DB, outbox CanonicalWalletOutboxStore) *CanonicalWalletBridge {
+	b := &CanonicalWalletBridge{
+		cfg:      cfg,
+		store:    store,
+		control:  control,
+		outboxDB: outboxDB,
+		outbox:   outbox,
+		// This dispatcher instance's opaque claim token — generated once
+		// per bridge, never per tick, so every row this instance claims is
+		// resolvable only by this same instance.
+		workerID: "sub2api-wallet-dispatcher-" + uuid.NewString(),
 	}
+	go b.runOutboxDispatcher()
 	return b
 }
 
-// ObserveSettlement is a bounded, non-blocking shadow hook. It never returns an
-// error to the existing billing path.
+// ObserveSettlement durably records the settlement event in the Postgres
+// outbox (its own transaction, committed synchronously before returning) —
+// replacing the previous in-memory bounded channel, which silently dropped
+// events when full or on crash. Once this returns, the event WILL
+// eventually be delivered (at-least-once, surviving a crash). It never
+// returns an error to the existing billing path.
+//
+// Disclosed limit: a BeginTx/Insert/Commit failure here still loses the
+// event — logged and counted in queueDropped, but not retried, because the
+// durability store itself is what failed. Same class of gap the in-memory
+// channel had, now bounded to "Postgres itself is down or the write
+// genuinely failed" instead of "an ordinary burst filled a fixed buffer."
 func (b *CanonicalWalletBridge) ObserveSettlement(event CanonicalWalletSettlementEvent) {
 	if b == nil || b.cfg.Mode == config.CanonicalWalletModeDisabled || event.AmountUnits <= 0 {
+		return
+	}
+	if b.outbox == nil || b.outboxDB == nil {
+		// Several of this file's own tests construct a bridge with a nil
+		// outbox because they don't exercise ObserveSettlement — guard BOTH
+		// fields here, since the very next statement dereferences outboxDB.
 		return
 	}
 	event.PlatformUserID = strings.TrimSpace(event.PlatformUserID)
@@ -320,9 +433,6 @@ func (b *CanonicalWalletBridge) ObserveSettlement(event CanonicalWalletSettlemen
 		canonicalWalletBridgeMetrics.missingPlatformID.Add(1)
 		return
 	}
-	// Strict boundary: reject a non-CNY currency outright instead of
-	// coercing it to CNY first (which would make the check below unable to
-	// ever observe the invalid value).
 	currency, err := RequireCNYBillingCurrency(event.Currency)
 	if err != nil {
 		canonicalWalletBridgeMetrics.unsupportedCurrency.Add(1)
@@ -335,13 +445,26 @@ func (b *CanonicalWalletBridge) ObserveSettlement(event CanonicalWalletSettlemen
 	if event.EventID == "" {
 		event.EventID = CanonicalWalletSettlementEventID(event.GatewayRequestID, event.PlatformUserID, event.Currency)
 	}
-	select {
-	case b.queue <- event:
-		canonicalWalletBridgeMetrics.queued.Add(1)
-	default:
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(b.cfg.RequestTimeoutMS)*time.Millisecond)
+	defer cancel()
+	tx, err := b.outboxDB.BeginTx(ctx, nil)
+	if err != nil {
 		canonicalWalletBridgeMetrics.queueDropped.Add(1)
-		slog.Warn("canonical wallet shadow queue full", "event_id", event.EventID, "platform_user_id", event.PlatformUserID)
+		slog.Warn("canonical wallet outbox begin failed", "event_id", event.EventID, "error", err)
+		return
 	}
+	if err := b.outbox.InsertOutboxEventTx(ctx, tx, event); err != nil {
+		_ = tx.Rollback()
+		canonicalWalletBridgeMetrics.queueDropped.Add(1)
+		slog.Warn("canonical wallet outbox insert failed", "event_id", event.EventID, "error", err)
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		canonicalWalletBridgeMetrics.queueDropped.Add(1)
+		slog.Warn("canonical wallet outbox commit failed", "event_id", event.EventID, "error", err)
+		return
+	}
+	canonicalWalletBridgeMetrics.queued.Add(1)
 }
 
 // CheckAndReserve is the future request-preflight state machine. Shadow mode
@@ -367,25 +490,75 @@ func (b *CanonicalWalletBridge) CheckAndReserve(ctx context.Context, event Canon
 	return true, nil
 }
 
-func (b *CanonicalWalletBridge) runWorker() {
-	for event := range b.queue {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(b.cfg.RequestTimeoutMS)*time.Millisecond)
-		b.processSettlement(ctx, event)
-		cancel()
+// runOutboxDispatcher polls for durably-persisted pending events instead of
+// draining an in-memory channel, so a crash mid-delivery leaves the event
+// claimable again on restart instead of gone.
+// walletOutboxDispatchBatch bounds how many events one tick claims. It is
+// deliberately small: staleAfter (below) must provably exceed the worst-case
+// time the LAST event in a batch waits behind its predecessors, and that
+// worst case grows linearly with this number.
+const walletOutboxDispatchBatch = 10
+
+func (b *CanonicalWalletBridge) runOutboxDispatcher() {
+	if b.outbox == nil || b.outboxDB == nil {
+		return // several of this file's own tests construct a bridge with a nil outbox (they don't exercise ObserveSettlement) — starting the ticker loop unconditionally would eventually dereference it. "Start only when BOTH are non-nil" is enforced in this one place.
+	}
+	perAttempt := time.Duration(b.cfg.RequestTimeoutMS) * time.Millisecond
+	// staleAfter must exceed the worst case for the LAST event in a batch:
+	// it waits behind (batch-1) predecessors, each bounded by perAttempt,
+	// then takes up to perAttempt itself — i.e. batch*perAttempt — plus
+	// margin for the claim/reclaim round-trips themselves. 2x that bound is
+	// the margin used here.
+	staleAfter := 2 * time.Duration(walletOutboxDispatchBatch) * perAttempt
+	ticker := time.NewTicker(perAttempt)
+	defer ticker.Stop()
+	for range ticker.C {
+		// Reclaim stale in_flight rows before claiming fresh pending ones,
+		// so a row a crashed dispatcher instance abandoned mid-delivery
+		// becomes eligible for ClaimPendingOutboxEvents again in this same
+		// tick rather than staying stuck until some future tick happens to
+		// run this first.
+		reclaimCtx, cancelReclaim := context.WithTimeout(context.Background(), perAttempt)
+		if reclaimed, err := b.outbox.ReclaimStaleInFlightEvents(reclaimCtx, staleAfter); err != nil {
+			slog.Warn("canonical wallet outbox stale-claim reclaim failed", "error", err)
+		} else if reclaimed > 0 {
+			slog.Warn("canonical wallet outbox reclaimed stale in_flight events", "count", reclaimed)
+		}
+		cancelReclaim()
+
+		claimCtx, cancelClaim := context.WithTimeout(context.Background(), perAttempt)
+		events, err := b.outbox.ClaimPendingOutboxEvents(claimCtx, b.workerID, walletOutboxDispatchBatch)
+		cancelClaim()
+		if err != nil {
+			slog.Warn("canonical wallet outbox claim failed", "error", err)
+			continue
+		}
+		for _, e := range events {
+			// One fresh context PER EVENT — a slow delivery must not consume
+			// the time budget of the events queued behind it.
+			eventCtx, cancelEvent := context.WithTimeout(context.Background(), perAttempt)
+			b.deliverOutboxEvent(eventCtx, e)
+			cancelEvent()
+		}
 	}
 }
 
-func (b *CanonicalWalletBridge) processSettlement(ctx context.Context, event CanonicalWalletSettlementEvent) {
+func (b *CanonicalWalletBridge) deliverOutboxEvent(ctx context.Context, e CanonicalWalletOutboxEvent) {
+	event := CanonicalWalletSettlementEvent{
+		EventID: e.EventID, GatewayRequestID: e.GatewayRequestID, PlatformUserID: e.PlatformUserID,
+		LeaseID: e.LeaseID, Currency: e.Currency, AmountUnits: e.AmountUnits,
+		LocalBalanceAfterUnits: e.LocalBalanceAfterUnits, OccurredAt: e.OccurredAt,
+	}
 	lease, err := b.ensureLease(ctx, event.PlatformUserID, event.Currency, event.AmountUnits)
 	if err != nil {
 		canonicalWalletBridgeMetrics.leaseAcquireError.Add(1)
-		slog.Warn("canonical wallet shadow lease unavailable", "event_id", event.EventID, "platform_user_id", event.PlatformUserID, "error", err)
+		_ = b.outbox.MarkOutboxEventFailed(ctx, e.ID, b.workerID, time.Now().UTC())
 		return
 	}
 	reservation, err := b.store.ReserveCanonicalWalletLease(ctx, event.PlatformUserID, lease.LeaseID, event.Currency, event.EventID, event.AmountUnits, time.Now().UTC())
 	if err != nil {
 		canonicalWalletBridgeMetrics.reserveError.Add(1)
-		slog.Warn("canonical wallet shadow reservation failed", "event_id", event.EventID, "lease_id", lease.LeaseID, "error", err)
+		_ = b.outbox.MarkOutboxEventFailed(ctx, e.ID, b.workerID, time.Now().UTC())
 		return
 	}
 	canonicalWalletBridgeMetrics.reserveOK.Add(1)
@@ -393,27 +566,24 @@ func (b *CanonicalWalletBridge) processSettlement(ctx context.Context, event Can
 	result, err := b.control.SubmitSettlement(ctx, event)
 	if err != nil {
 		canonicalWalletBridgeMetrics.settlementError.Add(1)
-		slog.Warn("canonical wallet shadow settlement failed", "event_id", event.EventID, "lease_id", event.LeaseID, "error", err)
+		_ = b.outbox.MarkOutboxEventFailed(ctx, e.ID, b.workerID, time.Now().UTC())
 		return
 	}
 	canonicalWalletBridgeMetrics.settlementOK.Add(1)
+	// Balance-mismatch (drift) detection, restored from the pre-outbox
+	// inline path — now comparing in the internal *Units scale on both
+	// sides (SubmitSettlement converts the wire response's
+	// canonical_balance_micros to CanonicalBalanceUnits before returning).
 	attrs := []any{"event_id", event.EventID, "lease_id", event.LeaseID, "duplicate", result.Duplicate, "amount_units", event.AmountUnits}
-	if result.CanonicalBalanceMicros != nil && event.LocalBalanceAfterUnits != nil {
-		// result.CanonicalBalanceMicros is still ShipAny's wire-level micros
-		// scale (renamed/converted in Task 4's SubmitSettlement fix); convert
-		// x100 (exact) so both sides of the drift comparison are cny-e8-v1
-		// units — comparing across the two scales directly would report a
-		// spurious 100x "mismatch" on every settlement.
-		canonicalBalanceUnits, convErr := MulUnits(*result.CanonicalBalanceMicros, 100)
-		if convErr == nil {
-			delta := canonicalBalanceUnits - *event.LocalBalanceAfterUnits
-			if delta != 0 {
-				canonicalWalletBridgeMetrics.balanceMismatch.Add(1)
-				attrs = append(attrs, "balance_delta_units", delta, "canonical_balance_units", canonicalBalanceUnits, "local_balance_after_units", *event.LocalBalanceAfterUnits)
-			}
+	if result.CanonicalBalanceUnits != nil && event.LocalBalanceAfterUnits != nil {
+		delta := *result.CanonicalBalanceUnits - *event.LocalBalanceAfterUnits
+		if delta != 0 {
+			canonicalWalletBridgeMetrics.balanceMismatch.Add(1)
+			attrs = append(attrs, "balance_delta_units", delta, "canonical_balance_units", *result.CanonicalBalanceUnits, "local_balance_after_units", *event.LocalBalanceAfterUnits)
 		}
 	}
-	slog.Info("canonical wallet shadow settlement observed", attrs...)
+	slog.Info("canonical wallet settlement delivered", attrs...)
+	_ = b.outbox.MarkOutboxEventDelivered(ctx, e.ID, b.workerID)
 }
 
 func (b *CanonicalWalletBridge) ensureLease(ctx context.Context, platformUserID, currency string, amountUnits int64) (*CanonicalWalletLease, error) {

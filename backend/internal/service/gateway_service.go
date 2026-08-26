@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -821,6 +822,8 @@ func NewGatewayService(
 	userGroupRateRepo UserGroupRateRepository,
 	cache GatewayCache,
 	cfg *config.Config,
+	db *sql.DB,
+	outbox CanonicalWalletOutboxStore,
 	schedulerSnapshot *SchedulerSnapshotService,
 	concurrencyService *ConcurrencyService,
 	billingService *BillingService,
@@ -880,7 +883,7 @@ func NewGatewayService(
 		exchangeRates:         NewExchangeRateService(cfg),
 	}
 	if walletStore, ok := cache.(CanonicalWalletLeaseStore); ok {
-		svc.canonicalWallet = NewCanonicalWalletBridge(cfg, walletStore)
+		svc.canonicalWallet = NewCanonicalWalletBridge(cfg, walletStore, db, outbox)
 	} else if cfg != nil && (cfg.CanonicalWallet.Mode == config.CanonicalWalletModeShadow || cfg.CanonicalWallet.Mode == config.CanonicalWalletModeEnforce) {
 		slog.Error("canonical wallet bridge configured without a Redis lease store; shadow observations are disabled")
 	}

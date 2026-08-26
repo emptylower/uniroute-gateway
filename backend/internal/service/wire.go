@@ -1020,6 +1020,8 @@ func ProvideGatewayService(
 	userGroupRateRepo UserGroupRateRepository,
 	cache GatewayCache,
 	cfg *config.Config,
+	db *sql.DB,
+	outbox CanonicalWalletOutboxStore,
 	schedulerSnapshot *SchedulerSnapshotService,
 	concurrencyService *ConcurrencyService,
 	billingService *BillingService,
@@ -1044,7 +1046,7 @@ func ProvideGatewayService(
 ) *GatewayService {
 	svc := NewGatewayService(
 		accountRepo, groupRepo, usageLogRepo, usageBillingRepo, userRepo, userSubRepo, userGroupRateRepo,
-		cache, cfg, schedulerSnapshot, concurrencyService, billingService, rateLimitService, billingCacheService,
+		cache, cfg, db, outbox, schedulerSnapshot, concurrencyService, billingService, rateLimitService, billingCacheService,
 		identityService, httpUpstream, deferredService, claudeTokenProvider, sessionLimitCache, rpmCache,
 		digestStore, settingService, tlsFPProfileService, channelService, resolver, compositeResolver,
 		balanceNotifyService, userPlatformQuotaRepo,

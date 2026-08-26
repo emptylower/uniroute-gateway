@@ -86,7 +86,7 @@ func newOpenAIResponsesFailoverTestHandler(t *testing.T, upstream service.HTTPUp
 		nil,
 		nil,
 		nil,
-		cfg,
+		cfg, nil, nil,
 		nil,
 		nil,
 		pricing,

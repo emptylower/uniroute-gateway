@@ -50,7 +50,7 @@ func TestGatewayChatCompletionsRejectsUnknownMappedModelBeforeUpstream(t *testin
 	upstream := &pricingPreflightUpstream{}
 	pricing := service.NewBillingService(cfg, nil)
 	gatewayService := service.NewGatewayService(
-		nil, &fakeGroupRepo{group: group}, nil, nil, nil, nil, nil, nil, cfg,
+		nil, &fakeGroupRepo{group: group}, nil, nil, nil, nil, nil, nil, cfg, nil, nil,
 		schedulerSnapshot, nil, pricing, nil, nil, nil, upstream, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
 	)
 	billingCache := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
@@ -100,7 +100,7 @@ func TestGatewayResponsesRejectsUnknownMappedModelBeforeUpstream(t *testing.T) {
 	upstream := &pricingPreflightUpstream{}
 	pricing := service.NewBillingService(cfg, nil)
 	gatewayService := service.NewGatewayService(
-		nil, &fakeGroupRepo{group: group}, nil, nil, nil, nil, nil, nil, cfg,
+		nil, &fakeGroupRepo{group: group}, nil, nil, nil, nil, nil, nil, cfg, nil, nil,
 		schedulerSnapshot, nil, pricing, nil, nil, nil, upstream, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
 	)
 	billingCache := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)

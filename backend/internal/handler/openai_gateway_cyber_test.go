@@ -280,7 +280,7 @@ func TestRecordCyberPolicyIfMarked_DetachesConcreteEvidenceFromBaselineQuotaPlat
 			billingCache := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, quotaRepo)
 			t.Cleanup(billingCache.Stop)
 			gateway := service.NewOpenAIGatewayService(
-				nil, usageRepo, nil, &cyberDetachedUserRepoStub{}, nil, nil, nil, cfg,
+				nil, usageRepo, nil, &cyberDetachedUserRepoStub{}, nil, nil, nil, cfg, nil, nil,
 				nil, nil, service.NewBillingService(cfg, nil), nil, billingCache, nil,
 				&service.DeferredService{}, nil, nil, nil, nil, nil, nil, quotaRepo,
 			)

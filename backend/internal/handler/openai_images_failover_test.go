@@ -125,7 +125,7 @@ func TestOpenAIGatewayHandlerImages_ServerErrorFailsOverAndReturnsClearErrorWhen
 		nil,
 		nil,
 		nil,
-		cfg,
+		cfg, nil, nil,
 		nil,
 		nil,
 		nil,

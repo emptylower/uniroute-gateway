@@ -606,7 +606,7 @@ func TestNewOpenAIGatewayService_InitializesOpenAIWSResolver(t *testing.T) {
 		nil,
 		nil,
 		nil,
-		cfg,
+		cfg, nil, nil,
 		nil,
 		nil,
 		nil,
