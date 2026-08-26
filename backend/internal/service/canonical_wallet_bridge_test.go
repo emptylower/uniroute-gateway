@@ -30,12 +30,19 @@ func (s *canonicalWalletStoreStub) GetCanonicalWalletLease(context.Context, stri
 	copy := *s.lease
 	return &copy, nil
 }
-func (s *canonicalWalletStoreStub) ReserveCanonicalWalletLease(_ context.Context, _, _, _ string, amount int64, _ time.Time) (*CanonicalWalletReservation, error) {
+func (s *canonicalWalletStoreStub) GetCanonicalWalletLeaseByID(_ context.Context, _, leaseID string) (*CanonicalWalletLease, error) {
+	if s.lease == nil || s.lease.LeaseID != leaseID {
+		return nil, ErrCanonicalWalletLeaseMissing
+	}
+	copy := *s.lease
+	return &copy, nil
+}
+func (s *canonicalWalletStoreStub) ReserveCanonicalWalletLease(_ context.Context, _, _, _, _ string, amount int64, _ time.Time) (*CanonicalWalletReservation, error) {
 	if s.reserveErr != nil {
 		return nil, s.reserveErr
 	}
 	copy := *s.lease
-	copy.ConsumedMicros += amount
+	copy.ConsumedUnits += amount
 	s.lease = &copy
 	return &CanonicalWalletReservation{Lease: copy}, nil
 }

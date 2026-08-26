@@ -38,14 +38,14 @@ type CanonicalWalletLease struct {
 	LeaseID        string    `json:"lease_id"`
 	PlatformUserID string    `json:"platform_user_id"`
 	Currency       string    `json:"currency"`
-	BudgetMicros   int64     `json:"budget_micros"`
-	ConsumedMicros int64     `json:"consumed_micros"`
+	BudgetUnits    int64     `json:"budget_units"`
+	ConsumedUnits  int64     `json:"consumed_units"`
 	ExpiresAt      time.Time `json:"expires_at"`
 }
 
-func (l CanonicalWalletLease) RemainingMicros() int64 {
-	remaining := l.BudgetMicros - l.ConsumedMicros
-	if remaining < 0 {
+func (l CanonicalWalletLease) RemainingUnits() int64 {
+	remaining, err := SubUnits(l.BudgetUnits, l.ConsumedUnits)
+	if err != nil {
 		return 0
 	}
 	return remaining
@@ -60,8 +60,19 @@ type CanonicalWalletReservation struct {
 // Reserve must be atomic and idempotent for the supplied event ID.
 type CanonicalWalletLeaseStore interface {
 	InstallCanonicalWalletLease(ctx context.Context, lease CanonicalWalletLease) error
+	// GetCanonicalWalletLease resolves the user's CURRENT (most recently
+	// issued, non-expired) lease — used when admitting a brand-new request.
 	GetCanonicalWalletLease(ctx context.Context, platformUserID string) (*CanonicalWalletLease, error)
-	ReserveCanonicalWalletLease(ctx context.Context, platformUserID, currency, eventID string, amountMicros int64, now time.Time) (*CanonicalWalletReservation, error)
+	// GetCanonicalWalletLeaseByID resolves one specific lease regardless of
+	// whether it is still the user's current lease — used to inspect a
+	// lease an in-flight reservation was already anchored to.
+	GetCanonicalWalletLeaseByID(ctx context.Context, platformUserID, leaseID string) (*CanonicalWalletLease, error)
+	// ReserveCanonicalWalletLease reserves against the EXPLICIT leaseID the
+	// caller supplies — a fresh request supplies the ID it just got from
+	// GetCanonicalWalletLease; a retry supplies the ID it used the first
+	// time (service.CanonicalWalletSettlementEvent.LeaseID), never "whatever
+	// is current now".
+	ReserveCanonicalWalletLease(ctx context.Context, platformUserID, leaseID, currency, eventID string, amountUnits int64, now time.Time) (*CanonicalWalletReservation, error)
 }
 
 type CanonicalWalletSettlementEvent struct {
@@ -106,8 +117,25 @@ func newCanonicalWalletHTTPClient(cfg config.CanonicalWalletConfig, client *http
 	return &canonicalWalletHTTPClient{cfg: cfg, client: client, now: func() time.Time { return time.Now().UTC() }}
 }
 
+// canonicalWalletLeaseWireResponse matches ShipAny's actual current
+// response shape (still *_micros, unchanged by this phase) — kept separate
+// from the internal CanonicalWalletLease type so the rest of this codebase
+// can move to cny-e8-v1 *_units without silently breaking this one HTTP
+// boundary. `consumed_micros` must be read from the wire too — a reinstall
+// of an EXISTING, partially-consumed lease (e.g. after a Redis restart
+// evicts the key) would otherwise default ConsumedUnits to 0, discarding
+// real consumption history.
+type canonicalWalletLeaseWireResponse struct {
+	LeaseID        string    `json:"lease_id"`
+	PlatformUserID string    `json:"platform_user_id"`
+	Currency       string    `json:"currency"`
+	BudgetMicros   int64     `json:"budget_micros"`
+	ConsumedMicros int64     `json:"consumed_micros"`
+	ExpiresAt      time.Time `json:"expires_at"`
+}
+
 func (c *canonicalWalletHTTPClient) AcquireLease(ctx context.Context, request canonicalWalletLeaseRequest) (*CanonicalWalletLease, error) {
-	var lease CanonicalWalletLease
+	var wire canonicalWalletLeaseWireResponse
 	windowSeconds := int64(c.cfg.LeaseTTLSeconds)
 	if windowSeconds <= 0 {
 		windowSeconds = 60
@@ -116,17 +144,43 @@ func (c *canonicalWalletHTTPClient) AcquireLease(ctx context.Context, request ca
 	leaseKeyRaw := fmt.Sprintf("v1|%s|%s|%d", strings.TrimSpace(request.PlatformUserID), NormalizeUserBillingCurrency(request.Currency), window)
 	leaseKeyHash := sha256.Sum256([]byte(leaseKeyRaw))
 	idempotencyKey := "gwlease_" + hex.EncodeToString(leaseKeyHash[:])
-	if err := c.doJSON(ctx, http.MethodPost, "/api/internal/v1/wallet/leases/acquire", canonicalWalletLeaseScope, idempotencyKey, request, &lease); err != nil {
+	if err := c.doJSON(ctx, http.MethodPost, "/api/internal/v1/wallet/leases/acquire", canonicalWalletLeaseScope, idempotencyKey, request, &wire); err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(lease.LeaseID) == "" || strings.TrimSpace(lease.PlatformUserID) != strings.TrimSpace(request.PlatformUserID) || lease.BudgetMicros <= 0 || lease.ExpiresAt.IsZero() {
+	if strings.TrimSpace(wire.LeaseID) == "" || strings.TrimSpace(wire.PlatformUserID) != strings.TrimSpace(request.PlatformUserID) || wire.BudgetMicros <= 0 || wire.ConsumedMicros < 0 || wire.ConsumedMicros > wire.BudgetMicros || wire.ExpiresAt.IsZero() {
 		return nil, errors.New("control plane returned an invalid canonical wallet lease")
 	}
-	lease.Currency = NormalizeUserBillingCurrency(lease.Currency)
-	if lease.Currency != NormalizeUserBillingCurrency(request.Currency) {
+	// Reject an unsupported currency outright on BOTH sides of the
+	// comparison — coercing both with NormalizeUserBillingCurrency would
+	// independently force invalid values to CNY and the two coerced values
+	// would match, masking a real mismatch instead of catching it.
+	currency, err := RequireCNYBillingCurrency(wire.Currency)
+	if err != nil {
+		return nil, fmt.Errorf("control plane returned an unsupported currency: %w", err)
+	}
+	if _, err := RequireCNYBillingCurrency(request.Currency); err != nil {
+		return nil, fmt.Errorf("requested an unsupported currency: %w", err)
+	}
+	if currency != strings.ToUpper(strings.TrimSpace(request.Currency)) {
 		return nil, ErrCanonicalWalletLeaseCurrencyMismatch
 	}
-	return &lease, nil
+	// ShipAny's route still speaks the OLD 1,000,000-per-CNY scale — convert
+	// to cny-e8-v1 units (100,000,000 per CNY) at this one boundary.
+	// Multiplying UP in scale is always exact (no precision loss going from
+	// a coarser to a finer unit) — the lossy rounding boundary is the OTHER
+	// direction, in ensureLease below.
+	budgetUnits, err := MulUnits(wire.BudgetMicros, 100)
+	if err != nil {
+		return nil, fmt.Errorf("convert control plane lease budget to cny-e8-v1 units: %w", err)
+	}
+	consumedUnits, err := MulUnits(wire.ConsumedMicros, 100)
+	if err != nil {
+		return nil, fmt.Errorf("convert control plane lease consumption to cny-e8-v1 units: %w", err)
+	}
+	return &CanonicalWalletLease{
+		LeaseID: wire.LeaseID, PlatformUserID: strings.TrimSpace(request.PlatformUserID), Currency: currency,
+		BudgetUnits: budgetUnits, ConsumedUnits: consumedUnits, ExpiresAt: wire.ExpiresAt,
+	}, nil
 }
 
 func (c *canonicalWalletHTTPClient) SubmitSettlement(ctx context.Context, event CanonicalWalletSettlementEvent) (*CanonicalWalletSettlementResult, error) {
@@ -300,9 +354,9 @@ func (b *CanonicalWalletBridge) CheckAndReserve(ctx context.Context, event Canon
 	if event.EventID == "" {
 		event.EventID = CanonicalWalletSettlementEventID(event.GatewayRequestID, event.PlatformUserID, event.Currency)
 	}
-	_, err := b.ensureLease(ctx, event.PlatformUserID, event.Currency, event.AmountUnits)
+	lease, err := b.ensureLease(ctx, event.PlatformUserID, event.Currency, event.AmountUnits)
 	if err == nil {
-		_, err = b.store.ReserveCanonicalWalletLease(ctx, event.PlatformUserID, event.Currency, event.EventID, event.AmountUnits, time.Now().UTC())
+		_, err = b.store.ReserveCanonicalWalletLease(ctx, event.PlatformUserID, lease.LeaseID, event.Currency, event.EventID, event.AmountUnits, time.Now().UTC())
 	}
 	if b.cfg.Mode == config.CanonicalWalletModeShadow {
 		return true, nil
@@ -328,7 +382,7 @@ func (b *CanonicalWalletBridge) processSettlement(ctx context.Context, event Can
 		slog.Warn("canonical wallet shadow lease unavailable", "event_id", event.EventID, "platform_user_id", event.PlatformUserID, "error", err)
 		return
 	}
-	reservation, err := b.store.ReserveCanonicalWalletLease(ctx, event.PlatformUserID, event.Currency, event.EventID, event.AmountUnits, time.Now().UTC())
+	reservation, err := b.store.ReserveCanonicalWalletLease(ctx, event.PlatformUserID, lease.LeaseID, event.Currency, event.EventID, event.AmountUnits, time.Now().UTC())
 	if err != nil {
 		canonicalWalletBridgeMetrics.reserveError.Add(1)
 		slog.Warn("canonical wallet shadow reservation failed", "event_id", event.EventID, "lease_id", lease.LeaseID, "error", err)
@@ -362,21 +416,30 @@ func (b *CanonicalWalletBridge) processSettlement(ctx context.Context, event Can
 	slog.Info("canonical wallet shadow settlement observed", attrs...)
 }
 
-func (b *CanonicalWalletBridge) ensureLease(ctx context.Context, platformUserID, currency string, amountMicros int64) (*CanonicalWalletLease, error) {
+func (b *CanonicalWalletBridge) ensureLease(ctx context.Context, platformUserID, currency string, amountUnits int64) (*CanonicalWalletLease, error) {
 	if b.store == nil || b.control == nil {
 		return nil, errors.New("canonical wallet bridge dependencies unavailable")
 	}
-	currency = NormalizeUserBillingCurrency(currency)
 	lease, err := b.store.GetCanonicalWalletLease(ctx, platformUserID)
-	if err == nil && lease != nil && lease.Currency == currency && lease.ExpiresAt.After(time.Now().UTC()) && lease.RemainingMicros() >= amountMicros {
+	if err == nil && lease != nil && lease.Currency == currency && lease.ExpiresAt.After(time.Now().UTC()) && lease.RemainingUnits() >= amountUnits {
 		return lease, nil
 	}
-	requested := b.cfg.LeaseBudgetMicros
-	if amountMicros > requested {
-		requested = amountMicros
+	// Interim until Task 5's config rename (LeaseBudgetMicros ->
+	// LeaseBudgetUnits with a rescaled default): the configured budget is
+	// still expressed in ShipAny's wire-level micros, so the comparison and
+	// the ceiling conversion happen in micros here.
+	requestedMicros := b.cfg.LeaseBudgetMicros
+	// Ceiling division: cny-e8-v1 units -> ShipAny's coarser wire-level
+	// micros scale (1 micro = 100 units). Rounding up means the lease
+	// ACTUALLY requested is never smaller than amountUnits demanded —
+	// at most 99 units (0.99 millionths of a CNY) of extra headroom is
+	// requested, never a shortfall.
+	amountMicros := (amountUnits + 99) / 100
+	if amountMicros > requestedMicros {
+		requestedMicros = amountMicros
 	}
 	lease, err = b.control.AcquireLease(ctx, canonicalWalletLeaseRequest{
-		PlatformUserID: platformUserID, Currency: currency, RequestedMicros: requested, RequestedTTLSeconds: b.cfg.LeaseTTLSeconds,
+		PlatformUserID: platformUserID, Currency: currency, RequestedMicros: requestedMicros, RequestedTTLSeconds: b.cfg.LeaseTTLSeconds,
 	})
 	if err != nil {
 		return nil, err
