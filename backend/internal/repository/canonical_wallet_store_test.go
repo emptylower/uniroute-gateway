@@ -306,3 +306,27 @@ func TestParseCanonicalWalletLeaseRejectsEveryCorruptField(t *testing.T) {
 		).Err(), "restore valid state for the next field")
 	}
 }
+
+// A real Redis that goes away mid-flight is the one reservation failure that
+// is NOT a script code — the transport error has to surface to the caller
+// rather than being swallowed into a nil reservation. miniredis is a real
+// server, so closing it is a real outage, not a faked driver response.
+func TestCanonicalWalletReserveSurfacesRedisTransportFailure(t *testing.T) {
+	mr := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	store := NewGatewayCache(client).(service.CanonicalWalletLeaseStore)
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	lease := service.CanonicalWalletLease{
+		LeaseID: "lease-transport", PlatformUserID: "shipany-user-transport", Currency: "CNY",
+		BudgetUnits: 1_000, ExpiresAt: now.Add(time.Minute),
+	}
+	require.NoError(t, store.InstallCanonicalWalletLease(context.Background(), lease))
+
+	mr.Close()
+
+	_, err := store.ReserveCanonicalWalletLease(context.Background(), lease.PlatformUserID, lease.LeaseID, "CNY", "event-transport", 10, now)
+	require.Error(t, err, "a Redis outage during reservation must surface, never be reported as a successful no-op")
+	require.NotErrorIs(t, err, service.ErrCanonicalWalletLeaseMissing, "a transport failure is not a missing lease — conflating them would let a retry rebind the event to a different lease")
+}
+

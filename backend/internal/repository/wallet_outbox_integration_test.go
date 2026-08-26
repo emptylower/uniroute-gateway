@@ -371,3 +371,72 @@ func TestWalletOutboxInsertSurfacesRealTransactionErrors(t *testing.T) {
 	_, err = dead.ReclaimStaleInFlightEvents(ctx, time.Minute)
 	require.Error(t, err)
 }
+
+// InsertOutboxEventTx must propagate any insert failure that is NOT a unique
+// violation, instead of falling through to the payload-hash comparison — that
+// fallback SELECT is only meaningful when the row genuinely already exists.
+// `SET LOCAL search_path` makes the table unresolvable for the rest of this
+// transaction only, producing a real Postgres 42P01 with no mock and no
+// cleanup: the setting dies with the transaction.
+func TestWalletOutboxInsertPropagatesNonUniqueFailures(t *testing.T) {
+	ctx := context.Background()
+	resetWalletOutboxTable(t)
+	store := NewWalletOutboxStore(integrationDB)
+	event := service.CanonicalWalletSettlementEvent{
+		EventID: "gwusg_" + uuid.NewString(), GatewayRequestID: "req-" + uuid.NewString(),
+		PlatformUserID: "shipany-user-" + uuid.NewString(), LeaseID: "lease-" + uuid.NewString(),
+		Currency: "CNY", AmountUnits: 12_000000, OccurredAt: time.Now().UTC(),
+	}
+
+	tx, err := integrationDB.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback() }()
+	_, err = tx.ExecContext(ctx, `SET LOCAL search_path TO pg_catalog`)
+	require.NoError(t, err)
+
+	err = store.InsertOutboxEventTx(ctx, tx, event)
+	require.Error(t, err, "a non-unique insert failure must propagate")
+	require.NotErrorIs(t, err, ErrWalletOutboxPayloadConflict, "a genuine insert failure must not be reported as a repricing conflict")
+	require.ErrorContains(t, err, "wallet_settlement_outbox")
+}
+
+func TestWalletOutboxBindEventLease(t *testing.T) {
+	ctx := context.Background()
+	resetWalletOutboxTable(t)
+	store := NewWalletOutboxStore(integrationDB)
+	event := service.CanonicalWalletSettlementEvent{
+		EventID: "gwusg_" + uuid.NewString(), GatewayRequestID: "req-" + uuid.NewString(),
+		PlatformUserID: "shipany-user-" + uuid.NewString(), LeaseID: "lease-orig",
+		Currency: "CNY", AmountUnits: 10_000000, OccurredAt: time.Now().UTC(),
+	}
+
+	tx, err := integrationDB.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	require.NoError(t, store.InsertOutboxEventTx(ctx, tx, event))
+	require.NoError(t, tx.Commit())
+
+	claimed, err := store.ClaimPendingOutboxEvents(ctx, testWalletOutboxWorkerID, 1)
+	require.NoError(t, err)
+	require.Len(t, claimed, 1)
+
+	// Another worker attempts to bind: claim lost
+	err = store.BindOutboxEventLease(ctx, claimed[0].ID, "other-worker", "lease-new")
+	require.ErrorIs(t, err, service.ErrCanonicalWalletOutboxClaimLost)
+
+	// Current owner binds: succeeds
+	require.NoError(t, store.BindOutboxEventLease(ctx, claimed[0].ID, testWalletOutboxWorkerID, "lease-new"))
+
+	var boundLease string
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT lease_id FROM wallet_settlement_outbox WHERE id = $1`, claimed[0].ID).Scan(&boundLease))
+	require.Equal(t, "lease-new", boundLease)
+
+	// Dead DB surfaces Exec error
+	deadDB, err := sql.Open("postgres", "host=127.0.0.1 port=1 user=postgres dbname=postgres sslmode=disable connect_timeout=1")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = deadDB.Close() })
+	dead := NewWalletOutboxStore(deadDB)
+	err = dead.BindOutboxEventLease(ctx, claimed[0].ID, testWalletOutboxWorkerID, "lease-new")
+	require.Error(t, err)
+}
+
+

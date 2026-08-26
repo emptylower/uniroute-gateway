@@ -228,6 +228,17 @@ func (c *gatewayCache) ReserveCanonicalWalletLease(ctx context.Context, platform
 	if err != nil {
 		return nil, err
 	}
+	return decodeCanonicalWalletReservationResult(result, platformUserID)
+}
+
+// decodeCanonicalWalletReservationResult turns the reservation Lua script's
+// raw reply into a reservation or a typed error. It is deliberately a pure
+// function over the raw []any and not a method: every defensive branch here
+// guards against a reply shape the shipped script cannot actually produce, so
+// the ONLY honest way to test them is to hand the decoder those shapes
+// directly. Inlined into the Redis call, they were untestable without faking
+// a driver — which is not a thing this repository does.
+func decodeCanonicalWalletReservationResult(result []any, platformUserID string) (*service.CanonicalWalletReservation, error) {
 	if len(result) == 0 {
 		return nil, errors.New("canonical wallet reservation returned no result")
 	}
