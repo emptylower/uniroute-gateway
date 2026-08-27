@@ -70,3 +70,39 @@ func TestOpenAIFreezeBillingSnapshotModeRulesAndShadowAccount(t *testing.T) {
 	require.True(t, snap.Flags.LongContextBillingEnabled)
 	require.Equal(t, int64(99), snap.AccountID, "AccountID is the selected (shadow) account; only the flags come from the credential")
 }
+
+// BenchmarkFreezeBillingSnapshot measures the request-path cost the generic
+// facade adds per attempt (p50 read from -benchtime output; recorded in the
+// completion record as the 3.3 authorization path's baseline cost).
+func BenchmarkFreezeBillingSnapshot(b *testing.B) {
+	svc, apiKey, _, account := newSnapshotTestFixture(&testing.T{})
+	gw := &GatewayService{billingSnapshotSettler: billingSnapshotSettler{snapshots: svc, billing: svc.billing}, billingService: svc.billing, resolver: svc.resolver}
+	ctx := context.Background()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = gw.FreezeBillingSnapshot(ctx, apiKey, account, nil, "claude-sonnet-4", "claude-sonnet-4", false, 0, 0)
+	}
+}
+
+// BenchmarkFreezeBillingSnapshotWSRow3 / Row4 measure the two WS sites
+// separately: row 3 is the handshake's validation-only freeze, row 4 the
+// per-turn carried freeze (including turn 1).
+func BenchmarkFreezeBillingSnapshotWSRow3(b *testing.B) {
+	svc, apiKey, _, account := newSnapshotTestFixture(&testing.T{})
+	gw := &OpenAIGatewayService{billingSnapshotSettler: billingSnapshotSettler{snapshots: svc, billing: svc.billing}, billingService: svc.billing, resolver: svc.resolver}
+	ctx := context.Background()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = gw.FreezeBillingSnapshot(ctx, apiKey, account, nil, "claude-sonnet-4", "claude-sonnet-4", true)
+	}
+}
+
+func BenchmarkFreezeBillingSnapshotWSRow4(b *testing.B) {
+	svc, apiKey, _, account := newSnapshotTestFixture(&testing.T{})
+	gw := &OpenAIGatewayService{billingSnapshotSettler: billingSnapshotSettler{snapshots: svc, billing: svc.billing}, billingService: svc.billing, resolver: svc.resolver}
+	ctx := context.Background()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = gw.FreezeBillingSnapshot(ctx, apiKey, account, nil, "claude-sonnet-4", "claude-sonnet-4", false)
+	}
+}

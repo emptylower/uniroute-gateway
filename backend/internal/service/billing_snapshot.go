@@ -231,9 +231,13 @@ func (s *BillingSnapshotService) Mode() BillingSnapshotMode {
 	}
 }
 
+// billingSnapshotRandRead is an injection seam so the unit suite can exercise
+// the id-generation failure branch (crypto/rand never fails in practice).
+var billingSnapshotRandRead = rand.Read
+
 func newBillingSnapshotID() (string, error) {
 	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
+	if _, err := billingSnapshotRandRead(b[:]); err != nil {
 		return "", err
 	}
 	return "bsnap_" + hex.EncodeToString(b[:]), nil

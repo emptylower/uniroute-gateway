@@ -4,10 +4,24 @@ package service
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if code == 0 && recordModeDriftTestRan {
+		got := BillingSnapshotMetricsSnapshot()
+		if got.Drift != 1 || got.SettleError != 0 || got.ModelMismatch != 1 {
+			fmt.Fprintf(os.Stderr, "record-mode invariant broken across the suite: drift=%d settleError=%d modelMismatch=%d (exactly 1/0/1 expected — only TestApplyBillingSnapshotToSettlementModes may produce them)\n", got.Drift, got.SettleError, got.ModelMismatch)
+			code = 1
+		}
+	}
+	os.Exit(code)
+}
 
 var recordModeDriftTestRan bool // read by TestMain (Task 8) so a -run subset never asserts a count it did not produce
 
