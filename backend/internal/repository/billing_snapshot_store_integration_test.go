@@ -18,7 +18,7 @@ func TestBillingSnapshotStoreRoundTripAndIdempotentInsert(t *testing.T) {
 	snap := &service.BillingSnapshot{
 		ID: "bsnap_test_" + t.Name(), Version: service.BillingSnapshotVersion, FrozenAt: time.Now().UTC().Truncate(time.Microsecond),
 		Family: service.BillingFamilyOpenAI, UserID: 1, APIKeyID: 2, AccountID: 3, RequestedModel: "m", BillingModel: "m", Candidates: []string{"m"},
-		Pricing: service.BillingSnapshotPricing{Mode: service.BillingModeToken, Source: service.PricingSourceLiteLLM, Base: &service.ModelPricing{InputPricePerToken: price, OutputPricePerToken: price * 5, MaxInputTokens: 128000}},
+		Pricing:     service.BillingSnapshotPricing{Mode: service.BillingModeToken, Source: service.PricingSourceLiteLLM, Base: &service.ModelPricing{InputPricePerToken: price, OutputPricePerToken: price * 5, MaxInputTokens: 128000}},
 		Multipliers: service.BillingSnapshotMultipliers{Base: 1, Text: 1, Image: 1, Video: 1, WebSearch: 1, Account: 1, PeakAt: time.Now().UTC().Truncate(time.Microsecond)},
 		FX:          service.ExchangeRateSnapshot{BaseCurrency: "USD", QuoteCurrency: "CNY", Rate: 7, Source: "test"},
 		Flags:       service.BillingSnapshotFlags{BillingCurrency: "CNY", MultiplierCurrency: "CNY"},

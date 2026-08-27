@@ -68,7 +68,7 @@ func TestEstimateUpperBoundDominatesWithPriorityAndCachePrices(t *testing.T) {
 	b := snap.Pricing.Base
 	b.InputPricePerTokenPriority, b.OutputPricePerTokenPriority, b.CacheReadPricePerTokenPriority = 6e-6, 30e-6, 0.6e-6
 	b.SupportsCacheBreakdown, b.CacheCreation5mPrice, b.CacheCreation1hPrice, b.CacheReadPricePerToken = true, 3.75e-6, 6e-6, 9e-6 // cache read deliberately dearer than input
-	b.ImageOutputPricePerToken, b.ImageOutputPriceExplicit = 40e-6, true                                                         // image output dearer than text output
+	b.ImageOutputPricePerToken, b.ImageOutputPriceExplicit = 40e-6, true                                                           // image output dearer than text output
 	rng := rand.New(rand.NewSource(11))
 	for i := 0; i < 1000; i++ {
 		inBound := rng.Intn(50000) + 1

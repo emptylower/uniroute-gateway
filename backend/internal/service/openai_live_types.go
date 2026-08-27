@@ -40,10 +40,10 @@ type LiveCallRequest struct {
 }
 
 type LiveCallIdentity struct {
-	APIKeyID            int64
-	UserID              int64
-	GroupID             *int64
-	SubscriptionID      *int64
+	APIKeyID       int64
+	UserID         int64
+	GroupID        *int64
+	SubscriptionID *int64
 	// APIKey / User (Phase 3.2) feed the billing snapshot's Freeze at the
 	// post-selection freeze point. This type is never serialized (no json tags,
 	// never marshalled by SaveLiveCall); the pointers stay in-process.

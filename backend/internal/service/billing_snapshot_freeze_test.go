@@ -68,7 +68,7 @@ func TestBillingSnapshotFreezeCapturesEveryPricingInput(t *testing.T) {
 	snap, err := svc.Freeze(context.Background(), FreezeInput{
 		APIKey: apiKey, User: user, Account: account,
 		RequestedModel: "claude-sonnet-4", BillingModel: "claude-sonnet-4",
-		Family: BillingFamilyGeneric,
+		Family:               BillingFamilyGeneric,
 		ResolveUserGroupRate: func(_ context.Context, _, _ int64, def float64) float64 { return def },
 	})
 	require.NoError(t, err)

@@ -490,9 +490,9 @@ func (s *BillingService) initFallbackPricing() {
 	// K3 官方定价（https://platform.kimi.com/docs/pricing/chat-k3）：
 	// 输入 ¥20/百万（缓存未命中）、缓存命中 ¥2/百万、输出 ¥100/百万，按 k2.6 同口径 6.84 折算。
 	s.fallbackPrices["kimi-k3"] = &ModelPricing{
-		InputPricePerToken:     2.92e-6, // $2.92 per MTok (cache miss, ¥20)
+		InputPricePerToken:     2.92e-6,  // $2.92 per MTok (cache miss, ¥20)
 		OutputPricePerToken:    14.62e-6, // $14.62 per MTok (¥100)
-		CacheReadPricePerToken: 0.29e-6, // $0.29 per MTok (cache hit, ¥2)
+		CacheReadPricePerToken: 0.29e-6,  // $0.29 per MTok (cache hit, ¥2)
 		SupportsCacheBreakdown: false,
 	}
 	s.fallbackPrices["kimi-k2.6"] = &ModelPricing{

@@ -272,8 +272,8 @@ func snapshotSettlementInputFromClaudeUsage(usage ClaudeUsage, override cacheTTL
 	}
 	return SnapshotSettlementInput{
 		Tokens: UsageTokens{
-			InputTokens:           usage.InputTokens, OutputTokens: usage.OutputTokens,
-			CacheCreationTokens:   usage.CacheCreationInputTokens, CacheReadTokens: usage.CacheReadInputTokens,
+			InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens,
+			CacheCreationTokens: usage.CacheCreationInputTokens, CacheReadTokens: usage.CacheReadInputTokens,
 			CacheCreation5mTokens: usage.CacheCreation5mTokens, CacheCreation1hTokens: usage.CacheCreation1hTokens,
 			ImageOutputTokens: usage.ImageOutputTokens,
 		},
@@ -304,19 +304,21 @@ func snapshotSettlementInputFromOpenAIResult(result *OpenAIForwardResult, servic
 		return SnapshotSettlementInput{}
 	}
 	return SnapshotSettlementInput{
-		Tokens:         openAIUsageTokens(result.Usage),
-		ServiceTier:    serviceTier,
-		ImageCount:     result.ImageCount, ImageSize: result.ImageSize,
-		VideoCount:     result.VideoCount, VideoResolution: result.VideoResolution, VideoDurationSeconds: result.VideoDurationSeconds,
+		Tokens:      openAIUsageTokens(result.Usage),
+		ServiceTier: serviceTier,
+		ImageCount:  result.ImageCount, ImageSize: result.ImageSize,
+		VideoCount: result.VideoCount, VideoResolution: result.VideoResolution, VideoDurationSeconds: result.VideoDurationSeconds,
 		WebSearchCalls: result.WebSearchCalls,
 		GrokVideo:      grokVideo,
 	}
 }
 
 // applyBillingSnapshotToSettlement is the single place the mode switch lives.
-//   off:    return the live cost untouched.
-//   record: compute the snapshot cost too; count drift; return the live cost.
-//   settle: return the snapshot cost and a ctx with the snapshot's FX pinned.
+//
+//	off:    return the live cost untouched.
+//	record: compute the snapshot cost too; count drift; return the live cost.
+//	settle: return the snapshot cost and a ctx with the snapshot's FX pinned.
+//
 // settledModel is the billing model the settlement path derived; a snapshot
 // that did not price it (snapshotCoversModel) settles live and is counted.
 func (s *billingSnapshotSettler) applyBillingSnapshotToSettlement(ctx context.Context, snap *BillingSnapshot, live *CostBreakdown, in SnapshotSettlementInput, settledModel string) (*CostBreakdown, context.Context) {

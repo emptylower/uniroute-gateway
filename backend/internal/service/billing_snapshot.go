@@ -89,8 +89,8 @@ type BillingSnapshotFlags struct {
 	// resolveCacheTTLUsageOverrideTarget returns (target, ok) and ok can be true
 	// with an EMPTY target (gateway_upstream_response.go:1325-1336), which the live
 	// path applies as the 5m default — so both halves are frozen, never a bare string.
-	CacheTTLOverrideEnabled bool   `json:"cache_ttl_override_enabled"`
-	CacheTTLOverrideTarget  string `json:"cache_ttl_override_target,omitempty"`
+	CacheTTLOverrideEnabled bool    `json:"cache_ttl_override_enabled"`
+	CacheTTLOverrideTarget  string  `json:"cache_ttl_override_target,omitempty"`
 	LongContextThreshold    int     `json:"long_context_threshold,omitempty"` // Gemini path opts (RecordUsageWithLongContext)
 	LongContextMultiplier   float64 `json:"long_context_multiplier,omitempty"`
 }
@@ -176,9 +176,9 @@ func BillingSnapshotMetricsSnapshot() BillingSnapshotMetrics {
 }
 
 type FreezeInput struct {
-	APIKey         *APIKey
-	User           *User
-	Account        *Account // required: the freeze point is after account selection
+	APIKey  *APIKey
+	User    *User
+	Account *Account // required: the freeze point is after account selection
 	// BillingAccount is the account whose FLAGS settlement reads — for a shadow
 	// account that is the credential account behind it (openai_gateway_usage.go:205-212,
 	// resolveCredentialAccount). nil = Account. AccountID always records Account.
@@ -330,8 +330,8 @@ func (s *BillingSnapshotService) Freeze(ctx context.Context, in FreezeInput) (*B
 		Candidates: usageBillingModelCandidates(billingModel, strings.TrimSpace(in.RequestedModel)),
 		Pricing: BillingSnapshotPricing{
 			Mode: resolved.Mode, Source: resolved.Source, Base: clonePricing(resolved.BasePricing),
-			Intervals: clonePricingIntervals(resolved.Intervals),
-			RequestTiers: clonePricingIntervals(resolved.RequestTiers),
+			Intervals:              clonePricingIntervals(resolved.Intervals),
+			RequestTiers:           clonePricingIntervals(resolved.RequestTiers),
 			DefaultPerRequestPrice: resolved.DefaultPerRequestPrice, SupportsCacheBreakdown: resolved.SupportsCacheBreakdown,
 			Channel: cloneChannelPricing(resolved.channelPricing), MaxInputTokens: maxIn, MaxOutputTokens: maxOut,
 		},

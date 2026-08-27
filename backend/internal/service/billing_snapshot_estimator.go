@@ -35,8 +35,8 @@ type EstimateInput struct {
 	MaxOutputTokens       int
 	ServiceTier           string
 	Continuation          ContinuationKind
-	PriorTurnInputTokens  int // warm: the relay's accumulated input of the prior turn
-	PriorTurnOutputTokens int // warm: … and its output
+	PriorTurnInputTokens  int    // warm: the relay's accumulated input of the prior turn
+	PriorTurnOutputTokens int    // warm: … and its output
 	ImageCount            int    // the caller's bound — the cost is linear in it
 	ImageSize             string // advisory only — the bound is taken over every tier against the original snapshot (the upstream reports the real one after the fact)
 	VideoCount            int

@@ -126,15 +126,15 @@ type LiteLLMModelPricing struct {
 	// figure, not the catalog's governance-mutable contextWindowFrom() value
 	// (litellm_catalog_adapter.go) — a frozen snapshot must not drift with
 	// catalog edits.
-	MaxInputTokens  int `json:"max_input_tokens,omitempty"`
-	MaxOutputTokens int `json:"max_output_tokens,omitempty"`
-	SupportsServiceTier                 bool    `json:"supports_service_tier"`
-	LiteLLMProvider                     string  `json:"litellm_provider"`
-	Mode                                string  `json:"mode"`
-	SupportsPromptCaching               bool    `json:"supports_prompt_caching"`
-	OutputCostPerImage                  float64 `json:"output_cost_per_image"`       // 图片生成模型每张图片价格
-	OutputCostPerImageToken             float64 `json:"output_cost_per_image_token"` // 图片输出 token 价格
-	InputCostPerImageToken              float64 `json:"input_cost_per_image_token"`  // 图片输入 token 价格（如 gpt-image-2 图片编辑）
+	MaxInputTokens          int     `json:"max_input_tokens,omitempty"`
+	MaxOutputTokens         int     `json:"max_output_tokens,omitempty"`
+	SupportsServiceTier     bool    `json:"supports_service_tier"`
+	LiteLLMProvider         string  `json:"litellm_provider"`
+	Mode                    string  `json:"mode"`
+	SupportsPromptCaching   bool    `json:"supports_prompt_caching"`
+	OutputCostPerImage      float64 `json:"output_cost_per_image"`       // 图片生成模型每张图片价格
+	OutputCostPerImageToken float64 `json:"output_cost_per_image_token"` // 图片输出 token 价格
+	InputCostPerImageToken  float64 `json:"input_cost_per_image_token"`  // 图片输入 token 价格（如 gpt-image-2 图片编辑）
 
 	// TokenPricingAbsent 表示源数据中 input/output token 价格均缺失（仅有图片价）。
 	// 此类条目只可用于图片计费，token 计费必须回退到 fallback 或 fail-closed，

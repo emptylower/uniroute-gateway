@@ -133,13 +133,18 @@ func TestCalculateCostFromSnapshotIsImmuneToEveryDriftClass(t *testing.T) {
 		// (billing_service.go:124-129): before the mutation "priority" costs 2× via
 		// serviceTierCostMultiplier, after it the priority price is used.
 		{"service-tier policy", SnapshotSettlementInput{Tokens: tokens, ServiceTier: "priority"}, nil,
-			func(f *driftFixture) { f.svc.billing.fallbackPrices["claude-sonnet-4"].InputPricePerTokenPriority = 1e-3 }},
+			func(f *driftFixture) {
+				f.svc.billing.fallbackPrices["claude-sonnet-4"].InputPricePerTokenPriority = 1e-3
+			}},
 		{"user/group multiplier", SnapshotSettlementInput{Tokens: tokens}, nil,
 			func(f *driftFixture) { f.apiKey.Group.RateMultiplierCNY = floatPtr(4.5) }}, // the CNY user's multiplier source (group.go:113-125)
 		// PeakMultiplierAt applies only to subscription groups (group.go:271), so
 		// this row freezes under subscription billing.
 		{"peak-hour multiplier", SnapshotSettlementInput{Tokens: tokens},
-			func(f *driftFixture) { f.apiKey.Group.SubscriptionType = SubscriptionTypeSubscription; f.sub = &UserSubscription{ID: 5} },
+			func(f *driftFixture) {
+				f.apiKey.Group.SubscriptionType = SubscriptionTypeSubscription
+				f.sub = &UserSubscription{ID: 5}
+			},
 			func(f *driftFixture) {
 				g := f.apiKey.Group
 				g.PeakRateEnabled, g.PeakRateMultiplier, g.PeakStart, g.PeakEnd = true, 5, "00:00", "23:59" // group.go:27-30
