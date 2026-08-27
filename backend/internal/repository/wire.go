@@ -178,6 +178,7 @@ var ProviderSet = wire.NewSet(
 	ProvideSQLDB,
 	ProvideRedis,
 	ProvideWalletOutboxStore,
+	ProvideBillingSnapshotStore,
 )
 
 // ProvideEnt 为依赖注入提供 Ent 客户端。
