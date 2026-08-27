@@ -1582,6 +1582,11 @@ type CanonicalWalletConfig struct {
 	SettlementQueueSize int    `mapstructure:"settlement_queue_size"`
 	SettlementWorkers   int    `mapstructure:"settlement_workers"`
 	EnforceReady        bool   `mapstructure:"enforce_ready"`
+	// BillingSnapshotMode (Phase 3.2): "off" = today's settlement paths exactly;
+	// "record" (default) = freeze + persist + compare, settle as today, count drift;
+	// "settle" = settle from the frozen snapshot. Independent of Mode so the
+	// snapshot can be proven in shadow before any hold exists.
+	BillingSnapshotMode string `mapstructure:"billing_snapshot_mode"`
 }
 
 // TotpConfig TOTP 双因素认证配置
@@ -2041,6 +2046,7 @@ func setDefaults() {
 	viper.SetDefault("canonical_wallet.settlement_queue_size", 2048)
 	viper.SetDefault("canonical_wallet.settlement_workers", 2)
 	viper.SetDefault("canonical_wallet.enforce_ready", false)
+	viper.SetDefault("canonical_wallet.billing_snapshot_mode", "record")
 
 	// Turnstile
 	viper.SetDefault("turnstile.required", false)
@@ -2590,6 +2596,18 @@ func setEnvReachableDefaults() {
 	viper.SetDefault("dingtalk_connect.sync_corp_email_attr_name", "")
 }
 
+// validateBillingSnapshotMode is checked for EVERY canonical_wallet.mode,
+// including "disabled": the snapshot runs independently of the wallet mode,
+// and an unrecognised value must never silently become "off".
+func validateBillingSnapshotMode(mode string) error {
+	switch strings.TrimSpace(mode) {
+	case "off", "record", "settle":
+		return nil
+	default:
+		return fmt.Errorf("canonical_wallet.billing_snapshot_mode must be one of off|record|settle, got %q", mode)
+	}
+}
+
 func (c *Config) Validate() error {
 	forwardedClientIPHeaders, err := NormalizeForwardedClientIPHeaders(c.Security.ForwardedClientIPHeaders)
 	if err != nil {
@@ -2597,6 +2615,9 @@ func (c *Config) Validate() error {
 	}
 	c.Security.ForwardedClientIPHeaders = forwardedClientIPHeaders
 	c.SetForwardedClientIPSettings(c.Security.TrustForwardedIPForAPIKeyACL, forwardedClientIPHeaders)
+	if err := validateBillingSnapshotMode(c.CanonicalWallet.BillingSnapshotMode); err != nil {
+		return err
+	}
 	if c.Server.ReadHeaderTimeout < 1 || c.Server.ReadHeaderTimeout > 60 {
 		return fmt.Errorf("server.read_header_timeout must be between 1 and 60 seconds")
 	}
