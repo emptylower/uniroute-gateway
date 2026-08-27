@@ -250,7 +250,12 @@ func (r *ModelPricingResolver) GetIntervalPricing(resolved *ResolvedPricing, tot
 		return resolved.BasePricing
 	}
 
-	return intervalToModelPricing(iv, resolved.SupportsCacheBreakdown, resolved.channelPricing)
+	pricing := intervalToModelPricing(iv, resolved.SupportsCacheBreakdown, resolved.channelPricing)
+	if resolved.BasePricing != nil {
+		pricing.MaxInputTokens = resolved.BasePricing.MaxInputTokens
+		pricing.MaxOutputTokens = resolved.BasePricing.MaxOutputTokens
+	}
+	return pricing
 }
 
 // intervalToModelPricing 将区间定价转换为 ModelPricing

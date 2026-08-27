@@ -108,6 +108,8 @@ type ModelPricing struct {
 	LongContextOutputMultiplier        float64 // 长上下文整次会话输出倍率
 	ImageOutputPricePerToken           float64 // 图片输出 token 价格 (USD)
 	ImageOutputPriceExplicit           bool    // 是否由渠道定价显式设定（为 true 时即使 == 0 也不回退）
+	MaxInputTokens                     int     // 上下文窗口（输入侧），0 = 未知；来自 LiteLLM max_input_tokens
+	MaxOutputTokens                    int     // 单次最大输出，0 = 未知；来自 LiteLLM max_output_tokens
 }
 
 const (
@@ -842,6 +844,8 @@ func (s *BillingService) GetModelPricing(model string) (*ModelPricing, error) {
 				LongContextOutputMultiplier:        litellmPricing.LongContextOutputCostMultiplier,
 				ImageInputPricePerToken:            litellmPricing.InputCostPerImageToken,
 				ImageOutputPricePerToken:           litellmPricing.OutputCostPerImageToken,
+				MaxInputTokens:                     litellmPricing.MaxInputTokens,
+				MaxOutputTokens:                    litellmPricing.MaxOutputTokens,
 			}), nil
 		}
 	}
