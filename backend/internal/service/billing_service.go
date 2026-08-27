@@ -1278,6 +1278,22 @@ func (s *BillingService) CalculateCostWithLongContext(model string, tokens Usage
 		return s.CalculateCost(model, tokens, rateMultiplier)
 	}
 
+	pricing, err := s.GetModelPricing(model)
+	if err != nil {
+		return nil, err
+	}
+	return s.calculateCostWithLongContextPricing(pricing, tokens, rateMultiplier, threshold, extraMultiplier)
+}
+
+// calculateCostWithLongContextPricing is CalculateCostWithLongContext's
+// in-range / out-of-range split with the pricing supplied by the caller.
+// Body: today's :1287-1331 with the two s.CalculateCost(model, X, M) calls
+// replaced by s.computeTokenBreakdown(pricing, X, M, "", true) — the exact
+// trailing arguments CalculateCost reaches through calculateCostInternal
+// (:1150-1152 → :1170-1172: serviceTier "", longContextBillingEnabled true)
+// — and the merge (:1321-1331) copied as is, leaving BillingMode empty on
+// the merged breakdown as it is today.
+func (s *BillingService) calculateCostWithLongContextPricing(pricing *ModelPricing, tokens UsageTokens, rateMultiplier float64, threshold int, extraMultiplier float64) (*CostBreakdown, error) {
 	// 拆分成范围内和范围外
 	var inRangeCacheTokens, inRangeInputTokens int
 	var outRangeCacheTokens, outRangeInputTokens int
@@ -1306,20 +1322,14 @@ func (s *BillingService) CalculateCostWithLongContext(model string, tokens Usage
 		CacheCreation1hTokens: tokens.CacheCreation1hTokens,
 		ImageOutputTokens:     tokens.ImageOutputTokens,
 	}
-	inRangeCost, err := s.CalculateCost(model, inRangeTokens, rateMultiplier)
-	if err != nil {
-		return nil, err
-	}
+	inRangeCost := s.computeTokenBreakdown(pricing, inRangeTokens, rateMultiplier, "", true)
 
 	// 范围外部分：× extraMultiplier 计费
 	outRangeTokens := UsageTokens{
 		InputTokens:     outRangeInputTokens,
 		CacheReadTokens: outRangeCacheTokens,
 	}
-	outRangeCost, err := s.CalculateCost(model, outRangeTokens, rateMultiplier*extraMultiplier)
-	if err != nil {
-		return inRangeCost, fmt.Errorf("out-range cost: %w", err)
-	}
+	outRangeCost := s.computeTokenBreakdown(pricing, outRangeTokens, rateMultiplier*extraMultiplier, "", true)
 
 	// 合并成本
 	return &CostBreakdown{
