@@ -151,6 +151,16 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 
 		account := selection.Account
 		setOpsSelectedAccount(c, account.ID, account.Platform)
+
+		// Phase 3.2 freeze point (row 11b, ungated): after account selection,
+		// before the upstream write; settle mode returns the same 503 the
+		// request-failed path below produces.
+		billingSnapshot, freezeErr := h.gatewayService.FreezeBillingSnapshot(c.Request.Context(), apiKey, account, subscription, requestedModel, account.GetMappedModel(requestedModel), false)
+		if freezeErr != nil {
+			h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "Model pricing is not configured")
+			return
+		}
+
 		accountRelease, acquired := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, false, &streamStarted, reqLog)
 		if !acquired {
 			return
@@ -170,7 +180,7 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 		if err == nil {
 			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, account.GetMappedModel(requestedModel), true, nil)
 			if result != nil {
-				h.recordAlphaSearchUsage(c, apiKey, account, subscription, channelMapping, requestedModel, body, result, subject.UserID)
+				h.recordAlphaSearchUsage(c, apiKey, account, subscription, channelMapping, requestedModel, body, result, subject.UserID, billingSnapshot)
 			}
 			return
 		}
@@ -230,6 +240,7 @@ func (h *OpenAIGatewayHandler) recordAlphaSearchUsage(
 	body []byte,
 	result *service.OpenAIForwardResult,
 	userID int64,
+	billingSnapshot *service.BillingSnapshot,
 ) {
 	userAgent := c.GetHeader("User-Agent")
 	clientIP := ip.GetClientIP(c)
@@ -255,6 +266,7 @@ func (h *OpenAIGatewayHandler) recordAlphaSearchUsage(
 			QuotaPlatform:      quotaPlatform,
 			SessionID:          sessionID,
 			ChannelUsageFields: channelMapping.ToUsageFields(requestedModel, result.UpstreamModel),
+			BillingSnapshot:    billingSnapshot,
 		}); err != nil {
 			logger.L().With(
 				zap.String("component", "handler.openai_gateway.alpha_search"),

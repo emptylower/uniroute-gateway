@@ -46,8 +46,9 @@ type OpenAIGatewayHandler struct {
 }
 
 type openAIWSTurnChannelMappingSnapshot struct {
-	turn    int
-	mapping service.ChannelMappingResult
+	turn            int
+	mapping         service.ChannelMappingResult
+	billingSnapshot *service.BillingSnapshot
 }
 
 var errOpenAIWSUnsupportedModelSwitch = errors.New("selected account does not support websocket model switch")
@@ -424,6 +425,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	var finalFailoverErr *service.UpstreamFailoverError
 	imagePermissionFiltered := false
 	attemptedCandidate := false
+	var billingSnapshot *service.BillingSnapshot
 	for candidateIndex, candidate := range candidates {
 		candidateStartedAt := time.Now()
 		routedKey := candidate.Apply(apiKey)
@@ -566,6 +568,18 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			candidateSessionHash = ensureOpenAIPoolModeSessionHash(candidateSessionHash, account)
 			reqLog.Debug("openai.account_selected", zap.Int64("account_id", account.ID), zap.String("account_name", account.Name))
 			setOpsSelectedAccount(c, account.ID, account.Platform)
+
+			// Phase 3.2 freeze point (row 1): after account selection, before the
+			// upstream write. Ungated (no EnsureModelPricing existed here): in
+			// off/record mode a failed freeze never refuses; settle mode does.
+			billingSnapshot, err = h.gatewayService.FreezeBillingSnapshot(c.Request.Context(), routedKey, account, candidateSubscription, reqModel, account.GetMappedModel(billingModel), false)
+			if err != nil {
+				lastChannelErr = err
+				if selection.ReleaseFunc != nil {
+					selection.ReleaseFunc()
+				}
+				continue
+			}
 
 			accountReleaseFunc, acquired := h.acquireResponsesAccountSlot(c, routedKey.GroupID, candidateSessionHash, selection, reqStream, &streamStarted, reqLog)
 			if !acquired {
@@ -751,6 +765,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 					SessionID:          sessionID,
 					ChannelUsageFields: routedChannelUsageFields(c, channelMapping, reqModel, result.UpstreamModel, candidate.ChannelID),
 					CyberBlocked:       cyberBlocked,
+					BillingSnapshot:    billingSnapshot,
 				}); err != nil {
 					logger.L().With(
 						zap.String("component", "handler.openai_gateway.responses"),
@@ -1149,6 +1164,16 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		_ = scheduleDecision
 		setOpsSelectedAccount(c, account.ID, account.Platform)
 
+		// Phase 3.2 freeze point (row 2): after account selection, before the
+		// upstream write. Ungated insert; on error the same 503 the pre-selection
+		// EnsureModelPricing produces (reached only in settle mode).
+		var billingSnapshot *service.BillingSnapshot
+		billingSnapshot, err = h.gatewayService.FreezeBillingSnapshot(c.Request.Context(), apiKey, account, subscription, reqModel, account.GetMappedModel(billingModelMsg), false)
+		if err != nil {
+			h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "Model pricing is not configured")
+			return
+		}
+
 		accountReleaseFunc, acquired := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog)
 		if !acquired {
 			return
@@ -1300,6 +1325,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 				SessionID:          sessionID,
 				ChannelUsageFields: clientRequestedUsageFields(c, channelMappingMsg, reqModel, result.UpstreamModel),
 				CyberBlocked:       cyberBlocked,
+				BillingSnapshot:    billingSnapshot,
 			}); err != nil {
 				logger.L().With(
 					zap.String("component", "handler.openai_gateway.messages"),
@@ -1853,7 +1879,10 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 
 		account := selection.Account
 		initialUpstreamModel := account.GetMappedModel(billingModelWS)
-		if err := h.gatewayService.EnsureModelPricing(ctx, apiKey, initialUpstreamModel); err != nil {
+		// Phase 3.2 freeze point (row 3, gated): validation only — the WS family's
+		// carried snapshot is row 4's, taken per turn (including turn 1). Same
+		// refusal contract as the EnsureModelPricing this replaces.
+		if _, err := h.gatewayService.FreezeBillingSnapshot(ctx, apiKey, account, subscription, billingModelWS, initialUpstreamModel, true); err != nil {
 			if selection.ReleaseFunc != nil {
 				selection.ReleaseFunc()
 			}
@@ -1964,10 +1993,14 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				if turn > 1 && !mappedModelUnchanged && !account.IsModelSupported(model) && !account.IsModelSupported(mapping.MappedModel) {
 					return "", newOpenAIWSUnsupportedModelSwitchError(mapping.MappedModel)
 				}
-				if err := h.gatewayService.EnsureModelPricing(ctx, apiKey, account.GetMappedModel(mapping.MappedModel)); err != nil {
-					return "", service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "model pricing is not configured", err)
+				// Phase 3.2 freeze point (row 4, gated): per-turn freeze (including
+				// turn 1) — the carried WS snapshot is this turn's, read at :2084's
+				// RecordUsage literal.
+				turnSnapshot, freezeErr := h.gatewayService.FreezeBillingSnapshot(ctx, apiKey, account, subscription, model, account.GetMappedModel(mapping.MappedModel), true)
+				if freezeErr != nil {
+					return "", service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "model pricing is not configured", freezeErr)
 				}
-				turnChannelMapping.Store(&openAIWSTurnChannelMappingSnapshot{turn: turn, mapping: mapping})
+				turnChannelMapping.Store(&openAIWSTurnChannelMappingSnapshot{turn: turn, mapping: mapping, billingSnapshot: turnSnapshot})
 				return mapping.MappedModel, nil
 			},
 			BeforeTurn: func(turn int) error {
@@ -2028,8 +2061,10 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 					turnUpstreamModel = strings.TrimSpace(result.UpstreamModel)
 				}
 				var turnMapping service.ChannelMappingResult
+				var turnBillingSnapshot *service.BillingSnapshot
 				if snapshot := turnChannelMapping.Load(); snapshot != nil && snapshot.turn == turn {
 					turnMapping = snapshot.mapping
+					turnBillingSnapshot = snapshot.billingSnapshot
 				} else {
 					turnMapping, _ = h.gatewayService.ResolveChannelMappingAndRestrict(ctx, apiKey.GroupID, turnRequestedModel)
 				}
@@ -2097,6 +2132,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 					SessionID:          sessionID,
 					ChannelUsageFields: turnUsageFields,
 					CyberBlocked:       cyberBlocked,
+					BillingSnapshot:    turnBillingSnapshot,
 				}); err != nil {
 					billingFailed.Store(true)
 					closeOpenAIClientWS(wsConn, coderws.StatusInternalError, "billing settlement failed")

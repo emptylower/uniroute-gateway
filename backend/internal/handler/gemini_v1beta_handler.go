@@ -465,12 +465,17 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 		// 账号槽位/等待计数需要在超时或断开时安全回收
 		accountReleaseFunc = wrapReleaseOnDone(c.Request.Context(), accountReleaseFunc)
 
-		if err := h.gatewayService.EnsureModelPricing(c.Request.Context(), apiKey, account.GetMappedModel(modelName)); err != nil {
+		// Phase 3.2 freeze point (row 9, gated): replaces the post-selection
+		// EnsureModelPricing — identical refusal, plus the frozen snapshot
+		// carrying the same long-context literals the handler passes to
+		// RecordUsageWithLongContext below.
+		billingSnapshot, freezeErr := h.gatewayService.FreezeBillingSnapshot(c.Request.Context(), apiKey, account, subscription, reqModel, account.GetMappedModel(modelName), true, 200000, 2.0)
+		if freezeErr != nil {
 			if accountReleaseFunc != nil {
 				accountReleaseFunc()
 			}
 			fs.FailedAccountIDs[account.ID] = struct{}{}
-			reqLog.Warn("gemini.model_pricing_unavailable", zap.Int64("account_id", account.ID), zap.Error(err))
+			reqLog.Warn("gemini.model_pricing_unavailable", zap.Int64("account_id", account.ID), zap.Error(freezeErr))
 			if fs.SwitchCount >= fs.MaxSwitches {
 				googleError(c, http.StatusServiceUnavailable, "Model pricing is not configured")
 				return
@@ -570,6 +575,7 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 				APIKeyService:         h.apiKeyService,
 				SessionID:             sessionID,
 				ChannelUsageFields:    clientRequestedUsageFields(c, channelMapping, reqModel, result.UpstreamModel),
+				BillingSnapshot:       billingSnapshot,
 			}); err != nil {
 				logger.L().With(
 					zap.String("component", "handler.gemini_v1beta.models"),

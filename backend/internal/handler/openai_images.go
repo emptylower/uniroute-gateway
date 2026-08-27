@@ -221,6 +221,16 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 		reqLog.Debug("openai.images.account_selected", zap.Int64("account_id", account.ID), zap.String("account_name", account.Name))
 		setOpsSelectedAccount(c, account.ID, account.Platform)
 
+		// Phase 3.2 freeze point (row 11a, ungated): after account selection,
+		// before the upstream write; the images model is channelMapping.MappedModel.
+		billingSnapshot, freezeErr := h.gatewayService.FreezeBillingSnapshot(c.Request.Context(), apiKey, account, subscription, requestModel, account.GetMappedModel(channelMapping.MappedModel), false)
+		if freezeErr != nil {
+			if selection.ReleaseFunc != nil {
+				selection.ReleaseFunc()
+			}
+			return
+		}
+
 		accountReleaseFunc, acquired := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, parsed.Stream, &streamStarted, reqLog)
 		if !acquired {
 			return
@@ -393,6 +403,7 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 				QuotaPlatform:      quotaPlatform,
 				SessionID:          sessionID,
 				ChannelUsageFields: clientRequestedUsageFields(c, channelMapping, requestModel, upstreamModel),
+				BillingSnapshot:    billingSnapshot,
 			}); err != nil {
 				logger.L().With(
 					zap.String("component", "handler.openai_gateway.images"),

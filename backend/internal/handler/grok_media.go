@@ -293,6 +293,15 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 		sessionHash = ensureOpenAIPoolModeSessionHash(sessionHash, account)
 		setOpsSelectedAccount(c, account.ID, account.Platform)
 
+		// Phase 3.2 freeze point (row 11c, ungated): after account selection,
+		// before the upstream write; settle mode returns the same 503 the
+		// no-eligible-account path above produces.
+		billingSnapshot, freezeErr := h.gatewayService.FreezeBillingSnapshot(c.Request.Context(), apiKey, account, subscription, requestModel, account.GetMappedModel(requestModel), false)
+		if freezeErr != nil {
+			h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "Model pricing is not configured")
+			return
+		}
+
 		accountReleaseFunc, accountAcquired := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, false, &streamStarted, reqLog)
 		if !accountAcquired {
 			return
@@ -405,7 +414,7 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 			}
 		}
 		if shouldRecordGrokMediaUsage(endpoint, requestModel) {
-			recordGrokMediaUsage(c, h, reqLog, apiKey, subject, subscription, account, result, requestModel, body, requestID)
+			recordGrokMediaUsage(c, h, reqLog, apiKey, subject, subscription, account, result, requestModel, body, requestID, billingSnapshot)
 		}
 		reqLog.Debug("grok_media.request_completed",
 			zap.Int64("account_id", account.ID),
@@ -462,6 +471,7 @@ func recordGrokMediaUsage(
 	requestModel string,
 	body []byte,
 	requestID string,
+	billingSnapshot *service.BillingSnapshot,
 ) {
 	userAgent := c.GetHeader("User-Agent")
 	clientIP := ip.GetClientIP(c)
@@ -496,6 +506,7 @@ func recordGrokMediaUsage(
 			QuotaPlatform:      quotaPlatform,
 			SessionID:          sessionID,
 			ChannelUsageFields: channelUsageFields,
+			BillingSnapshot:    billingSnapshot,
 		}); err != nil {
 			logger.L().With(
 				zap.String("component", "handler.openai_gateway.grok_media"),

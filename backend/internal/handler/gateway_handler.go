@@ -437,6 +437,18 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			account := selection.Account
 			setOpsSelectedAccount(c, account.ID, account.Platform)
 
+			// Phase 3.2 freeze point (row 10a, ungated): after account selection,
+			// before the upstream write. No refusal existed here today — a failed
+			// freeze never refuses in off/record mode; settle mode fails the
+			// candidate over to the next one.
+			billingSnapshot, freezeErr := h.gatewayService.FreezeBillingSnapshot(c.Request.Context(), apiKey, account, subscription, reqModel, account.GetMappedModel(billingModel), false, 0, 0)
+			if freezeErr != nil {
+				if selection.Acquired && selection.ReleaseFunc != nil {
+					selection.ReleaseFunc()
+				}
+				continue
+			}
+
 			// 检查请求拦截（预热请求、SUGGESTION MODE等）
 			if account.IsInterceptWarmupEnabled() {
 				interceptType := detectInterceptType(body, reqModel, parsedReq.MaxTokens, isClaudeCodeClient)
@@ -636,6 +648,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					ForceCacheBilling:  forceCacheBilling,
 					APIKeyService:      h.apiKeyService,
 					ChannelUsageFields: clientRequestedUsageFields(c, channelMapping, reqModel, result.UpstreamModel),
+					BillingSnapshot:    billingSnapshot,
 				}); err != nil {
 					logger.L().With(
 						zap.String("component", "handler.gateway.messages"),
@@ -736,6 +749,16 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				zap.Int64("sticky_bound_account_id", sessionBoundAccountID),
 				zap.Bool("sticky_honored", sessionBoundAccountID > 0 && sessionBoundAccountID == account.ID),
 			)
+
+			// Phase 3.2 freeze point (row 10b, ungated): after account selection,
+			// before the upstream write; settle mode fails the candidate over.
+			billingSnapshot, freezeErr := h.gatewayService.FreezeBillingSnapshot(c.Request.Context(), currentAPIKey, account, currentSubscription, reqModel, account.GetMappedModel(billingModel), false, 0, 0)
+			if freezeErr != nil {
+				if selection.Acquired && selection.ReleaseFunc != nil {
+					selection.ReleaseFunc()
+				}
+				continue
+			}
 
 			// 检查请求拦截（预热请求、SUGGESTION MODE等）
 			if account.IsInterceptWarmupEnabled() {
@@ -1073,6 +1096,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					ForceCacheBilling:  forceCacheBilling,
 					APIKeyService:      h.apiKeyService,
 					ChannelUsageFields: clientRequestedUsageFields(c, channelMapping, reqModel, result.UpstreamModel),
+					BillingSnapshot:    billingSnapshot,
 				}); err != nil {
 					logger.L().With(
 						zap.String("component", "handler.gateway.messages"),

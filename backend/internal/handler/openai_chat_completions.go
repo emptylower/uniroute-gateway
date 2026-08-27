@@ -236,12 +236,15 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 				break
 			}
 			account := selection.Account
-			if err := h.gatewayService.EnsureModelPricing(c.Request.Context(), routedKey, account.GetMappedModel(billingModel)); err != nil {
+			// Phase 3.2 freeze point (row 5, gated): replaces the post-selection
+			// EnsureModelPricing — identical refusal, plus the frozen snapshot.
+			billingSnapshot, freezeErr := h.gatewayService.FreezeBillingSnapshot(c.Request.Context(), routedKey, account, candidateSubscription, reqModel, account.GetMappedModel(billingModel), true)
+			if freezeErr != nil {
 				if selection.ReleaseFunc != nil {
 					selection.ReleaseFunc()
 				}
 				failedAccountIDs[account.ID] = struct{}{}
-				lastChannelErr = err
+				lastChannelErr = freezeErr
 				continue
 			}
 			candidateSessionHash = ensureOpenAIPoolModeSessionHash(candidateSessionHash, account)
@@ -403,6 +406,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 					SessionID:          sessionID,
 					ChannelUsageFields: routedChannelUsageFields(c, channelMapping, reqModel, result.UpstreamModel, candidate.ChannelID),
 					CyberBlocked:       cyberBlocked,
+					BillingSnapshot:    billingSnapshot,
 				}); err != nil {
 					logger.L().With(
 						zap.String("component", "handler.openai_gateway.chat_completions"),

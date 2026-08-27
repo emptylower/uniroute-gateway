@@ -218,13 +218,16 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 				break
 			}
 			account := selection.Account
-			if err := h.gatewayService.EnsureModelPricing(requestCtx, routedKey, account.GetMappedModel(billingModel)); err != nil {
+			// Phase 3.2 freeze point (row 6, gated): replaces the post-selection
+			// EnsureModelPricing — identical refusal, plus the frozen snapshot.
+			billingSnapshot, freezeErr := h.gatewayService.FreezeBillingSnapshot(requestCtx, routedKey, account, candidateSubscription, reqModel, account.GetMappedModel(billingModel), true, 0, 0)
+			if freezeErr != nil {
 				if selection.ReleaseFunc != nil {
 					selection.ReleaseFunc()
 				}
 				fs.FailedAccountIDs[account.ID] = struct{}{}
-				lastChannelErr = err
-				reqLog.Warn("gateway.responses.model_pricing_unavailable", zap.Int64("account_id", account.ID), zap.Error(err))
+				lastChannelErr = freezeErr
+				reqLog.Warn("gateway.responses.model_pricing_unavailable", zap.Int64("account_id", account.ID), zap.Error(freezeErr))
 				continue
 			}
 			setOpsSelectedAccount(c, account.ID, account.Platform)
@@ -320,6 +323,7 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 					UpstreamEndpoint: upstreamEndpoint, UserAgent: userAgent, IPAddress: clientIP,
 					RequestPayloadHash: requestPayloadHash, APIKeyService: h.apiKeyService, SessionID: sessionID,
 					ChannelUsageFields: routedChannelUsageFields(c, channelMapping, reqModel, result.UpstreamModel, candidate.ChannelID),
+					BillingSnapshot:    billingSnapshot,
 				}); err != nil {
 					reqLog.Error("gateway.responses.record_usage_failed", zap.Int64("account_id", account.ID), zap.Error(err))
 				}

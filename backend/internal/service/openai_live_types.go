@@ -44,6 +44,11 @@ type LiveCallIdentity struct {
 	UserID              int64
 	GroupID             *int64
 	SubscriptionID      *int64
+	// APIKey / User (Phase 3.2) feed the billing snapshot's Freeze at the
+	// post-selection freeze point. This type is never serialized (no json tags,
+	// never marshalled by SaveLiveCall); the pointers stay in-process.
+	APIKey              *APIKey
+	User                *User
 	UserAgent           string
 	IPAddress           string
 	InboundEndpoint     string
@@ -86,13 +91,16 @@ type LiveCallRecord struct {
 	InputPricePerToken     float64
 	OutputPricePerToken    float64
 	CacheReadPricePerToken float64
-	CreatedAt              time.Time
-	ExpiresAt              time.Time
-	Controller             string
-	ControllerOwner        string
-	UserAgent              string
-	IPAddress              string
-	InboundEndpoint        string
+	// BillingSnapshotID (Phase 3.2): the wallet_billing_snapshot row the Live
+	// session's prices were frozen from ("" when no snapshot was taken).
+	BillingSnapshotID string
+	CreatedAt         time.Time
+	ExpiresAt         time.Time
+	Controller        string
+	ControllerOwner   string
+	UserAgent         string
+	IPAddress         string
+	InboundEndpoint   string
 	// AttestationCiphertext 仅用于让同一会话的 Sideband 复用创建时的证明。
 	AttestationCiphertext string
 }

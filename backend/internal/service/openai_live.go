@@ -222,7 +222,41 @@ func (s *OpenAIGatewayService) CreateLiveCall(
 			return nil, ErrLiveConcurrencyFull
 		}
 
-		created, createErr := s.createUpstreamLiveCall(ctx, account, request, attestation)
+		// Phase 3.2 freeze point (Live): after the Live lease is acquired and
+		// before the SDP POST — the post-selection point where the pricing
+		// basis becomes computable (spec §2.1). Record mode: a failed freeze is
+		// counted and the call continues with snap == nil; settle mode releases
+		// the selection AND the Live concurrency lease (already held here) and
+		// returns the error, exactly as the createErr branch below does.
+		var snap *BillingSnapshot
+		if s.snapshots != nil && s.snapshots.Mode() != BillingSnapshotModeOff {
+			billingAccount := account
+			if account.IsShadow() {
+				resolvedCredential, credErr := resolveCredentialAccount(ctx, s.accountRepo, account)
+				if credErr != nil {
+					selection.ReleaseFunc()
+					s.releaseLiveLease(account.ID, identity.UserID, identity.APIKeyID, leaseID)
+					return nil, credErr
+				}
+				billingAccount = resolvedCredential
+			}
+			var freezeErr error
+			snap, freezeErr = s.snapshots.Freeze(ctx, FreezeInput{
+				APIKey: identity.APIKey, User: identity.User, Account: account, BillingAccount: billingAccount,
+				RequestedModel: billingModel, BillingModel: billingModel, Family: BillingFamilyLive,
+				ResolveUserGroupRate: s.ResolveUserGroupRateMultiplier,
+			})
+			if freezeErr != nil {
+				snap, freezeErr = s.snapshots.freezeOutcome(nil, freezeErr, billingModel)
+				if freezeErr != nil {
+					selection.ReleaseFunc()
+					s.releaseLiveLease(account.ID, identity.UserID, identity.APIKeyID, leaseID)
+					return nil, freezeErr
+				}
+			}
+		}
+
+		created, createErr := s.createUpstreamLiveCall(ctx, account, request, attestation, snap)
 		selection.ReleaseFunc()
 		if createErr != nil {
 			s.releaseLiveLease(account.ID, identity.UserID, identity.APIKeyID, leaseID)
@@ -238,6 +272,17 @@ func (s *OpenAIGatewayService) CreateLiveCall(
 		model := strings.TrimSpace(gjson.GetBytes(request.Session, "model").String())
 		if model == "" {
 			model = "gpt-live"
+		}
+		// When a snapshot was frozen, the record's per-token prices come from it
+		// so the record and the snapshot cannot disagree. (Base is nil for a
+		// per-request/image resolve; Live's freeze re-resolves after selection.)
+		recordPricing := pricing
+		if snap != nil && snap.Pricing.Base != nil {
+			recordPricing = snap.Pricing.Base
+		}
+		var billingSnapshotID string
+		if snap != nil {
+			billingSnapshotID = snap.ID
 		}
 		record := &LiveCallRecord{
 			CallID:                 created.CallID,
@@ -261,9 +306,10 @@ func (s *OpenAIGatewayService) CreateLiveCall(
 			RateLimit1d:            identity.RateLimit1d,
 			RateLimit7d:            identity.RateLimit7d,
 			SubscriptionBilling:    identity.SubscriptionBilling,
-			InputPricePerToken:     pricing.InputPricePerToken,
-			OutputPricePerToken:    pricing.OutputPricePerToken,
-			CacheReadPricePerToken: pricing.CacheReadPricePerToken,
+			InputPricePerToken:     recordPricing.InputPricePerToken,
+			OutputPricePerToken:    recordPricing.OutputPricePerToken,
+			CacheReadPricePerToken: recordPricing.CacheReadPricePerToken,
+			BillingSnapshotID:      billingSnapshotID,
 			CreatedAt:              now,
 			ExpiresAt:              now.Add(s.liveMaxSessionDuration()),
 			Controller:             LiveControllerPending,
@@ -305,6 +351,7 @@ func (s *OpenAIGatewayService) createUpstreamLiveCall(
 	account *Account,
 	request *LiveCallRequest,
 	attestation string,
+	snap *BillingSnapshot,
 ) (*LiveCallCreated, error) {
 	token, _, err := s.GetAccessToken(ctx, account)
 	if err != nil {
@@ -345,6 +392,15 @@ func (s *OpenAIGatewayService) createUpstreamLiveCall(
 	upstreamReq.Header.Set("Accept", "application/sdp")
 	upstreamReq.Header.Set(liveAttestationHeader, attestation)
 	applyLiveUpstreamIdentityHeaders(upstreamReq.Header)
+
+	// Live is the one family whose record must be durable before the write
+	// (spec §2.3): persist the snapshot synchronously right before the SDP
+	// POST. Errors are counted, never fatal, in 3.2.
+	if snap != nil && s.snapshots != nil {
+		if persistErr := s.snapshots.Persist(ctx, snap); persistErr != nil {
+			billingSnapshotMetrics.persistError.Add(1)
+		}
+	}
 
 	resp, err := s.httpUpstream.Do(upstreamReq, resolveAccountProxyURL(account), account.ID, account.Concurrency)
 	if err != nil {

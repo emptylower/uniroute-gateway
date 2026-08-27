@@ -171,12 +171,15 @@ func (h *OpenAIGatewayHandler) Embeddings(c *gin.Context) {
 			return
 		}
 		account := selection.Account
-		if err := h.gatewayService.EnsureModelPricing(c.Request.Context(), apiKey, account.GetMappedModel(billingModel)); err != nil {
+		// Phase 3.2 freeze point (row 8, gated): replaces the post-selection
+		// EnsureModelPricing — identical refusal, plus the frozen snapshot.
+		billingSnapshot, freezeErr := h.gatewayService.FreezeBillingSnapshot(c.Request.Context(), apiKey, account, subscription, reqModel, account.GetMappedModel(billingModel), true)
+		if freezeErr != nil {
 			if selection.ReleaseFunc != nil {
 				selection.ReleaseFunc()
 			}
 			failedAccountIDs[account.ID] = struct{}{}
-			reqLog.Warn("openai_embeddings.model_pricing_unavailable", zap.Int64("account_id", account.ID), zap.Error(err))
+			reqLog.Warn("openai_embeddings.model_pricing_unavailable", zap.Int64("account_id", account.ID), zap.Error(freezeErr))
 			continue
 		}
 		setOpsSelectedAccount(c, account.ID, account.Platform)
@@ -276,6 +279,7 @@ func (h *OpenAIGatewayHandler) Embeddings(c *gin.Context) {
 				QuotaPlatform:      quotaPlatform,
 				SessionID:          sessionID,
 				ChannelUsageFields: clientRequestedUsageFields(c, channelMapping, reqModel, result.UpstreamModel),
+				BillingSnapshot:    billingSnapshot,
 			}); err != nil {
 				logger.L().With(
 					zap.String("component", "handler.openai_gateway.embeddings"),
