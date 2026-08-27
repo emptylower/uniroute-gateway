@@ -46774,6 +46774,7 @@ type UsageLogMutation struct {
 	long_context_billing_applied *bool
 	account_rate_multiplier      *float64
 	addaccount_rate_multiplier   *float64
+	billing_snapshot_id          *string
 	billing_type                 *int8
 	addbilling_type              *int8
 	stream                       *bool
@@ -48712,6 +48713,55 @@ func (m *UsageLogMutation) ResetAccountRateMultiplier() {
 	delete(m.clearedFields, usagelog.FieldAccountRateMultiplier)
 }
 
+// SetBillingSnapshotID sets the "billing_snapshot_id" field.
+func (m *UsageLogMutation) SetBillingSnapshotID(s string) {
+	m.billing_snapshot_id = &s
+}
+
+// BillingSnapshotID returns the value of the "billing_snapshot_id" field in the mutation.
+func (m *UsageLogMutation) BillingSnapshotID() (r string, exists bool) {
+	v := m.billing_snapshot_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldBillingSnapshotID returns the old "billing_snapshot_id" field's value of the UsageLog entity.
+// If the UsageLog object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UsageLogMutation) OldBillingSnapshotID(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldBillingSnapshotID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldBillingSnapshotID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldBillingSnapshotID: %w", err)
+	}
+	return oldValue.BillingSnapshotID, nil
+}
+
+// ClearBillingSnapshotID clears the value of the "billing_snapshot_id" field.
+func (m *UsageLogMutation) ClearBillingSnapshotID() {
+	m.billing_snapshot_id = nil
+	m.clearedFields[usagelog.FieldBillingSnapshotID] = struct{}{}
+}
+
+// BillingSnapshotIDCleared returns if the "billing_snapshot_id" field was cleared in this mutation.
+func (m *UsageLogMutation) BillingSnapshotIDCleared() bool {
+	_, ok := m.clearedFields[usagelog.FieldBillingSnapshotID]
+	return ok
+}
+
+// ResetBillingSnapshotID resets all changes to the "billing_snapshot_id" field.
+func (m *UsageLogMutation) ResetBillingSnapshotID() {
+	m.billing_snapshot_id = nil
+	delete(m.clearedFields, usagelog.FieldBillingSnapshotID)
+}
+
 // SetBillingType sets the "billing_type" field.
 func (m *UsageLogMutation) SetBillingType(i int8) {
 	m.billing_type = &i
@@ -49759,7 +49809,7 @@ func (m *UsageLogMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *UsageLogMutation) Fields() []string {
-	fields := make([]string, 0, 53)
+	fields := make([]string, 0, 54)
 	if m.user != nil {
 		fields = append(fields, usagelog.FieldUserID)
 	}
@@ -49867,6 +49917,9 @@ func (m *UsageLogMutation) Fields() []string {
 	}
 	if m.account_rate_multiplier != nil {
 		fields = append(fields, usagelog.FieldAccountRateMultiplier)
+	}
+	if m.billing_snapshot_id != nil {
+		fields = append(fields, usagelog.FieldBillingSnapshotID)
 	}
 	if m.billing_type != nil {
 		fields = append(fields, usagelog.FieldBillingType)
@@ -49999,6 +50052,8 @@ func (m *UsageLogMutation) Field(name string) (ent.Value, bool) {
 		return m.LongContextBillingApplied()
 	case usagelog.FieldAccountRateMultiplier:
 		return m.AccountRateMultiplier()
+	case usagelog.FieldBillingSnapshotID:
+		return m.BillingSnapshotID()
 	case usagelog.FieldBillingType:
 		return m.BillingType()
 	case usagelog.FieldStream:
@@ -50114,6 +50169,8 @@ func (m *UsageLogMutation) OldField(ctx context.Context, name string) (ent.Value
 		return m.OldLongContextBillingApplied(ctx)
 	case usagelog.FieldAccountRateMultiplier:
 		return m.OldAccountRateMultiplier(ctx)
+	case usagelog.FieldBillingSnapshotID:
+		return m.OldBillingSnapshotID(ctx)
 	case usagelog.FieldBillingType:
 		return m.OldBillingType(ctx)
 	case usagelog.FieldStream:
@@ -50408,6 +50465,13 @@ func (m *UsageLogMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetAccountRateMultiplier(v)
+		return nil
+	case usagelog.FieldBillingSnapshotID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetBillingSnapshotID(v)
 		return nil
 	case usagelog.FieldBillingType:
 		v, ok := value.(int8)
@@ -50882,6 +50946,9 @@ func (m *UsageLogMutation) ClearedFields() []string {
 	if m.FieldCleared(usagelog.FieldAccountRateMultiplier) {
 		fields = append(fields, usagelog.FieldAccountRateMultiplier)
 	}
+	if m.FieldCleared(usagelog.FieldBillingSnapshotID) {
+		fields = append(fields, usagelog.FieldBillingSnapshotID)
+	}
 	if m.FieldCleared(usagelog.FieldDurationMs) {
 		fields = append(fields, usagelog.FieldDurationMs)
 	}
@@ -50961,6 +51028,9 @@ func (m *UsageLogMutation) ClearField(name string) error {
 		return nil
 	case usagelog.FieldAccountRateMultiplier:
 		m.ClearAccountRateMultiplier()
+		return nil
+	case usagelog.FieldBillingSnapshotID:
+		m.ClearBillingSnapshotID()
 		return nil
 	case usagelog.FieldDurationMs:
 		m.ClearDurationMs()
@@ -51110,6 +51180,9 @@ func (m *UsageLogMutation) ResetField(name string) error {
 		return nil
 	case usagelog.FieldAccountRateMultiplier:
 		m.ResetAccountRateMultiplier()
+		return nil
+	case usagelog.FieldBillingSnapshotID:
+		m.ResetBillingSnapshotID()
 		return nil
 	case usagelog.FieldBillingType:
 		m.ResetBillingType()

@@ -362,3 +362,20 @@ type billingSnapshotSettler struct {
 	snapshots *BillingSnapshotService
 	billing   *BillingService
 }
+
+// persistBillingSnapshotBestEffort runs on its own detached context: the
+// usage-log writes happen on the caller's ctx (writeUsageLogBestEffort,
+// gateway_usage_billing.go:589-594 derives its own), and the billing context
+// applyUsageBillingDetailed creates (:367) is cancelled by its defer (:368)
+// before the log is written at :854 — there is no in-scope detached context to reuse.
+func persistBillingSnapshotBestEffort(ctx context.Context, svc *BillingSnapshotService, snap *BillingSnapshot) {
+	if svc == nil || snap == nil {
+		return
+	}
+	pctx, cancel := detachedBillingContext(ctx)
+	defer cancel()
+	if err := svc.Persist(pctx, snap); err != nil {
+		billingSnapshotMetrics.persistError.Add(1)
+		logger.LegacyPrintf("service.billing_snapshot", "persist failed snapshot=%s err=%v", snap.ID, err)
+	}
+}

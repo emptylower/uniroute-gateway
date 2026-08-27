@@ -146,6 +146,13 @@ func (UsageLog) Fields() []ent.Field {
 			Nillable().
 			SchemaType(map[string]string{dialect.Postgres: "decimal(10,4)"}),
 
+		// billing_snapshot_id: Phase 3.2 — the wallet_billing_snapshot row this
+		// usage was priced from (settle mode) or compared against (record mode).
+		field.String("billing_snapshot_id").
+			MaxLen(64).
+			Optional().
+			Nillable(),
+
 		// 其他字段
 		field.Int8("billing_type").
 			Default(0),

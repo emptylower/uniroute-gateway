@@ -235,6 +235,11 @@ func AccountRateMultiplier(v float64) predicate.UsageLog {
 	return predicate.UsageLog(sql.FieldEQ(FieldAccountRateMultiplier, v))
 }
 
+// BillingSnapshotID applies equality check predicate on the "billing_snapshot_id" field. It's identical to BillingSnapshotIDEQ.
+func BillingSnapshotID(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldBillingSnapshotID, v))
+}
+
 // BillingType applies equality check predicate on the "billing_type" field. It's identical to BillingTypeEQ.
 func BillingType(v int8) predicate.UsageLog {
 	return predicate.UsageLog(sql.FieldEQ(FieldBillingType, v))
@@ -2008,6 +2013,81 @@ func AccountRateMultiplierIsNil() predicate.UsageLog {
 // AccountRateMultiplierNotNil applies the NotNil predicate on the "account_rate_multiplier" field.
 func AccountRateMultiplierNotNil() predicate.UsageLog {
 	return predicate.UsageLog(sql.FieldNotNull(FieldAccountRateMultiplier))
+}
+
+// BillingSnapshotIDEQ applies the EQ predicate on the "billing_snapshot_id" field.
+func BillingSnapshotIDEQ(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldBillingSnapshotID, v))
+}
+
+// BillingSnapshotIDNEQ applies the NEQ predicate on the "billing_snapshot_id" field.
+func BillingSnapshotIDNEQ(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNEQ(FieldBillingSnapshotID, v))
+}
+
+// BillingSnapshotIDIn applies the In predicate on the "billing_snapshot_id" field.
+func BillingSnapshotIDIn(vs ...string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldIn(FieldBillingSnapshotID, vs...))
+}
+
+// BillingSnapshotIDNotIn applies the NotIn predicate on the "billing_snapshot_id" field.
+func BillingSnapshotIDNotIn(vs ...string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNotIn(FieldBillingSnapshotID, vs...))
+}
+
+// BillingSnapshotIDGT applies the GT predicate on the "billing_snapshot_id" field.
+func BillingSnapshotIDGT(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGT(FieldBillingSnapshotID, v))
+}
+
+// BillingSnapshotIDGTE applies the GTE predicate on the "billing_snapshot_id" field.
+func BillingSnapshotIDGTE(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGTE(FieldBillingSnapshotID, v))
+}
+
+// BillingSnapshotIDLT applies the LT predicate on the "billing_snapshot_id" field.
+func BillingSnapshotIDLT(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLT(FieldBillingSnapshotID, v))
+}
+
+// BillingSnapshotIDLTE applies the LTE predicate on the "billing_snapshot_id" field.
+func BillingSnapshotIDLTE(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLTE(FieldBillingSnapshotID, v))
+}
+
+// BillingSnapshotIDContains applies the Contains predicate on the "billing_snapshot_id" field.
+func BillingSnapshotIDContains(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldContains(FieldBillingSnapshotID, v))
+}
+
+// BillingSnapshotIDHasPrefix applies the HasPrefix predicate on the "billing_snapshot_id" field.
+func BillingSnapshotIDHasPrefix(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldHasPrefix(FieldBillingSnapshotID, v))
+}
+
+// BillingSnapshotIDHasSuffix applies the HasSuffix predicate on the "billing_snapshot_id" field.
+func BillingSnapshotIDHasSuffix(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldHasSuffix(FieldBillingSnapshotID, v))
+}
+
+// BillingSnapshotIDIsNil applies the IsNil predicate on the "billing_snapshot_id" field.
+func BillingSnapshotIDIsNil() predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldIsNull(FieldBillingSnapshotID))
+}
+
+// BillingSnapshotIDNotNil applies the NotNil predicate on the "billing_snapshot_id" field.
+func BillingSnapshotIDNotNil() predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNotNull(FieldBillingSnapshotID))
+}
+
+// BillingSnapshotIDEqualFold applies the EqualFold predicate on the "billing_snapshot_id" field.
+func BillingSnapshotIDEqualFold(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEqualFold(FieldBillingSnapshotID, v))
+}
+
+// BillingSnapshotIDContainsFold applies the ContainsFold predicate on the "billing_snapshot_id" field.
+func BillingSnapshotIDContainsFold(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldContainsFold(FieldBillingSnapshotID, v))
 }
 
 // BillingTypeEQ applies the EQ predicate on the "billing_type" field.

@@ -86,6 +86,8 @@ const (
 	FieldLongContextBillingApplied = "long_context_billing_applied"
 	// FieldAccountRateMultiplier holds the string denoting the account_rate_multiplier field in the database.
 	FieldAccountRateMultiplier = "account_rate_multiplier"
+	// FieldBillingSnapshotID holds the string denoting the billing_snapshot_id field in the database.
+	FieldBillingSnapshotID = "billing_snapshot_id"
 	// FieldBillingType holds the string denoting the billing_type field in the database.
 	FieldBillingType = "billing_type"
 	// FieldStream holds the string denoting the stream field in the database.
@@ -208,6 +210,7 @@ var Columns = []string{
 	FieldRateMultiplier,
 	FieldLongContextBillingApplied,
 	FieldAccountRateMultiplier,
+	FieldBillingSnapshotID,
 	FieldBillingType,
 	FieldStream,
 	FieldDurationMs,
@@ -300,6 +303,8 @@ var (
 	DefaultRateMultiplier float64
 	// DefaultLongContextBillingApplied holds the default value on creation for the "long_context_billing_applied" field.
 	DefaultLongContextBillingApplied bool
+	// BillingSnapshotIDValidator is a validator for the "billing_snapshot_id" field. It is called by the builders before save.
+	BillingSnapshotIDValidator func(string) error
 	// DefaultBillingType holds the default value on creation for the "billing_type" field.
 	DefaultBillingType int8
 	// DefaultStream holds the default value on creation for the "stream" field.
@@ -514,6 +519,11 @@ func ByLongContextBillingApplied(opts ...sql.OrderTermOption) OrderOption {
 // ByAccountRateMultiplier orders the results by the account_rate_multiplier field.
 func ByAccountRateMultiplier(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldAccountRateMultiplier, opts...).ToFunc()
+}
+
+// ByBillingSnapshotID orders the results by the billing_snapshot_id field.
+func ByBillingSnapshotID(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldBillingSnapshotID, opts...).ToFunc()
 }
 
 // ByBillingType orders the results by the billing_type field.

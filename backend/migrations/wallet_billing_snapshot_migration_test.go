@@ -16,3 +16,11 @@ func TestMigration209CreatesWalletBillingSnapshot(t *testing.T) {
 	require.Contains(t, sql, "idx_wallet_billing_snapshot_user_created")
 	require.NotContains(t, sql, "DROP TABLE")
 }
+
+func TestMigration210AddsUsageLogsBillingSnapshotID(t *testing.T) {
+	content, err := FS.ReadFile("210_usage_logs_billing_snapshot_id.sql")
+	require.NoError(t, err)
+	sql := string(content)
+	require.Contains(t, sql, "ALTER TABLE usage_logs ADD COLUMN IF NOT EXISTS billing_snapshot_id TEXT")
+	require.Contains(t, sql, "idx_usage_logs_billing_snapshot_id")
+}

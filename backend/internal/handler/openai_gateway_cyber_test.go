@@ -283,7 +283,7 @@ func TestRecordCyberPolicyIfMarked_DetachesConcreteEvidenceFromBaselineQuotaPlat
 				nil, usageRepo, nil, &cyberDetachedUserRepoStub{}, nil, nil, nil, cfg, nil, nil,
 				nil, nil, service.NewBillingService(cfg, nil), nil, billingCache, nil,
 				&service.DeferredService{}, nil, nil, nil, nil, nil, nil, quotaRepo,
-			)
+			nil)
 			h := &OpenAIGatewayHandler{gatewayService: gateway}
 			groupID := int64(401)
 			apiKey := &service.APIKey{

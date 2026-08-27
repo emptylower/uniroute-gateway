@@ -939,6 +939,7 @@ var ProviderSet = wire.NewSet(
 	ProvideChannelRoutingSelector,
 	wire.Bind(new(ChannelRoutingAccess), new(*APIKeyService)),
 	NewModelPricingResolver,
+	NewBillingSnapshotService,
 	NewExchangeRateService,
 	ProvideModelCatalogService,
 	NewContentModerationService,
@@ -1056,6 +1057,7 @@ func ProvideGatewayService(
 	userPlatformQuotaRepo UserPlatformQuotaRepository,
 	store ModelAuthorizationStore,
 	modeProvider GovernanceModeProvider,
+	billingSnapshots *BillingSnapshotService,
 ) *GatewayService {
 	svc := NewGatewayService(
 		accountRepo, groupRepo, usageLogRepo, usageBillingRepo, userRepo, userSubRepo, userGroupRateRepo,
@@ -1064,6 +1066,7 @@ func ProvideGatewayService(
 		digestStore, settingService, tlsFPProfileService, channelService, resolver, compositeResolver,
 		balanceNotifyService, userPlatformQuotaRepo,
 	)
+	svc.billingSnapshotSettler = billingSnapshotSettler{snapshots: billingSnapshots, billing: billingService}
 	svc.SetPublicationStore(store)
 	svc.SetGovernanceModeProvider(modeProvider)
 	return svc

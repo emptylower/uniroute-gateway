@@ -51,6 +51,10 @@ type RecordUsageInput struct {
 	ForceCacheBilling  bool               // 强制缓存计费：将 input_tokens 转为 cache_read 计费（用于粘性会话切换）
 	APIKeyService      APIKeyQuotaUpdater // 可选：用于更新API Key配额
 	QuotaPlatform      string             // user×platform 配额计量平台：handler 在请求 ctx 内经 QuotaPlatform() 算定后传入（后扣运行在 worker 池 background ctx 上，取不到 ForcePlatform）
+	// BillingSnapshot (Phase 3.2) is the frozen pricing basis for this attempt,
+	// carried here as an explicit field — never in context.Context (spec §3.5).
+	// nil = no snapshot (Count Tokens, off mode, pre-3.2 callers).
+	BillingSnapshot *BillingSnapshot
 
 	ChannelUsageFields // 渠道映射信息（由 handler 在 Forward 前解析）
 }
@@ -642,6 +646,7 @@ func (s *GatewayService) RecordUsage(ctx context.Context, input *RecordUsageInpu
 		ForceCacheBilling:  input.ForceCacheBilling,
 		APIKeyService:      input.APIKeyService,
 		QuotaPlatform:      input.QuotaPlatform,
+		BillingSnapshot:    input.BillingSnapshot,
 		ChannelUsageFields: input.ChannelUsageFields,
 	}, &recordUsageOpts{})
 }
@@ -664,6 +669,7 @@ type RecordUsageLongContextInput struct {
 	ForceCacheBilling     bool               // 强制缓存计费：将 input_tokens 转为 cache_read 计费（用于粘性会话切换）
 	APIKeyService         APIKeyQuotaUpdater // API Key 配额服务（可选）
 	QuotaPlatform         string             // user×platform 配额计量平台：handler 在请求 ctx 内经 QuotaPlatform() 算定后传入（后扣运行在 worker 池 background ctx 上，取不到 ForcePlatform）
+	BillingSnapshot       *BillingSnapshot   // Phase 3.2 frozen pricing basis (nil = none)
 
 	ChannelUsageFields // 渠道映射信息（由 handler 在 Forward 前解析）
 }
@@ -685,6 +691,7 @@ func (s *GatewayService) RecordUsageWithLongContext(ctx context.Context, input *
 		ForceCacheBilling:  input.ForceCacheBilling,
 		APIKeyService:      input.APIKeyService,
 		QuotaPlatform:      input.QuotaPlatform,
+		BillingSnapshot:    input.BillingSnapshot,
 		ChannelUsageFields: input.ChannelUsageFields,
 	}, &recordUsageOpts{
 		LongContextThreshold:  input.LongContextThreshold,
@@ -708,6 +715,7 @@ type recordUsageCoreInput struct {
 	ForceCacheBilling  bool
 	APIKeyService      APIKeyQuotaUpdater
 	QuotaPlatform      string
+	BillingSnapshot    *BillingSnapshot
 	ChannelUsageFields
 }
 
@@ -729,6 +737,9 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 		result.Usage.CacheReadInputTokens += result.Usage.InputTokens
 		result.Usage.InputTokens = 0
 	}
+	// Phase 3.2: the RAW usage (post ForceCacheBilling, pre cache-TTL override).
+	// The snapshot path classifies cache input by the SNAPSHOT's frozen target.
+	rawUsage := result.Usage
 
 	// Cache TTL Override: 确保计费时 token 分类与账号设置一致。
 	// 账号级设置优先；全局 1h 请求注入开启时，默认把 usage 计费归回 5m。
@@ -787,6 +798,9 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	if err != nil {
 		return err
 	}
+	cost, ctx = s.applyBillingSnapshotToSettlement(ctx, input.BillingSnapshot, cost,
+		snapshotSettlementInputFromClaudeUsage(rawUsage, snapshotCacheTTLOverride(input.BillingSnapshot), result.ImageCount, result.ImageSize),
+		billingModel)
 
 	// 判断计费方式：订阅模式 vs 余额模式
 	billingType := BillingTypeBalance
@@ -803,6 +817,10 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	usageLog := s.buildRecordUsageLog(ctx, input, result, apiKey, user, account, subscription,
 		requestedModel, multiplier, imageMultiplier, accountRateMultiplier, billingType, cacheTTLOverridden, cost, opts)
 	applySettlementSnapshot(usageLog, settlement)
+	if input.BillingSnapshot != nil {
+		id := input.BillingSnapshot.ID
+		usageLog.BillingSnapshotID = &id
+	}
 	usageLog.GovernanceTargetPlatform = resolvedUsageTargetPlatform(ctx, "", input.QuotaPlatform, apiKey, account)
 
 	// 计算账号统计定价费用（使用最终上游模型匹配自定义规则）
@@ -824,6 +842,7 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 
 	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
 		writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.gateway")
+		persistBillingSnapshotBestEffort(ctx, s.snapshots, input.BillingSnapshot)
 		logger.LegacyPrintf("service.gateway", "[SIMPLE MODE] Usage recorded (not billed): user=%d, tokens=%d", usageLog.UserID, usageLog.TotalTokens())
 		s.deferredService.ScheduleLastUsedUpdate(account.ID)
 		return nil
@@ -852,6 +871,7 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	}
 	observeCanonicalWalletSettlement(s.canonicalWallet, requestID, user, cost, isSubscriptionBilling, billingApplied, billingResult)
 	writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.gateway")
+	persistBillingSnapshotBestEffort(ctx, s.snapshots, input.BillingSnapshot)
 
 	return nil
 }

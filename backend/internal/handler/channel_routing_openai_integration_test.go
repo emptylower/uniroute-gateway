@@ -188,7 +188,7 @@ func newChannelRoutingOpenAIHandler(t *testing.T, streamSuccess, failCheap, part
 	gateway := service.NewOpenAIGatewayService(
 		channelRoutingAccountRepo{accounts: accounts}, nil, nil, nil, nil, nil, nil, cfg, nil, nil,
 		nil, nil, pricing, nil, nil, upstream, nil, nil, nil, nil, nil, nil, nil, nil,
-	)
+	nil)
 	billing := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil, nil)
 	t.Cleanup(billing.Stop)
 	apiKeys := service.NewAPIKeyService(nil, nil, nil, nil, nil, nil, cfg)

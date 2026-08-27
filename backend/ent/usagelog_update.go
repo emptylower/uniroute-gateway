@@ -729,6 +729,26 @@ func (_u *UsageLogUpdate) ClearAccountRateMultiplier() *UsageLogUpdate {
 	return _u
 }
 
+// SetBillingSnapshotID sets the "billing_snapshot_id" field.
+func (_u *UsageLogUpdate) SetBillingSnapshotID(v string) *UsageLogUpdate {
+	_u.mutation.SetBillingSnapshotID(v)
+	return _u
+}
+
+// SetNillableBillingSnapshotID sets the "billing_snapshot_id" field if the given value is not nil.
+func (_u *UsageLogUpdate) SetNillableBillingSnapshotID(v *string) *UsageLogUpdate {
+	if v != nil {
+		_u.SetBillingSnapshotID(*v)
+	}
+	return _u
+}
+
+// ClearBillingSnapshotID clears the value of the "billing_snapshot_id" field.
+func (_u *UsageLogUpdate) ClearBillingSnapshotID() *UsageLogUpdate {
+	_u.mutation.ClearBillingSnapshotID()
+	return _u
+}
+
 // SetBillingType sets the "billing_type" field.
 func (_u *UsageLogUpdate) SetBillingType(v int8) *UsageLogUpdate {
 	_u.mutation.ResetBillingType()
@@ -1197,6 +1217,11 @@ func (_u *UsageLogUpdate) check() error {
 			return &ValidationError{Name: "exchange_rate_source", err: fmt.Errorf(`ent: validator failed for field "UsageLog.exchange_rate_source": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.BillingSnapshotID(); ok {
+		if err := usagelog.BillingSnapshotIDValidator(v); err != nil {
+			return &ValidationError{Name: "billing_snapshot_id", err: fmt.Errorf(`ent: validator failed for field "UsageLog.billing_snapshot_id": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.UserAgent(); ok {
 		if err := usagelog.UserAgentValidator(v); err != nil {
 			return &ValidationError{Name: "user_agent", err: fmt.Errorf(`ent: validator failed for field "UsageLog.user_agent": %w`, err)}
@@ -1429,6 +1454,12 @@ func (_u *UsageLogUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if _u.mutation.AccountRateMultiplierCleared() {
 		_spec.ClearField(usagelog.FieldAccountRateMultiplier, field.TypeFloat64)
+	}
+	if value, ok := _u.mutation.BillingSnapshotID(); ok {
+		_spec.SetField(usagelog.FieldBillingSnapshotID, field.TypeString, value)
+	}
+	if _u.mutation.BillingSnapshotIDCleared() {
+		_spec.ClearField(usagelog.FieldBillingSnapshotID, field.TypeString)
 	}
 	if value, ok := _u.mutation.BillingType(); ok {
 		_spec.SetField(usagelog.FieldBillingType, field.TypeInt8, value)
@@ -2390,6 +2421,26 @@ func (_u *UsageLogUpdateOne) ClearAccountRateMultiplier() *UsageLogUpdateOne {
 	return _u
 }
 
+// SetBillingSnapshotID sets the "billing_snapshot_id" field.
+func (_u *UsageLogUpdateOne) SetBillingSnapshotID(v string) *UsageLogUpdateOne {
+	_u.mutation.SetBillingSnapshotID(v)
+	return _u
+}
+
+// SetNillableBillingSnapshotID sets the "billing_snapshot_id" field if the given value is not nil.
+func (_u *UsageLogUpdateOne) SetNillableBillingSnapshotID(v *string) *UsageLogUpdateOne {
+	if v != nil {
+		_u.SetBillingSnapshotID(*v)
+	}
+	return _u
+}
+
+// ClearBillingSnapshotID clears the value of the "billing_snapshot_id" field.
+func (_u *UsageLogUpdateOne) ClearBillingSnapshotID() *UsageLogUpdateOne {
+	_u.mutation.ClearBillingSnapshotID()
+	return _u
+}
+
 // SetBillingType sets the "billing_type" field.
 func (_u *UsageLogUpdateOne) SetBillingType(v int8) *UsageLogUpdateOne {
 	_u.mutation.ResetBillingType()
@@ -2871,6 +2922,11 @@ func (_u *UsageLogUpdateOne) check() error {
 			return &ValidationError{Name: "exchange_rate_source", err: fmt.Errorf(`ent: validator failed for field "UsageLog.exchange_rate_source": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.BillingSnapshotID(); ok {
+		if err := usagelog.BillingSnapshotIDValidator(v); err != nil {
+			return &ValidationError{Name: "billing_snapshot_id", err: fmt.Errorf(`ent: validator failed for field "UsageLog.billing_snapshot_id": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.UserAgent(); ok {
 		if err := usagelog.UserAgentValidator(v); err != nil {
 			return &ValidationError{Name: "user_agent", err: fmt.Errorf(`ent: validator failed for field "UsageLog.user_agent": %w`, err)}
@@ -3120,6 +3176,12 @@ func (_u *UsageLogUpdateOne) sqlSave(ctx context.Context) (_node *UsageLog, err 
 	}
 	if _u.mutation.AccountRateMultiplierCleared() {
 		_spec.ClearField(usagelog.FieldAccountRateMultiplier, field.TypeFloat64)
+	}
+	if value, ok := _u.mutation.BillingSnapshotID(); ok {
+		_spec.SetField(usagelog.FieldBillingSnapshotID, field.TypeString, value)
+	}
+	if _u.mutation.BillingSnapshotIDCleared() {
+		_spec.ClearField(usagelog.FieldBillingSnapshotID, field.TypeString)
 	}
 	if value, ok := _u.mutation.BillingType(); ok {
 		_spec.SetField(usagelog.FieldBillingType, field.TypeInt8, value)

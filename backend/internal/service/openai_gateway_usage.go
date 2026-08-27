@@ -36,6 +36,9 @@ type OpenAIRecordUsageInput struct {
 	GovernanceTargetPlatform string
 	// CyberBlocked 为 true 时把该用量行标记为 cyber（request_type=cyber），计费逻辑不变。
 	CyberBlocked bool
+	// BillingSnapshot (Phase 3.2) is the frozen pricing basis for this attempt;
+	// nil = no snapshot (Count Tokens, off mode, pre-3.2 callers).
+	BillingSnapshot *BillingSnapshot
 	ChannelUsageFields
 }
 
@@ -143,20 +146,9 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 
 	// OpenAI input_tokens 是总输入，包含缓存读取和缓存写入明细。
 	// 将三类 token 拆成互斥桶，避免缓存写入同时按普通输入和 cache_write 重复计费。
-	actualInputTokens := result.Usage.InputTokens - result.Usage.CacheReadInputTokens - result.Usage.CacheCreationInputTokens
-	if actualInputTokens < 0 {
-		actualInputTokens = 0
-	}
-
-	// Calculate cost
-	tokens := UsageTokens{
-		InputTokens:         actualInputTokens,
-		ImageInputTokens:    result.Usage.ImageInputTokens,
-		OutputTokens:        result.Usage.OutputTokens,
-		CacheCreationTokens: result.Usage.CacheCreationInputTokens,
-		CacheReadTokens:     result.Usage.CacheReadInputTokens,
-		ImageOutputTokens:   result.Usage.ImageOutputTokens,
-	}
+	// (Phase 3.2: extracted into openAIUsageTokens so both billing paths share it.)
+	tokens := openAIUsageTokens(result.Usage)
+	actualInputTokens := tokens.InputTokens
 	isSubscriptionBilling := subscription != nil && apiKey.Group != nil && apiKey.Group.IsSubscriptionType()
 	multiplierCurrency := CurrencyUSD
 	if !isSubscriptionBilling {
@@ -225,6 +217,9 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	if err != nil {
 		return err
 	}
+	cost, ctx = s.applyBillingSnapshotToSettlement(ctx, input.BillingSnapshot, cost,
+		snapshotSettlementInputFromOpenAIResult(result, serviceTier, isGrokVideoUsageResult(result, billingModels)),
+		billingModel)
 
 	// Determine billing type
 	billingType := BillingTypeBalance
@@ -304,6 +299,10 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	}
 	usageLog.AccountRateMultiplier = &accountRateMultiplier
 	applySettlementSnapshot(usageLog, settlement)
+	if input.BillingSnapshot != nil {
+		id := input.BillingSnapshot.ID
+		usageLog.BillingSnapshotID = &id
+	}
 	usageLog.GovernanceTargetPlatform = resolvedUsageTargetPlatform(ctx, input.GovernanceTargetPlatform, input.QuotaPlatform, apiKey, account)
 	usageLog.BillingType = billingType
 	usageLog.Stream = result.Stream
@@ -361,6 +360,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 
 	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
 		writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.openai_gateway")
+		persistBillingSnapshotBestEffort(ctx, s.snapshots, input.BillingSnapshot)
 		logger.LegacyPrintf("service.openai_gateway", "[SIMPLE MODE] Usage recorded (not billed): user=%d, tokens=%d", usageLog.UserID, usageLog.TotalTokens())
 		s.deferredService.ScheduleLastUsedUpdate(account.ID)
 		return nil
@@ -388,6 +388,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	}
 	observeCanonicalWalletSettlement(s.canonicalWallet, requestID, user, cost, isSubscriptionBilling, billingApplied, billingResult)
 	writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.openai_gateway")
+	persistBillingSnapshotBestEffort(ctx, s.snapshots, input.BillingSnapshot)
 
 	return nil
 }

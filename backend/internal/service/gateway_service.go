@@ -718,6 +718,10 @@ type GatewayService struct {
 	canonicalWallet       *CanonicalWalletBridge
 	publicationStore      ModelAuthorizationStore
 	modeProvider          GovernanceModeProvider
+
+	// billingSnapshotSettler (Phase 3.2) carries the snapshot service into the
+	// settlement seam; a zero value means snapshots are off.
+	billingSnapshotSettler
 }
 
 func (s *GatewayService) SetPublicationStore(store ModelAuthorizationStore) {

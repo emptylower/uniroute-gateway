@@ -448,6 +448,10 @@ type OpenAIGatewayService struct {
 	openaiCompatAnthropicDigestSessions sync.Map
 	liveUsageFallback                   sync.Map // key: call hash, value: *liveUsageFallbackBucket
 	liveFinalizeRetrying                sync.Map // key: call hash, value: struct{}
+
+	// billingSnapshotSettler (Phase 3.2) carries the snapshot service into the
+	// settlement seam; a zero value means snapshots are off.
+	billingSnapshotSettler
 }
 
 // NewOpenAIGatewayService creates a new OpenAIGatewayService
@@ -476,6 +480,7 @@ func NewOpenAIGatewayService(
 	balanceNotifyService *BalanceNotifyService,
 	settingService *SettingService,
 	userPlatformQuotaRepo UserPlatformQuotaRepository,
+	billingSnapshots *BillingSnapshotService,
 ) *OpenAIGatewayService {
 	svc := &OpenAIGatewayService{
 		accountRepo:         accountRepo,
@@ -491,6 +496,10 @@ func NewOpenAIGatewayService(
 		billingService:      billingService,
 		rateLimitService:    rateLimitService,
 		billingCacheService: billingCacheService,
+		billingSnapshotSettler: billingSnapshotSettler{
+			snapshots: billingSnapshots,
+			billing:   billingService,
+		},
 		userGroupRateResolver: newUserGroupRateResolver(
 			userGroupRateRepo,
 			nil,

@@ -491,6 +491,20 @@ func (_c *UsageLogCreate) SetNillableAccountRateMultiplier(v *float64) *UsageLog
 	return _c
 }
 
+// SetBillingSnapshotID sets the "billing_snapshot_id" field.
+func (_c *UsageLogCreate) SetBillingSnapshotID(v string) *UsageLogCreate {
+	_c.mutation.SetBillingSnapshotID(v)
+	return _c
+}
+
+// SetNillableBillingSnapshotID sets the "billing_snapshot_id" field if the given value is not nil.
+func (_c *UsageLogCreate) SetNillableBillingSnapshotID(v *string) *UsageLogCreate {
+	if v != nil {
+		_c.SetBillingSnapshotID(*v)
+	}
+	return _c
+}
+
 // SetBillingType sets the "billing_type" field.
 func (_c *UsageLogCreate) SetBillingType(v int8) *UsageLogCreate {
 	_c.mutation.SetBillingType(v)
@@ -1019,6 +1033,11 @@ func (_c *UsageLogCreate) check() error {
 	if _, ok := _c.mutation.LongContextBillingApplied(); !ok {
 		return &ValidationError{Name: "long_context_billing_applied", err: errors.New(`ent: missing required field "UsageLog.long_context_billing_applied"`)}
 	}
+	if v, ok := _c.mutation.BillingSnapshotID(); ok {
+		if err := usagelog.BillingSnapshotIDValidator(v); err != nil {
+			return &ValidationError{Name: "billing_snapshot_id", err: fmt.Errorf(`ent: validator failed for field "UsageLog.billing_snapshot_id": %w`, err)}
+		}
+	}
 	if _, ok := _c.mutation.BillingType(); !ok {
 		return &ValidationError{Name: "billing_type", err: errors.New(`ent: missing required field "UsageLog.billing_type"`)}
 	}
@@ -1231,6 +1250,10 @@ func (_c *UsageLogCreate) createSpec() (*UsageLog, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.AccountRateMultiplier(); ok {
 		_spec.SetField(usagelog.FieldAccountRateMultiplier, field.TypeFloat64, value)
 		_node.AccountRateMultiplier = &value
+	}
+	if value, ok := _c.mutation.BillingSnapshotID(); ok {
+		_spec.SetField(usagelog.FieldBillingSnapshotID, field.TypeString, value)
+		_node.BillingSnapshotID = &value
 	}
 	if value, ok := _c.mutation.BillingType(); ok {
 		_spec.SetField(usagelog.FieldBillingType, field.TypeInt8, value)
@@ -2040,6 +2063,24 @@ func (u *UsageLogUpsert) AddAccountRateMultiplier(v float64) *UsageLogUpsert {
 // ClearAccountRateMultiplier clears the value of the "account_rate_multiplier" field.
 func (u *UsageLogUpsert) ClearAccountRateMultiplier() *UsageLogUpsert {
 	u.SetNull(usagelog.FieldAccountRateMultiplier)
+	return u
+}
+
+// SetBillingSnapshotID sets the "billing_snapshot_id" field.
+func (u *UsageLogUpsert) SetBillingSnapshotID(v string) *UsageLogUpsert {
+	u.Set(usagelog.FieldBillingSnapshotID, v)
+	return u
+}
+
+// UpdateBillingSnapshotID sets the "billing_snapshot_id" field to the value that was provided on create.
+func (u *UsageLogUpsert) UpdateBillingSnapshotID() *UsageLogUpsert {
+	u.SetExcluded(usagelog.FieldBillingSnapshotID)
+	return u
+}
+
+// ClearBillingSnapshotID clears the value of the "billing_snapshot_id" field.
+func (u *UsageLogUpsert) ClearBillingSnapshotID() *UsageLogUpsert {
+	u.SetNull(usagelog.FieldBillingSnapshotID)
 	return u
 }
 
@@ -3086,6 +3127,27 @@ func (u *UsageLogUpsertOne) UpdateAccountRateMultiplier() *UsageLogUpsertOne {
 func (u *UsageLogUpsertOne) ClearAccountRateMultiplier() *UsageLogUpsertOne {
 	return u.Update(func(s *UsageLogUpsert) {
 		s.ClearAccountRateMultiplier()
+	})
+}
+
+// SetBillingSnapshotID sets the "billing_snapshot_id" field.
+func (u *UsageLogUpsertOne) SetBillingSnapshotID(v string) *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetBillingSnapshotID(v)
+	})
+}
+
+// UpdateBillingSnapshotID sets the "billing_snapshot_id" field to the value that was provided on create.
+func (u *UsageLogUpsertOne) UpdateBillingSnapshotID() *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateBillingSnapshotID()
+	})
+}
+
+// ClearBillingSnapshotID clears the value of the "billing_snapshot_id" field.
+func (u *UsageLogUpsertOne) ClearBillingSnapshotID() *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.ClearBillingSnapshotID()
 	})
 }
 
@@ -4347,6 +4409,27 @@ func (u *UsageLogUpsertBulk) UpdateAccountRateMultiplier() *UsageLogUpsertBulk {
 func (u *UsageLogUpsertBulk) ClearAccountRateMultiplier() *UsageLogUpsertBulk {
 	return u.Update(func(s *UsageLogUpsert) {
 		s.ClearAccountRateMultiplier()
+	})
+}
+
+// SetBillingSnapshotID sets the "billing_snapshot_id" field.
+func (u *UsageLogUpsertBulk) SetBillingSnapshotID(v string) *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetBillingSnapshotID(v)
+	})
+}
+
+// UpdateBillingSnapshotID sets the "billing_snapshot_id" field to the value that was provided on create.
+func (u *UsageLogUpsertBulk) UpdateBillingSnapshotID() *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateBillingSnapshotID()
+	})
+}
+
+// ClearBillingSnapshotID clears the value of the "billing_snapshot_id" field.
+func (u *UsageLogUpsertBulk) ClearBillingSnapshotID() *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.ClearBillingSnapshotID()
 	})
 }
 

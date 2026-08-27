@@ -170,6 +170,8 @@ type UsageLog struct {
 	LongContextBillingApplied bool
 	// AccountRateMultiplier 账号计费倍率快照（nil 表示历史数据，按 1.0 处理）
 	AccountRateMultiplier *float64
+	// BillingSnapshotID Phase 3.2：本行用量对应的计费快照 id（nil = 无快照）
+	BillingSnapshotID *string
 	// AccountStatsCost 账号统计定价预计算费用（nil = 使用默认公式 total_cost × account_rate_multiplier）
 	AccountStatsCost *float64
 

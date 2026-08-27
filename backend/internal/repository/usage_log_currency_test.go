@@ -19,7 +19,7 @@ func TestPrepareUsageLogInsertPersistsCurrencySnapshot(t *testing.T) {
 	})
 
 	require.Len(t, prepared.args, len(usageLogInsertArgTypes))
-	base := len(prepared.args) - 8
+	base := len(prepared.args) - 9
 	require.Equal(t, service.CurrencyUSD, prepared.args[base])
 	require.Equal(t, service.CurrencyCNY, prepared.args[base+1])
 	require.Equal(t, 7.2, prepared.args[base+2])
