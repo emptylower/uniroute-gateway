@@ -17,6 +17,10 @@ import (
 // ForwardCountTokens 转发 count_tokens 请求到上游 API
 // 特点：不记录使用量、仅支持非流式响应
 func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context, account *Account, parsed *ParsedRequest) error {
+	// Phase 3.3a: Count Tokens never settles — every upstream write in this
+	// function (first write and signature-rectify retry) carries the explicit
+	// non-billable mark (spec §2.0, §2.4).
+	ctx = WithNonBillableUpstream(ctx, NonBillableCountTokens)
 	if parsed == nil {
 		s.countTokensError(c, http.StatusBadRequest, "invalid_request_error", "Request body is empty")
 		return fmt.Errorf("parse request: empty request")
@@ -241,6 +245,8 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 }
 
 func (s *GatewayService) forwardCountTokensAnthropicAPIKeyPassthrough(ctx context.Context, c *gin.Context, account *Account, body []byte) error {
+	// Phase 3.3a: Count Tokens never settles — explicit non-billable mark (spec §2.4).
+	ctx = WithNonBillableUpstream(ctx, NonBillableCountTokens)
 	token, tokenType, err := s.GetAccessToken(ctx, account)
 	if err != nil {
 		s.countTokensError(c, http.StatusBadGateway, "upstream_error", "Failed to get access token")

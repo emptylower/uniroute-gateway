@@ -131,6 +131,8 @@ func (s *GrokQuotaService) ProbeUsage(ctx context.Context, accountID int64) (*Gr
 }
 
 func (s *GrokQuotaService) probeUsage(ctx context.Context, accountID int64) (*GrokQuotaProbeResult, error) {
+	// Phase 3.3a: quota probing never settles — explicit non-billable mark (spec §2.0).
+	ctx = WithNonBillableUpstream(ctx, NonBillableQuota)
 	account, token, proxyURL, err := s.prepareProbe(ctx, accountID)
 	if err != nil {
 		return nil, err
@@ -354,6 +356,8 @@ func (s *GrokQuotaService) fetchBilling(
 	proxyURL string,
 	weekly bool,
 ) (*xai.BillingSummary, int, error) {
+	// Phase 3.3a: quota billing fetch never settles — explicit non-billable mark (spec §2.0).
+	ctx = WithNonBillableUpstream(ctx, NonBillableQuota)
 	billingURL, err := buildGrokBillingURL(account, s.cfg, weekly)
 	if err != nil {
 		return nil, 0, infraerrors.Newf(http.StatusBadRequest, "GROK_QUOTA_BASE_URL_INVALID", "invalid Grok base_url: %v", err)

@@ -46,6 +46,8 @@ func (s *claudeUsageService) FetchUsageWithOptions(ctx context.Context, opts *se
 	if opts == nil {
 		return nil, fmt.Errorf("options is nil")
 	}
+	// Phase 3.3a: usage fetching never settles — explicit non-billable mark (spec §2.0).
+	ctx = service.WithNonBillableUpstream(ctx, service.NonBillableUsageFetch)
 
 	// 创建请求
 	req, err := http.NewRequestWithContext(ctx, "GET", s.usageURL, nil)

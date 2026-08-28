@@ -855,6 +855,8 @@ func (s *OllamaCloudUsageService) refreshAccount(ctx context.Context, accountID 
 }
 
 func (s *OllamaCloudUsageService) refreshLoadedAccount(ctx context.Context, account *Account, intervalMinutes int) (*OllamaCloudUsageSnapshot, error) {
+	// Phase 3.3a: usage fetching never settles — explicit non-billable mark (spec §2.0).
+	ctx = WithNonBillableUpstream(ctx, NonBillableUsageFetch)
 	now := s.currentTime().UTC()
 	ciphertext, _ := account.Extra[OllamaCloudUsageSessionExtraKey].(string)
 	if ciphertext == "" {

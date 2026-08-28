@@ -849,6 +849,10 @@ func (s *AccountTestService) fetchAntigravityOAuthUpstreamModelDiscovery(ctx con
 }
 
 func (s *AccountTestService) doUpstreamModelsRequest(req *http.Request, proxyURL string, account *Account) (*http.Response, error) {
+	// Phase 3.3a: model listing never settles — explicit non-billable mark (spec §2.0).
+	// Both callers are listing/probe paths: FetchUpstreamModelDiscovery
+	// (upstream_models.go:135) and retryGeminiModelsOnOpenAISurface (:502).
+	req = req.WithContext(WithNonBillableUpstream(req.Context(), NonBillableModelListing))
 	if s.tlsFPProfileService == nil {
 		return s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, nil)
 	}

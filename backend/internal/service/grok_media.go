@@ -463,6 +463,10 @@ func (s *OpenAIGatewayService) forwardGrokMediaVideoContent(
 	token, requestID string,
 	startTime time.Time,
 ) (*OpenAIForwardResult, error) {
+	// Phase 3.3a: the status poll (:494) and content fetch (:553) never settle —
+	// explicit non-billable mark. The generation POST (:403) lives in a different
+	// function and stays billable (spec §2.0).
+	ctx = WithNonBillableUpstream(ctx, NonBillableMediaFetch)
 	statusURL, err := buildGrokMediaURL(account, s.cfg, GrokMediaEndpointVideoStatus, requestID)
 	if err != nil {
 		return nil, err

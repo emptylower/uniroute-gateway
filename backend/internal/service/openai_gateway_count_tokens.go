@@ -81,6 +81,8 @@ func (s *OpenAIGatewayService) ForwardCountTokensAsAnthropic(
 	body []byte,
 	defaultMappedModel string,
 ) error {
+	// Phase 3.3a: Count Tokens never settles — explicit non-billable mark (spec §2.4).
+	ctx = WithNonBillableUpstream(ctx, NonBillableCountTokens)
 	if account == nil {
 		writeAnthropicCountTokensError(c, http.StatusServiceUnavailable, "api_error", "No available OpenAI accounts")
 		return fmt.Errorf("count_tokens: missing account")

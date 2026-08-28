@@ -547,6 +547,8 @@ func (s *UpstreamBillingProbeService) SetAccountEnabled(ctx context.Context, acc
 }
 
 func (s *UpstreamBillingProbeService) probeLoadedAccount(ctx context.Context, account *Account, intervalMinutes int) (*UpstreamBillingProbeSnapshot, error) {
+	// Phase 3.3a: the billing probe never settles — explicit non-billable mark (spec §2.0).
+	ctx = WithNonBillableUpstream(ctx, NonBillableProbe)
 	now := s.currentTime().UTC()
 	if s.accountTestService == nil || s.accountTestService.httpUpstream == nil {
 		return s.persistProbeFailure(ctx, account, intervalMinutes, now, 0, "transport_unavailable", 0)

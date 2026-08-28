@@ -255,6 +255,8 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 // testClaudeAccountConnection tests an Anthropic Claude account's connection
 func (s *AccountTestService) testClaudeAccountConnection(c *gin.Context, account *Account, modelID string) error {
 	ctx := c.Request.Context()
+	// Phase 3.3a: account testing never settles — explicit non-billable mark (spec §2.0).
+	ctx = WithNonBillableUpstream(ctx, NonBillableAccountTest)
 
 	// Determine the model to use
 	testModelID := modelID
@@ -379,6 +381,8 @@ func (s *AccountTestService) testClaudeAccountConnection(c *gin.Context, account
 }
 
 func (s *AccountTestService) testClaudeVertexServiceAccountConnection(c *gin.Context, ctx context.Context, account *Account, testModelID string) error {
+	// Phase 3.3a: account testing never settles — explicit non-billable mark (spec §2.0).
+	ctx = WithNonBillableUpstream(ctx, NonBillableAccountTest)
 	if mappedModel, matched := account.ResolveMappedModel(testModelID); matched {
 		testModelID = mappedModel
 	} else {
@@ -448,6 +452,8 @@ func (s *AccountTestService) testClaudeVertexServiceAccountConnection(c *gin.Con
 
 // testBedrockAccountConnection tests a Bedrock (SigV4 or API Key) account using non-streaming invoke
 func (s *AccountTestService) testBedrockAccountConnection(c *gin.Context, ctx context.Context, account *Account, testModelID string) error {
+	// Phase 3.3a: account testing never settles — explicit non-billable mark (spec §2.0).
+	ctx = WithNonBillableUpstream(ctx, NonBillableAccountTest)
 	region := bedrockRuntimeRegion(account)
 	resolvedModelID, ok := ResolveBedrockModelID(account, testModelID)
 	if !ok {
@@ -552,6 +558,8 @@ func (s *AccountTestService) testBedrockAccountConnection(c *gin.Context, ctx co
 // testOpenAIAccountConnection tests an OpenAI account's connection
 func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account *Account, modelID string, prompt string, mode string) error {
 	ctx := c.Request.Context()
+	// Phase 3.3a: account testing never settles — explicit non-billable mark (spec §2.0).
+	ctx = WithNonBillableUpstream(ctx, NonBillableAccountTest)
 	mode = normalizeAccountTestMode(mode)
 
 	// Default to openai.DefaultTestModel for OpenAI testing
@@ -746,6 +754,8 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 // testGrokAccountConnection tests a Grok OAuth or API-key account through xAI's Responses API.
 func (s *AccountTestService) testGrokAccountConnection(c *gin.Context, account *Account, modelID string) error {
 	ctx := c.Request.Context()
+	// Phase 3.3a: account testing never settles — explicit non-billable mark (spec §2.0).
+	ctx = WithNonBillableUpstream(ctx, NonBillableAccountTest)
 
 	if s.httpUpstream == nil {
 		return s.sendErrorAndEnd(c, "HTTP upstream not configured")
@@ -873,6 +883,8 @@ func (s *AccountTestService) testOpenAIChatCompletionsConnection(
 	authToken string,
 ) error {
 	ctx := c.Request.Context()
+	// Phase 3.3a: account testing never settles — explicit non-billable mark (spec §2.0).
+	ctx = WithNonBillableUpstream(ctx, NonBillableAccountTest)
 	apiURL := buildOpenAIChatCompletionsURL(normalizedBaseURL)
 
 	c.Writer.Header().Set("Content-Type", "text/event-stream")
@@ -929,6 +941,8 @@ func (s *AccountTestService) testOpenAIChatCompletionsConnection(
 // resulting capability state on the account.
 func (s *AccountTestService) testOpenAICompactConnection(c *gin.Context, account *Account, testModelID string) error {
 	ctx := c.Request.Context()
+	// Phase 3.3a: account testing never settles — explicit non-billable mark (spec §2.0).
+	ctx = WithNonBillableUpstream(ctx, NonBillableAccountTest)
 	credentialAccount := account
 	if account.IsShadow() {
 		resolved, err := resolveCredentialAccount(ctx, s.accountRepo, account)
@@ -1108,6 +1122,8 @@ func (s *AccountTestService) reconcileOpenAI429State(ctx context.Context, accoun
 // testGeminiAccountConnection tests a Gemini account's connection
 func (s *AccountTestService) testGeminiAccountConnection(c *gin.Context, account *Account, modelID string, prompt string) error {
 	ctx := c.Request.Context()
+	// Phase 3.3a: account testing never settles — explicit non-billable mark (spec §2.0).
+	ctx = WithNonBillableUpstream(ctx, NonBillableAccountTest)
 
 	// Determine the model to use
 	testModelID := modelID
@@ -1735,6 +1751,8 @@ func (s *AccountTestService) processOpenAIStream(c *gin.Context, body io.Reader)
 
 // testOpenAIImageAPIKey tests OpenAI image generation using an API Key account.
 func (s *AccountTestService) testOpenAIImageAPIKey(c *gin.Context, ctx context.Context, account *Account, modelID, prompt string) error {
+	// Phase 3.3a: account testing never settles — explicit non-billable mark (spec §2.0).
+	ctx = WithNonBillableUpstream(ctx, NonBillableAccountTest)
 	authToken := account.GetOpenAIApiKey()
 	if authToken == "" {
 		return s.sendErrorAndEnd(c, "No API key available")
@@ -1832,6 +1850,8 @@ func (s *AccountTestService) testOpenAIImageAPIKey(c *gin.Context, ctx context.C
 
 // testOpenAIImageOAuth tests OpenAI image generation using an OAuth account via Codex /responses API.
 func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Context, account *Account, modelID, prompt string) error {
+	// Phase 3.3a: account testing never settles — explicit non-billable mark (spec §2.0).
+	ctx = WithNonBillableUpstream(ctx, NonBillableAccountTest)
 	credentialAccount := account
 	if account.IsShadow() {
 		resolved, err := resolveCredentialAccount(ctx, s.accountRepo, account)
