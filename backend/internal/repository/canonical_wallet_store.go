@@ -199,7 +199,7 @@ var armCanonicalWalletHoldScript = redis.NewScript(`
 
 // releaseCanonicalWalletHoldScript (§10.5/§10.7) — KEYS: hold hash, user hold
 // set, lease hash. ARGV: authorization_id, state_after ('released' |
-// 'abandoned'), class_after ('' keeps the stored class). Only an armed hold
+// 'abandoned'), class_after (” keeps the stored class). Only an armed hold
 // moves ({7} otherwise, carrying the stored state/event_id for the caller's
 // branch-on-event_id rule); the lease's released_units rises by the held
 // figure iff the lease hash still exists — a hold on an expired lease is the

@@ -405,16 +405,25 @@ func TestCanonicalWalletReservationMarkerCannotOutliveItsLease(t *testing.T) {
 // reusable on the gateway — and the seal reports the released figure as its
 // third value.
 func TestCanonicalWalletReserveGuardSubtractsReleased(t *testing.T) {
-	mr := miniredis.RunT(t); rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()}); c := &gatewayCache{rdb: rdb}
-	ctx := context.Background(); now := time.Now().UTC().Truncate(time.Millisecond); exp := now.Add(time.Minute)
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	c := &gatewayCache{rdb: rdb}
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	exp := now.Add(time.Minute)
 	require.NoError(t, c.InstallCanonicalWalletLease(ctx, service.CanonicalWalletLease{LeaseID: "L", PlatformUserID: "u", Currency: "CNY", BudgetUnits: 100, ExpiresAt: exp}))
-	_, err := c.ReserveCanonicalWalletLease(ctx, "u", "L", "CNY", "e1", 100, now); require.NoError(t, err)
-	_, err = c.ReserveCanonicalWalletLease(ctx, "u", "L", "CNY", "e2", 1, now); require.ErrorIs(t, err, service.ErrCanonicalWalletLeaseExhausted) // the existing {4} sentinel (canonical_wallet_bridge.go:31)
+	_, err := c.ReserveCanonicalWalletLease(ctx, "u", "L", "CNY", "e1", 100, now)
+	require.NoError(t, err)
+	_, err = c.ReserveCanonicalWalletLease(ctx, "u", "L", "CNY", "e2", 1, now)
+	require.ErrorIs(t, err, service.ErrCanonicalWalletLeaseExhausted) // the existing {4} sentinel (canonical_wallet_bridge.go:31)
 	require.NoError(t, rdb.HIncrBy(ctx, canonicalWalletLeaseKey("u", "L"), "released_units", 40).Err())
-	res, err := c.ReserveCanonicalWalletLease(ctx, "u", "L", "CNY", "e3", 40, now); require.NoError(t, err)
+	res, err := c.ReserveCanonicalWalletLease(ctx, "u", "L", "CNY", "e3", 40, now)
+	require.NoError(t, err)
 	require.Equal(t, int64(140), res.Lease.ConsumedUnits, "consumed is monotone; the guard subtracted released")
-	consumed, released, err := c.SealCanonicalWalletLease(ctx, "u", "L"); require.NoError(t, err)
-	require.Equal(t, int64(140), consumed); require.Equal(t, int64(40), released)
+	consumed, released, err := c.SealCanonicalWalletLease(ctx, "u", "L")
+	require.NoError(t, err)
+	require.Equal(t, int64(140), consumed)
+	require.Equal(t, int64(40), released)
 }
 
 // mustHoldState reads one hold hash field via HGETALL for assertions.
