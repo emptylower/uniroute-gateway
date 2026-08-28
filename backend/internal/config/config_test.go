@@ -2737,3 +2737,23 @@ func TestValidateCanonicalWalletEnforceGate(t *testing.T) {
 		require.NoError(t, err)
 	})
 }
+
+func TestPhase34ProtoExpirySkewMarginValidation(t *testing.T) {
+	cfg, err := newCanonicalWalletValidateConfig(t, CanonicalWalletModeShadow, false, false) // config_test.go:2701
+	require.NoError(t, err)
+	cfg.CanonicalWallet.RequestTimeoutMS = 300
+
+	cfg.CanonicalWallet.ExpirySkewMarginMS = 0
+	require.ErrorContains(t, cfg.Validate(), "canonical_wallet.expiry_skew_margin_ms")
+
+	cfg.CanonicalWallet.ExpirySkewMarginMS = 301
+	require.ErrorContains(t, cfg.Validate(), "canonical_wallet.expiry_skew_margin_ms")
+
+	cfg.CanonicalWallet.ExpirySkewMarginMS = 100
+	require.NoError(t, cfg.Validate())
+
+	// disabled mode never validates the wallet block — byte-for-byte preservation
+	cfg.CanonicalWallet.Mode = CanonicalWalletModeDisabled
+	cfg.CanonicalWallet.ExpirySkewMarginMS = 0
+	require.NoError(t, cfg.Validate())
+}

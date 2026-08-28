@@ -65,7 +65,7 @@ func TestCanonicalWalletOutboxDispatcherDeliversEndToEnd(t *testing.T) {
 	cfg.RequestTimeoutMS = 100 // dispatcher tick interval for this test
 
 	client := newCanonicalWalletHTTPClient(cfg, controlPlane.Client())
-	bridge := newCanonicalWalletBridge(cfg, store, client, db, outbox)
+	bridge := newCanonicalWalletBridge(cfg, store, client, db, outbox, 0)
 	require.NotNil(t, bridge)
 
 	amountUnits := int64(30_000000) // 0.30 CNY in cny-e8-v1 units

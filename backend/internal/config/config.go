@@ -1579,6 +1579,11 @@ type CanonicalWalletConfig struct {
 	LeaseTTLSeconds     int    `mapstructure:"lease_ttl_seconds"`
 	LeaseBudgetUnits    int64  `mapstructure:"lease_budget_units"`
 	RequestTimeoutMS    int    `mapstructure:"request_timeout_ms"`
+	// ExpirySkewMarginMS (Phase 3.4): a cached lease whose expires_at is within
+	// this many milliseconds of the gateway clock is treated as expired —
+	// redesign §4 (round-1 finding: ensureLease compared against a bare
+	// time.Now()). Validated 0 < margin ≤ request_timeout_ms when enabled.
+	ExpirySkewMarginMS  int    `mapstructure:"expiry_skew_margin_ms"`
 	SettlementQueueSize int    `mapstructure:"settlement_queue_size"`
 	SettlementWorkers   int    `mapstructure:"settlement_workers"`
 	EnforceReady        bool   `mapstructure:"enforce_ready"`
@@ -2043,6 +2048,7 @@ func setDefaults() {
 	viper.SetDefault("canonical_wallet.lease_ttl_seconds", 300)
 	viper.SetDefault("canonical_wallet.lease_budget_units", int64(500_000_000))
 	viper.SetDefault("canonical_wallet.request_timeout_ms", 300)
+	viper.SetDefault("canonical_wallet.expiry_skew_margin_ms", 100)
 	viper.SetDefault("canonical_wallet.settlement_queue_size", 2048)
 	viper.SetDefault("canonical_wallet.settlement_workers", 2)
 	viper.SetDefault("canonical_wallet.enforce_ready", false)
@@ -2714,6 +2720,9 @@ func (c *Config) Validate() error {
 		}
 		if c.CanonicalWallet.RequestTimeoutMS < 50 || c.CanonicalWallet.RequestTimeoutMS > 5000 {
 			return fmt.Errorf("canonical_wallet.request_timeout_ms must be between 50 and 5000")
+		}
+		if c.CanonicalWallet.ExpirySkewMarginMS <= 0 || c.CanonicalWallet.ExpirySkewMarginMS > c.CanonicalWallet.RequestTimeoutMS {
+			return fmt.Errorf("canonical_wallet.expiry_skew_margin_ms must be between 1 and request_timeout_ms (%d)", c.CanonicalWallet.RequestTimeoutMS)
 		}
 		if c.CanonicalWallet.SettlementQueueSize < 1 || c.CanonicalWallet.SettlementQueueSize > 1_000_000 {
 			return fmt.Errorf("canonical_wallet.settlement_queue_size must be between 1 and 1000000")

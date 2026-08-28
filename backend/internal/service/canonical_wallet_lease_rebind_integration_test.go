@@ -87,7 +87,7 @@ func TestCanonicalWalletOutboxRetryReservesAgainstTheOriginalLease(t *testing.T)
 	cfg.RequestTimeoutMS = 100 // also the dispatcher's tick interval
 
 	client := newCanonicalWalletHTTPClient(cfg, controlPlane.Client())
-	bridge := newCanonicalWalletBridge(cfg, store, client, db, outbox)
+	bridge := newCanonicalWalletBridge(cfg, store, client, db, outbox, 0)
 	require.NotNil(t, bridge)
 
 	gatewayRequestID := "req-rebind-" + uuid.NewString()
@@ -175,7 +175,7 @@ func TestCanonicalWalletDeliverOutboxEventClaimLost(t *testing.T) {
 	cfg := canonicalWalletTestConfig(config.CanonicalWalletModeEnforce)
 	cfg.ControlPlaneURL, cfg.Secret = controlPlane.URL, strings.Repeat("s", 32)
 	client := newCanonicalWalletHTTPClient(cfg, controlPlane.Client())
-	bridge := newCanonicalWalletBridge(cfg, store, client, db, outbox)
+	bridge := newCanonicalWalletBridge(cfg, store, client, db, outbox, 0)
 
 	event := CanonicalWalletSettlementEvent{
 		EventID: "gwusg_" + uuid.NewString(), GatewayRequestID: "req-" + uuid.NewString(),
@@ -237,7 +237,7 @@ func TestCanonicalWalletDeliverOutboxEventStaleBindingAndExpiredFallback(t *test
 	cfg := canonicalWalletTestConfig(config.CanonicalWalletModeEnforce)
 	cfg.ControlPlaneURL, cfg.Secret = controlPlane.URL, strings.Repeat("s", 32)
 	client := newCanonicalWalletHTTPClient(cfg, controlPlane.Client())
-	bridge := newCanonicalWalletBridge(cfg, store, client, db, outbox)
+	bridge := newCanonicalWalletBridge(cfg, store, client, db, outbox, 0)
 
 	// 1. Install an EXPIRED lease in Redis to test resolveOutboxEventLease fallback
 	require.NoError(t, store.InstallCanonicalWalletLease(ctx, CanonicalWalletLease{

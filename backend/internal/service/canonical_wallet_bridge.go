@@ -60,6 +60,18 @@ func (l CanonicalWalletLease) RemainingUnits() int64 {
 	return remaining
 }
 
+// leaseExpiredAt (Phase 3.4, redesign §4): a lease is usable only while its
+// expiry is strictly beyond now + expiry_skew_margin_ms — the margin absorbs
+// the round trip to Redis, whose own PEXPIREAT decides the reservation.
+func (b *CanonicalWalletBridge) leaseExpiredAt(lease *CanonicalWalletLease, now time.Time) bool {
+	margin := time.Duration(b.cfg.ExpirySkewMarginMS) * time.Millisecond
+	return lease == nil || !lease.ExpiresAt.After(now.Add(margin))
+}
+
+func (b *CanonicalWalletBridge) leaseCovers(lease *CanonicalWalletLease, currency string, amountUnits int64, now time.Time) bool {
+	return lease != nil && lease.Currency == currency && !b.leaseExpiredAt(lease, now) && lease.RemainingUnits() >= amountUnits
+}
+
 type CanonicalWalletReservation struct {
 	Lease     CanonicalWalletLease
 	Duplicate bool
@@ -412,29 +424,61 @@ type CanonicalWalletBridge struct {
 	outboxDB *sql.DB
 	outbox   CanonicalWalletOutboxStore
 	workerID string
+	// now (Phase 3.4): the injectable clock every lease-expiry decision in
+	// this file uses — ensureLease, resolveOutboxEventLease and
+	// HasCanonicalWalletHeadroom. Tests set it; production keeps UTC wall time.
+	now func() time.Time
+	// callerSlotTTLSeconds (Phase 3.4): gateway.concurrency_slot_ttl_minutes × 60,
+	// sent on every ensure as caller_slot_ttl_seconds (redesign §3.3).
+	callerSlotTTLSeconds int
 	// observedForTest (Phase 3.3a): test-only hook invoked at the top of
 	// ObserveSettlement so the token's arrival can be asserted in-process.
 	observedForTest func(CanonicalWalletSettlementEvent)
+}
+
+// clock is the only way this file reads the injectable clock. Several existing
+// tests build a bare &CanonicalWalletBridge{…} literal instead of going through
+// newCanonicalWalletBridge — deliberately, because the constructor always starts
+// runOutboxDispatcher (see the comment above the literal in
+// canonical_wallet_outbox_integration_test.go) — so `now` can be nil in
+// canonical_wallet_failure_paths_integration_test.go,
+// canonical_wallet_outbox_integration_test.go, canonical_wallet_wire_http_test.go,
+// canonical_wallet_lease_rebind_integration_test.go and
+// canonical_wallet_authorizer_test.go. Never read b.now directly.
+func (b *CanonicalWalletBridge) clock() time.Time {
+	if b == nil || b.now == nil {
+		return time.Now().UTC()
+	}
+	return b.now()
 }
 
 func NewCanonicalWalletBridge(cfg *config.Config, store CanonicalWalletLeaseStore, outboxDB *sql.DB, outbox CanonicalWalletOutboxStore) *CanonicalWalletBridge {
 	if cfg == nil || cfg.CanonicalWallet.Mode == "" || cfg.CanonicalWallet.Mode == config.CanonicalWalletModeDisabled {
 		return nil
 	}
-	return newCanonicalWalletBridge(cfg.CanonicalWallet, store, newCanonicalWalletHTTPClient(cfg.CanonicalWallet, nil), outboxDB, outbox)
+	slot := 0
+	if cfg.Gateway.ConcurrencySlotTTLMinutes > 0 {
+		slot = cfg.Gateway.ConcurrencySlotTTLMinutes * 60
+	}
+	return newCanonicalWalletBridge(cfg.CanonicalWallet, store, newCanonicalWalletHTTPClient(cfg.CanonicalWallet, nil), outboxDB, outbox, slot)
 }
 
-func newCanonicalWalletBridge(cfg config.CanonicalWalletConfig, store CanonicalWalletLeaseStore, control canonicalWalletControlPlane, outboxDB *sql.DB, outbox CanonicalWalletOutboxStore) *CanonicalWalletBridge {
+func newCanonicalWalletBridge(cfg config.CanonicalWalletConfig, store CanonicalWalletLeaseStore, control canonicalWalletControlPlane, outboxDB *sql.DB, outbox CanonicalWalletOutboxStore, callerSlotTTLSeconds int) *CanonicalWalletBridge {
+	if callerSlotTTLSeconds <= 0 {
+		callerSlotTTLSeconds = 1800 // gateway.concurrency_slot_ttl_minutes' default (30) × 60
+	}
 	b := &CanonicalWalletBridge{
 		cfg:      cfg,
 		store:    store,
 		control:  control,
 		outboxDB: outboxDB,
 		outbox:   outbox,
+		now:      func() time.Time { return time.Now().UTC() },
 		// This dispatcher instance's opaque claim token — generated once
 		// per bridge, never per tick, so every row this instance claims is
 		// resolvable only by this same instance.
-		workerID: "sub2api-wallet-dispatcher-" + uuid.NewString(),
+		workerID:             "sub2api-wallet-dispatcher-" + uuid.NewString(),
+		callerSlotTTLSeconds: callerSlotTTLSeconds,
 	}
 	go b.runOutboxDispatcher()
 	return b
@@ -618,7 +662,7 @@ func (b *CanonicalWalletBridge) HasCanonicalWalletHeadroom(ctx context.Context, 
 	if err != nil {
 		return false, err
 	}
-	if lease.Currency != currency || !lease.ExpiresAt.After(time.Now().UTC()) {
+	if lease.Currency != currency || b.leaseExpiredAt(lease, b.clock()) {
 		return false, nil
 	}
 	return lease.RemainingUnits() > 0, nil
@@ -794,7 +838,7 @@ func (b *CanonicalWalletBridge) resolveOutboxEventLease(ctx context.Context, e C
 		// marker somewhere.
 		return nil, err
 	}
-	if err == nil && lease != nil && lease.Currency == e.Currency && lease.ExpiresAt.After(time.Now().UTC()) {
+	if err == nil && lease != nil && lease.Currency == e.Currency && !b.leaseExpiredAt(lease, b.clock()) {
 		return lease, nil
 	}
 	return b.ensureLease(ctx, e.PlatformUserID, e.Currency, e.AmountUnits)
@@ -805,7 +849,7 @@ func (b *CanonicalWalletBridge) ensureLease(ctx context.Context, platformUserID,
 		return nil, errors.New("canonical wallet bridge dependencies unavailable")
 	}
 	lease, err := b.store.GetCanonicalWalletLease(ctx, platformUserID)
-	if err == nil && lease != nil && lease.Currency == currency && lease.ExpiresAt.After(time.Now().UTC()) && lease.RemainingUnits() >= amountUnits {
+	if b.leaseCovers(lease, currency, amountUnits, b.clock()) {
 		return lease, nil
 	}
 	// The configured budget is cny-e8-v1 units; convert to ShipAny's
@@ -827,8 +871,8 @@ func (b *CanonicalWalletBridge) ensureLease(ctx context.Context, platformUserID,
 	if lease == nil {
 		return nil, ErrCanonicalWalletLeaseMissing // a (nil, nil) grant was a latent nil deref one line later; name it
 	}
-	now := time.Now().UTC()
-	if !lease.ExpiresAt.After(now) {
+	now := b.clock()
+	if b.leaseExpiredAt(lease, now) {
 		canonicalWalletBridgeMetrics.leaseGrantExpired.Add(1)
 		return nil, fmt.Errorf("%w: lease %s expired at %s", ErrCanonicalWalletLeaseExpired, lease.LeaseID, lease.ExpiresAt.UTC().Format(time.RFC3339Nano))
 	}

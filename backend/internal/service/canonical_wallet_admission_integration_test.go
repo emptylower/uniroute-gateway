@@ -48,7 +48,7 @@ func TestCanonicalWalletCheckAndReserveEnforcesRealHardCap(t *testing.T) {
 		LeaseID: "lease-" + uuid.NewString(), PlatformUserID: platformUserID, Currency: "CNY",
 		BudgetUnits: 50_000000, ExpiresAt: time.Now().UTC().Add(time.Minute), // 0.5 CNY budget, deliberately small
 	}}
-	bridge := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeEnforce), store, control, nil, nil) // outboxDB/outbox nil — this test doesn't call ObserveSettlement
+	bridge := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeEnforce), store, control, nil, nil, 0) // outboxDB/outbox nil — this test doesn't call ObserveSettlement
 
 	first := CanonicalWalletSettlementEvent{GatewayRequestID: "req-1", PlatformUserID: platformUserID, Currency: "CNY", AmountUnits: 30_000000}
 	allowed, err := bridge.CheckAndReserve(ctx, first)
@@ -75,7 +75,7 @@ func TestCanonicalWalletCheckAndReserveHonorsExplicitLeaseIDOnRetry(t *testing.T
 		LeaseID: oldLeaseID, PlatformUserID: platformUserID, Currency: "CNY",
 		BudgetUnits: 100_000000, ExpiresAt: time.Now().UTC().Add(time.Minute),
 	}}
-	bridge := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeEnforce), store, control, nil, nil) // outboxDB/outbox nil — this test doesn't call ObserveSettlement
+	bridge := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeEnforce), store, control, nil, nil, 0) // outboxDB/outbox nil — this test doesn't call ObserveSettlement
 
 	first := CanonicalWalletSettlementEvent{GatewayRequestID: "req-retry-1", PlatformUserID: platformUserID, Currency: "CNY", AmountUnits: 10_000000}
 	allowed, err := bridge.CheckAndReserve(ctx, first)
@@ -112,7 +112,7 @@ func TestCanonicalWalletMidStreamOverrunToppedUpAtomicallyBeforeExceeding(t *tes
 		LeaseID: leaseID, PlatformUserID: platformUserID, Currency: "CNY",
 		BudgetUnits: 100_000000, ExpiresAt: time.Now().UTC().Add(time.Minute),
 	}}
-	bridge := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeEnforce), store, control, nil, nil) // outboxDB/outbox nil — this test doesn't call ObserveSettlement
+	bridge := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeEnforce), store, control, nil, nil, 0) // outboxDB/outbox nil — this test doesn't call ObserveSettlement
 
 	initial := CanonicalWalletSettlementEvent{GatewayRequestID: "req-stream-1", PlatformUserID: platformUserID, Currency: "CNY", AmountUnits: 40_000000}
 	allowed, err := bridge.CheckAndReserve(ctx, initial)
@@ -153,7 +153,7 @@ func TestBillingCacheServiceChecksBalanceEligibilityAgainstCanonicalWalletInEnfo
 	newSvc := func(t *testing.T, lease CanonicalWalletLease) *BillingCacheService {
 		t.Helper()
 		require.NoError(t, store.InstallCanonicalWalletLease(ctx, lease))
-		bridge := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeEnforce), store, &canonicalWalletControlStub{}, nil, nil) // control/outboxDB/outbox unused by HasCanonicalWalletHeadroom
+		bridge := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeEnforce), store, &canonicalWalletControlStub{}, nil, nil, 0) // control/outboxDB/outbox unused by HasCanonicalWalletHeadroom
 		// A real bootstrap exchange rate keeps CheckBillingEligibility's
 		// downstream currency-conversion step (reached when
 		// user.BillingCurrency is non-empty) out of this test's way without
@@ -435,7 +435,7 @@ func TestCanonicalWalletShadowModeAllowsEverythingAndReservesNothing(t *testing.
 	platformUserID := "shipany-user-" + uuid.NewString()
 	leaseID := "lease-" + uuid.NewString()
 
-	bridge := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeShadow), store, &canonicalWalletControlStub{}, nil, nil)
+	bridge := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeShadow), store, &canonicalWalletControlStub{}, nil, nil, 0)
 
 	allowed, err := bridge.CheckAndReserve(ctx, CanonicalWalletSettlementEvent{
 		GatewayRequestID: "req-shadow", PlatformUserID: platformUserID, Currency: "CNY", AmountUnits: 999_000000,
@@ -462,7 +462,7 @@ func TestHasCanonicalWalletHeadroomEnforceBranches(t *testing.T) {
 	store := &gatewayCacheAdapterForTest{rdb: rdb}
 	now := time.Now().UTC().Truncate(time.Millisecond)
 
-	bridge := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeEnforce), store, &canonicalWalletControlStub{}, nil, nil)
+	bridge := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeEnforce), store, &canonicalWalletControlStub{}, nil, nil, 0)
 
 	// No lease ever issued: fail closed with the store's own error.
 	_, err := bridge.HasCanonicalWalletHeadroom(ctx, "shipany-user-"+uuid.NewString(), "CNY")
@@ -503,7 +503,7 @@ func TestCheckBalanceEligibilityEnforceBranchesThroughRealEntryPoints(t *testing
 	store := &gatewayCacheAdapterForTest{rdb: rdb}
 
 	newBridge := func() *CanonicalWalletBridge {
-		return newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeEnforce), store, &canonicalWalletControlStub{}, nil, nil)
+		return newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeEnforce), store, &canonicalWalletControlStub{}, nil, nil, 0)
 	}
 	cfg := &config.Config{RunMode: config.RunModeStandard}
 	cfg.Billing.ExchangeRate.BootstrapUSDToCNY = 7.2
