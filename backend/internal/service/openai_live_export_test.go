@@ -207,6 +207,14 @@ func (s *LiveRestartLeaseStoreStub) ReserveCanonicalWalletLease(_ context.Contex
 	}
 	return &CanonicalWalletReservation{Lease: *s.Lease}, nil
 }
+func (s *LiveRestartLeaseStoreStub) SealCanonicalWalletLease(_ context.Context, _, _ string) (int64, error) {
+	if s.Lease == nil {
+		return 0, ErrCanonicalWalletLeaseMissing
+	}
+	pre := s.Lease.ConsumedUnits
+	s.Lease.ConsumedUnits = s.Lease.BudgetUnits
+	return pre, nil
+}
 
 type LiveRestartControlStub struct {
 	Lease *CanonicalWalletLease

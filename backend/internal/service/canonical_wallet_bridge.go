@@ -94,6 +94,10 @@ type CanonicalWalletLeaseStore interface {
 	// time (service.CanonicalWalletSettlementEvent.LeaseID), never "whatever
 	// is current now".
 	ReserveCanonicalWalletLease(ctx context.Context, platformUserID, leaseID, currency, eventID string, amountUnits int64, now time.Time) (*CanonicalWalletReservation, error)
+	// SealCanonicalWalletLease (Phase 3.4, redesign §3.3) closes the lease to new
+	// reservations ahead of a drain and returns the pre-seal consumed units.
+	// Returns ErrCanonicalWalletLeaseMissing when the lease hash is absent.
+	SealCanonicalWalletLease(ctx context.Context, platformUserID, leaseID string) (int64, error)
 }
 
 type CanonicalWalletSettlementEvent struct {

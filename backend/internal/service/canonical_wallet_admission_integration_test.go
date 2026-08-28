@@ -270,6 +270,18 @@ var testReserveCanonicalWalletLeaseScript = redis.NewScript(`
 	return {0, stored_lease_id, currency, budget, updated, expires_at}
 `)
 
+var testSealCanonicalWalletLeaseScript = redis.NewScript(`
+	if redis.call('EXISTS', KEYS[1]) == 0 then return {1} end
+	local budget = tonumber(redis.call('HGET', KEYS[1], 'budget_units') or '0')
+	local consumed = tonumber(redis.call('HGET', KEYS[1], 'consumed_units') or '0')
+	redis.call('HSET', KEYS[1], 'consumed_units', budget)
+	local current = redis.call('GET', KEYS[2])
+	if current ~= false and current == ARGV[1] then
+		redis.call('DEL', KEYS[2])
+	end
+	return {0, consumed}
+`)
+
 func testCanonicalWalletUserHash(platformUserID string) string {
 	sum := sha256.Sum256([]byte(strings.TrimSpace(platformUserID)))
 	return hex.EncodeToString(sum[:])
@@ -420,6 +432,33 @@ func (c *gatewayCacheAdapterForTest) ReserveCanonicalWalletLease(ctx context.Con
 	default:
 		return nil, fmt.Errorf("unknown canonical wallet reservation code %d", code)
 	}
+}
+
+func (c *gatewayCacheAdapterForTest) SealCanonicalWalletLease(ctx context.Context, platformUserID, leaseID string) (int64, error) {
+	if strings.TrimSpace(platformUserID) == "" || strings.TrimSpace(leaseID) == "" {
+		return 0, errors.New("canonical wallet seal requires a platform user id and a lease id")
+	}
+	result, err := testSealCanonicalWalletLeaseScript.Run(ctx, c.rdb,
+		[]string{testCanonicalWalletLeaseKey(platformUserID, leaseID), testCanonicalWalletCurrentKey(platformUserID)},
+		leaseID,
+	).Slice()
+	if err != nil {
+		return 0, err
+	}
+	if len(result) == 0 {
+		return 0, errors.New("canonical wallet seal returned no result")
+	}
+	code, err := testRedisResultInt64(result[0])
+	if err != nil {
+		return 0, err
+	}
+	if code == 1 {
+		return 0, ErrCanonicalWalletLeaseMissing
+	}
+	if len(result) != 2 {
+		return 0, errors.New("canonical wallet seal returned an invalid result")
+	}
+	return testRedisResultInt64(result[1])
 }
 
 var _ CanonicalWalletLeaseStore = (*gatewayCacheAdapterForTest)(nil)

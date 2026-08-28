@@ -1570,23 +1570,23 @@ const (
 // Only shadow observation is wired into usage billing today; enforce is gated
 // for a future preflight cutover.
 type CanonicalWalletConfig struct {
-	Mode                string `mapstructure:"mode"`
-	ControlPlaneURL     string `mapstructure:"control_plane_url"`
-	Issuer              string `mapstructure:"issuer"`
-	Audience            string `mapstructure:"audience"`
-	Secret              string `mapstructure:"secret"`
-	Version             string `mapstructure:"version"`
-	LeaseTTLSeconds     int    `mapstructure:"lease_ttl_seconds"`
-	LeaseBudgetUnits    int64  `mapstructure:"lease_budget_units"`
-	RequestTimeoutMS    int    `mapstructure:"request_timeout_ms"`
+	Mode             string `mapstructure:"mode"`
+	ControlPlaneURL  string `mapstructure:"control_plane_url"`
+	Issuer           string `mapstructure:"issuer"`
+	Audience         string `mapstructure:"audience"`
+	Secret           string `mapstructure:"secret"`
+	Version          string `mapstructure:"version"`
+	LeaseTTLSeconds  int    `mapstructure:"lease_ttl_seconds"`
+	LeaseBudgetUnits int64  `mapstructure:"lease_budget_units"`
+	RequestTimeoutMS int    `mapstructure:"request_timeout_ms"`
 	// ExpirySkewMarginMS (Phase 3.4): a cached lease whose expires_at is within
 	// this many milliseconds of the gateway clock is treated as expired —
 	// redesign §4 (round-1 finding: ensureLease compared against a bare
 	// time.Now()). Validated 0 < margin ≤ request_timeout_ms when enabled.
-	ExpirySkewMarginMS  int    `mapstructure:"expiry_skew_margin_ms"`
-	SettlementQueueSize int    `mapstructure:"settlement_queue_size"`
-	SettlementWorkers   int    `mapstructure:"settlement_workers"`
-	EnforceReady        bool   `mapstructure:"enforce_ready"`
+	ExpirySkewMarginMS  int  `mapstructure:"expiry_skew_margin_ms"`
+	SettlementQueueSize int  `mapstructure:"settlement_queue_size"`
+	SettlementWorkers   int  `mapstructure:"settlement_workers"`
+	EnforceReady        bool `mapstructure:"enforce_ready"`
 	// BillingSnapshotMode (Phase 3.2): "off" = today's settlement paths exactly;
 	// "record" (default) = freeze + persist + compare, settle as today, count drift;
 	// "settle" = settle from the frozen snapshot. Independent of Mode so the

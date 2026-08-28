@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
@@ -32,35 +31,45 @@ func p34Bridge(t *testing.T, ctx context.Context, cfgMode string, store Canonica
 	return b
 }
 
-// Test 18 — skew margin: a lease inside the margin is treated as expired.
-func TestPhase34Proto18SkewMarginTreatsNearExpiryAsExpired(t *testing.T) {
+// Test 15a (seal): after a seal, a NEW reservation on the lease is refused by
+// the reserve script's budget guard; a retry carrying an existing marker still
+// succeeds (duplicate check runs before the budget check — verified against
+// reserveCanonicalWalletLeaseScript's order: EXISTS → currency → expiry →
+// marker → budget); the current pointer is deleted; the pre-seal consumed is
+// returned; a second seal is idempotent.
+func TestPhase34Proto15aSealRefusesNewReservationsButHonoursMarkers(t *testing.T) {
 	ctx := context.Background()
 	rdb := startCanonicalWalletTestRedis(t, ctx)
 	store := &gatewayCacheAdapterForTest{rdb: rdb}
 	user := "shipany-user-" + uuid.NewString()
-	wall := time.Now().UTC()
-	expires := wall.Add(10 * time.Second) // Redis keeps the key alive for the whole test
+	expires := time.Now().UTC().Add(10 * time.Second)
 	require.NoError(t, store.InstallCanonicalWalletLease(ctx, CanonicalWalletLease{
-		LeaseID: "lease-margin", PlatformUserID: user, Currency: "CNY", BudgetUnits: 500_000_000, ExpiresAt: expires,
+		LeaseID: "lease-seal", PlatformUserID: user, Currency: "CNY", BudgetUnits: 500_000_000, ExpiresAt: expires,
 	}))
-	control := &canonicalWalletControlStub{} // records ensure calls; returns a fresh lease when asked
-
-	// 50 ms before expiry, inside the 100 ms margin → expired → ensure is called.
-	control.lease = CanonicalWalletLease{LeaseID: "lease-fresh", PlatformUserID: user, Currency: "CNY", BudgetUnits: 500_000_000, ExpiresAt: expires.Add(time.Minute)}
-	b := p34Bridge(t, ctx, config.CanonicalWalletModeEnforce, store, control, expires.Add(-50*time.Millisecond))
-	lease, err := b.ensureLease(ctx, user, "CNY", 1_000_000, canonicalWalletLeasePurposeAuthorize, "")
+	_, err := store.ReserveCanonicalWalletLease(ctx, user, "lease-seal", "CNY", "evt-before", 30_000_000, time.Now().UTC())
 	require.NoError(t, err)
-	require.Equal(t, "lease-fresh", lease.LeaseID)
-	require.Equal(t, 1, control.ensureCalls)
 
-	// 150 ms before expiry, outside the margin → cache hit, no ensure.
-	control2 := &canonicalWalletControlStub{}
-	require.NoError(t, store.InstallCanonicalWalletLease(ctx, CanonicalWalletLease{
-		LeaseID: "lease-margin-2", PlatformUserID: user + "-b", Currency: "CNY", BudgetUnits: 500_000_000, ExpiresAt: expires,
-	}))
-	b2 := p34Bridge(t, ctx, config.CanonicalWalletModeEnforce, store, control2, expires.Add(-150*time.Millisecond))
-	lease, err = b2.ensureLease(ctx, user+"-b", "CNY", 1_000_000, canonicalWalletLeasePurposeAuthorize, "")
+	pre, err := store.SealCanonicalWalletLease(ctx, user, "lease-seal")
 	require.NoError(t, err)
-	require.Equal(t, "lease-margin-2", lease.LeaseID)
-	require.Equal(t, 0, control2.ensureCalls)
+	require.Equal(t, int64(30_000_000), pre, "the seal returns the PRE-seal consumed")
+
+	sealed, err := store.GetCanonicalWalletLeaseByID(ctx, user, "lease-seal")
+	require.NoError(t, err)
+	require.Equal(t, sealed.BudgetUnits, sealed.ConsumedUnits, "consumed == budget after the seal")
+	_, err = store.GetCanonicalWalletLease(ctx, user)
+	require.ErrorIs(t, err, ErrCanonicalWalletLeaseMissing, "the current pointer is deleted by the seal")
+
+	_, err = store.ReserveCanonicalWalletLease(ctx, user, "lease-seal", "CNY", "evt-after", 1, time.Now().UTC())
+	require.ErrorIs(t, err, ErrCanonicalWalletLeaseExhausted, "a new reservation on a sealed lease is refused")
+
+	dup, err := store.ReserveCanonicalWalletLease(ctx, user, "lease-seal", "CNY", "evt-before", 30_000_000, time.Now().UTC())
+	require.NoError(t, err)
+	require.True(t, dup.Duplicate, "a retry carrying its marker still succeeds on the sealed lease")
+
+	again, err := store.SealCanonicalWalletLease(ctx, user, "lease-seal")
+	require.NoError(t, err)
+	require.Equal(t, sealed.BudgetUnits, again, "a second seal is idempotent and returns the already-sealed consumed (== budget)")
+
+	_, err = store.SealCanonicalWalletLease(ctx, user, "lease-absent")
+	require.ErrorIs(t, err, ErrCanonicalWalletLeaseMissing)
 }

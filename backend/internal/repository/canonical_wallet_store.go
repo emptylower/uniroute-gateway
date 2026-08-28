@@ -139,6 +139,29 @@ var reserveCanonicalWalletLeaseScript = redis.NewScript(`
 	return {0, stored_lease_id, currency, budget, updated, expires_at}
 `)
 
+// sealCanonicalWalletLeaseScript (Phase 3.4, redesign §3.3) atomically closes
+// KEYS[1] to NEW reservations on the gateway side ahead of a drain: it reads
+// consumed_units, sets consumed_units = budget_units, and DELetes the current
+// pointer KEYS[2] if it names this lease. It returns {0, pre_seal_consumed} —
+// the figure the gateway sends as gateway_consumed_units. After the seal the
+// reserve script's budget guard (consumed + amount > budget) refuses every
+// further reservation, while a retry carrying an existing marker still
+// succeeds because the duplicate check runs before the budget check.
+// Idempotent: sealing a sealed lease returns consumed == budget. The hash is
+// NOT deleted — GetCanonicalWalletLeaseByID still finds a sealed lease, which
+// is what keeps the explicit-id branch's marker resolution working.
+var sealCanonicalWalletLeaseScript = redis.NewScript(`
+	if redis.call('EXISTS', KEYS[1]) == 0 then return {1} end
+	local budget = tonumber(redis.call('HGET', KEYS[1], 'budget_units') or '0')
+	local consumed = tonumber(redis.call('HGET', KEYS[1], 'consumed_units') or '0')
+	redis.call('HSET', KEYS[1], 'consumed_units', budget)
+	local current = redis.call('GET', KEYS[2])
+	if current ~= false and current == ARGV[1] then
+		redis.call('DEL', KEYS[2])
+	end
+	return {0, consumed}
+`)
+
 func canonicalWalletLeaseKeyPrefix(platformUserID string) string {
 	return canonicalWalletLeasePrefix + "{" + canonicalWalletUserHash(platformUserID) + "}:"
 }
@@ -235,6 +258,36 @@ func (c *gatewayCache) ReserveCanonicalWalletLease(ctx context.Context, platform
 		return nil, err
 	}
 	return decodeCanonicalWalletReservationResult(result, platformUserID)
+}
+
+func (c *gatewayCache) SealCanonicalWalletLease(ctx context.Context, platformUserID, leaseID string) (int64, error) {
+	if c == nil || c.rdb == nil {
+		return 0, errors.New("canonical wallet Redis store unavailable")
+	}
+	if strings.TrimSpace(platformUserID) == "" || strings.TrimSpace(leaseID) == "" {
+		return 0, errors.New("canonical wallet seal requires a platform user id and a lease id")
+	}
+	result, err := sealCanonicalWalletLeaseScript.Run(ctx, c.rdb,
+		[]string{canonicalWalletLeaseKey(platformUserID, leaseID), canonicalWalletCurrentKey(platformUserID)},
+		leaseID,
+	).Slice()
+	if err != nil {
+		return 0, err
+	}
+	if len(result) == 0 {
+		return 0, errors.New("canonical wallet seal returned no result")
+	}
+	code, err := redisResultInt64(result[0])
+	if err != nil {
+		return 0, err
+	}
+	if code == 1 {
+		return 0, service.ErrCanonicalWalletLeaseMissing
+	}
+	if len(result) != 2 {
+		return 0, errors.New("canonical wallet seal returned an invalid result")
+	}
+	return redisResultInt64(result[1])
 }
 
 // decodeCanonicalWalletReservationResult turns the reservation Lua script's

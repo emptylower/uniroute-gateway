@@ -64,6 +64,17 @@ func (s *canonicalWalletStoreStub) ReserveCanonicalWalletLease(_ context.Context
 	return &CanonicalWalletReservation{Lease: copy}, nil
 }
 
+func (s *canonicalWalletStoreStub) SealCanonicalWalletLease(_ context.Context, _, leaseID string) (int64, error) {
+	if s.lease == nil || s.lease.LeaseID != leaseID {
+		return 0, ErrCanonicalWalletLeaseMissing
+	}
+	pre := s.lease.ConsumedUnits
+	sealed := *s.lease
+	sealed.ConsumedUnits = sealed.BudgetUnits
+	s.lease = &sealed
+	return pre, nil
+}
+
 type canonicalWalletControlStub struct {
 	leaseErr error
 	lease    CanonicalWalletLease
