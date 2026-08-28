@@ -47,16 +47,16 @@ func TestCanonicalWalletOutboxRetryReservesAgainstTheOriginalLease(t *testing.T)
 
 	controlPlane := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/api/internal/v1/wallet/leases/acquire":
-			var req canonicalWalletLeaseRequest
+		case "/api/internal/v2/wallet/leases/ensure":
+			var req canonicalWalletEnsureRequest
 			require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
 			mu.Lock()
 			leaseAcquires++
 			mu.Unlock()
-			// lease-a: 5 CNY of budget in ShipAny's wire micros, expiring
-			// far in the future so it stays resolvable BY ID after it stops
-			// being the user's current lease.
-			_, _ = w.Write([]byte(`{"data":{"lease_id":"lease-a","platform_user_id":"` + req.PlatformUserID + `","currency":"CNY","budget_micros":5000000,"consumed_micros":0,"expires_at":"2030-01-01T00:00:00Z"}}`))
+			// lease-a: 5 CNY of budget, expiring far in the future so it
+			// stays resolvable BY ID after it stops being the user's
+			// current lease.
+			_, _ = w.Write([]byte(`{"data":{"lease_id":"lease-a","platform_user_id":"` + req.PlatformUserID + `","currency":"CNY","budget_units":500000000,"captured_units":0,"released_units":0,"headroom_units":500000000,"expires_at":"2030-01-01T00:00:00Z","capture_seq":0,"outcome":"issued","clamped_by":"none"}}`))
 		case "/api/internal/v1/wallet/settlements":
 			var req canonicalWalletSettlementWireRequest
 			require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
@@ -162,10 +162,10 @@ func TestCanonicalWalletDeliverOutboxEventClaimLost(t *testing.T) {
 
 	platformUserID := "shipany-user-" + uuid.NewString()
 	controlPlane := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/internal/v1/wallet/leases/acquire" {
-			var req canonicalWalletLeaseRequest
+		if r.URL.Path == "/api/internal/v2/wallet/leases/ensure" {
+			var req canonicalWalletEnsureRequest
 			require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
-			_, _ = w.Write([]byte(`{"data":{"lease_id":"lease-lost","platform_user_id":"` + req.PlatformUserID + `","currency":"CNY","budget_micros":5000000,"consumed_micros":0,"expires_at":"2030-01-01T00:00:00Z"}}`))
+			_, _ = w.Write([]byte(`{"data":{"lease_id":"lease-lost","platform_user_id":"` + req.PlatformUserID + `","currency":"CNY","budget_units":500000000,"captured_units":0,"released_units":0,"headroom_units":500000000,"expires_at":"2030-01-01T00:00:00Z","capture_seq":0,"outcome":"issued","clamped_by":"none"}}`))
 			return
 		}
 		http.NotFound(w, r)
@@ -220,10 +220,10 @@ func TestCanonicalWalletDeliverOutboxEventStaleBindingAndExpiredFallback(t *test
 
 	controlPlane := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/api/internal/v1/wallet/leases/acquire":
-			var req canonicalWalletLeaseRequest
+		case "/api/internal/v2/wallet/leases/ensure":
+			var req canonicalWalletEnsureRequest
 			require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
-			_, _ = w.Write([]byte(`{"data":{"lease_id":"lease-fresh","platform_user_id":"` + req.PlatformUserID + `","currency":"CNY","budget_micros":5000000,"consumed_micros":0,"expires_at":"2030-01-01T00:00:00Z"}}`))
+			_, _ = w.Write([]byte(`{"data":{"lease_id":"lease-fresh","platform_user_id":"` + req.PlatformUserID + `","currency":"CNY","budget_units":500000000,"captured_units":0,"released_units":0,"headroom_units":500000000,"expires_at":"2030-01-01T00:00:00Z","capture_seq":0,"outcome":"issued","clamped_by":"none"}}`))
 		case "/api/internal/v1/wallet/settlements":
 			var req canonicalWalletSettlementWireRequest
 			require.NoError(t, json.NewDecoder(r.Body).Decode(&req))

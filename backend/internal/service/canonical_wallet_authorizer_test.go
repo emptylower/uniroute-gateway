@@ -71,7 +71,7 @@ func TestAuthorizeDisabledModeMintsOnly(t *testing.T) {
 	require.NotEmpty(t, h.ID)
 	require.Equal(t, int64(0), h.EstimatedUnits)
 	require.Equal(t, "", h.LeaseID)
-	require.Equal(t, 0, control.acquireCalls)
+	require.Equal(t, 0, control.ensureCalls)
 }
 
 func TestAuthorizeNilAuthorizerMintsOnly(t *testing.T) {
@@ -153,9 +153,11 @@ func TestAuthorizeRequestsExactlyTheEstimate(t *testing.T) {
 	auth, snap, apiKey, control, _ := newAuthorizerFixture(t, config.CanonicalWalletModeShadow)
 	h, err := auth.Authorize(context.Background(), AuthorizeInput{Snapshot: snap, Estimate: estimateFor(`{"max_tokens":64}`), User: apiKey.User})
 	require.NoError(t, err)
-	// ensureLease requests max(lease_budget_units, amount) in micros with ceiling division.
-	want := (max64(500_000_000, h.EstimatedUnits) + 99) / 100
-	require.Equal(t, want, control.lastRequest.RequestedMicros)
+	// Phase 3.4 (v2 wire): the ask is the amount itself as min_headroom_units
+	// plus the CONFIGURED lease budget as requested_budget_units — the server
+	// takes the max (§3 step 4), so the client no longer computes it.
+	require.Equal(t, h.EstimatedUnits, control.lastEnsure.MinHeadroomUnits)
+	require.Equal(t, int64(500_000_000), control.lastEnsure.RequestedBudgetUnits)
 }
 
 func TestEstimateInputFromRequestBody(t *testing.T) {
@@ -216,7 +218,7 @@ func benchmarkAuthorize(b *testing.B, leaseOnStore bool) {
 	store := &canonicalWalletStoreStub{}
 	if leaseOnStore {
 		// Current lease covers any estimate this body produces → the fast path:
-		// one store read, no AcquireLease, no install.
+		// one store read, no EnsureLease, no install.
 		store.lease = &CanonicalWalletLease{LeaseID: "lease-hit", Currency: "CNY", BudgetUnits: 500_000_000, ExpiresAt: time.Now().Add(time.Hour)}
 	} else {
 		// Review note M3: keep the store empty on every iteration — without

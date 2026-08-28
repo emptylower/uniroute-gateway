@@ -34,17 +34,16 @@ func TestCanonicalWalletOutboxDispatcherDeliversEndToEnd(t *testing.T) {
 	platformUserID := "shipany-user-" + uuid.NewString()
 
 	var receivedSettlements []canonicalWalletSettlementWireRequest
-	var receivedLeaseRequests []canonicalWalletLeaseRequest
+	var receivedEnsureRequests []canonicalWalletEnsureRequest
 	settlementSignal := make(chan struct{}, 4)
 	controlPlane := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/api/internal/v1/wallet/leases/acquire":
-			var req canonicalWalletLeaseRequest
+		case "/api/internal/v2/wallet/leases/ensure":
+			var req canonicalWalletEnsureRequest
 			require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
-			receivedLeaseRequests = append(receivedLeaseRequests, req)
+			receivedEnsureRequests = append(receivedEnsureRequests, req)
 			require.Equal(t, "CNY", req.Currency)
-			// ShipAny's route speaks *_micros: 5 CNY budget = 5,000,000 micros.
-			_, _ = w.Write([]byte(`{"data":{"lease_id":"lease-e2e","platform_user_id":"` + req.PlatformUserID + `","currency":"CNY","budget_micros":5000000,"consumed_micros":0,"expires_at":"2030-01-01T00:00:00Z"}}`))
+			_, _ = w.Write([]byte(`{"data":{"lease_id":"lease-e2e","platform_user_id":"` + req.PlatformUserID + `","currency":"CNY","budget_units":500000000,"captured_units":0,"released_units":0,"headroom_units":500000000,"expires_at":"2030-01-01T00:00:00Z","capture_seq":0,"outcome":"issued","clamped_by":"none"}}`))
 		case "/api/internal/v1/wallet/settlements":
 			var req canonicalWalletSettlementWireRequest
 			require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
@@ -97,13 +96,13 @@ func TestCanonicalWalletOutboxDispatcherDeliversEndToEnd(t *testing.T) {
 	}
 	require.True(t, delivered, "the dispatcher must deliver the durably-recorded settlement to the control plane")
 
-	// The wire request carried CEILING-converted micros and the lease
-	// acquisition spoke micros too. ensureLease requests
-	// max(cfg.LeaseBudgetUnits, amountUnits) — here the amount (30,000,000
-	// units) exceeds the test config's budget (100,000 units), so the lease
-	// is sized to the amount: ceiling(30,000,000 / 100) = 300,000 micros.
-	require.Len(t, receivedLeaseRequests, 1)
-	require.Equal(t, int64(300000), receivedLeaseRequests[0].RequestedMicros, "max(configured budget, amount) converted to wire-level micros with ceiling division")
+	// The wire request was UNITS-NATIVE and the ensure call asked for the
+	// event's amount as min_headroom_units and the CONFIGURED lease budget as
+	// requested_budget_units — the server takes the max (§3 step 4), so the
+	// client no longer computes it.
+	require.Len(t, receivedEnsureRequests, 1)
+	require.Equal(t, amountUnits, receivedEnsureRequests[0].MinHeadroomUnits, "the amount is the min_headroom ask")
+	require.Equal(t, cfg.LeaseBudgetUnits, receivedEnsureRequests[0].RequestedBudgetUnits, "requested_budget is the configured lease budget")
 	require.Len(t, receivedSettlements, 1)
 	require.Equal(t, "lease-e2e", receivedSettlements[0].LeaseID, "the settlement is anchored to the lease the reservation actually landed on")
 	require.Equal(t, int64(300000), receivedSettlements[0].AmountMicros, "30,000,000 units = 300,000 micros")

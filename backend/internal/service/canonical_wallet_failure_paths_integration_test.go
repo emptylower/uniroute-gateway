@@ -95,12 +95,12 @@ func TestDeliverOutboxEventRealFailurePaths(t *testing.T) {
 		outbox := &outboxStoreForTest{db: db}
 		platformUserID := "shipany-user-" + uuid.NewString()
 
-		// The control plane only ever issues a 100-micros lease, far below
+		// The control plane only ever issues a 100-unit lease, far below
 		// the event's amount, so the REAL Redis reserve rejects it.
 		controlPlane := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			var req canonicalWalletLeaseRequest
+			var req canonicalWalletEnsureRequest
 			_ = json.NewDecoder(r.Body).Decode(&req)
-			_, _ = w.Write([]byte(`{"data":{"lease_id":"lease-tiny","platform_user_id":"` + req.PlatformUserID + `","currency":"CNY","budget_micros":100,"consumed_micros":0,"expires_at":"2030-01-01T00:00:00Z"}}`))
+			_, _ = w.Write([]byte(`{"data":{"lease_id":"lease-tiny","platform_user_id":"` + req.PlatformUserID + `","currency":"CNY","budget_units":100,"captured_units":0,"released_units":0,"headroom_units":100,"expires_at":"2030-01-01T00:00:00Z","capture_seq":0,"outcome":"issued","clamped_by":"none"}}`))
 		}))
 		defer controlPlane.Close()
 		cfg := canonicalWalletTestConfig(config.CanonicalWalletModeEnforce)
@@ -139,10 +139,10 @@ func TestDeliverOutboxEventRealFailurePaths(t *testing.T) {
 		refused := false
 		controlPlane := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch r.URL.Path {
-			case "/api/internal/v1/wallet/leases/acquire":
-				var req canonicalWalletLeaseRequest
+			case "/api/internal/v2/wallet/leases/ensure":
+				var req canonicalWalletEnsureRequest
 				_ = json.NewDecoder(r.Body).Decode(&req)
-				_, _ = w.Write([]byte(`{"data":{"lease_id":"lease-refuse","platform_user_id":"` + req.PlatformUserID + `","currency":"CNY","budget_micros":5000000,"consumed_micros":0,"expires_at":"2030-01-01T00:00:00Z"}}`))
+				_, _ = w.Write([]byte(`{"data":{"lease_id":"lease-refuse","platform_user_id":"` + req.PlatformUserID + `","currency":"CNY","budget_units":500000000,"captured_units":0,"released_units":0,"headroom_units":500000000,"expires_at":"2030-01-01T00:00:00Z","capture_seq":0,"outcome":"issued","clamped_by":"none"}}`))
 			case "/api/internal/v1/wallet/settlements":
 				refused = true
 				_, _ = w.Write([]byte(`{"data":{"accepted":false,"duplicate":false}}`))
@@ -198,30 +198,33 @@ func TestEnsureCanonicalWalletHeadroomGuardsAndErrors(t *testing.T) {
 	require.False(t, ok)
 }
 
-func TestAcquireLeaseAndDoJSONRemainingRealPaths(t *testing.T) {
+func TestEnsureLeaseAndDoJSONRemainingRealPaths(t *testing.T) {
 	ctx := context.Background()
 
 	// Unreachable control plane -> real transport error from doJSON.
 	cfg := canonicalWalletTestConfig(config.CanonicalWalletModeShadow)
 	cfg.ControlPlaneURL, cfg.Secret = "http://127.0.0.1:1", strings.Repeat("s", 32)
 	client := newCanonicalWalletHTTPClient(cfg, nil)
-	_, err := client.AcquireLease(ctx, canonicalWalletLeaseRequest{
-		PlatformUserID: "user-1", Currency: "CNY", RequestedMicros: 1, RequestedTTLSeconds: 60,
+	_, err := client.EnsureLease(ctx, canonicalWalletEnsureRequest{
+		PlatformUserID: "user-1", Currency: "CNY", Purpose: "authorize", MinHeadroomUnits: 1, RequestedBudgetUnits: 1, RequestedTTLSeconds: 60, CallerSlotTTLSeconds: 1800,
 	})
 	require.Error(t, err)
 
-	// Wire budget beyond int64 units after x100 conversion -> overflow error.
+	// Phase 3.4: the v2 lease wire is units-native — the x100 conversion the
+	// old overflow leg exercised is gone (redesign §6). The same property in
+	// the new wire: a wire figure beyond int64's range must be REJECTED (the
+	// JSON decode of budget_units fails), never accepted or wrapped.
 	overflowServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"data":{"lease_id":"l","platform_user_id":"user-1","currency":"CNY","budget_micros":92233720368547760,"consumed_micros":0,"expires_at":"2030-01-01T00:00:00Z"}}`))
+		_, _ = w.Write([]byte(`{"data":{"lease_id":"l","platform_user_id":"user-1","currency":"CNY","budget_units":92233720368547758080,"captured_units":0,"released_units":0,"headroom_units":0,"expires_at":"2030-01-01T00:00:00Z","outcome":"issued"}}`))
 	}))
 	defer overflowServer.Close()
 	cfg2 := canonicalWalletTestConfig(config.CanonicalWalletModeShadow)
 	cfg2.ControlPlaneURL, cfg2.Secret = overflowServer.URL, strings.Repeat("s", 32)
 	client2 := newCanonicalWalletHTTPClient(cfg2, overflowServer.Client())
-	_, err = client2.AcquireLease(ctx, canonicalWalletLeaseRequest{
-		PlatformUserID: "user-1", Currency: "CNY", RequestedMicros: 1, RequestedTTLSeconds: 60,
+	_, err = client2.EnsureLease(ctx, canonicalWalletEnsureRequest{
+		PlatformUserID: "user-1", Currency: "CNY", Purpose: "authorize", MinHeadroomUnits: 1, RequestedBudgetUnits: 1, RequestedTTLSeconds: 60, CallerSlotTTLSeconds: 1800,
 	})
-	require.ErrorIs(t, err, ErrCanonicalWalletUnitsOverflow, "a wire budget that cannot scale x100 into int64 must be rejected, not wrapped")
+	require.Error(t, err, "a wire budget beyond int64's range must be rejected, not accepted")
 
 	badBody := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`not-json-at-all`))

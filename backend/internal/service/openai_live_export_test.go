@@ -220,17 +220,18 @@ type LiveRestartControlStub struct {
 	Lease *CanonicalWalletLease
 }
 
-func (s *LiveRestartControlStub) AcquireLease(ctx context.Context, request canonicalWalletLeaseRequest) (*CanonicalWalletLease, error) {
-	if s.Lease != nil {
-		return s.Lease, nil
-	}
-	return &CanonicalWalletLease{
+func (s *LiveRestartControlStub) EnsureLease(ctx context.Context, request canonicalWalletEnsureRequest) (*canonicalWalletEnsureResult, error) {
+	lease := &CanonicalWalletLease{
 		LeaseID:        "lease_restart_cw",
 		PlatformUserID: request.PlatformUserID,
 		Currency:       request.Currency,
 		BudgetUnits:    100_000_000,
 		ExpiresAt:      time.Now().Add(5 * time.Minute),
-	}, nil
+	}
+	if s.Lease != nil {
+		lease = s.Lease
+	}
+	return &canonicalWalletEnsureResult{Lease: *lease, Outcome: "issued", ClampedBy: "none"}, nil
 }
 
 func (s *LiveRestartControlStub) SubmitSettlement(ctx context.Context, event CanonicalWalletSettlementEvent) (*CanonicalWalletSettlementResult, error) {

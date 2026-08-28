@@ -70,42 +70,44 @@ func TestCanonicalWalletSubmitSettlementRejectsControlPlaneRefusal(t *testing.T)
 	require.Error(t, err)
 }
 
-// AcquireLease must keep speaking ShipAny's *_micros wire shape while
-// converting the response x100 into internal units — and must REJECT a
-// non-CNY currency outright instead of coercing it to CNY.
-func TestCanonicalWalletAcquireLeaseWireResponseConvertsMicrosToUnits(t *testing.T) {
+// EnsureLease speaks ShipAny's v2 units-native (cny-e8-v1) wire shape —
+// no micros conversion on the lease path — and must REJECT a non-CNY
+// currency outright instead of coercing it to CNY.
+func TestCanonicalWalletEnsureLeaseWireResponseIsUnitsNative(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req canonicalWalletLeaseRequest
+		var req canonicalWalletEnsureRequest
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
-		require.Equal(t, int64(500_000), req.RequestedMicros, "requested budget stays in ShipAny's wire-level micros")
-		_, _ = w.Write([]byte(`{"data":{"lease_id":"lease-wire","platform_user_id":"user-1","currency":"CNY","budget_micros":500000,"consumed_micros":250000,"expires_at":"2030-01-01T00:00:00Z"}}`))
+		require.Equal(t, int64(500_000_000), req.RequestedBudgetUnits, "requested budget stays in cny-e8-v1 units")
+		_, _ = w.Write([]byte(`{"data":{"lease_id":"lease-wire","platform_user_id":"user-1","currency":"CNY","budget_units":500000000,"captured_units":250000000,"released_units":0,"headroom_units":250000000,"expires_at":"2030-01-01T00:00:00Z","capture_seq":1,"outcome":"reused","clamped_by":"none"}}`))
 	}))
 	defer server.Close()
 	cfg := canonicalWalletTestConfig(config.CanonicalWalletModeShadow)
 	cfg.ControlPlaneURL, cfg.Secret = server.URL, strings.Repeat("s", 32)
 	client := newCanonicalWalletHTTPClient(cfg, server.Client())
-	lease, err := client.AcquireLease(context.Background(), canonicalWalletLeaseRequest{
-		PlatformUserID: "user-1", Currency: "CNY", RequestedMicros: 500_000, RequestedTTLSeconds: 60,
+	res, err := client.EnsureLease(context.Background(), canonicalWalletEnsureRequest{
+		PlatformUserID: "user-1", Currency: "CNY", Purpose: "authorize", MinHeadroomUnits: 1, RequestedBudgetUnits: 500_000_000, RequestedTTLSeconds: 60, CallerSlotTTLSeconds: 1800,
 	})
 	require.NoError(t, err)
-	require.Equal(t, int64(50_000000), lease.BudgetUnits, "500000 micros x100 = 50,000,000 units")
-	require.Equal(t, int64(25_000000), lease.ConsumedUnits, "partial consumption history must survive the boundary conversion")
-	require.Equal(t, "CNY", lease.Currency)
+	require.Equal(t, int64(500_000_000), res.Lease.BudgetUnits)
+	require.Equal(t, int64(250_000_000), res.Lease.ConsumedUnits, "consumed = budget − headroom_units: partial consumption history must survive the boundary")
+	require.Equal(t, "CNY", res.Lease.Currency)
+	require.Equal(t, "reused", res.Outcome)
 }
 
-func TestCanonicalWalletAcquireLeaseRejectsInvalidWireResponses(t *testing.T) {
+func TestCanonicalWalletEnsureLeaseRejectsInvalidWireResponses(t *testing.T) {
 	cases := []struct {
 		name    string
 		body    string
 		wantErr string
 	}{
-		{"empty lease id", `{"data":{"lease_id":"","platform_user_id":"user-1","currency":"CNY","budget_micros":500000,"consumed_micros":0,"expires_at":"2030-01-01T00:00:00Z"}}`, "invalid"},
-		{"wrong platform user", `{"data":{"lease_id":"l","platform_user_id":"someone-else","currency":"CNY","budget_micros":500000,"consumed_micros":0,"expires_at":"2030-01-01T00:00:00Z"}}`, "invalid"},
-		{"zero budget", `{"data":{"lease_id":"l","platform_user_id":"user-1","currency":"CNY","budget_micros":0,"consumed_micros":0,"expires_at":"2030-01-01T00:00:00Z"}}`, "invalid"},
-		{"negative consumption", `{"data":{"lease_id":"l","platform_user_id":"user-1","currency":"CNY","budget_micros":500000,"consumed_micros":-1,"expires_at":"2030-01-01T00:00:00Z"}}`, "invalid"},
-		{"consumption over budget", `{"data":{"lease_id":"l","platform_user_id":"user-1","currency":"CNY","budget_micros":500000,"consumed_micros":500001,"expires_at":"2030-01-01T00:00:00Z"}}`, "invalid"},
-		{"zero expiry", `{"data":{"lease_id":"l","platform_user_id":"user-1","currency":"CNY","budget_micros":500000,"consumed_micros":0,"expires_at":"0001-01-01T00:00:00Z"}}`, "invalid"},
-		{"non-CNY currency", `{"data":{"lease_id":"l","platform_user_id":"user-1","currency":"USD","budget_micros":500000,"consumed_micros":0,"expires_at":"2030-01-01T00:00:00Z"}}`, "unsupported currency"},
+		{"empty lease id", `{"data":{"lease_id":"","platform_user_id":"user-1","currency":"CNY","budget_units":500000000,"captured_units":0,"released_units":0,"headroom_units":500000000,"expires_at":"2030-01-01T00:00:00Z","outcome":"issued"}}`, "invalid"},
+		{"wrong platform user", `{"data":{"lease_id":"l","platform_user_id":"someone-else","currency":"CNY","budget_units":500000000,"captured_units":0,"released_units":0,"headroom_units":500000000,"expires_at":"2030-01-01T00:00:00Z","outcome":"issued"}}`, "invalid"},
+		{"zero budget", `{"data":{"lease_id":"l","platform_user_id":"user-1","currency":"CNY","budget_units":0,"captured_units":0,"released_units":0,"headroom_units":0,"expires_at":"2030-01-01T00:00:00Z","outcome":"issued"}}`, "invalid"},
+		{"negative captured", `{"data":{"lease_id":"l","platform_user_id":"user-1","currency":"CNY","budget_units":500000000,"captured_units":-1,"released_units":0,"headroom_units":500000000,"expires_at":"2030-01-01T00:00:00Z","outcome":"issued"}}`, "invalid"},
+		{"headroom over budget", `{"data":{"lease_id":"l","platform_user_id":"user-1","currency":"CNY","budget_units":500000000,"captured_units":0,"released_units":0,"headroom_units":500000001,"expires_at":"2030-01-01T00:00:00Z","outcome":"issued"}}`, "invalid"},
+		{"bad outcome", `{"data":{"lease_id":"l","platform_user_id":"user-1","currency":"CNY","budget_units":500000000,"captured_units":0,"released_units":0,"headroom_units":500000000,"expires_at":"2030-01-01T00:00:00Z","outcome":"maybe"}}`, "invalid"},
+		{"zero expiry", `{"data":{"lease_id":"l","platform_user_id":"user-1","currency":"CNY","budget_units":500000000,"captured_units":0,"released_units":0,"headroom_units":500000000,"expires_at":"0001-01-01T00:00:00Z","outcome":"issued"}}`, "invalid"},
+		{"non-CNY currency", `{"data":{"lease_id":"l","platform_user_id":"user-1","currency":"USD","budget_units":500000000,"captured_units":0,"released_units":0,"headroom_units":500000000,"expires_at":"2030-01-01T00:00:00Z","outcome":"issued"}}`, "unsupported currency"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -116,8 +118,8 @@ func TestCanonicalWalletAcquireLeaseRejectsInvalidWireResponses(t *testing.T) {
 			cfg := canonicalWalletTestConfig(config.CanonicalWalletModeShadow)
 			cfg.ControlPlaneURL, cfg.Secret = server.URL, strings.Repeat("s", 32)
 			client := newCanonicalWalletHTTPClient(cfg, server.Client())
-			_, err := client.AcquireLease(context.Background(), canonicalWalletLeaseRequest{
-				PlatformUserID: "user-1", Currency: "CNY", RequestedMicros: 500_000, RequestedTTLSeconds: 60,
+			_, err := client.EnsureLease(context.Background(), canonicalWalletEnsureRequest{
+				PlatformUserID: "user-1", Currency: "CNY", Purpose: "authorize", MinHeadroomUnits: 1, RequestedBudgetUnits: 500_000_000, RequestedTTLSeconds: 60, CallerSlotTTLSeconds: 1800,
 			})
 			require.Error(t, err)
 			require.Contains(t, err.Error(), tc.wantErr)
@@ -125,19 +127,19 @@ func TestCanonicalWalletAcquireLeaseRejectsInvalidWireResponses(t *testing.T) {
 	}
 }
 
-func TestCanonicalWalletAcquireLeaseRejectsNonCNYRequestedCurrency(t *testing.T) {
+func TestCanonicalWalletEnsureLeaseRejectsNonCNYRequestedCurrency(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"data":{"lease_id":"l","platform_user_id":"user-1","currency":"USD","budget_micros":500000,"consumed_micros":0,"expires_at":"2030-01-01T00:00:00Z"}}`))
+		_, _ = w.Write([]byte(`{"data":{"lease_id":"l","platform_user_id":"user-1","currency":"USD","budget_units":500000000,"captured_units":0,"released_units":0,"headroom_units":500000000,"expires_at":"2030-01-01T00:00:00Z","outcome":"issued"}}`))
 	}))
 	defer server.Close()
 	cfg := canonicalWalletTestConfig(config.CanonicalWalletModeShadow)
 	cfg.ControlPlaneURL, cfg.Secret = server.URL, strings.Repeat("s", 32)
 	client := newCanonicalWalletHTTPClient(cfg, server.Client())
-	_, err := client.AcquireLease(context.Background(), canonicalWalletLeaseRequest{
-		PlatformUserID: "user-1", Currency: "USD", RequestedMicros: 500_000, RequestedTTLSeconds: 60,
+	_, err := client.EnsureLease(context.Background(), canonicalWalletEnsureRequest{
+		PlatformUserID: "user-1", Currency: "USD", Purpose: "authorize", MinHeadroomUnits: 1, RequestedBudgetUnits: 500_000_000, RequestedTTLSeconds: 60, CallerSlotTTLSeconds: 1800,
 	})
-	// The wire response's own currency is validated first, so a USD response
-	// fails with the control-plane error before the requested currency does.
+	// The v2 client validates the REQUESTED currency before the call leaves
+	// the gateway — a non-CNY request is rejected outright either way.
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unsupported currency")
 }
@@ -264,18 +266,41 @@ func canonicalWalletBridgeStatsValue(key string) int64 {
 	return CanonicalWalletBridgeStats()[key]
 }
 
-func TestAcquireLeaseDefaultsWindowWhenTTLUnset(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"data":{"lease_id":"lease-ttl","platform_user_id":"user-1","currency":"CNY","budget_micros":1000,"consumed_micros":0,"expires_at":"2030-01-01T00:00:00Z"}}`))
+func TestPhase34ProtoEnsureWireRoundTripAndRefusals(t *testing.T) {
+	var gotHeader http.Header
+	var gotBody canonicalWalletEnsureRequest
+	refuse := ""
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/internal/v2/wallet/leases/ensure", r.URL.Path)
+		gotHeader = r.Header.Clone()
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody))
+		if refuse != "" {
+			w.WriteHeader(http.StatusConflict)
+			_, _ = w.Write([]byte(`{"code":-1,"message":"` + refuse + `","data":{"reason":"` + refuse + `"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":{"lease_id":"srv-1","platform_user_id":"u1","currency":"CNY","budget_units":500000000,"captured_units":100000000,"released_units":0,"headroom_units":400000000,"expires_at":"2030-01-01T00:00:00Z","capture_seq":3,"outcome":"reused","clamped_by":"none"}}`))
 	}))
-	defer server.Close()
-	cfg := canonicalWalletTestConfig(config.CanonicalWalletModeShadow)
-	cfg.ControlPlaneURL, cfg.Secret = server.URL, strings.Repeat("s", 32)
-	cfg.LeaseTTLSeconds = 0 // falls back to a 60-second idempotency window
-	client := newCanonicalWalletHTTPClient(cfg, server.Client())
-	lease, err := client.AcquireLease(context.Background(), canonicalWalletLeaseRequest{
-		PlatformUserID: "user-1", Currency: "CNY", RequestedMicros: 1000, RequestedTTLSeconds: 0,
-	})
+	defer srv.Close()
+	cfg := canonicalWalletTestConfig(config.CanonicalWalletModeEnforce)
+	cfg.ControlPlaneURL, cfg.Secret = srv.URL, strings.Repeat("s", 32)
+	client := newCanonicalWalletHTTPClient(cfg, srv.Client())
+	req := canonicalWalletEnsureRequest{PlatformUserID: "u1", Currency: "CNY", Purpose: "authorize", MinHeadroomUnits: 1, RequestedBudgetUnits: 500_000_000, RequestedTTLSeconds: 300, CallerSlotTTLSeconds: 1800}
+
+	res, err := client.EnsureLease(context.Background(), req)
 	require.NoError(t, err)
-	require.Equal(t, "lease-ttl", lease.LeaseID)
+	require.Empty(t, gotHeader.Get("Idempotency-Key"), "ensure is idempotent by transaction: no gwlease_ window key")
+	require.True(t, strings.HasPrefix(gotHeader.Get("Authorization"), "Bearer "))
+	require.Equal(t, req, gotBody)
+	require.Equal(t, "reused", res.Outcome)
+	require.Equal(t, int64(500_000_000), res.Lease.BudgetUnits)
+	require.Equal(t, int64(100_000_000), res.Lease.ConsumedUnits, "consumed = budget − headroom_units")
+
+	for reason, want := range map[string]error{
+		"lease_cap_reached": ErrCanonicalWalletLeaseCapReached, "insufficient_balance": ErrCanonicalWalletBalanceShortfall, "lease_contention": ErrCanonicalWalletLeaseContention,
+	} {
+		refuse = reason
+		_, err := client.EnsureLease(context.Background(), req)
+		require.ErrorIs(t, err, want, reason)
+	}
 }

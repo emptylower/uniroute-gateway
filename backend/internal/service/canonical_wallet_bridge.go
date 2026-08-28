@@ -36,6 +36,9 @@ var (
 	// unconditionally (spec §2.0.1 step (3)); 3.4a decides on the issuance row
 	// whether the grant was clamped (terminal) or merely undersized (one advance).
 	ErrCanonicalWalletBalanceShortfall = errors.New("canonical wallet lease granted below the amount being authorized")
+	// Phase 3.4 (redesign §3/§4): the ensure route's two other refusals.
+	ErrCanonicalWalletLeaseCapReached = errors.New("canonical wallet lease cap reached for this user")                  // terminal on the authorize path
+	ErrCanonicalWalletLeaseContention = errors.New("canonical wallet lease issuance lost the per-user race repeatedly") // transient
 )
 
 const (
@@ -169,15 +172,15 @@ type CanonicalWalletOutboxStore interface {
 	ReclaimStaleInFlightEvents(ctx context.Context, staleAfter time.Duration) (int64, error)
 }
 
-type canonicalWalletLeaseRequest struct {
-	PlatformUserID      string `json:"platform_user_id"`
-	Currency            string `json:"currency"`
-	RequestedMicros     int64  `json:"requested_micros"`
-	RequestedTTLSeconds int    `json:"requested_ttl_seconds"`
-}
+type canonicalWalletLeasePurpose string
+
+const (
+	canonicalWalletLeasePurposeAuthorize canonicalWalletLeasePurpose = "authorize"
+	canonicalWalletLeasePurposeSettle    canonicalWalletLeasePurpose = "settle"
+)
 
 type canonicalWalletControlPlane interface {
-	AcquireLease(ctx context.Context, request canonicalWalletLeaseRequest) (*CanonicalWalletLease, error)
+	EnsureLease(ctx context.Context, request canonicalWalletEnsureRequest) (*canonicalWalletEnsureResult, error)
 	SubmitSettlement(ctx context.Context, event CanonicalWalletSettlementEvent) (*CanonicalWalletSettlementResult, error)
 }
 
@@ -194,69 +197,97 @@ func newCanonicalWalletHTTPClient(cfg config.CanonicalWalletConfig, client *http
 	return &canonicalWalletHTTPClient{cfg: cfg, client: client, now: func() time.Time { return time.Now().UTC() }}
 }
 
-// canonicalWalletLeaseWireResponse matches ShipAny's actual current
-// response shape (still *_micros, unchanged by this phase) — kept separate
-// from the internal CanonicalWalletLease type so the rest of this codebase
-// can move to cny-e8-v1 *_units without silently breaking this one HTTP
-// boundary. `consumed_micros` must be read from the wire too — a reinstall
-// of an EXISTING, partially-consumed lease (e.g. after a Redis restart
-// evicts the key) would otherwise default ConsumedUnits to 0, discarding
-// real consumption history.
-type canonicalWalletLeaseWireResponse struct {
+// canonicalWalletEnsureRequest is redesign §3's request, units-native
+// (cny-e8-v1). No idempotency key: ensure is idempotent by transaction.
+type canonicalWalletEnsureRequest struct {
+	PlatformUserID       string                      `json:"platform_user_id"`
+	Currency             string                      `json:"currency"`
+	Purpose              string                      `json:"purpose"`
+	MinHeadroomUnits     int64                       `json:"min_headroom_units"`
+	RequestedBudgetUnits int64                       `json:"requested_budget_units"`
+	RequestedTTLSeconds  int                         `json:"requested_ttl_seconds"`
+	PreferLeaseID        string                      `json:"prefer_lease_id,omitempty"`
+	Drained              []canonicalWalletDrainEntry `json:"drained,omitempty"`
+	CallerSlotTTLSeconds int                         `json:"caller_slot_ttl_seconds"`
+	GatewayAttemptID     string                      `json:"gateway_attempt_id,omitempty"`
+}
+
+type canonicalWalletDrainEntry struct {
+	LeaseID              string `json:"lease_id"`
+	GatewayConsumedUnits int64  `json:"gateway_consumed_units"`
+}
+
+type canonicalWalletEnsureWireResponse struct {
 	LeaseID        string    `json:"lease_id"`
 	PlatformUserID string    `json:"platform_user_id"`
 	Currency       string    `json:"currency"`
-	BudgetMicros   int64     `json:"budget_micros"`
-	ConsumedMicros int64     `json:"consumed_micros"`
+	BudgetUnits    int64     `json:"budget_units"`
+	CapturedUnits  int64     `json:"captured_units"`
+	ReleasedUnits  int64     `json:"released_units"`
+	HeadroomUnits  int64     `json:"headroom_units"`
 	ExpiresAt      time.Time `json:"expires_at"`
+	CaptureSeq     int64     `json:"capture_seq"`
+	Outcome        string    `json:"outcome"`
+	ClampedBy      string    `json:"clamped_by"`
 }
 
-func (c *canonicalWalletHTTPClient) AcquireLease(ctx context.Context, request canonicalWalletLeaseRequest) (*CanonicalWalletLease, error) {
-	var wire canonicalWalletLeaseWireResponse
-	windowSeconds := int64(c.cfg.LeaseTTLSeconds)
-	if windowSeconds <= 0 {
-		windowSeconds = 60
+type canonicalWalletEnsureResult struct {
+	Lease     CanonicalWalletLease
+	Outcome   string // reused | issued
+	ClampedBy string // none | cap | balance
+}
+
+// canonicalWalletRefusalError carries a 409 refusal's data.reason from the
+// control plane (ShipAny's respJson(-1, message, {reason}) shape).
+type canonicalWalletRefusalError struct {
+	Reason string
+	Status int
+}
+
+func (e *canonicalWalletRefusalError) Error() string {
+	return fmt.Sprintf("canonical wallet control plane refused: %s (status %d)", e.Reason, e.Status)
+}
+
+func (c *canonicalWalletHTTPClient) EnsureLease(ctx context.Context, request canonicalWalletEnsureRequest) (*canonicalWalletEnsureResult, error) {
+	if _, err := RequireCNYBillingCurrency(request.Currency); err != nil {
+		return nil, fmt.Errorf("requested an unsupported currency: %w", err)
 	}
-	window := c.now().Unix() / windowSeconds
-	leaseKeyRaw := fmt.Sprintf("v1|%s|%s|%d", strings.TrimSpace(request.PlatformUserID), NormalizeUserBillingCurrency(request.Currency), window)
-	leaseKeyHash := sha256.Sum256([]byte(leaseKeyRaw))
-	idempotencyKey := "gwlease_" + hex.EncodeToString(leaseKeyHash[:])
-	if err := c.doJSON(ctx, http.MethodPost, "/api/internal/v1/wallet/leases/acquire", canonicalWalletLeaseScope, idempotencyKey, request, &wire); err != nil {
+	var wire canonicalWalletEnsureWireResponse
+	if err := c.doJSON(ctx, http.MethodPost, "/api/internal/v2/wallet/leases/ensure", canonicalWalletLeaseScope, "", request, &wire); err != nil {
+		var refusal *canonicalWalletRefusalError
+		if errors.As(err, &refusal) {
+			switch refusal.Reason {
+			case "lease_cap_reached":
+				return nil, fmt.Errorf("%w: %s", ErrCanonicalWalletLeaseCapReached, refusal.Error())
+			case "insufficient_balance":
+				return nil, fmt.Errorf("%w: %s", ErrCanonicalWalletBalanceShortfall, refusal.Error())
+			case "lease_contention":
+				return nil, fmt.Errorf("%w: %s", ErrCanonicalWalletLeaseContention, refusal.Error())
+			}
+		}
 		return nil, err
 	}
-	if strings.TrimSpace(wire.LeaseID) == "" || strings.TrimSpace(wire.PlatformUserID) != strings.TrimSpace(request.PlatformUserID) || wire.BudgetMicros <= 0 || wire.ConsumedMicros < 0 || wire.ConsumedMicros > wire.BudgetMicros || wire.ExpiresAt.IsZero() {
+	if strings.TrimSpace(wire.LeaseID) == "" || strings.TrimSpace(wire.PlatformUserID) != strings.TrimSpace(request.PlatformUserID) || wire.BudgetUnits <= 0 || wire.CapturedUnits < 0 || wire.ReleasedUnits < 0 || wire.HeadroomUnits < 0 || wire.HeadroomUnits > wire.BudgetUnits || wire.ExpiresAt.IsZero() || (wire.Outcome != "reused" && wire.Outcome != "issued") {
 		return nil, errors.New("control plane returned an invalid canonical wallet lease")
 	}
-	// Reject an unsupported currency outright on BOTH sides of the
-	// comparison — coercing both with NormalizeUserBillingCurrency would
-	// independently force invalid values to CNY and the two coerced values
-	// would match, masking a real mismatch instead of catching it.
 	currency, err := RequireCNYBillingCurrency(wire.Currency)
 	if err != nil {
 		return nil, fmt.Errorf("control plane returned an unsupported currency: %w", err)
 	}
-	if _, err := RequireCNYBillingCurrency(request.Currency); err != nil {
-		return nil, fmt.Errorf("requested an unsupported currency: %w", err)
-	}
 	if currency != strings.ToUpper(strings.TrimSpace(request.Currency)) {
 		return nil, ErrCanonicalWalletLeaseCurrencyMismatch
 	}
-	// ShipAny's route still speaks the OLD 1,000,000-per-CNY scale — convert
-	// to cny-e8-v1 units (100,000,000 per CNY) at this one boundary.
-	// Multiplying UP in scale is always exact (no precision loss going from
-	// a coarser to a finer unit) — the lossy rounding boundary is the OTHER
-	// direction, in ensureLease below.
-	budgetUnits, err := MulUnits(wire.BudgetMicros, 100)
+	// redesign §4: consumed := budget − headroom_units (captured + released as the server sees them)
+	consumed, err := SubUnits(wire.BudgetUnits, wire.HeadroomUnits)
 	if err != nil {
-		return nil, fmt.Errorf("convert control plane lease budget to cny-e8-v1 units: %w", err)
+		return nil, err
 	}
-	consumedUnits, err := MulUnits(wire.ConsumedMicros, 100)
-	if err != nil {
-		return nil, fmt.Errorf("convert control plane lease consumption to cny-e8-v1 units: %w", err)
-	}
-	return &CanonicalWalletLease{
-		LeaseID: wire.LeaseID, PlatformUserID: strings.TrimSpace(request.PlatformUserID), Currency: currency,
-		BudgetUnits: budgetUnits, ConsumedUnits: consumedUnits, ExpiresAt: wire.ExpiresAt,
+	return &canonicalWalletEnsureResult{
+		Lease: CanonicalWalletLease{
+			LeaseID: wire.LeaseID, PlatformUserID: strings.TrimSpace(request.PlatformUserID), Currency: currency,
+			BudgetUnits: wire.BudgetUnits, ConsumedUnits: consumed, ExpiresAt: wire.ExpiresAt,
+		},
+		Outcome: wire.Outcome, ClampedBy: wire.ClampedBy,
 	}, nil
 }
 
@@ -351,6 +382,14 @@ func (c *canonicalWalletHTTPClient) doJSON(ctx context.Context, method, path, sc
 		return fmt.Errorf("read canonical wallet response: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		var refusal struct {
+			Data struct {
+				Reason string `json:"reason"`
+			} `json:"data"`
+		}
+		if resp.StatusCode == http.StatusConflict && json.Unmarshal(body, &refusal) == nil && refusal.Data.Reason != "" {
+			return &canonicalWalletRefusalError{Reason: refusal.Data.Reason, Status: resp.StatusCode}
+		}
 		return fmt.Errorf("canonical wallet control plane returned status %d", resp.StatusCode)
 	}
 	if len(body) == 0 || responseBody == nil {
@@ -856,25 +895,21 @@ func (b *CanonicalWalletBridge) ensureLease(ctx context.Context, platformUserID,
 	if b.leaseCovers(lease, currency, amountUnits, b.clock()) {
 		return lease, nil
 	}
-	// The configured budget is cny-e8-v1 units; convert to ShipAny's
-	// wire-level micros scale with ceiling division at this one boundary —
-	// rounding up means the lease ACTUALLY requested is never smaller than
-	// requestedUnits demanded: at most 99 units (0.99 millionths of a CNY)
-	// of extra headroom is requested, never a shortfall.
-	requestedUnits := b.cfg.LeaseBudgetUnits
-	if amountUnits > requestedUnits {
-		requestedUnits = amountUnits
-	}
-	requestedMicros := (requestedUnits + 99) / 100
-	lease, err = b.control.AcquireLease(ctx, canonicalWalletLeaseRequest{
-		PlatformUserID: platformUserID, Currency: currency, RequestedMicros: requestedMicros, RequestedTTLSeconds: b.cfg.LeaseTTLSeconds,
+	// Phase 3.4 (Task 3a minimal adaptation): the v1 acquire call and its
+	// units→micros ceiling conversion are gone — the ensure wire is
+	// units-native and the server takes max(requested_budget, min_headroom).
+	result, err := b.control.EnsureLease(ctx, canonicalWalletEnsureRequest{
+		PlatformUserID: platformUserID, Currency: currency, Purpose: string(canonicalWalletLeasePurposeAuthorize),
+		MinHeadroomUnits: amountUnits, RequestedBudgetUnits: b.cfg.LeaseBudgetUnits,
+		RequestedTTLSeconds: b.cfg.LeaseTTLSeconds, CallerSlotTTLSeconds: b.callerSlotTTLSeconds,
 	})
 	if err != nil {
 		return nil, err
 	}
-	if lease == nil {
+	if result == nil {
 		return nil, ErrCanonicalWalletLeaseMissing // a (nil, nil) grant was a latent nil deref one line later; name it
 	}
+	lease = &result.Lease
 	now := b.clock()
 	if b.leaseExpiredAt(lease, now) {
 		canonicalWalletBridgeMetrics.leaseGrantExpired.Add(1)

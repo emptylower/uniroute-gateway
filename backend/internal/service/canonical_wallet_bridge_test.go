@@ -80,23 +80,30 @@ type canonicalWalletControlStub struct {
 	lease    CanonicalWalletLease
 	// Phase 3.3a: capture of the last acquire request so the authorization
 	// tests can assert exactly what ensureLease asked the control plane for.
-	acquireCalls int
-	lastRequest  canonicalWalletLeaseRequest
-	// nilLease makes AcquireLease return the (nil, nil) grant ensureLease names.
+	// Phase 3.4 (Task 3a): the request is the v2 ensure wire; the stub
+	// returns the lease inside a canonicalWalletEnsureResult.
+	ensureCalls int
+	lastEnsure  canonicalWalletEnsureRequest
+	// outcome ("reused" | "issued") defaults to "issued" when empty.
+	outcome string
+	// nilLease makes EnsureLease return the (nil, nil) grant ensureLease names.
 	nilLease bool
 }
 
-func (s *canonicalWalletControlStub) AcquireLease(_ context.Context, req canonicalWalletLeaseRequest) (*CanonicalWalletLease, error) {
-	s.acquireCalls++
-	s.lastRequest = req
+func (s *canonicalWalletControlStub) EnsureLease(_ context.Context, req canonicalWalletEnsureRequest) (*canonicalWalletEnsureResult, error) {
+	s.ensureCalls++
+	s.lastEnsure = req
 	if s.leaseErr != nil {
 		return nil, s.leaseErr
 	}
 	if s.nilLease {
 		return nil, nil
 	}
-	copy := s.lease
-	return &copy, nil
+	outcome := s.outcome
+	if outcome == "" {
+		outcome = "issued"
+	}
+	return &canonicalWalletEnsureResult{Lease: s.lease, Outcome: outcome, ClampedBy: "none"}, nil
 }
 func (s *canonicalWalletControlStub) SubmitSettlement(context.Context, CanonicalWalletSettlementEvent) (*CanonicalWalletSettlementResult, error) {
 	return &CanonicalWalletSettlementResult{Accepted: true}, nil
@@ -128,8 +135,8 @@ func TestCanonicalWalletCheckAndReserveFailsClosedOnlyInEnforceMode(t *testing.T
 func TestCanonicalWalletHTTPClientUsesShortScopedAssertion(t *testing.T) {
 	secret := strings.Repeat("s", 32)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/api/internal/v1/wallet/leases/acquire", r.URL.Path)
-		require.True(t, strings.HasPrefix(r.Header.Get("Idempotency-Key"), "gwlease_"))
+		require.Equal(t, "/api/internal/v2/wallet/leases/ensure", r.URL.Path)
+		require.Empty(t, r.Header.Get("Idempotency-Key"), "ensure is idempotent by transaction: no gwlease_ window key")
 		raw := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 		claims := jwt.MapClaims{}
 		token, err := jwt.ParseWithClaims(raw, claims, func(token *jwt.Token) (any, error) {
@@ -144,16 +151,16 @@ func TestCanonicalWalletHTTPClientUsesShortScopedAssertion(t *testing.T) {
 		exp, _ := claims.GetExpirationTime()
 		require.LessOrEqual(t, exp.Time.Sub(iat.Time), 60*time.Second)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":{"lease_id":"lease-1","platform_user_id":"user-1","currency":"CNY","budget_micros":1000,"consumed_micros":0,"expires_at":"2030-01-01T00:00:00Z"}}`))
+		_, _ = w.Write([]byte(`{"data":{"lease_id":"lease-1","platform_user_id":"user-1","currency":"CNY","budget_units":1000,"captured_units":0,"released_units":0,"headroom_units":1000,"expires_at":"2030-01-01T00:00:00Z","capture_seq":0,"outcome":"issued","clamped_by":"none"}}`))
 	}))
 	defer server.Close()
 
 	cfg := canonicalWalletTestConfig(config.CanonicalWalletModeShadow)
 	cfg.ControlPlaneURL, cfg.Secret, cfg.Issuer, cfg.Audience, cfg.Version = server.URL, secret, "gateway", "shipany", "v7"
 	client := newCanonicalWalletHTTPClient(cfg, server.Client())
-	lease, err := client.AcquireLease(context.Background(), canonicalWalletLeaseRequest{PlatformUserID: "user-1", Currency: "CNY", RequestedMicros: 1000, RequestedTTLSeconds: 60})
+	res, err := client.EnsureLease(context.Background(), canonicalWalletEnsureRequest{PlatformUserID: "user-1", Currency: "CNY", Purpose: "authorize", MinHeadroomUnits: 1, RequestedBudgetUnits: 1000, RequestedTTLSeconds: 60, CallerSlotTTLSeconds: 1800})
 	require.NoError(t, err)
-	require.Equal(t, "lease-1", lease.LeaseID)
+	require.Equal(t, "lease-1", res.Lease.LeaseID)
 }
 
 func TestCanonicalWalletSettlementEventIDIsStableAcrossRepricing(t *testing.T) {
