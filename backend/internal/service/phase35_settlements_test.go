@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 
@@ -197,4 +198,100 @@ func TestPhase35NamedLeaseIDReleasesTheRetryReservation(t *testing.T) {
 	fake.mu.Lock()
 	require.Equal(t, yConsumedBefore, fake.lease(user, Y).Captured)
 	fake.mu.Unlock()
+}
+
+// Test 37 — §11.5's classification table, minus the two rows that are
+// mechanisms rather than classifications (lease_over_capture and
+// lease_not_capturable — Tasks 5/6, asserted by delivery, not a status).
+// Every row is driven through the REAL dispatcher against the fake's
+// respondWith hook: a terminal row dead-letters on the FIRST attempt with
+// the stated reason; a transient row survives past two attempts (the
+// backoff) with no reason persisted.
+func TestPhase35ClassificationTable(t *testing.T) {
+	ctx := context.Background()
+	rdb := startCanonicalWalletTestRedis(t, ctx)
+	store := &gatewayCacheAdapterForTest{rdb: rdb}
+	now := time.Now().UTC()
+
+	const settlementsPath = "/api/internal/v2/wallet/settlements"
+	const ensurePath = "/api/internal/v2/wallet/leases/ensure"
+	refusal := func(reason string) string {
+		return `{"code":-1,"message":"` + reason + `","data":{"reason":"` + reason + `"}}`
+	}
+
+	rows := []struct {
+		name           string
+		path           string
+		status         int
+		body           string
+		terminalReason string // "" = transient
+	}{
+		{"401 unauthorized on settlements is transient", settlementsPath, 401, refusal("unauthorized"), ""},
+		{"401 unauthorized on ensure is transient", ensurePath, 401, refusal("unauthorized"), ""},
+		{"404 lease_not_found on settlements is contract_violation", settlementsPath, 404, refusal("lease_not_found"), "contract_violation"},
+		{"409 lease_owner_mismatch on ensure is contract_violation", ensurePath, 409, refusal("lease_owner_mismatch"), "contract_violation"},
+		{"400 invalid_request on ensure is contract_violation", ensurePath, 400, refusal("invalid_request"), "contract_violation"},
+		{"400 invalid_request on settlements is contract_violation", settlementsPath, 400, refusal("invalid_request"), "contract_violation"},
+		{"400 invalid_amount on settlements is contract_violation", settlementsPath, 400, refusal("invalid_amount"), "contract_violation"},
+		{"409 settlement_payload_conflict is payload_conflict", settlementsPath, 409, refusal("settlement_payload_conflict"), "payload_conflict"},
+		{"500 internal_error is transient", settlementsPath, 500, refusal("internal_error"), ""},
+		{"503 flag off is transient", settlementsPath, 503, refusal("unavailable"), ""},
+	}
+
+	for i, row := range rows {
+		t.Run(row.name, func(t *testing.T) {
+			// A throwaway outbox per row: every bridge keeps its dispatcher
+			// ticker alive for the life of the test binary, so a shared table
+			// would let an earlier row's bridge claim a later row against
+			// its own fake. Redis is shared — every user is uuid-distinct.
+			db := startCanonicalWalletTestPostgres(t, ctx)
+			outbox := &outboxStoreForTest{db: db}
+			fake := newFakeEnsureControlPlane(t, func() time.Time { return now })
+			user := "shipany-user-" + uuid.NewString()
+			fake.fund(user, 100_000_000_000)
+			fake.respondWith(row.path, row.status, row.body, -1)
+			b := p34DispatcherBridge(t, fake, store, db, outbox, now)
+			reqID := "req-35-37-" + itoa(i)
+			b.ObserveSettlement(CanonicalWalletSettlementEvent{
+				GatewayRequestID: reqID, PlatformUserID: user, Currency: "CNY", AmountUnits: 10_000_000, OccurredAt: now,
+			})
+
+			readRow := func() (string, int, sql.NullString) {
+				var status string
+				var attempts int
+				var reason sql.NullString
+				require.NoError(t, db.QueryRowContext(ctx,
+					`SELECT status, attempt_count, dead_letter_reason FROM wallet_settlement_outbox WHERE gateway_request_id = $1`, reqID).
+					Scan(&status, &attempts, &reason))
+				return status, attempts, reason
+			}
+
+			if row.terminalReason != "" {
+				p34WaitOutboxStatus(t, ctx, db, reqID, "dead_letter")
+				status, attempts, reason := readRow()
+				require.Equal(t, "dead_letter", status)
+				require.Equal(t, 1, attempts, "terminal rows dead-letter on the first attempt — no backoff retries hide a wire bug")
+				require.True(t, reason.Valid)
+				require.Equal(t, row.terminalReason, reason.String)
+				return
+			}
+
+			// Transient: the row must survive past TWO attempts on the
+			// backoff (simulatedNow is the fixed `now`; the real ticker
+			// re-claims once now+backoff passes) and never carry a reason.
+			deadline := time.Now().Add(30 * time.Second)
+			for {
+				status, attempts, reason := readRow()
+				if status == "pending" && attempts >= 2 {
+					require.False(t, reason.Valid, "a retried row carries no dead-letter reason")
+					break
+				}
+				require.NotEqual(t, "dead_letter", status, "a transient row must never dead-letter")
+				if time.Now().After(deadline) {
+					t.Fatalf("transient row %s never reached a second attempt (status %s, attempts %d)", reqID, status, attempts)
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
+		})
+	}
 }

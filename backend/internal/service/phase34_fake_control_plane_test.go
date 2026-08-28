@@ -258,6 +258,10 @@ func (f *fakeEnsureControlPlane) refuseClamped(w http.ResponseWriter, reason, cl
 func (f *fakeEnsureControlPlane) handle(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	// f.respondWith is consulted before either route's own handling (test 37).
+	if f.canned(w, r) {
+		return
+	}
 	switch r.URL.Path {
 	case "/api/internal/v2/wallet/leases/ensure":
 		if r.Method == http.MethodGet {
@@ -403,9 +407,6 @@ func (f *fakeEnsureControlPlane) handle(w http.ResponseWriter, r *http.Request) 
 		// per-event identity, named_lease_id, lease_over_capture with
 		// data.headroom, lease_not_capturable on a closed lease,
 		// settlement_payload_conflict, and the strict amount-object wire.
-		if f.canned(w, r) {
-			return
-		}
 		var req canonicalWalletSettlementWireRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)

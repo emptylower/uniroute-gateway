@@ -429,15 +429,49 @@ type canonicalWalletEnsureResult struct {
 	ClampedBy string // none | cap | balance
 }
 
-// canonicalWalletRefusalError carries a 409 refusal's data.reason from the
-// control plane (ShipAny's respJson(-1, message, {reason}) shape).
-type canonicalWalletRefusalError struct {
-	Reason string
-	Status int
+// canonicalWalletStatusError (Phase 3.5, §11.5) carries every non-2xx the
+// control plane can answer: the status, the path (the classification is
+// route-sensitive — a 404 on settlements and a 404 on ensure differ),
+// data.reason when the body carries one, and — for the settlements route's
+// lease_over_capture — data.headroom parsed to units. The wrapped error is
+// set ONLY on the §9.6 item 6 branch (a 404/405 on the ensure route), so
+// errors.As(err, &se) and errors.Is(err,
+// ErrCanonicalWalletControlPlaneIncompatible) both succeed there.
+type canonicalWalletStatusError struct {
+	Status        int
+	Path          string
+	Reason        string
+	HeadroomUnits *int64
+	wrapped       error
 }
 
-func (e *canonicalWalletRefusalError) Error() string {
-	return fmt.Sprintf("canonical wallet control plane refused: %s (status %d)", e.Reason, e.Status)
+func (e *canonicalWalletStatusError) Error() string {
+	if e.Reason != "" {
+		return fmt.Sprintf("canonical wallet control plane refused: %s (status %d)", e.Reason, e.Status)
+	}
+	return fmt.Sprintf("canonical wallet control plane returned status %d", e.Status)
+}
+
+func (e *canonicalWalletStatusError) Unwrap() error { return e.wrapped }
+
+// classifyControlPlaneError (§11.5): the terminal rows of the
+// classification table. Everything else — 401 (a rotated service secret
+// self-heals), 5xx, 503 flag-off, transport errors, the local guards — is
+// transient and returns ok=false; lease_over_capture and
+// lease_not_capturable are handled BEFORE this (the split and the stale
+// binding) and never reach it.
+func classifyControlPlaneError(err error) (terminalReason string, ok bool) {
+	var se *canonicalWalletStatusError
+	if !errors.As(err, &se) {
+		return "", false
+	}
+	switch {
+	case se.Status == 400, se.Reason == "lease_owner_mismatch", se.Reason == "lease_not_found":
+		return "contract_violation", true
+	case se.Reason == "settlement_payload_conflict":
+		return "payload_conflict", true
+	}
+	return "", false
 }
 
 func (c *canonicalWalletHTTPClient) EnsureLease(ctx context.Context, request canonicalWalletEnsureRequest) (*canonicalWalletEnsureResult, error) {
@@ -446,7 +480,7 @@ func (c *canonicalWalletHTTPClient) EnsureLease(ctx context.Context, request can
 	}
 	var wire canonicalWalletEnsureWireResponse
 	if err := c.doJSON(ctx, http.MethodPost, canonicalWalletEnsurePath, canonicalWalletLeaseScope, "", request, &wire); err != nil {
-		var refusal *canonicalWalletRefusalError
+		var refusal *canonicalWalletStatusError
 		if errors.As(err, &refusal) {
 			switch refusal.Reason {
 			case "lease_cap_reached":
@@ -626,24 +660,34 @@ func (c *canonicalWalletHTTPClient) doJSON(ctx context.Context, method, path, sc
 		return fmt.Errorf("read canonical wallet response: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		// §11.5: EVERY non-2xx comes back as the typed status error — the
+		// status, the path, data.reason and (settlements' over-capture)
+		// data.headroom, parsed with the strict parser when present.
 		var refusal struct {
 			Data struct {
-				Reason string `json:"reason"`
+				Reason   string                       `json:"reason"`
+				Headroom *canonicalWalletAmountObject `json:"headroom"`
 			} `json:"data"`
 		}
-		if resp.StatusCode == http.StatusConflict && json.Unmarshal(body, &refusal) == nil && refusal.Data.Reason != "" {
-			return &canonicalWalletRefusalError{Reason: refusal.Data.Reason, Status: resp.StatusCode}
+		statusErr := &canonicalWalletStatusError{Status: resp.StatusCode, Path: path}
+		if json.Unmarshal(body, &refusal) == nil {
+			statusErr.Reason = refusal.Data.Reason
+			if refusal.Data.Headroom != nil {
+				if units, herr := parseCanonicalWalletAmountObject("data.headroom", *refusal.Data.Headroom); herr == nil {
+					statusErr.HeadroomUnits = &units
+				}
+			}
 		}
-		// §9.6 item 6: a 404/405 from the ensure route at runtime means the
-		// control plane predates 3.4a-S — classified
-		// ErrCanonicalWalletControlPlaneIncompatible (transient: the outbox
-		// retries on the backoff; attempts_exhausted if it runs out). Keyed
-		// on the PATH — doJSON is shared with the settlements route, whose
+		// §9.6 item 6 (PRESERVED, not replaced): a 404/405 from the ensure
+		// route at runtime means the control plane predates 3.4a-S — the
+		// status error WRAPS ErrCanonicalWalletControlPlaneIncompatible so
+		// both errors.As(err, &se) and errors.Is(err, …) succeed. Keyed on
+		// the PATH — doJSON is shared with the settlements route, whose
 		// statuses are its own.
 		if path == canonicalWalletEnsurePath && (resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed) {
-			return fmt.Errorf("%w: ensure route answered status %d", ErrCanonicalWalletControlPlaneIncompatible, resp.StatusCode)
+			statusErr.wrapped = fmt.Errorf("%w: ensure route answered status %d", ErrCanonicalWalletControlPlaneIncompatible, resp.StatusCode)
 		}
-		return fmt.Errorf("canonical wallet control plane returned status %d", resp.StatusCode)
+		return statusErr
 	}
 	if len(body) == 0 || responseBody == nil {
 		return nil
@@ -724,6 +768,9 @@ type canonicalWalletMetrics struct {
 	// Phase 3.5 (§11.2): the v2 settlements client's counters.
 	namedLeaseReleased atomic.Int64
 	balanceBehindLocal atomic.Int64
+	// Phase 3.5 (§11.5): the terminal classification counters.
+	deadLetterContractViolation atomic.Int64
+	deadLetterPayloadConflict   atomic.Int64
 	// §9.6 item 6's rollout-guard counters (global, like every counter here).
 	controlPlaneIncompatible atomic.Int64
 	controlPlaneProbeFailed  atomic.Int64
@@ -757,25 +804,27 @@ func CanonicalWalletBridgeStats() map[string]int64 {
 		"reserve_ok":       m.reserveOK.Load(), "reserve_error": m.reserveError.Load(),
 		"settlement_ok": m.settlementOK.Load(), "settlement_error": m.settlementError.Load(),
 		"balance_mismatch": m.balanceMismatch.Load(), "missing_platform_user_id": m.missingPlatformID.Load(),
-		"unsupported_currency":          m.unsupportedCurrency.Load(),
-		"dead_letter_balance_shortfall": m.deadLetterBalanceShortfall.Load(),
-		"named_lease_released":          m.namedLeaseReleased.Load(),
-		"balance_behind_local":          m.balanceBehindLocal.Load(),
-		"control_plane_incompatible":    m.controlPlaneIncompatible.Load(),
-		"control_plane_probe_failed":    m.controlPlaneProbeFailed.Load(),
-		"hold_released_not_written":     m.holdReleasedNotWritten.Load(),
-		"hold_release_error":            m.holdReleaseError.Load(),
-		"hold_converted":                m.holdConverted.Load(),
-		"hold_convert_error":            m.holdConvertError.Load(),
-		"hold_convert_duplicate":        m.holdConvertDuplicate.Load(),
-		"hold_settlement_after_release": m.holdSettlementAfterRelease.Load(),
-		"hold_convert_overrun_released": m.holdConvertOverrunReleased.Load(),
-		"hold_missing_at_settlement":    m.holdMissingAtSettlement.Load(),
-		"hold_indeterminate_classified": m.holdIndeterminateClassified.Load(),
-		"hold_indeterminate_row_failed": m.holdIndeterminateRowFailed.Load(),
-		"reaper_error":                  m.reaperError.Load(),
-		"holds_abandoned":               m.holdsAbandoned.Load(),
-		"hold_outcomes_expired":         m.holdOutcomesExpired.Load(),
+		"unsupported_currency":           m.unsupportedCurrency.Load(),
+		"dead_letter_balance_shortfall":  m.deadLetterBalanceShortfall.Load(),
+		"named_lease_released":           m.namedLeaseReleased.Load(),
+		"balance_behind_local":           m.balanceBehindLocal.Load(),
+		"dead_letter_contract_violation": m.deadLetterContractViolation.Load(),
+		"dead_letter_payload_conflict":   m.deadLetterPayloadConflict.Load(),
+		"control_plane_incompatible":     m.controlPlaneIncompatible.Load(),
+		"control_plane_probe_failed":     m.controlPlaneProbeFailed.Load(),
+		"hold_released_not_written":      m.holdReleasedNotWritten.Load(),
+		"hold_release_error":             m.holdReleaseError.Load(),
+		"hold_converted":                 m.holdConverted.Load(),
+		"hold_convert_error":             m.holdConvertError.Load(),
+		"hold_convert_duplicate":         m.holdConvertDuplicate.Load(),
+		"hold_settlement_after_release":  m.holdSettlementAfterRelease.Load(),
+		"hold_convert_overrun_released":  m.holdConvertOverrunReleased.Load(),
+		"hold_missing_at_settlement":     m.holdMissingAtSettlement.Load(),
+		"hold_indeterminate_classified":  m.holdIndeterminateClassified.Load(),
+		"hold_indeterminate_row_failed":  m.holdIndeterminateRowFailed.Load(),
+		"reaper_error":                   m.reaperError.Load(),
+		"holds_abandoned":                m.holdsAbandoned.Load(),
+		"hold_outcomes_expired":          m.holdOutcomesExpired.Load(),
 	}
 }
 
@@ -1422,6 +1471,13 @@ func (b *CanonicalWalletBridge) deliverOutboxEvent(ctx context.Context, e Canoni
 			_ = b.outbox.MarkOutboxEventDeadLetter(ctx, e.ID, b.workerID, "balance_shortfall")
 			return
 		}
+		// §11.5 classification: a terminal control-plane answer (a wire bug
+		// the backoff cannot fix) dead-letters immediately with its named
+		// reason; everything else below stays transient.
+		if reason, terminal := classifyControlPlaneError(err); terminal {
+			b.markTerminalClassification(ctx, e.ID, reason)
+			return
+		}
 		// Transport/store errors, the transient lease_contention, the local
 		// under-grant guard (ErrCanonicalWalletLeaseGrantBelowAmount) and a
 		// control plane without the ensure route
@@ -1472,6 +1528,15 @@ func (b *CanonicalWalletBridge) deliverOutboxEvent(ctx context.Context, e Canoni
 	result, err := b.control.SubmitSettlement(ctx, event)
 	if err != nil {
 		canonicalWalletBridgeMetrics.settlementError.Add(1)
+		// §11.5 classification on the settlements branch too: a terminal
+		// answer dead-letters with its named reason (lease_over_capture and
+		// lease_not_capturable are handled by their own mechanisms in Tasks
+		// 5/6 and never reach this classifier); 401/5xx/transport stay on
+		// the backoff.
+		if reason, terminal := classifyControlPlaneError(err); terminal {
+			b.markTerminalClassification(ctx, e.ID, reason)
+			return
+		}
 		_ = b.outbox.MarkOutboxEventFailed(ctx, e.ID, b.workerID, b.clock())
 		return
 	}
@@ -1515,6 +1580,21 @@ func (b *CanonicalWalletBridge) deliverOutboxEvent(ctx context.Context, e Canoni
 // units→credits rounding quantum. Deltas within it are the local balance's
 // float rounding; beyond it the two ledgers genuinely disagree.
 const canonicalWalletDriftQuantumUnits = 1_000_000
+
+// markTerminalClassification (§11.5) resolves a row this worker owns
+// straight to dead_letter with the classifier's named reason and counts it.
+func (b *CanonicalWalletBridge) markTerminalClassification(ctx context.Context, id int64, reason string) {
+	if err := b.outbox.MarkOutboxEventDeadLetter(ctx, id, b.workerID, reason); err != nil {
+		slog.Warn("canonical wallet outbox terminal classification failed", "id", id, "reason", reason, "error", err)
+		return
+	}
+	switch reason {
+	case "payload_conflict":
+		canonicalWalletBridgeMetrics.deadLetterPayloadConflict.Add(1)
+	default:
+		canonicalWalletBridgeMetrics.deadLetterContractViolation.Add(1)
+	}
+}
 
 // canonicalWalletLeaseBindingIsStale reports whether a reservation failure
 // against an ALREADY-BOUND lease proves that binding can never succeed, so it
