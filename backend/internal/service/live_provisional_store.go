@@ -128,7 +128,7 @@ func (s *liveProvisionalStore) Abort(ctx context.Context, token string, at time.
 	return nil
 }
 
-func (s *liveProvisionalStore) ClaimFinalization(ctx context.Context, token string, at time.Time) (bool, error) {
+func (s *liveProvisionalStore) ClaimFinalization(ctx context.Context, token string, _ time.Time) (bool, error) {
 	if s == nil || s.db == nil {
 		return false, errors.New("live provisional store unavailable")
 	}

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	sqlmock "github.com/DATA-DOG/go-sqlmock"
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/require"
@@ -234,6 +236,53 @@ func TestObserveSettlementReturnBoolGuards(t *testing.T) {
 
 	// non-positive amount
 	require.False(t, shadow.ObserveSettlement(CanonicalWalletSettlementEvent{PlatformUserID: "u1", Currency: "CNY", AmountUnits: 0}))
+
+	// committed -> true
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+
+	outboxStub := &outboxStoreStub{}
+	mock.ExpectBegin()
+	mock.ExpectCommit()
+	shadowWithOutbox := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeShadow), &canonicalWalletStoreStub{}, &canonicalWalletControlStub{}, db, outboxStub)
+	require.True(t, shadowWithOutbox.ObserveSettlement(CanonicalWalletSettlementEvent{PlatformUserID: "u1", Currency: "CNY", AmountUnits: 100}))
+	require.NoError(t, mock.ExpectationsWereMet())
+
+	// failing store -> false
+	dbFail, mockFail, err := sqlmock.New()
+	require.NoError(t, err)
+	defer dbFail.Close()
+
+	failingOutbox := &outboxStoreStub{insertErr: errors.New("db insert failed")}
+	mockFail.ExpectBegin()
+	mockFail.ExpectRollback()
+	shadowFailing := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeShadow), &canonicalWalletStoreStub{}, &canonicalWalletControlStub{}, dbFail, failingOutbox)
+	require.False(t, shadowFailing.ObserveSettlement(CanonicalWalletSettlementEvent{PlatformUserID: "u1", Currency: "CNY", AmountUnits: 100}))
+	require.NoError(t, mockFail.ExpectationsWereMet())
+}
+
+type outboxStoreStub struct {
+	insertErr error
+}
+
+func (s *outboxStoreStub) InsertOutboxEventTx(context.Context, *sql.Tx, CanonicalWalletSettlementEvent) error {
+	return s.insertErr
+}
+func (s *outboxStoreStub) ClaimPendingOutboxEvents(context.Context, string, int) ([]CanonicalWalletOutboxEvent, error) {
+	return nil, nil
+}
+func (s *outboxStoreStub) MarkOutboxEventDelivered(context.Context, int64, string) error {
+	return nil
+}
+func (s *outboxStoreStub) MarkOutboxEventFailed(context.Context, int64, string, time.Time) error {
+	return nil
+}
+func (s *outboxStoreStub) BindOutboxEventLease(context.Context, int64, string, string) error {
+	return nil
+}
+func (s *outboxStoreStub) ReclaimStaleInFlightEvents(context.Context, time.Duration) (int64, error) {
+	return 0, nil
 }
 
 func TestObserveCanonicalWalletSettlementReturnBool(t *testing.T) {

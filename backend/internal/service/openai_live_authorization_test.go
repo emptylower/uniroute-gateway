@@ -36,10 +36,16 @@ func (s *stubOpenAIScheduler) SnapshotMetrics() OpenAIAccountSchedulerMetricsSna
 }
 
 type inMemoryLiveProvisionalStore struct {
-	mu      sync.Mutex
-	records map[string]*LiveProvisionalRecord
-	saveErr error
-	onSave  func(rec *LiveProvisionalRecord)
+	mu          sync.Mutex
+	records     map[string]*LiveProvisionalRecord
+	saveErr     error
+	activateErr error
+	abortErr    error
+	claimErr    error
+	completeErr error
+	releaseErr  error
+	onSave      func(rec *LiveProvisionalRecord)
+	totalCalls  int
 }
 
 func newInMemoryLiveProvisionalStore() *inMemoryLiveProvisionalStore {
@@ -49,6 +55,7 @@ func newInMemoryLiveProvisionalStore() *inMemoryLiveProvisionalStore {
 func (s *inMemoryLiveProvisionalStore) Save(ctx context.Context, rec *LiveProvisionalRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.totalCalls++
 	if s.saveErr != nil {
 		return s.saveErr
 	}
@@ -66,6 +73,10 @@ func (s *inMemoryLiveProvisionalStore) Save(ctx context.Context, rec *LiveProvis
 func (s *inMemoryLiveProvisionalStore) Activate(ctx context.Context, token, callHash string, activatedAt time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.totalCalls++
+	if s.activateErr != nil {
+		return s.activateErr
+	}
 	rec, ok := s.records[token]
 	if !ok || rec.Status != LiveProvisionalStatusProvisional {
 		return ErrLiveProvisionalNotFound
@@ -79,6 +90,10 @@ func (s *inMemoryLiveProvisionalStore) Activate(ctx context.Context, token, call
 func (s *inMemoryLiveProvisionalStore) Abort(ctx context.Context, token string, terminalAt time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.totalCalls++
+	if s.abortErr != nil {
+		return s.abortErr
+	}
 	rec, ok := s.records[token]
 	if !ok || rec.Status != LiveProvisionalStatusProvisional {
 		return ErrLiveProvisionalNotFound
@@ -91,6 +106,10 @@ func (s *inMemoryLiveProvisionalStore) Abort(ctx context.Context, token string, 
 func (s *inMemoryLiveProvisionalStore) ClaimFinalization(ctx context.Context, token string, claimedAt time.Time) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.totalCalls++
+	if s.claimErr != nil {
+		return false, s.claimErr
+	}
 	if s.saveErr != nil {
 		return false, s.saveErr
 	}
@@ -105,6 +124,10 @@ func (s *inMemoryLiveProvisionalStore) ClaimFinalization(ctx context.Context, to
 func (s *inMemoryLiveProvisionalStore) CompleteFinalization(ctx context.Context, token, settlementEventID string, settledUnits int64, terminalAt time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.totalCalls++
+	if s.completeErr != nil {
+		return s.completeErr
+	}
 	if s.saveErr != nil {
 		return s.saveErr
 	}
@@ -124,6 +147,10 @@ func (s *inMemoryLiveProvisionalStore) CompleteFinalization(ctx context.Context,
 func (s *inMemoryLiveProvisionalStore) ReleaseFinalizationClaim(ctx context.Context, token string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.totalCalls++
+	if s.releaseErr != nil {
+		return s.releaseErr
+	}
 	rec, ok := s.records[token]
 	if !ok || rec.Status != LiveProvisionalStatusFinalizing {
 		return ErrLiveProvisionalNotFound
@@ -135,6 +162,7 @@ func (s *inMemoryLiveProvisionalStore) ReleaseFinalizationClaim(ctx context.Cont
 func (s *inMemoryLiveProvisionalStore) Get(ctx context.Context, token string) (*LiveProvisionalRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.totalCalls++
 	rec, ok := s.records[token]
 	if !ok {
 		return nil, ErrLiveProvisionalNotFound
@@ -146,6 +174,7 @@ func (s *inMemoryLiveProvisionalStore) Get(ctx context.Context, token string) (*
 func (s *inMemoryLiveProvisionalStore) GetByCallHash(ctx context.Context, callHash string) (*LiveProvisionalRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.totalCalls++
 	for _, rec := range s.records {
 		if rec.CallHash == callHash {
 			copy := *rec
@@ -491,9 +520,21 @@ func TestCreateLiveCallDisabledModeIsUnchanged(t *testing.T) {
 	f := newLiveAuthTestFixture(t, config.CanonicalWalletModeDisabled)
 
 	var recordedHeaders http.Header
+	var recordedBody []byte
+	var recordedURL string
+	var recordedMethod string
 	f.svc.httpUpstream = &hookedHTTPUpstream{
 		doFn: func(req *http.Request) (*http.Response, error) {
 			recordedHeaders = req.Header.Clone()
+			recordedURL = req.URL.String()
+			recordedMethod = req.Method
+			if req.Body != nil {
+				var err error
+				recordedBody, err = io.ReadAll(req.Body)
+				if err != nil {
+					return nil, err
+				}
+			}
 			return &http.Response{
 				StatusCode: http.StatusOK,
 				Header:     http.Header{"Location": {"/backend-api/codex/call_disabled"}},
@@ -502,17 +543,35 @@ func TestCreateLiveCallDisabledModeIsUnchanged(t *testing.T) {
 		},
 	}
 
-	created, err := f.svc.CreateLiveCall(context.Background(), defaultLiveCallRequest(), defaultLiveCallIdentity(f), 5)
+	req := defaultLiveCallRequest()
+	identity := defaultLiveCallIdentity(f)
+	created, err := f.svc.CreateLiveCall(context.Background(), req, identity, 5)
 	require.NoError(t, err)
 	require.NotNil(t, created)
 
 	f.provStore.mu.Lock()
 	require.Empty(t, f.provStore.records, "disabled mode must not write any provisional record")
+	require.Equal(t, 0, f.provStore.totalCalls, "disabled mode must issue zero provisional store I/O calls")
 	f.provStore.mu.Unlock()
 
 	require.Equal(t, int64(0), LiveProvisionalMetricsSnapshot().Written)
+	require.Equal(t, http.MethodPost, recordedMethod)
+	require.Equal(t, chatGPTLiveCallsURL, recordedURL)
 	require.Equal(t, "Bearer test-token", recordedHeaders.Get("Authorization"))
 	require.Equal(t, "quicksilver=v2", recordedHeaders.Get("OpenAI-Alpha"))
+	require.Equal(t, "application/json", recordedHeaders.Get("Content-Type"))
+	require.Equal(t, "application/sdp", recordedHeaders.Get("Accept"))
+	require.Equal(t, `{"v":1,"s":0,"t":"v1.test"}`, recordedHeaders.Get(liveAttestationHeader))
+
+	expectedBodyJSON, err := json.Marshal(struct {
+		SDP     string          `json:"sdp"`
+		Session json.RawMessage `json:"session"`
+	}{
+		SDP:     req.SDP,
+		Session: req.Session,
+	})
+	require.NoError(t, err)
+	require.JSONEq(t, string(expectedBodyJSON), string(recordedBody))
 }
 
 func TestCreateLiveCallTwoConcurrentSessionsBothWriteRows(t *testing.T) {

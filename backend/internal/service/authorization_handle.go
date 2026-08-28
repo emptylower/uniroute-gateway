@@ -293,41 +293,23 @@ func AuthorizationMetricsSnapshot() AuthorizationMetrics {
 }
 
 type LiveProvisionalMetrics struct {
-	Written                              int64
-	Activated                            int64
-	Aborted                              int64
-	Finalized                            int64
-	StoreUnavailable                     int64
-	SettlementNotEnqueued                int64
-	LiveProvisionalWritten               int64
-	LiveProvisionalActivated             int64
-	LiveProvisionalAborted               int64
-	LiveProvisionalFinalized             int64
-	LiveProvisionalStoreUnavailable      int64
-	LiveProvisionalSettlementNotEnqueued int64
+	Written               int64
+	Activated             int64
+	Aborted               int64
+	Finalized             int64
+	StoreUnavailable      int64
+	SettlementNotEnqueued int64
 }
 
 func LiveProvisionalMetricsSnapshot() LiveProvisionalMetrics {
 	m := &authorizationMetrics
-	w := m.liveProvisionalWritten.Load()
-	a := m.liveProvisionalActivated.Load()
-	ab := m.liveProvisionalAborted.Load()
-	f := m.liveProvisionalFinalized.Load()
-	u := m.liveProvisionalStoreUnavailable.Load()
-	ne := m.liveProvisionalSettlementNotEnqueued.Load()
 	return LiveProvisionalMetrics{
-		Written:                              w,
-		Activated:                            a,
-		Aborted:                              ab,
-		Finalized:                            f,
-		StoreUnavailable:                     u,
-		SettlementNotEnqueued:                ne,
-		LiveProvisionalWritten:               w,
-		LiveProvisionalActivated:             a,
-		LiveProvisionalAborted:               ab,
-		LiveProvisionalFinalized:             f,
-		LiveProvisionalStoreUnavailable:      u,
-		LiveProvisionalSettlementNotEnqueued: ne,
+		Written:               m.liveProvisionalWritten.Load(),
+		Activated:             m.liveProvisionalActivated.Load(),
+		Aborted:               m.liveProvisionalAborted.Load(),
+		Finalized:             m.liveProvisionalFinalized.Load(),
+		StoreUnavailable:      m.liveProvisionalStoreUnavailable.Load(),
+		SettlementNotEnqueued: m.liveProvisionalSettlementNotEnqueued.Load(),
 	}
 }
 

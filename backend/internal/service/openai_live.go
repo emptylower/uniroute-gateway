@@ -363,7 +363,9 @@ func (s *OpenAIGatewayService) CreateLiveCall(
 			}
 			return nil, fmt.Errorf("save live call mapping: %w", saveErr)
 		}
-		s.activateLiveProvisional(authHandle.ID, record.CallHash)
+		if rowWritten {
+			s.activateLiveProvisional(authHandle.ID, record.CallHash)
+		}
 		created.Account = account
 		go s.observeLiveCall(record.CallHash)
 		return created, nil
@@ -1006,18 +1008,6 @@ func (s *OpenAIGatewayService) tryFinalizeLiveCall(record *LiveCallRecord) bool 
 	}
 	cost := &CostBreakdown{InputCost: inputCost, OutputCost: outputCost, CacheReadCost: cacheReadCost, TotalCost: sourceCost, ActualCost: actualCost, BillingMode: string(BillingModeToken)}
 
-	claimed := false
-	if record.AuthorizationID != "" {
-		var claimErr error
-		claimed, claimErr = s.claimLiveProvisionalFinalization(record.AuthorizationID)
-		if claimErr != nil {
-			authorizationMetrics.liveProvisionalStoreUnavailable.Add(1)
-			logger.L().Warn("openai.live_provisional_claim_failed", zap.String("authorization_id", record.AuthorizationID), zap.Error(claimErr))
-		} else if s.liveProvisional != nil && !claimed {
-			return true // concurrent finalize in progress
-		}
-	}
-
 	applied, billingResult, billingErr := applyUsageBillingDetailed(context.Background(), record.CallHash, usageLog, &postUsageBillingParams{
 		Cost: cost,
 		User: user, APIKey: apiKey, Account: account, Subscription: subscription,
@@ -1027,26 +1017,8 @@ func (s *OpenAIGatewayService) tryFinalizeLiveCall(record *LiveCallRecord) bool 
 		Platform:              PlatformOpenAI,
 	}, s.billingDeps(), s.usageBillingRepo)
 	if billingErr != nil {
-		if claimed {
-			s.releaseLiveProvisionalFinalizationClaim(record.AuthorizationID)
-		}
 		logger.L().Error("openai.live_billing_failed", zap.String("call_hash", record.CallHash), zap.Error(billingErr))
 		return false
-	}
-
-	cwMode := s.canonicalWalletMode()
-	enqueued := observeCanonicalWalletSettlement(s.canonicalWallet, record.CallHash, user, cost, record.SubscriptionBilling, applied, billingResult, record.AuthorizationToken, record.AuthorizationID)
-	if cwMode != config.CanonicalWalletModeDisabled && !enqueued {
-		authorizationMetrics.liveProvisionalSettlementNotEnqueued.Add(1)
-	}
-
-	if record.AuthorizationID != "" {
-		eventID := CanonicalWalletSettlementEventID(record.CallHash, record.PlatformUserID, user.BillingCurrency)
-		settledUnits, _ := canonicalWalletUnitsFromCNY(cost.ActualCost)
-		if completeErr := s.completeLiveProvisionalFinalization(record.AuthorizationID, eventID, settledUnits); completeErr != nil {
-			authorizationMetrics.liveProvisionalStoreUnavailable.Add(1)
-			logger.L().Warn("openai.live_provisional_complete_failed", zap.String("authorization_id", record.AuthorizationID), zap.Error(completeErr))
-		}
 	}
 
 	usageCtx, usageCancel := detachedBillingContext(context.Background())
@@ -1056,6 +1028,40 @@ func (s *OpenAIGatewayService) tryFinalizeLiveCall(record *LiveCallRecord) bool 
 		logger.L().Error("openai.live_usage_log_failed", zap.String("call_hash", record.CallHash), zap.Error(usageErr))
 		return false
 	}
+
+	// Phase 3.3c: Live reaches canonical settlement (spec §2.3, §6 item 5) — with the
+	// platform identity finalization never had, the REAL billingApplied, and the attempt's
+	// token. One-shot under finalization retries: the row's active → finalizing claim is
+	// the guard, and the row is marked finalized only if the bridge committed the outbox
+	// row. A pre-3.3c or disabled-mode record (no token) skips the observer exactly as
+	// today; a nil store skips it too (constraint 9).
+	if s.canonicalWalletMode() != config.CanonicalWalletModeDisabled && record.AuthorizationID != "" && s.liveProvisional != nil {
+		claimed, claimErr := s.claimLiveProvisionalFinalization(record.AuthorizationID)
+		if claimErr != nil {
+			logger.L().Error("openai.live_provisional_finalize_failed", zap.String("call_hash", record.CallHash), zap.Error(claimErr))
+			return false // retried by scheduleLiveFinalizationRetry; QueueLiveFinalization keeps the Redis record
+		}
+		if claimed {
+			cost := &CostBreakdown{InputCost: inputCost, OutputCost: outputCost, CacheReadCost: cacheReadCost, TotalCost: sourceCost, ActualCost: actualCost, BillingMode: string(BillingModeToken)}
+			currency := NormalizeUserBillingCurrency(record.BillingCurrency)
+			eventID := CanonicalWalletSettlementEventID(record.CallHash, user.PlatformUserID, currency)
+			if record.AuthorizationToken != "" && observeCanonicalWalletSettlement(s.canonicalWallet, record.CallHash, user, cost, record.SubscriptionBilling, applied, billingResult, record.AuthorizationToken, record.AuthorizationID) {
+				settledUnits, _ := canonicalWalletUnitsFromCNY(cost.ActualCost) // the error is discarded only because a true return from the observer implies this same conversion already succeeded inside it — do not reorder
+				if err := s.completeLiveProvisionalFinalization(record.AuthorizationID, eventID, settledUnits); err != nil {
+					logger.L().Error("openai.live_provisional_complete_failed", zap.String("call_hash", record.CallHash), zap.Error(err))
+					return false // the row stays finalizing: "settlement outcome unknown" to Phase 4 — the named residual
+				}
+			} else {
+				// The observer's own guards (subscription-billed, non-CNY, zero cost, not applied)
+				// legitimately drop the event, and so does a dropped outbox write — distinguishable
+				// only by the bridge's counters. Release the claim so a later attempt or Phase 4 can
+				// observe again; record no settlement_event_id.
+				authorizationMetrics.liveProvisionalSettlementNotEnqueued.Add(1)
+				s.releaseLiveProvisionalFinalizationClaim(record.AuthorizationID)
+			}
+		}
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), liveRedisOperationTimeout)
 	first, closeErr := store.MarkLiveCallClosed(ctx, record.CallHash, liveClosedRecordTTL)
 	cancel()
