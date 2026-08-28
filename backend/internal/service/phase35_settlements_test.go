@@ -913,18 +913,27 @@ func TestPhase35LateCaptureRetargetsAndTheReceivable(t *testing.T) {
 		// The first delivery: ShipAny refuses lease_not_capturable → release
 		// in full, unbind, one failed attempt (the row retries unbound).
 		p34WaitOutboxLeaseUnbound(t, ctx, db, eventID)
-		var status string
-		var attempts int
-		require.NoError(t, db.QueryRowContext(ctx, `SELECT status, attempt_count FROM wallet_settlement_outbox WHERE event_id = $1`, eventID).Scan(&status, &attempts))
-		require.Equal(t, "pending", status, "the row retries — the charge lands on a fresh lease")
-		require.Equal(t, 1, attempts)
 		require.Equal(t, "30000000", p34bHashField(t, ctx, store, user, L, "released_units"), "released_units == A — the FULL form")
 		require.ErrorIs(t, rdb.Get(ctx, testCanonicalWalletReservationKey(user, eventID)).Err(), redis.Nil, "the reservation marker is gone")
 		require.Equal(t, int64(0), rdb.Exists(ctx, testCanonicalWalletReleaseMarkerKey(user, eventID)).Val(), "no release marker — the full form is pinned (§11.4)")
 		require.Equal(t, int64(1), canonicalWalletBridgeMetrics.lateCaptureRetargeted.Load()-retargetedBase)
 
-		// The next tick ensures a settle-purpose lease and captures there.
+		// The END state, not the transient pending: the still-running
+		// dispatcher re-claims the row on its next tick (pending →
+		// in_flight), so which of the two an instantaneous read catches is
+		// a race (round-1 MAJOR-1). Delivered, bound to a lease that is
+		// NOT the closed one, one failed attempt, not dead-lettered — the
+		// stable proof the charge landed on a fresh settle lease.
 		p34WaitOutboxStatus(t, ctx, db, "req-35-36", "delivered")
+		var finalLease string
+		var attempts int
+		var deadLetterReason sql.NullString
+		require.NoError(t, db.QueryRowContext(ctx,
+			`SELECT COALESCE(lease_id, ''), attempt_count, dead_letter_reason FROM wallet_settlement_outbox WHERE event_id = $1`, eventID).Scan(&finalLease, &attempts, &deadLetterReason))
+		require.NotEmpty(t, finalLease, "the delivered charge is bound to a lease")
+		require.NotEqual(t, L, finalLease, "the charge landed on a fresh settle lease, not the closed one")
+		require.Equal(t, 1, attempts, "exactly one failed attempt — the row retried unbound")
+		require.False(t, deadLetterReason.Valid, "the row retried rather than dead-lettered")
 		fake.mu.Lock()
 		var settleCaptured int64
 		for _, l := range fake.leases[user] {
