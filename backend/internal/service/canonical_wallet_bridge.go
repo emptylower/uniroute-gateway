@@ -29,6 +29,12 @@ var (
 	ErrCanonicalWalletLeaseCurrencyMismatch = errors.New("canonical wallet lease currency mismatch")
 	ErrCanonicalWalletReservationConflict   = errors.New("canonical wallet event was reserved against a different lease")
 	ErrCanonicalWalletOutboxClaimLost       = errors.New("canonical wallet outbox row is no longer claimed by this dispatcher")
+	// ErrCanonicalWalletBalanceShortfall: the control plane granted a lease whose
+	// remaining budget is below the amount being authorized now — both acquire
+	// routes clamp to available balance by design. Rejected client-side and
+	// unconditionally (spec §2.0.1 step (3)); 3.4a decides on the issuance row
+	// whether the grant was clamped (terminal) or merely undersized (one advance).
+	ErrCanonicalWalletBalanceShortfall = errors.New("canonical wallet lease granted below the amount being authorized")
 )
 
 const (
@@ -361,18 +367,20 @@ func (c *canonicalWalletHTTPClient) serviceAssertion(scope string) (string, erro
 }
 
 type canonicalWalletMetrics struct {
-	queued              atomic.Int64
-	queueDropped        atomic.Int64
-	leaseAcquireOK      atomic.Int64
-	leaseAcquireError   atomic.Int64
-	leaseBindError      atomic.Int64
-	reserveOK           atomic.Int64
-	reserveError        atomic.Int64
-	settlementOK        atomic.Int64
-	settlementError     atomic.Int64
-	balanceMismatch     atomic.Int64
-	missingPlatformID   atomic.Int64
-	unsupportedCurrency atomic.Int64
+	queued                atomic.Int64
+	queueDropped          atomic.Int64
+	leaseAcquireOK        atomic.Int64
+	leaseGrantBelowAmount atomic.Int64
+	leaseGrantExpired     atomic.Int64
+	leaseAcquireError     atomic.Int64
+	leaseBindError        atomic.Int64
+	reserveOK             atomic.Int64
+	reserveError          atomic.Int64
+	settlementOK          atomic.Int64
+	settlementError       atomic.Int64
+	balanceMismatch       atomic.Int64
+	missingPlatformID     atomic.Int64
+	unsupportedCurrency   atomic.Int64
 }
 
 var canonicalWalletBridgeMetrics canonicalWalletMetrics
@@ -382,8 +390,9 @@ func CanonicalWalletBridgeStats() map[string]int64 {
 	return map[string]int64{
 		"queued": m.queued.Load(), "queue_dropped": m.queueDropped.Load(),
 		"lease_acquire_ok": m.leaseAcquireOK.Load(), "lease_acquire_error": m.leaseAcquireError.Load(),
+		"lease_grant_below_amount": m.leaseGrantBelowAmount.Load(), "lease_grant_expired": m.leaseGrantExpired.Load(),
 		"lease_bind_error": m.leaseBindError.Load(),
-		"reserve_ok": m.reserveOK.Load(), "reserve_error": m.reserveError.Load(),
+		"reserve_ok":       m.reserveOK.Load(), "reserve_error": m.reserveError.Load(),
 		"settlement_ok": m.settlementOK.Load(), "settlement_error": m.settlementError.Load(),
 		"balance_mismatch": m.balanceMismatch.Load(), "missing_platform_user_id": m.missingPlatformID.Load(),
 		"unsupported_currency": m.unsupportedCurrency.Load(),
@@ -795,6 +804,24 @@ func (b *CanonicalWalletBridge) ensureLease(ctx context.Context, platformUserID,
 	})
 	if err != nil {
 		return nil, err
+	}
+	if lease == nil {
+		return nil, ErrCanonicalWalletLeaseMissing // a (nil, nil) grant was a latent nil deref one line later; name it
+	}
+	now := time.Now().UTC()
+	if !lease.ExpiresAt.After(now) {
+		canonicalWalletBridgeMetrics.leaseGrantExpired.Add(1)
+		return nil, fmt.Errorf("%w: lease %s expired at %s", ErrCanonicalWalletLeaseExpired, lease.LeaseID, lease.ExpiresAt.UTC().Format(time.RFC3339Nano))
+	}
+	if lease.RemainingUnits() < amountUnits {
+		canonicalWalletBridgeMetrics.leaseGrantBelowAmount.Add(1)
+		// Dispatcher consequence: on the outbox path (resolveOutboxEventLease)
+		// this error fails the delivery attempt like any other ensureLease
+		// error today — retried on the backoff and moved to dead_letter after
+		// walletOutboxMaxAttempts. The terminal balance_shortfall dead-letter
+		// classification on the first occurrence is 3.4a's (it needs the
+		// issuance row to tell clamped from undersized).
+		return nil, fmt.Errorf("%w: granted %d units, %d required", ErrCanonicalWalletBalanceShortfall, lease.RemainingUnits(), amountUnits)
 	}
 	if err := b.store.InstallCanonicalWalletLease(ctx, *lease); err != nil {
 		return nil, err

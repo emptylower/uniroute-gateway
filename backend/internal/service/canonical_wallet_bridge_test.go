@@ -17,9 +17,14 @@ import (
 type canonicalWalletStoreStub struct {
 	lease      *CanonicalWalletLease
 	reserveErr error
+	// Phase 3.3a: how many times a lease was installed / reserved — the
+	// ensureLease rejection tests assert a rejected grant is never installed.
+	installCalls int
+	reserveCalls int
 }
 
 func (s *canonicalWalletStoreStub) InstallCanonicalWalletLease(_ context.Context, lease CanonicalWalletLease) error {
+	s.installCalls++
 	s.lease = &lease
 	return nil
 }
@@ -38,6 +43,7 @@ func (s *canonicalWalletStoreStub) GetCanonicalWalletLeaseByID(_ context.Context
 	return &copy, nil
 }
 func (s *canonicalWalletStoreStub) ReserveCanonicalWalletLease(_ context.Context, _, _, _, _ string, amount int64, _ time.Time) (*CanonicalWalletReservation, error) {
+	s.reserveCalls++
 	if s.reserveErr != nil {
 		return nil, s.reserveErr
 	}
@@ -50,9 +56,15 @@ func (s *canonicalWalletStoreStub) ReserveCanonicalWalletLease(_ context.Context
 type canonicalWalletControlStub struct {
 	leaseErr error
 	lease    CanonicalWalletLease
+	// Phase 3.3a: capture of the last acquire request so the authorization
+	// tests can assert exactly what ensureLease asked the control plane for.
+	acquireCalls int
+	lastRequest  canonicalWalletLeaseRequest
 }
 
-func (s *canonicalWalletControlStub) AcquireLease(context.Context, canonicalWalletLeaseRequest) (*CanonicalWalletLease, error) {
+func (s *canonicalWalletControlStub) AcquireLease(_ context.Context, req canonicalWalletLeaseRequest) (*CanonicalWalletLease, error) {
+	s.acquireCalls++
+	s.lastRequest = req
 	if s.leaseErr != nil {
 		return nil, s.leaseErr
 	}
@@ -144,4 +156,45 @@ func TestCanonicalWalletUnitsFromCNYMatchesUnitsPerCNYConstant(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(canonicalWalletUnitsPerCNY), units)
 	require.Equal(t, int64(100_000_000), units, "cny-e8-v1: 1 CNY must be exactly 100,000,000 units, not 1,000,000")
+}
+
+// newBridgeForEnsureLeaseTest builds a bridge over the stubs with the 500M-unit
+// budget the Phase 3.3a ensureLease tests assume; the store stub starts with no
+// current lease, so ensureLease always goes to the control plane.
+func newBridgeForEnsureLeaseTest(t *testing.T) (*CanonicalWalletBridge, *canonicalWalletStoreStub, *canonicalWalletControlStub) {
+	t.Helper()
+	store := &canonicalWalletStoreStub{}
+	control := &canonicalWalletControlStub{}
+	cfg := canonicalWalletTestConfig(config.CanonicalWalletModeShadow)
+	cfg.LeaseBudgetUnits = 500_000_000
+	return newCanonicalWalletBridge(cfg, store, control, nil, nil), store, control
+}
+
+func TestEnsureLeaseRejectsGrantBelowAmount(t *testing.T) {
+	// The control plane clamps to available balance and returns a lease whose
+	// budget is below the amount being authorized (spec §2.0.1 step (3)).
+	b, store, control := newBridgeForEnsureLeaseTest(t)
+	control.lease = CanonicalWalletLease{LeaseID: "lease-1", Currency: "CNY", BudgetUnits: 100_000_000, ConsumedUnits: 0, ExpiresAt: time.Now().Add(5 * time.Minute)}
+	_, err := b.ensureLease(context.Background(), "user-1", "CNY", 200_000_000)
+	require.ErrorIs(t, err, ErrCanonicalWalletBalanceShortfall)
+	require.Equal(t, 0, store.installCalls, "a rejected grant is never installed")
+}
+
+func TestEnsureLeaseRejectsExpiredGrant(t *testing.T) {
+	b, store, control := newBridgeForEnsureLeaseTest(t)
+	control.lease = CanonicalWalletLease{LeaseID: "lease-1", Currency: "CNY", BudgetUnits: 500_000_000, ExpiresAt: time.Now().Add(-time.Second)}
+	_, err := b.ensureLease(context.Background(), "user-1", "CNY", 1_000_000)
+	require.ErrorIs(t, err, ErrCanonicalWalletLeaseExpired)
+	require.Equal(t, 0, store.installCalls)
+}
+
+func TestEnsureLeaseAcceptsGrantBelowBudgetButAboveAmount(t *testing.T) {
+	// A lease below lease_budget_units is normal (both routes clamp to balance);
+	// only a lease below the AMOUNT is rejected (index 3.3 exit).
+	b, store, control := newBridgeForEnsureLeaseTest(t)
+	control.lease = CanonicalWalletLease{LeaseID: "lease-1", Currency: "CNY", BudgetUnits: 3_000_000, ExpiresAt: time.Now().Add(5 * time.Minute)}
+	lease, err := b.ensureLease(context.Background(), "user-1", "CNY", 1_000_000)
+	require.NoError(t, err)
+	require.Equal(t, "lease-1", lease.LeaseID)
+	require.Equal(t, 1, store.installCalls)
 }
