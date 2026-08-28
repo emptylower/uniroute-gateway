@@ -16,13 +16,14 @@ var ErrAuthorizationRefused = errors.New("wallet authorization refused")
 type AuthorizationRefusalReason string
 
 const (
-	AuthorizationRefusalUnmarkedWrite    AuthorizationRefusalReason = "unmarked_write"   // neither a handle nor a non-billable mark (spec §2.0 default-billable)
-	AuthorizationRefusalSnapshotMissing  AuthorizationRefusalReason = "snapshot_missing" // 3.2 froze nothing (off mode, or a record-mode freeze failure)
-	AuthorizationRefusalEstimateFailed   AuthorizationRefusalReason = "estimate_failed"  // EstimateUpperBoundUnits errored (e.g. unbounded output with no model maximum — 3.7's top-up bounds it)
-	AuthorizationRefusalIdentityMissing  AuthorizationRefusalReason = "identity_missing" // no platform user id — the same rule ObserveSettlement applies
-	AuthorizationRefusalCurrency         AuthorizationRefusalReason = "currency_unsupported"
-	AuthorizationRefusalBalanceShortfall AuthorizationRefusalReason = "balance_shortfall" // ensureLease: the granted lease is below the amount (spec §2.0.1 step (3))
-	AuthorizationRefusalLeaseUnavailable AuthorizationRefusalReason = "lease_unavailable" // ensureLease: any other failure (control plane, store, expired grant)
+	AuthorizationRefusalUnmarkedWrite        AuthorizationRefusalReason = "unmarked_write"   // neither a handle nor a non-billable mark (spec §2.0 default-billable)
+	AuthorizationRefusalSnapshotMissing      AuthorizationRefusalReason = "snapshot_missing" // 3.2 froze nothing (off mode, or a record-mode freeze failure)
+	AuthorizationRefusalEstimateFailed       AuthorizationRefusalReason = "estimate_failed"  // EstimateUpperBoundUnits errored (e.g. unbounded output with no model maximum — 3.7's top-up bounds it)
+	AuthorizationRefusalIdentityMissing      AuthorizationRefusalReason = "identity_missing" // no platform user id — the same rule ObserveSettlement applies
+	AuthorizationRefusalCurrency             AuthorizationRefusalReason = "currency_unsupported"
+	AuthorizationRefusalBalanceShortfall     AuthorizationRefusalReason = "balance_shortfall" // ensureLease: the granted lease is below the amount (spec §2.0.1 step (3))
+	AuthorizationRefusalLeaseUnavailable     AuthorizationRefusalReason = "lease_unavailable" // ensureLease: any other failure (control plane, store, expired grant)
+	AuthorizationRefusalLiveStoreUnavailable AuthorizationRefusalReason = "live_provisional_store_unavailable"
 )
 
 // AuthorizationRefusedError is the one client-visible refusal shape.

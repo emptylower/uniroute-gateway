@@ -253,6 +253,9 @@ type AuthorizationMetrics struct {
 	SnapshotMissing, EstimateFailed, IdentityMissing, CurrencyUnsupported int64
 	LeaseUnavailable, BalanceShortfall                                    int64
 	Abandoned                                                             int64
+	LiveProvisionalWritten, LiveProvisionalActivated                      int64
+	LiveProvisionalAborted, LiveProvisionalFinalized                      int64
+	LiveProvisionalStoreUnavailable, LiveProvisionalSettlementNotEnqueued int64
 }
 
 var authorizationMetrics struct {
@@ -263,6 +266,9 @@ var authorizationMetrics struct {
 	snapshotMissing, estimateFailed, identityMissing, currencyUnsupported atomic.Int64
 	leaseUnavailable, balanceShortfall                                    atomic.Int64
 	abandoned                                                             atomic.Int64
+	liveProvisionalWritten, liveProvisionalActivated                      atomic.Int64
+	liveProvisionalAborted, liveProvisionalFinalized                      atomic.Int64
+	liveProvisionalStoreUnavailable, liveProvisionalSettlementNotEnqueued atomic.Int64
 }
 
 func AuthorizationMetricsSnapshot() AuthorizationMetrics {
@@ -276,13 +282,65 @@ func AuthorizationMetricsSnapshot() AuthorizationMetrics {
 		SnapshotMissing: m.snapshotMissing.Load(), EstimateFailed: m.estimateFailed.Load(),
 		IdentityMissing: m.identityMissing.Load(), CurrencyUnsupported: m.currencyUnsupported.Load(),
 		LeaseUnavailable: m.leaseUnavailable.Load(), BalanceShortfall: m.balanceShortfall.Load(),
-		Abandoned: m.abandoned.Load(),
+		Abandoned:                            m.abandoned.Load(),
+		LiveProvisionalWritten:               m.liveProvisionalWritten.Load(),
+		LiveProvisionalActivated:             m.liveProvisionalActivated.Load(),
+		LiveProvisionalAborted:               m.liveProvisionalAborted.Load(),
+		LiveProvisionalFinalized:             m.liveProvisionalFinalized.Load(),
+		LiveProvisionalStoreUnavailable:      m.liveProvisionalStoreUnavailable.Load(),
+		LiveProvisionalSettlementNotEnqueued: m.liveProvisionalSettlementNotEnqueued.Load(),
+	}
+}
+
+type LiveProvisionalMetrics struct {
+	Written                              int64
+	Activated                            int64
+	Aborted                              int64
+	Finalized                            int64
+	StoreUnavailable                     int64
+	SettlementNotEnqueued                int64
+	LiveProvisionalWritten               int64
+	LiveProvisionalActivated             int64
+	LiveProvisionalAborted               int64
+	LiveProvisionalFinalized             int64
+	LiveProvisionalStoreUnavailable      int64
+	LiveProvisionalSettlementNotEnqueued int64
+}
+
+func LiveProvisionalMetricsSnapshot() LiveProvisionalMetrics {
+	m := &authorizationMetrics
+	w := m.liveProvisionalWritten.Load()
+	a := m.liveProvisionalActivated.Load()
+	ab := m.liveProvisionalAborted.Load()
+	f := m.liveProvisionalFinalized.Load()
+	u := m.liveProvisionalStoreUnavailable.Load()
+	ne := m.liveProvisionalSettlementNotEnqueued.Load()
+	return LiveProvisionalMetrics{
+		Written:                              w,
+		Activated:                            a,
+		Aborted:                              ab,
+		Finalized:                            f,
+		StoreUnavailable:                     u,
+		SettlementNotEnqueued:                ne,
+		LiveProvisionalWritten:               w,
+		LiveProvisionalActivated:             a,
+		LiveProvisionalAborted:               ab,
+		LiveProvisionalFinalized:             f,
+		LiveProvisionalStoreUnavailable:      u,
+		LiveProvisionalSettlementNotEnqueued: ne,
 	}
 }
 
 func ResetAuthorizationMetricsForTest() {
 	m := &authorizationMetrics
-	for _, c := range []*atomic.Int64{&m.minted, &m.refused, &m.writesAuthorized, &m.writesNonBillable, &m.writesUnmarked, &m.writesRefused, &m.misplacedMarks, &m.outcomeResult, &m.outcomeNotWritten, &m.outcomeIndeterminate, &m.snapshotMissing, &m.estimateFailed, &m.identityMissing, &m.currencyUnsupported, &m.leaseUnavailable, &m.balanceShortfall, &m.abandoned} {
+	for _, c := range []*atomic.Int64{
+		&m.minted, &m.refused, &m.writesAuthorized, &m.writesNonBillable, &m.writesUnmarked, &m.writesRefused,
+		&m.misplacedMarks, &m.outcomeResult, &m.outcomeNotWritten, &m.outcomeIndeterminate,
+		&m.snapshotMissing, &m.estimateFailed, &m.identityMissing, &m.currencyUnsupported,
+		&m.leaseUnavailable, &m.balanceShortfall, &m.abandoned,
+		&m.liveProvisionalWritten, &m.liveProvisionalActivated, &m.liveProvisionalAborted,
+		&m.liveProvisionalFinalized, &m.liveProvisionalStoreUnavailable, &m.liveProvisionalSettlementNotEnqueued,
+	} {
 		c.Store(0)
 	}
 }

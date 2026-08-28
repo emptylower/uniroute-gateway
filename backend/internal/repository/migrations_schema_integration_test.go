@@ -195,6 +195,28 @@ func TestMigrationsRunner_IsIdempotent_AndSchemaIsUpToDate(t *testing.T) {
 
 	// user_allowed_groups: created_at should be timestamptz
 	requireColumn(t, tx, "user_allowed_groups", "created_at", "timestamp with time zone", 0, false)
+
+	// wallet_live_provisional: provisional record for Live sessions (migration 211)
+	requireColumn(t, tx, "wallet_live_provisional", "token", "text", 0, false)
+	requireColumn(t, tx, "wallet_live_provisional", "authorization_id", "text", 0, false)
+	requireColumn(t, tx, "wallet_live_provisional", "call_hash", "text", 0, false)
+	requireColumn(t, tx, "wallet_live_provisional", "platform_user_id", "text", 0, false)
+	requireColumn(t, tx, "wallet_live_provisional", "user_id", "bigint", 0, false)
+	requireColumn(t, tx, "wallet_live_provisional", "api_key_id", "bigint", 0, false)
+	requireColumn(t, tx, "wallet_live_provisional", "account_id", "bigint", 0, false)
+	requireColumn(t, tx, "wallet_live_provisional", "billing_currency", "text", 0, false)
+	requireColumn(t, tx, "wallet_live_provisional", "billing_snapshot_id", "text", 0, false)
+	requireColumn(t, tx, "wallet_live_provisional", "estimated_units", "bigint", 0, false)
+	requireColumn(t, tx, "wallet_live_provisional", "status", "text", 0, false)
+	requireColumn(t, tx, "wallet_live_provisional", "windows", "jsonb", 0, false)
+	requireColumn(t, tx, "wallet_live_provisional", "settlement_event_id", "text", 0, false)
+	requireColumn(t, tx, "wallet_live_provisional", "created_at", "timestamp with time zone", 0, false)
+	requireColumn(t, tx, "wallet_live_provisional", "activated_at", "timestamp with time zone", 0, true)
+	requireColumn(t, tx, "wallet_live_provisional", "terminal_at", "timestamp with time zone", 0, true)
+	requireIndex(t, tx, "wallet_live_provisional", "uq_wallet_live_provisional_call_hash")
+	requirePartialUniqueIndexDefinition(t, tx, "wallet_live_provisional", "uq_wallet_live_provisional_call_hash", "call_hash", "WHERE")
+	requireIndex(t, tx, "wallet_live_provisional", "idx_wallet_live_provisional_user_status")
+	requireIndex(t, tx, "wallet_live_provisional", "idx_wallet_live_provisional_status_created")
 }
 
 func TestMigrationsRunner_AuthIdentityAndPaymentSchemaStayAligned(t *testing.T) {

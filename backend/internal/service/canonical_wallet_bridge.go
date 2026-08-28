@@ -452,9 +452,9 @@ func newCanonicalWalletBridge(cfg config.CanonicalWalletConfig, store CanonicalW
 // durability store itself is what failed. Same class of gap the in-memory
 // channel had, now bounded to "Postgres itself is down or the write
 // genuinely failed" instead of "an ordinary burst filled a fixed buffer."
-func (b *CanonicalWalletBridge) ObserveSettlement(event CanonicalWalletSettlementEvent) {
+func (b *CanonicalWalletBridge) ObserveSettlement(event CanonicalWalletSettlementEvent) bool {
 	if b == nil || b.cfg.Mode == config.CanonicalWalletModeDisabled || event.AmountUnits <= 0 {
-		return
+		return false
 	}
 	if b.observedForTest != nil {
 		b.observedForTest(event)
@@ -463,17 +463,17 @@ func (b *CanonicalWalletBridge) ObserveSettlement(event CanonicalWalletSettlemen
 		// Several of this file's own tests construct a bridge with a nil
 		// outbox because they don't exercise ObserveSettlement — guard BOTH
 		// fields here, since the very next statement dereferences outboxDB.
-		return
+		return false
 	}
 	event.PlatformUserID = strings.TrimSpace(event.PlatformUserID)
 	if event.PlatformUserID == "" {
 		canonicalWalletBridgeMetrics.missingPlatformID.Add(1)
-		return
+		return false
 	}
 	currency, err := RequireCNYBillingCurrency(event.Currency)
 	if err != nil {
 		canonicalWalletBridgeMetrics.unsupportedCurrency.Add(1)
-		return
+		return false
 	}
 	event.Currency = currency
 	if event.OccurredAt.IsZero() {
@@ -494,20 +494,21 @@ func (b *CanonicalWalletBridge) ObserveSettlement(event CanonicalWalletSettlemen
 	if err != nil {
 		canonicalWalletBridgeMetrics.queueDropped.Add(1)
 		slog.Warn("canonical wallet outbox begin failed", "event_id", event.EventID, "error", err)
-		return
+		return false
 	}
 	if err := b.outbox.InsertOutboxEventTx(ctx, tx, event); err != nil {
 		_ = tx.Rollback()
 		canonicalWalletBridgeMetrics.queueDropped.Add(1)
 		slog.Warn("canonical wallet outbox insert failed", "event_id", event.EventID, "error", err)
-		return
+		return false
 	}
 	if err := tx.Commit(); err != nil {
 		canonicalWalletBridgeMetrics.queueDropped.Add(1)
 		slog.Warn("canonical wallet outbox commit failed", "event_id", event.EventID, "error", err)
-		return
+		return false
 	}
 	canonicalWalletBridgeMetrics.queued.Add(1)
+	return true
 }
 
 // CheckAndReserve is the real request-preflight state machine. Shadow mode
@@ -888,13 +889,13 @@ func RequireCNYBillingCurrency(value string) (string, error) {
 	return normalized, nil
 }
 
-func observeCanonicalWalletSettlement(bridge *CanonicalWalletBridge, requestID string, user *User, cost *CostBreakdown, subscriptionBilling, billingApplied bool, billingResult *UsageBillingApplyResult, authorizationToken, authorizationID string) {
+func observeCanonicalWalletSettlement(bridge *CanonicalWalletBridge, requestID string, user *User, cost *CostBreakdown, subscriptionBilling, billingApplied bool, billingResult *UsageBillingApplyResult, authorizationToken, authorizationID string) bool {
 	if bridge == nil || user == nil || cost == nil || subscriptionBilling || !billingApplied || cost.ActualCost <= 0 {
-		return
+		return false
 	}
 	amountUnits, err := canonicalWalletUnitsFromCNY(cost.ActualCost)
 	if err != nil || amountUnits <= 0 {
-		return
+		return false
 	}
 	localBalance := user.Balance - cost.ActualCost
 	if billingResult != nil && billingResult.NewBalance != nil {
@@ -909,7 +910,7 @@ func observeCanonicalWalletSettlement(bridge *CanonicalWalletBridge, requestID s
 	// RequireCNYBillingCurrency be the single authoritative boundary —
 	// coercing here first would force every value to "CNY" before that
 	// check ever runs, so it could never reject a real non-CNY user.
-	bridge.ObserveSettlement(CanonicalWalletSettlementEvent{
+	return bridge.ObserveSettlement(CanonicalWalletSettlementEvent{
 		GatewayRequestID: requestID, PlatformUserID: user.PlatformUserID, Currency: user.BillingCurrency,
 		AmountUnits: amountUnits, LocalBalanceAfterUnits: localBalanceAfterPtr, OccurredAt: time.Now().UTC(),
 		AuthorizationToken: authorizationToken, AuthorizationID: authorizationID,

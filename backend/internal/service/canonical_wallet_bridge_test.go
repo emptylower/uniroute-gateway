@@ -212,3 +212,50 @@ func TestEnsureLeaseAcceptsGrantBelowBudgetButAboveAmount(t *testing.T) {
 	require.Equal(t, "lease-1", lease.LeaseID)
 	require.Equal(t, 1, store.installCalls)
 }
+
+func TestObserveSettlementReturnBoolGuards(t *testing.T) {
+	// disabled mode
+	disabled := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeDisabled), &canonicalWalletStoreStub{}, &canonicalWalletControlStub{}, nil, nil)
+	require.False(t, disabled.ObserveSettlement(CanonicalWalletSettlementEvent{PlatformUserID: "u1", Currency: "CNY", AmountUnits: 100}))
+
+	// nil bridge
+	var nilBridge *CanonicalWalletBridge
+	require.False(t, nilBridge.ObserveSettlement(CanonicalWalletSettlementEvent{PlatformUserID: "u1", Currency: "CNY", AmountUnits: 100}))
+
+	// shadow mode with nil outboxDB / outbox
+	shadow := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeShadow), &canonicalWalletStoreStub{}, &canonicalWalletControlStub{}, nil, nil)
+	require.False(t, shadow.ObserveSettlement(CanonicalWalletSettlementEvent{PlatformUserID: "u1", Currency: "CNY", AmountUnits: 100}))
+
+	// missing platform user id
+	require.False(t, shadow.ObserveSettlement(CanonicalWalletSettlementEvent{PlatformUserID: "", Currency: "CNY", AmountUnits: 100}))
+
+	// invalid currency
+	require.False(t, shadow.ObserveSettlement(CanonicalWalletSettlementEvent{PlatformUserID: "u1", Currency: "USD", AmountUnits: 100}))
+
+	// non-positive amount
+	require.False(t, shadow.ObserveSettlement(CanonicalWalletSettlementEvent{PlatformUserID: "u1", Currency: "CNY", AmountUnits: 0}))
+}
+
+func TestObserveCanonicalWalletSettlementReturnBool(t *testing.T) {
+	shadow := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeShadow), &canonicalWalletStoreStub{}, &canonicalWalletControlStub{}, nil, nil)
+	user := &User{ID: 1, PlatformUserID: "u1", BillingCurrency: "CNY", Balance: 10.0}
+	cost := &CostBreakdown{ActualCost: 1.0}
+
+	// nil bridge -> false
+	require.False(t, observeCanonicalWalletSettlement(nil, "req-1", user, cost, false, true, nil, "tok", "auth"))
+
+	// subscriptionBilling -> false
+	require.False(t, observeCanonicalWalletSettlement(shadow, "req-1", user, cost, true, true, nil, "tok", "auth"))
+
+	// billingApplied == false -> false
+	require.False(t, observeCanonicalWalletSettlement(shadow, "req-1", user, cost, false, false, nil, "tok", "auth"))
+
+	// zero cost -> false
+	require.False(t, observeCanonicalWalletSettlement(shadow, "req-1", user, &CostBreakdown{ActualCost: 0}, false, true, nil, "tok", "auth"))
+
+	// nil user -> false
+	require.False(t, observeCanonicalWalletSettlement(shadow, "req-1", nil, cost, false, true, nil, "tok", "auth"))
+
+	// nil cost -> false
+	require.False(t, observeCanonicalWalletSettlement(shadow, "req-1", user, nil, false, true, nil, "tok", "auth"))
+}
