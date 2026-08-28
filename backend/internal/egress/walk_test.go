@@ -130,3 +130,27 @@ func TestWalkParsesWholeRepoWithoutError(t *testing.T) {
 	_, err := parser.ParseFile(fset, "walk.go", nil, parser.ParseComments)
 	require.NoError(t, err)
 }
+
+// Review note M1: direct branch coverage for the two expression helpers the
+// walker uses to classify refusal checks and upstream receivers.
+func TestIsSelectorOrIdentNamed(t *testing.T) {
+	for _, expr := range []string{`ErrAuthorizationRefused`, `pkg.ErrAuthorizationRefused`, `somethingElse`} {
+		e, err := parser.ParseExpr(expr)
+		require.NoError(t, err)
+		require.True(t, isSelectorOrIdentNamed(e, "ErrAuthorizationRefused") == (expr != `somethingElse`))
+	}
+	idx, err := parser.ParseExpr(`m["k"]`)
+	require.NoError(t, err)
+	require.False(t, isSelectorOrIdentNamed(idx, "ErrAuthorizationRefused"))
+}
+
+func TestReceiverIsHTTPUpstream(t *testing.T) {
+	for _, tc := range []struct {
+		expr string
+		want bool
+	}{{`httpUpstream`, true}, {`s.httpUpstream`, true}, {`s.accountTestService.httpUpstream`, true}, {`client`, false}, {`client.Do`, false}, {`m["k"]`, false}} {
+		e, err := parser.ParseExpr(tc.expr)
+		require.NoError(t, err)
+		require.Equal(t, tc.want, receiverIsHTTPUpstream(e), tc.expr)
+	}
+}

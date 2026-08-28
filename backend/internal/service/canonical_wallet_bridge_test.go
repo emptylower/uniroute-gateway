@@ -21,10 +21,19 @@ type canonicalWalletStoreStub struct {
 	// ensureLease rejection tests assert a rejected grant is never installed.
 	installCalls int
 	reserveCalls int
+	// neverPersist (review note M3): InstallCanonicalWalletLease becomes a
+	// no-op so benchmark iterations keep missing.
+	neverPersist bool
 }
 
 func (s *canonicalWalletStoreStub) InstallCanonicalWalletLease(_ context.Context, lease CanonicalWalletLease) error {
 	s.installCalls++
+	// Phase 3.3a review note M3: neverPersist keeps the store empty so a
+	// benchmark can measure the MISS path on every iteration (otherwise the
+	// first install turns iterations 2..N into hits).
+	if s.neverPersist {
+		return nil
+	}
 	s.lease = &lease
 	return nil
 }

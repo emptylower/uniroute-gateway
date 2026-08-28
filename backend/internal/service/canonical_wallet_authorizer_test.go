@@ -218,6 +218,10 @@ func benchmarkAuthorize(b *testing.B, leaseOnStore bool) {
 		// Current lease covers any estimate this body produces → the fast path:
 		// one store read, no AcquireLease, no install.
 		store.lease = &CanonicalWalletLease{LeaseID: "lease-hit", Currency: "CNY", BudgetUnits: 500_000_000, ExpiresAt: time.Now().Add(time.Hour)}
+	} else {
+		// Review note M3: keep the store empty on every iteration — without
+		// this the first install would turn iterations 2..N into hits.
+		store.neverPersist = true
 	}
 	control := &canonicalWalletControlStub{}
 	if !leaseOnStore {
