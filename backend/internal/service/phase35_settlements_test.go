@@ -1246,8 +1246,8 @@ func TestPhase35ZeroCostAbortPointsReleaseTheHold(t *testing.T) {
 // Test 40 — §11.8's repricing, pinned not mechanised: the same
 // GatewayRequestID with a different amount either dedups (same hash) or is
 // rejected as a payload conflict (different hash — observed: the conflict)
-// with exactly one row and queueDropped counted; on the wire, a redelivery
-// of a captured event with a different amount is the fake's
+// with exactly one row and outboxPayloadConflict counted; on the wire, a
+// redelivery of a captured event with a different amount is the fake's
 // settlement_payload_conflict → terminal payload_conflict (Task 4).
 func TestPhase35RepricingIsPinned(t *testing.T) {
 	ctx := context.Background()
@@ -1263,11 +1263,14 @@ func TestPhase35RepricingIsPinned(t *testing.T) {
 
 	const A1 = int64(30_000_000)
 	const A2 = int64(31_000_000)
+	conflictBase := canonicalWalletBridgeStatsValue("outbox_payload_conflict")
 	droppedBase := canonicalWalletBridgeStatsValue("queue_dropped")
 
 	// In-process: the first submission enqueues; the repriced resubmission
 	// under the same event id is a payload conflict — false, one row,
-	// queueDropped counted. (CanonicalWalletSettlementEventID excludes the
+	// outboxPayloadConflict counted, queue_dropped unmoved (round-1
+	// MINOR-1: a rejected duplicate is not a durability drop).
+	// (CanonicalWalletSettlementEventID excludes the
 	// amount, so both carry the SAME event id.)
 	require.True(t, b.ObserveSettlement(CanonicalWalletSettlementEvent{
 		GatewayRequestID: "req-35-40", PlatformUserID: user, Currency: "CNY", AmountUnits: A1, OccurredAt: now,
@@ -1278,7 +1281,8 @@ func TestPhase35RepricingIsPinned(t *testing.T) {
 	var rows int
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM wallet_settlement_outbox WHERE gateway_request_id = 'req-35-40'`).Scan(&rows))
 	require.Equal(t, 1, rows, "exactly one outbox row exists")
-	require.Equal(t, droppedBase+1, canonicalWalletBridgeStatsValue("queue_dropped"), "the rejected resubmission is counted queue_dropped")
+	require.Equal(t, conflictBase+1, canonicalWalletBridgeStatsValue("outbox_payload_conflict"), "the rejected resubmission is counted outbox_payload_conflict")
+	require.Equal(t, droppedBase, canonicalWalletBridgeStatsValue("queue_dropped"), "queue_dropped is reserved for real write failures")
 
 	// On the wire: the row delivers at A1; a redelivery of the captured
 	// event carrying A2 is the fake's settlement_payload_conflict → terminal

@@ -475,6 +475,8 @@ func TestPhase34bSettlementConvertsTheHold(t *testing.T) {
 
 	dupBase := canonicalWalletBridgeMetrics.holdConvertDuplicate.Load()
 	afterReleaseBase := canonicalWalletBridgeMetrics.holdSettlementAfterRelease.Load()
+	conflictBase := canonicalWalletBridgeStatsValue("outbox_payload_conflict")
+	droppedBase := canonicalWalletBridgeStatsValue("queue_dropped")
 
 	l1, err := b.ensureLease(ctx, user, "CNY", 100_000_000, canonicalWalletLeasePurposeAuthorize, "")
 	require.NoError(t, err)
@@ -510,12 +512,16 @@ func TestPhase34bSettlementConvertsTheHold(t *testing.T) {
 	// submission is REJECTED as a payload conflict — the original row was
 	// born BOUND to the hold's lease by the conversion, while the retry (a
 	// {7}-settled conversion) carries no lease, so the payload hashes differ.
-	// The recorded outcome: false + queueDropped + exactly one row.
+	// The recorded outcome: false + outboxPayloadConflict + exactly one
+	// row, queue_dropped unmoved (round-1 MINOR-1: the rejected retry is a
+	// successful dedup, not a durability drop).
 	require.False(t, b.ObserveSettlement(CanonicalWalletSettlementEvent{GatewayRequestID: "req-24", PlatformUserID: user, Currency: "CNY", AmountUnits: A, OccurredAt: now, AuthorizationID: "auth-24"}))
 	require.Equal(t, int64(1), canonicalWalletBridgeMetrics.holdConvertDuplicate.Load()-dupBase)
 	var rows int
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM wallet_settlement_outbox WHERE gateway_request_id = 'req-24'`).Scan(&rows))
 	require.Equal(t, 1, rows, "the outbox's payload-hash idempotency rejects the retried submission — no second row")
+	require.Equal(t, conflictBase+1, canonicalWalletBridgeStatsValue("outbox_payload_conflict"), "the rejected retry is counted outbox_payload_conflict")
+	require.Equal(t, droppedBase, canonicalWalletBridgeStatsValue("queue_dropped"), "queue_dropped is reserved for real write failures")
 
 	// {7}-empty leg (a): a not_written release, then a retried write that
 	// settles A → the event proceeds unbound on a settle-purpose lease, with

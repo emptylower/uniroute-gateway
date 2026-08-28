@@ -750,6 +750,7 @@ func (c *canonicalWalletHTTPClient) serviceAssertion(scope string) (string, erro
 type canonicalWalletMetrics struct {
 	queued                     atomic.Int64
 	queueDropped               atomic.Int64
+	outboxPayloadConflict      atomic.Int64
 	leaseAcquireOK             atomic.Int64
 	leaseIssued                atomic.Int64
 	leaseReused                atomic.Int64
@@ -808,7 +809,8 @@ func CanonicalWalletBridgeStats() map[string]int64 {
 	m := &canonicalWalletBridgeMetrics
 	return map[string]int64{
 		"queued": m.queued.Load(), "queue_dropped": m.queueDropped.Load(),
-		"lease_acquire_ok": m.leaseAcquireOK.Load(), "lease_acquire_error": m.leaseAcquireError.Load(),
+		"outbox_payload_conflict": m.outboxPayloadConflict.Load(),
+		"lease_acquire_ok":        m.leaseAcquireOK.Load(), "lease_acquire_error": m.leaseAcquireError.Load(),
 		"lease_issued": m.leaseIssued.Load(), "lease_reused": m.leaseReused.Load(),
 		"lease_grant_below_amount": m.leaseGrantBelowAmount.Load(), "lease_grant_expired": m.leaseGrantExpired.Load(),
 		"lease_bind_error": m.leaseBindError.Load(),
@@ -1094,6 +1096,14 @@ func newCanonicalWalletBridge(cfg config.CanonicalWalletConfig, store CanonicalW
 	return b
 }
 
+// walletOutboxPayloadConflictMessage is repository.ErrWalletOutboxPayloadConflict's
+// message. The sentinel itself cannot be named here — repository imports
+// service, so naming it back would be the import cycle the service-package
+// test twin (ErrWalletOutboxPayloadConflictForTest) exists to dodge — and
+// the store returns the sentinel bare, never wrapped, so the exact message
+// is the cross-package contract both sentinels carry verbatim.
+const walletOutboxPayloadConflictMessage = "wallet outbox event id already used with a different payload"
+
 // ObserveSettlement durably records the settlement event in the Postgres
 // outbox (its own transaction, committed synchronously before returning) —
 // replacing the previous in-memory bounded channel, which silently dropped
@@ -1106,6 +1116,10 @@ func newCanonicalWalletBridge(cfg config.CanonicalWalletConfig, store CanonicalW
 // durability store itself is what failed. Same class of gap the in-memory
 // channel had, now bounded to "Postgres itself is down or the write
 // genuinely failed" instead of "an ordinary burst filled a fixed buffer."
+// The one Insert error that loses nothing — the payload-hash conflict
+// rejecting a repriced resubmission (the stored row stands and will
+// deliver) — is counted separately as outboxPayloadConflict (round-1
+// MINOR-1), keeping queueDropped a pure durability signal.
 func (b *CanonicalWalletBridge) ObserveSettlement(event CanonicalWalletSettlementEvent) bool {
 	if b == nil || b.cfg.Mode == config.CanonicalWalletModeDisabled {
 		return false
@@ -1198,6 +1212,15 @@ func (b *CanonicalWalletBridge) ObserveSettlement(event CanonicalWalletSettlemen
 	}
 	if err := b.outbox.InsertOutboxEventTx(ctx, tx, event); err != nil {
 		_ = tx.Rollback()
+		// Round-1 MINOR-1: a rejected repriced resubmission is a SUCCESSFUL
+		// dedup — the stored row stands and will deliver — not a durability
+		// drop, so it gets its own counter and an info line; queueDropped
+		// stays reserved for real write failures.
+		if err.Error() == walletOutboxPayloadConflictMessage {
+			canonicalWalletBridgeMetrics.outboxPayloadConflict.Add(1)
+			slog.Info("canonical wallet outbox insert rejected a repriced resubmission (payload conflict)", "event_id", event.EventID, "error", err)
+			return false
+		}
 		canonicalWalletBridgeMetrics.queueDropped.Add(1)
 		slog.Warn("canonical wallet outbox insert failed", "event_id", event.EventID, "error", err)
 		return false
