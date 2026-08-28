@@ -226,7 +226,15 @@ type OpenAIWSIngressHooks struct {
 	// MapRequestModel resolves the current turn's client model to the model
 	// that must be written into the upstream response.create frame.
 	MapRequestModel func(turn int, originalModel string) (string, error)
-	AfterTurn       func(turn int, result *OpenAIForwardResult, turnErr error)
+	// AuthorizeTurn (Phase 3.3) is the authorization point of a WebSocket turn: called
+	// after MapRequestModel (so the turn's snapshot exists) and after the payload is
+	// final, before the turn's first upstream write — the WS frame or the bridged HTTP
+	// request. The forwarder builds the estimate (it holds the payload, the continuation
+	// classification and the prior turn's usage); the handler runs AuthorizeBillableAttempt
+	// on the turn's snapshot. A returned error is terminal for the turn and closes the
+	// client with the refusal status.
+	AuthorizeTurn func(turn int, estimate EstimateInput) (*AuthorizationHandle, error)
+	AfterTurn     func(turn int, result *OpenAIForwardResult, turnErr error)
 }
 
 func (s *OpenAIGatewayService) getOpenAIWSConnPool() *openAIWSConnPool {

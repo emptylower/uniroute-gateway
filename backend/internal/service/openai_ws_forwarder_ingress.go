@@ -534,8 +534,28 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					return fmt.Errorf("resolve Grok websocket cache identity: %w", err)
 				}
 			}
+			// The bridge payload is final here: buildOpenAIWSReplayInputSequence has
+			// inlined the history, MapRequestModel and the Fast Policy rewrite ran in
+			// parseClientPayload. The inlined payload IS the conversation bound, so
+			// the bridge turn needs no continuation term (spec §2.0).
+			bridgeImageCount := 0
+			if currentBridgePayload.imageBillingModel != "" {
+				bridgeImageCount = 1
+			}
+			bridgeEst := EstimateInputFromRequestBody(bridgePayloadRaw, EstimateInputOptions{ImageCount: bridgeImageCount, ImageSize: currentBridgePayload.imageSizeTier})
+			bridgeEst.Continuation = ContinuationNone
+			var bridgeTurnHandle *AuthorizationHandle
+			if hooks != nil && hooks.AuthorizeTurn != nil {
+				h, authErr := hooks.AuthorizeTurn(turn, bridgeEst)
+				if authErr != nil {
+					return wrapOpenAIWSIngressTurnError("authorize", authErr, false)
+				}
+				bridgeTurnHandle = h
+			}
+			// The bridge call carries the PER-TURN derived context, never the
+			// connection-scoped ctx (spec §2.0, the pooled-ingress row).
 			result, bridgeErr := s.proxyOpenAIWSHTTPBridgeTurn(
-				ctx,
+				WithAuthorizationHandle(ctx, bridgeTurnHandle),
 				c,
 				account,
 				token,
@@ -764,13 +784,52 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		return lease, nil
 	}
 
+	// Per-session continuation inputs (spec §2.0): declared before sendAndRelay so
+	// the closure captures them and they persist across turns — one goroutine, no
+	// atomics needed. The prior turn's reported input+output IS the conversation
+	// size at the start of this turn (the upstream re-bills the whole conversation
+	// every turn), not a running sum.
+	sessionHasIngressUsage := false
+	lastIngressTurnInput := 0
+	lastIngressTurnOutput := 0
+
 	sendAndRelay := func(turn int, lease *openAIWSConnLease, payload []byte, payloadBytes int, originalModel string, imageBillingModel string, imageSizeTier string, imageInputSize string) (*OpenAIForwardResult, error) {
 		if lease == nil {
 			return nil, errors.New("upstream websocket lease is nil")
 		}
 		turnStart := time.Now()
 		wroteDownstream := false
-		if err := lease.WriteJSONWithContextTimeout(ctx, json.RawMessage(payload), s.openAIWSWriteTimeout()); err != nil {
+		// Per-turn store policy (3.2's ClassifyWSContinuation doc-comment assigns
+		// the store read to 3.3): with server-side store disabled the upstream
+		// keeps no conversation, so a prior turn's usage is not the next turn's
+		// input and the turn is classified from its payload alone.
+		turnStoreDisabled := s.isOpenAIWSStoreDisabledInRequestRaw(payload, account)
+		// The payload is final here: MapRequestModel already ran in parseClientPayload
+		// and the Fast Policy rewrite applied to it — authorize on exactly the bytes
+		// that are written upstream (spec §2.0, constraint 11).
+		imageCountForTurn := 0
+		if imageBillingModel != "" {
+			imageCountForTurn = 1
+		}
+		est := EstimateInputFromRequestBody(payload, EstimateInputOptions{ImageCount: imageCountForTurn, ImageSize: imageSizeTier})
+		sessionHasAccumulatedUsage := sessionHasIngressUsage && !turnStoreDisabled
+		est.Continuation = ClassifyWSContinuation(payload, sessionHasAccumulatedUsage)
+		if sessionHasAccumulatedUsage {
+			est.PriorTurnInputTokens, est.PriorTurnOutputTokens = lastIngressTurnInput, lastIngressTurnOutput
+		}
+		var turnHandle *AuthorizationHandle
+		if hooks != nil && hooks.AuthorizeTurn != nil {
+			h, authErr := hooks.AuthorizeTurn(turn, est)
+			if authErr != nil {
+				// stage "authorize" is not retryable (isOpenAIWSIngressTurnRetryable's
+				// default arm) and the refusal surfaces as the named close status.
+				return nil, wrapOpenAIWSIngressTurnError("authorize", authErr, false)
+			}
+			turnHandle = h
+		}
+		lease.ArmAuthorization(turnHandle)
+		turnCtx := WithAuthorizationHandle(ctx, turnHandle)
+		if err := lease.WriteJSONWithContextTimeout(turnCtx, json.RawMessage(payload), s.openAIWSWriteTimeout()); err != nil {
 			return nil, wrapOpenAIWSIngressTurnError(
 				"write_upstream",
 				fmt.Errorf("write upstream websocket request: %w", err),
@@ -795,7 +854,6 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		turnPreviousResponseID := openAIWSPayloadStringFromRaw(payload, "previous_response_id")
 		turnPreviousResponseIDKind := ClassifyOpenAIPreviousResponseIDKind(turnPreviousResponseID)
 		turnPromptCacheKey := openAIWSPayloadStringFromRaw(payload, "prompt_cache_key")
-		turnStoreDisabled := s.isOpenAIWSStoreDisabledInRequestRaw(payload, account)
 		turnHasFunctionCallOutput := openAIWSRawPayloadHasToolCallOutput(payload)
 		eventCount := 0
 		tokenEventCount := 0
@@ -1221,6 +1279,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		return true
 	}
 	for {
+		// A turn's handle lives only for that turn: clear anything the previous
+		// iteration armed before this turn's work begins (spec §2.0).
+		sessionLease.DisarmAuthorization()
 		if turn > 1 && !skipBeforeTurn && hooks != nil && hooks.BeforeRequest != nil {
 			if err := hooks.BeforeRequest(turn, currentPayload, currentOriginalModel); err != nil {
 				return err
@@ -1532,15 +1593,18 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		if relayErr != nil {
 			lastTurnClean = false
 			if recoverIngressPrevResponseNotFound(relayErr, turn, connID) {
+				sessionLease.DisarmAuthorization()
 				continue
 			}
 			if retryIngressTurn(relayErr, turn, connID) {
+				sessionLease.DisarmAuthorization()
 				continue
 			}
 			finalErr := relayErr
 			if unwrapped := errors.Unwrap(relayErr); unwrapped != nil {
 				finalErr = unwrapped
 			}
+			sessionLease.DisarmAuthorization()
 			if hooks != nil && hooks.AfterTurn != nil {
 				hooks.AfterTurn(turn, nil, finalErr)
 			}
@@ -1551,6 +1615,10 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		turnPrevRecoveryTried = false
 		lastTurnFinishedAt = time.Now()
 		lastTurnClean = true
+		sessionLease.DisarmAuthorization()
+		sessionHasIngressUsage = true
+		lastIngressTurnInput = result.Usage.InputTokens
+		lastIngressTurnOutput = result.Usage.OutputTokens
 		if hooks != nil && hooks.AfterTurn != nil {
 			hooks.AfterTurn(turn, result, nil)
 		}

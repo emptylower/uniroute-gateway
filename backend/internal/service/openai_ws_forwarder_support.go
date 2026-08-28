@@ -78,7 +78,9 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 	prewarmPayload["generate"] = false
 	prewarmPayloadJSON := payloadAsJSONBytes(prewarmPayload)
 
-	if err := lease.WriteJSONWithContextTimeout(ctx, prewarmPayload, s.openAIWSWriteTimeout()); err != nil {
+	// The generate:false warm-up is a real upstream write with no cost: mark it
+	// non-billable so it never mints a token off the request's handle (spec §2.0).
+	if err := lease.WriteJSONWithContextTimeout(WithNonBillableUpstream(ctx, NonBillableWSPrewarm), prewarmPayload, s.openAIWSWriteTimeout()); err != nil {
 		lease.MarkBroken()
 		logOpenAIWSModeInfo(
 			"prewarm_write_fail account_id=%d conn_id=%s cause=%s",

@@ -1868,7 +1868,9 @@ func TestOpenAIWSConnPool_SnapshotTransportMetrics(t *testing.T) {
 	cfg := &config.Config{}
 	pool := newOpenAIWSConnPool(cfg)
 
-	dialer, ok := pool.clientDialer.(*coderOpenAIWSClientDialer)
+	decorated, ok := pool.clientDialer.(*authorizingOpenAIWSClientDialer)
+	require.True(t, ok, "the pool's default dialer is the authorizing decorator (Phase 3.3b)")
+	dialer, ok := decorated.inner.(*coderOpenAIWSClientDialer)
 	require.True(t, ok)
 
 	_, err := dialer.proxyHTTPClient("http://127.0.0.1:28080")
