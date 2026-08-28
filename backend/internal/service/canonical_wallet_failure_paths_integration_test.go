@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -118,15 +119,18 @@ func TestDeliverOutboxEventRealFailurePaths(t *testing.T) {
 
 		status, err := outbox.OutboxEventStatus(ctx, e.ID)
 		require.NoError(t, err)
-		// Phase 3.4 (redesign §4, test 19): the control plane clamped below
-		// the amount — balance shortfall is TERMINAL, dead-lettered on the
-		// first attempt with reason balance_shortfall, not retried. (This
-		// subtest's fake grants below min_headroom_units, which a
-		// §3-conformant server never does; 3.4a separates the two sentinels.)
-		require.Equal(t, "dead_letter", status, "a balance shortfall is terminal: dead-lettered on the first attempt")
+		// Phase 3.4a (redesign §9.3): the fake grants below min_headroom_units,
+		// which a §3-conformant server never does — the local under-grant guard
+		// is TRANSIENT (its own sentinel), so the row is retried on the backoff,
+		// never dead-lettered. Only the server's insufficient_balance refusal is
+		// terminal (balance_shortfall).
+		require.Equal(t, "pending", status, "an under-grant is transient (§9.3): retried on the backoff, never dead-lettered")
 		var attempts int
 		require.NoError(t, db.QueryRowContext(ctx, `SELECT attempt_count FROM wallet_settlement_outbox WHERE id = $1`, e.ID).Scan(&attempts))
-		require.Equal(t, 1, attempts, "dead-lettered immediately, no backoff retries")
+		require.Equal(t, 1, attempts, "one failed attempt, then the backoff — not a dead-letter")
+		var reason sql.NullString
+		require.NoError(t, db.QueryRowContext(ctx, `SELECT dead_letter_reason FROM wallet_settlement_outbox WHERE id = $1`, e.ID).Scan(&reason))
+		require.False(t, reason.Valid, "a retried row carries no dead-letter reason")
 		// Phase 3.3a (spec §2.0.1 step (3)): a granted lease whose remaining
 		// budget is below the amount is rejected client-side and NEVER
 		// installed — so the tiny lease does not exist in the store.

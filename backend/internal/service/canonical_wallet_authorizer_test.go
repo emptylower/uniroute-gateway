@@ -91,7 +91,10 @@ func TestAuthorizeShadowNeverRefuses(t *testing.T) {
 		require.Equal(t, int64(1), AuthorizationMetricsSnapshot().SnapshotMissing)
 	})
 	t.Run("balance shortfall", func(t *testing.T) {
-		control.lease = CanonicalWalletLease{LeaseID: "lease-2", Currency: "CNY", BudgetUnits: 1, ExpiresAt: time.Now().Add(time.Minute)}
+		// §9.3: the server's insufficient_balance refusal is the ONLY producer
+		// of ErrCanonicalWalletBalanceShortfall now — the local under-grant
+		// guard carries its own transient sentinel (see the enforce table).
+		control.leaseErr = ErrCanonicalWalletBalanceShortfall
 		h, err := auth.Authorize(context.Background(), AuthorizeInput{Snapshot: snap, Estimate: estimateFor(`{"max_tokens":64}`), User: apiKey.User})
 		require.NoError(t, err)
 		require.Nil(t, h.Refusal)
@@ -121,8 +124,14 @@ func TestAuthorizeEnforceRefusesWithTheNamedReason(t *testing.T) {
 			in.User = &u
 		}, AuthorizationRefusalCurrency},
 		{"balance shortfall", func(_ *AuthorizeInput, c *canonicalWalletControlStub) {
-			c.lease = CanonicalWalletLease{LeaseID: "l", Currency: "CNY", BudgetUnits: 1, ExpiresAt: time.Now().Add(time.Minute)}
+			// §9.3: the server's insufficient_balance refusal.
+			c.leaseErr = ErrCanonicalWalletBalanceShortfall
 		}, AuthorizationRefusalBalanceShortfall},
+		{"under-grant (local guard)", func(_ *AuthorizeInput, c *canonicalWalletControlStub) {
+			// §9.3: a grant below the amount is now its own TRANSIENT sentinel,
+			// mapped lease_unavailable — never balance_shortfall.
+			c.lease = CanonicalWalletLease{LeaseID: "l", Currency: "CNY", BudgetUnits: 1, ExpiresAt: time.Now().Add(time.Minute)}
+		}, AuthorizationRefusalLeaseUnavailable},
 		{"control plane down", func(_ *AuthorizeInput, c *canonicalWalletControlStub) { c.leaseErr = errors.New("503") }, AuthorizationRefusalLeaseUnavailable},
 	}
 	for _, tc := range cases {
@@ -350,6 +359,10 @@ func TestPhase34ProtoAuthorizeMapsCapReachedAndContention(t *testing.T) {
 		{ErrCanonicalWalletLeaseCapReached, AuthorizationRefusalLeaseCapReached},
 		{ErrCanonicalWalletLeaseContention, AuthorizationRefusalLeaseUnavailable},
 		{ErrCanonicalWalletBalanceShortfall, AuthorizationRefusalBalanceShortfall},
+		// §9.3/§9.6: both new sentinels fall to the default branch —
+		// lease_unavailable, asserted here so the mapping cannot drift.
+		{ErrCanonicalWalletLeaseGrantBelowAmount, AuthorizationRefusalLeaseUnavailable},
+		{ErrCanonicalWalletControlPlaneIncompatible, AuthorizationRefusalLeaseUnavailable},
 	} {
 		auth, snap, apiKey, stub, _ := newAuthorizerFixture(t, config.CanonicalWalletModeEnforce)
 		stub.leaseErr = tc.err

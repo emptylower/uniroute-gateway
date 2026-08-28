@@ -32,15 +32,27 @@ var (
 	ErrCanonicalWalletLeaseCurrencyMismatch = errors.New("canonical wallet lease currency mismatch")
 	ErrCanonicalWalletReservationConflict   = errors.New("canonical wallet event was reserved against a different lease")
 	ErrCanonicalWalletOutboxClaimLost       = errors.New("canonical wallet outbox row is no longer claimed by this dispatcher")
-	// ErrCanonicalWalletBalanceShortfall: the control plane granted a lease whose
-	// remaining budget is below the amount being authorized now — both acquire
-	// routes clamp to available balance by design. Rejected client-side and
-	// unconditionally (spec §2.0.1 step (3)); 3.4a decides on the issuance row
-	// whether the grant was clamped (terminal) or merely undersized (one advance).
+	// ErrCanonicalWalletBalanceShortfall (§9.3): the server's
+	// insufficient_balance refusal — TERMINAL. The dispatcher dead-letters
+	// with reason balance_shortfall; Authorize refuses balance_shortfall.
+	// Produced ONLY by EnsureLease's refusal mapping; the local under-grant
+	// guard carries its own transient sentinel below.
 	ErrCanonicalWalletBalanceShortfall = errors.New("canonical wallet lease granted below the amount being authorized")
 	// Phase 3.4 (redesign §3/§4): the ensure route's two other refusals.
 	ErrCanonicalWalletLeaseCapReached = errors.New("canonical wallet lease cap reached for this user")                  // terminal on the authorize path
 	ErrCanonicalWalletLeaseContention = errors.New("canonical wallet lease issuance lost the per-user race repeatedly") // transient
+	// ErrCanonicalWalletLeaseGrantBelowAmount (§9.3): ensureLease's local
+	// guard — the grant covers less than the amount being authorized.
+	// Unreachable against a §3-conformant control plane (clampBudget refuses
+	// rather than issuing below min_headroom_units); TRANSIENT — retried on
+	// the outbox backoff and lease_unavailable in Authorize — so a server bug
+	// can never turn a retryable condition into permanently uncollected revenue.
+	ErrCanonicalWalletLeaseGrantBelowAmount = errors.New("canonical wallet lease granted below the amount being authorized (transient: a conformant control plane never does this)")
+	// ErrCanonicalWalletControlPlaneIncompatible (§9.6 item 6): the control
+	// plane has no /ensure route (startup probe or a runtime 404/405) — the
+	// rollout ordering was violated. Transient at runtime: the outbox retries
+	// on the backoff and, if it exhausts, dead-letters with attempts_exhausted.
+	ErrCanonicalWalletControlPlaneIncompatible = errors.New("canonical wallet control plane has no ensure route (deploy ShipAny 3.4a-S first)")
 )
 
 const (
@@ -848,18 +860,20 @@ func (b *CanonicalWalletBridge) deliverOutboxEvent(ctx context.Context, e Canoni
 	if err != nil {
 		canonicalWalletBridgeMetrics.leaseAcquireError.Add(1)
 		if errors.Is(err, ErrCanonicalWalletBalanceShortfall) {
-			// Terminal (redesign §4): the control plane clamped below the amount;
-			// no backoff changes the balance. Dead-letter now, reason balance_shortfall.
-			// (ensureLease's local under-grant guard shares this sentinel; §3 makes
-			// it unreachable, and 3.4a separates the two before this runs unflagged.)
+			// Terminal (§9.3): the control plane clamped below the amount;
+			// no backoff changes the balance. Dead-letter now, reason
+			// balance_shortfall (persisted by migration 212).
 			canonicalWalletBridgeMetrics.deadLetterBalanceShortfall.Add(1)
 			_ = b.outbox.MarkOutboxEventDeadLetter(ctx, e.ID, b.workerID, "balance_shortfall")
 			return
 		}
-		// transport/store errors and the transient lease_contention retry on the
-		// backoff as today. ErrCanonicalWalletLeaseCapReached cannot reach here
-		// (the dispatcher ensures with purpose = settle); if it ever did, it would
-		// retry as today.
+		// Transport/store errors, the transient lease_contention, the local
+		// under-grant guard (ErrCanonicalWalletLeaseGrantBelowAmount) and a
+		// control plane without the ensure route
+		// (ErrCanonicalWalletControlPlaneIncompatible) all retry on the
+		// backoff as today (§9.3). ErrCanonicalWalletLeaseCapReached cannot
+		// reach here (the dispatcher ensures with purpose = settle); if it
+		// ever did, it would retry as today.
 		_ = b.outbox.MarkOutboxEventFailed(ctx, e.ID, b.workerID, time.Now().UTC())
 		return
 	}
@@ -1048,13 +1062,12 @@ func (b *CanonicalWalletBridge) ensureLease(ctx context.Context, platformUserID,
 		return nil, fmt.Errorf("%w: lease %s expired at %s", ErrCanonicalWalletLeaseExpired, lease.LeaseID, lease.ExpiresAt.UTC().Format(time.RFC3339Nano))
 	}
 	if lease.RemainingUnits() < amountUnits {
-		// Shares ErrCanonicalWalletBalanceShortfall with the server's
-		// insufficient_balance refusal. Against a §3-conformant server this
-		// guard is unreachable (ensure never answers below min_headroom_units);
-		// 3.4a separates the two (lease_grant_below_amount vs
-		// insufficient_balance) before the dispatcher's dead-letter runs unflagged.
+		// §9.3: this local guard is TRANSIENT and carries its own sentinel,
+		// distinct from the server's terminal insufficient_balance refusal.
+		// Unreachable against a §3-conformant server (ensure never answers
+		// below min_headroom_units); retried on the outbox backoff.
 		canonicalWalletBridgeMetrics.leaseGrantBelowAmount.Add(1)
-		return nil, fmt.Errorf("%w: granted %d units, %d required", ErrCanonicalWalletBalanceShortfall, lease.RemainingUnits(), amountUnits)
+		return nil, fmt.Errorf("%w: granted %d units, %d required", ErrCanonicalWalletLeaseGrantBelowAmount, lease.RemainingUnits(), amountUnits)
 	}
 	if err := b.store.InstallCanonicalWalletLease(ctx, lease); err != nil {
 		return nil, err

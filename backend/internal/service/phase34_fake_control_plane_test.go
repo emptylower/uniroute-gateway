@@ -56,7 +56,11 @@ type fakeEnsureControlPlane struct {
 	requests       []canonicalWalletEnsureRequest
 	ensureHeaders  []http.Header // ensure requests only — the settlement client sends its own Idempotency-Key
 	contentionOnce bool
-	Server         *httptest.Server
+	// grantBelowMinOnce (§9.3): the NEXT issue path grants headroom one unit
+	// below min_headroom — the non-conformant server the local under-grant
+	// guard exists for — once, then behaves again.
+	grantBelowMinOnce bool
+	Server            *httptest.Server
 }
 
 func newFakeEnsureControlPlane(t *testing.T, now func() time.Time) *fakeEnsureControlPlane {
@@ -241,6 +245,12 @@ func (f *fakeEnsureControlPlane) handle(w http.ResponseWriter, r *http.Request) 
 			if budget < minHeadroom {
 				f.refuseClamped(w, "insufficient_balance", "balance")
 				return
+			}
+			if f.grantBelowMinOnce {
+				// §9.3's unreachable-against-conformance case: a server bug
+				// that issues below min_headroom_units anyway.
+				f.grantBelowMinOnce = false
+				budget = minHeadroom - 1
 			}
 			f.seq++
 			f.issuances++

@@ -217,11 +217,15 @@ func newBridgeForEnsureLeaseTest(t *testing.T) (*CanonicalWalletBridge, *canonic
 
 func TestEnsureLeaseRejectsGrantBelowAmount(t *testing.T) {
 	// The control plane clamps to available balance and returns a lease whose
-	// budget is below the amount being authorized (spec §2.0.1 step (3)).
+	// budget is below the amount being authorized. §9.3: this local guard is
+	// TRANSIENT and carries its own sentinel — unreachable against a
+	// §3-conformant server, retried on the outbox backoff; the server's
+	// insufficient_balance refusal keeps ErrCanonicalWalletBalanceShortfall.
 	b, store, control := newBridgeForEnsureLeaseTest(t)
 	control.lease = CanonicalWalletLease{LeaseID: "lease-1", Currency: "CNY", BudgetUnits: 100_000_000, ConsumedUnits: 0, ExpiresAt: time.Now().Add(5 * time.Minute)}
 	_, err := b.ensureLease(context.Background(), "user-1", "CNY", 200_000_000, canonicalWalletLeasePurposeAuthorize, "")
-	require.ErrorIs(t, err, ErrCanonicalWalletBalanceShortfall)
+	require.ErrorIs(t, err, ErrCanonicalWalletLeaseGrantBelowAmount)
+	require.NotErrorIs(t, err, ErrCanonicalWalletBalanceShortfall)
 	require.Equal(t, 0, store.installCalls, "a rejected grant is never installed")
 }
 

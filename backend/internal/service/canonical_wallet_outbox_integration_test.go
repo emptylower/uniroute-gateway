@@ -35,8 +35,8 @@ func startCanonicalWalletTestPostgres(t *testing.T, ctx context.Context) *sql.DB
 			lease_id TEXT, gateway_request_id TEXT NOT NULL, currency TEXT NOT NULL,
 			amount_units BIGINT NOT NULL, local_balance_after_units BIGINT, payload_hash TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
 			attempt_count INT NOT NULL DEFAULT 0, next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(), claimed_at TIMESTAMPTZ, claimed_by TEXT,
-			occurred_at TIMESTAMPTZ NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), delivered_at TIMESTAMPTZ
-		)`) // same columns as Task 4 Step 2's real migration — kept in sync by hand since this test owns its own throwaway database, same convention as this task's other real-Redis tests owning their own throwaway keyspace
+			occurred_at TIMESTAMPTZ NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), delivered_at TIMESTAMPTZ, dead_letter_reason TEXT
+		)`) // same columns as Task 4 Step 2's real migration (+ 212's dead_letter_reason) — kept in sync by hand since this test owns its own throwaway database, same convention as this task's other real-Redis tests owning their own throwaway keyspace
 	require.NoError(t, err)
 	return db
 }
@@ -117,7 +117,7 @@ func (o *outboxStoreForTest) MarkOutboxEventFailed(ctx context.Context, id int64
 	}
 	const maxAttempts = 8
 	if attempts >= maxAttempts {
-		_, err := o.db.ExecContext(ctx, `UPDATE wallet_settlement_outbox SET status = 'dead_letter', claimed_at = NULL, claimed_by = NULL WHERE id = $1 AND status = 'in_flight' AND claimed_by = $2`, id, workerID)
+		_, err := o.db.ExecContext(ctx, `UPDATE wallet_settlement_outbox SET status = 'dead_letter', dead_letter_reason = 'attempts_exhausted', claimed_at = NULL, claimed_by = NULL WHERE id = $1 AND status = 'in_flight' AND claimed_by = $2`, id, workerID)
 		return err
 	}
 	next := simulatedNow.Add(time.Duration(1<<uint(attempts)) * time.Second)
@@ -143,7 +143,7 @@ func (o *outboxStoreForTest) BindOutboxEventLease(ctx context.Context, id int64,
 }
 
 func (o *outboxStoreForTest) MarkOutboxEventDeadLetter(ctx context.Context, id int64, workerID, reason string) error {
-	res, err := o.db.ExecContext(ctx, `UPDATE wallet_settlement_outbox SET status = 'dead_letter', attempt_count = attempt_count + 1, claimed_at = NULL, claimed_by = NULL WHERE id = $1 AND status = 'in_flight' AND claimed_by = $2`, id, workerID)
+	res, err := o.db.ExecContext(ctx, `UPDATE wallet_settlement_outbox SET status = 'dead_letter', dead_letter_reason = $3, attempt_count = attempt_count + 1, claimed_at = NULL, claimed_by = NULL WHERE id = $1 AND status = 'in_flight' AND claimed_by = $2`, id, workerID, reason)
 	if err != nil {
 		return err
 	}

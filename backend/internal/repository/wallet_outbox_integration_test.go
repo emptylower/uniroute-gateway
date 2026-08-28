@@ -329,6 +329,66 @@ func findWalletOutboxFixtureCase(t *testing.T, fixture walletOutboxFixture, name
 	return walletOutboxFixtureCase{}
 }
 
+// Phase 3.4a (redesign §9.3): every dead-letter carries a PERSISTED reason.
+// MarkOutboxEventDeadLetter writes the caller's reason; MarkOutboxEventFailed's
+// exhaustion branch writes 'attempts_exhausted'; a row that never dead-lettered
+// reads back NULL (which also covers rows predating migration 212).
+func TestWalletOutboxDeadLetterReason(t *testing.T) {
+	ctx := context.Background()
+	resetWalletOutboxTable(t)
+	store := NewWalletOutboxStore(integrationDB)
+
+	readReason := func(id int64) sql.NullString {
+		var reason sql.NullString
+		require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT dead_letter_reason FROM wallet_settlement_outbox WHERE id = $1`, id).Scan(&reason))
+		return reason
+	}
+	insertAndClaim := func(amount int64) int64 {
+		event := service.CanonicalWalletSettlementEvent{
+			EventID: "gwusg_" + uuid.NewString(), GatewayRequestID: "req-" + uuid.NewString(),
+			PlatformUserID: "shipany-user-" + uuid.NewString(), LeaseID: "lease-" + uuid.NewString(),
+			Currency: "CNY", AmountUnits: amount, OccurredAt: time.Now().UTC(),
+		}
+		tx, err := integrationDB.BeginTx(ctx, nil)
+		require.NoError(t, err)
+		require.NoError(t, store.InsertOutboxEventTx(ctx, tx, event))
+		require.NoError(t, tx.Commit())
+		claimed, err := store.ClaimPendingOutboxEvents(ctx, testWalletOutboxWorkerID, 10)
+		require.NoError(t, err)
+		require.Len(t, claimed, 1)
+		return claimed[0].ID
+	}
+
+	// A row dead-lettered through the named-reason writer.
+	deadLetterID := insertAndClaim(21_000000)
+	require.NoError(t, store.MarkOutboxEventDeadLetter(ctx, deadLetterID, testWalletOutboxWorkerID, "balance_shortfall"))
+	reason := readReason(deadLetterID)
+	require.True(t, reason.Valid)
+	require.Equal(t, "balance_shortfall", reason.String)
+
+	// A row driven to walletOutboxMaxAttempts through MarkOutboxEventFailed.
+	exhaustedID := insertAndClaim(22_000000)
+	require.NoError(t, store.MarkOutboxEventFailed(ctx, exhaustedID, testWalletOutboxWorkerID, time.Now().UTC().Add(-time.Hour)))
+	for i := 1; i < walletOutboxMaxAttempts; i++ {
+		reclaimed, err := store.ClaimPendingOutboxEvents(ctx, testWalletOutboxWorkerID, 10)
+		require.NoError(t, err)
+		require.Len(t, reclaimed, 1)
+		require.Equal(t, exhaustedID, reclaimed[0].ID)
+		require.NoError(t, store.MarkOutboxEventFailed(ctx, exhaustedID, testWalletOutboxWorkerID, time.Now().UTC().Add(-time.Hour)))
+	}
+	status, err := store.OutboxEventStatus(ctx, exhaustedID)
+	require.NoError(t, err)
+	require.Equal(t, "dead_letter", status, "the exhaustion branch must have dead-lettered the row")
+	reason = readReason(exhaustedID)
+	require.True(t, reason.Valid)
+	require.Equal(t, "attempts_exhausted", reason.String)
+
+	// A row still pending reads back NULL.
+	pendingID := insertAndClaim(23_000000) // claimed → in_flight, never resolved
+	reason = readReason(pendingID)
+	require.False(t, reason.Valid, "a row that never dead-lettered carries no reason")
+}
+
 func TestProvideWalletOutboxStoreSatisfiesServiceInterface(t *testing.T) {
 	var provided service.CanonicalWalletOutboxStore = ProvideWalletOutboxStore(integrationDB)
 	require.NotNil(t, provided)

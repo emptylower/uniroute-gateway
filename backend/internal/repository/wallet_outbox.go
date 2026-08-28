@@ -214,7 +214,7 @@ func (s *WalletOutboxStore) MarkOutboxEventFailed(ctx context.Context, id int64,
 		return err
 	}
 	if attempts >= walletOutboxMaxAttempts {
-		_, err := s.db.ExecContext(ctx, `UPDATE wallet_settlement_outbox SET status = 'dead_letter', claimed_at = NULL, claimed_by = NULL WHERE id = $1 AND status = 'in_flight' AND claimed_by = $2`, id, workerID)
+		_, err := s.db.ExecContext(ctx, `UPDATE wallet_settlement_outbox SET status = 'dead_letter', dead_letter_reason = 'attempts_exhausted', claimed_at = NULL, claimed_by = NULL WHERE id = $1 AND status = 'in_flight' AND claimed_by = $2`, id, workerID)
 		return err
 	}
 	backoff := time.Duration(1<<uint(attempts)) * time.Second // 2s, 4s, 8s, ...
@@ -224,7 +224,7 @@ func (s *WalletOutboxStore) MarkOutboxEventFailed(ctx context.Context, id int64,
 }
 
 func (s *WalletOutboxStore) MarkOutboxEventDeadLetter(ctx context.Context, id int64, workerID, reason string) error {
-	res, err := s.db.ExecContext(ctx, `UPDATE wallet_settlement_outbox SET status = 'dead_letter', attempt_count = attempt_count + 1, claimed_at = NULL, claimed_by = NULL WHERE id = $1 AND status = 'in_flight' AND claimed_by = $2`, id, workerID)
+	res, err := s.db.ExecContext(ctx, `UPDATE wallet_settlement_outbox SET status = 'dead_letter', dead_letter_reason = $3, attempt_count = attempt_count + 1, claimed_at = NULL, claimed_by = NULL WHERE id = $1 AND status = 'in_flight' AND claimed_by = $2`, id, workerID, reason)
 	if err != nil {
 		return err
 	}
