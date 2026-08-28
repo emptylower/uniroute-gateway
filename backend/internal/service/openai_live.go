@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	coderws "github.com/coder/websocket"
 	"github.com/google/uuid"
@@ -30,6 +31,7 @@ const (
 	liveClosedRecordTTL           = 24 * time.Hour
 	liveObserverPollInterval      = 250 * time.Millisecond
 	liveUpstreamBodyLimit         = 2 << 20
+	liveProvisionalWriteTimeout   = 300 * time.Millisecond
 )
 
 type liveUsageDelta struct {
@@ -256,10 +258,42 @@ func (s *OpenAIGatewayService) CreateLiveCall(
 			}
 		}
 
-		created, createErr := s.createUpstreamLiveCall(ctx, account, request, attestation, snap)
+		// Phase 3.3c: authorize this POST attempt (each attempt is its own
+		// authorization — spec §2.0), write the durable provisional record BEFORE
+		// the upstream write (spec §2.3, shadow/enforce only — constraint 8), and
+		// hand the handle to the request so the decorated port authorizes the POST.
+		authHandle, authErr := s.AuthorizeBillableAttempt(ctx, snap, identity.APIKey, EstimateInputFromRequestBody(request.Session, EstimateInputOptions{}))
+		if authErr != nil {
+			selection.ReleaseFunc()
+			s.releaseLiveLease(account.ID, identity.UserID, identity.APIKeyID, leaseID)
+			return nil, authErr // the handler maps a refusal to 402 (Task 4); shouldFailoverLiveCreateError returns false for it
+		}
+		platformUserID := ""
+		if identity.User != nil {
+			platformUserID = identity.User.PlatformUserID
+		}
+		provisional := &LiveProvisionalRecord{
+			Token: authHandle.ID, AuthorizationID: authHandle.ID, PlatformUserID: platformUserID,
+			UserID: identity.UserID, APIKeyID: identity.APIKeyID, AccountID: account.ID,
+			BillingCurrency: identity.BillingCurrency, BillingSnapshotID: snapshotIDOf(snap),
+			EstimatedUnits: authHandle.EstimatedUnits, Status: LiveProvisionalStatusProvisional,
+			Windows:   []LiveWindow{{WindowSeq: 1, LeaseID: "", Token: authHandle.ID}},
+			CreatedAt: time.Now().UTC(),
+		}
+		rowWritten, rowErr := s.saveLiveProvisional(ctx, provisional, authHandle)
+		if rowErr != nil {
+			selection.ReleaseFunc()
+			s.releaseLiveLease(account.ID, identity.UserID, identity.APIKeyID, leaseID)
+			return nil, rowErr
+		}
+		attemptCtx := WithAuthorizationHandle(ctx, authHandle)
+		created, createErr := s.createUpstreamLiveCall(attemptCtx, account, request, attestation, snap)
 		selection.ReleaseFunc()
 		if createErr != nil {
 			s.releaseLiveLease(account.ID, identity.UserID, identity.APIKeyID, leaseID)
+			if rowWritten {
+				s.abortLiveProvisional(authHandle.ID, createErr)
+			}
 			if !s.shouldFailoverLiveCreateError(createErr) {
 				return nil, createErr
 			}
@@ -310,6 +344,9 @@ func (s *OpenAIGatewayService) CreateLiveCall(
 			OutputPricePerToken:    recordPricing.OutputPricePerToken,
 			CacheReadPricePerToken: recordPricing.CacheReadPricePerToken,
 			BillingSnapshotID:      billingSnapshotID,
+			AuthorizationToken:     AuthorizationTokenOf(authHandle),
+			AuthorizationID:        authHandle.ID,
+			PlatformUserID:         platformUserID,
 			CreatedAt:              now,
 			ExpiresAt:              now.Add(s.liveMaxSessionDuration()),
 			Controller:             LiveControllerPending,
@@ -321,8 +358,12 @@ func (s *OpenAIGatewayService) CreateLiveCall(
 		mappingTTL := s.liveMaxSessionDuration() + 5*time.Minute
 		if saveErr := store.SaveLiveCall(ctx, record, mappingTTL); saveErr != nil {
 			s.releaseLiveLease(account.ID, identity.UserID, identity.APIKeyID, leaseID)
+			if rowWritten {
+				s.abortLiveProvisional(authHandle.ID, saveErr)
+			}
 			return nil, fmt.Errorf("save live call mapping: %w", saveErr)
 		}
+		s.activateLiveProvisional(authHandle.ID, record.CallHash)
 		created.Account = account
 		go s.observeLiveCall(record.CallHash)
 		return created, nil
@@ -334,6 +375,9 @@ func (s *OpenAIGatewayService) CreateLiveCall(
 }
 
 func (s *OpenAIGatewayService) shouldFailoverLiveCreateError(err error) bool {
+	if errors.Is(err, ErrAuthorizationRefused) {
+		return false
+	}
 	var upstreamErr *UpstreamFailoverError
 	if !errors.As(err, &upstreamErr) {
 		// 凭证读取和网络传输错误都可能只影响当前账号或代理。
@@ -1171,4 +1215,116 @@ func (s *OpenAIGatewayService) flushLiveUsageFallback(record *LiveCallRecord, st
 		s.liveUsageFallback.Delete(record.CallHash)
 	}
 	return nil
+}
+
+func snapshotIDOf(snap *BillingSnapshot) string {
+	if snap == nil {
+		return ""
+	}
+	return snap.ID
+}
+
+func (s *OpenAIGatewayService) saveLiveProvisional(ctx context.Context, rec *LiveProvisionalRecord, handle *AuthorizationHandle) (bool, error) {
+	mode := config.CanonicalWalletModeDisabled
+	if s.authorizer != nil {
+		mode = s.authorizer.mode()
+	} else if s.cfg != nil {
+		mode = s.cfg.CanonicalWallet.Mode
+	}
+	if mode == config.CanonicalWalletModeDisabled || mode == "" {
+		return false, nil
+	}
+	if s.liveProvisional == nil {
+		authorizationMetrics.liveProvisionalStoreUnavailable.Add(1)
+		if mode == config.CanonicalWalletModeEnforce {
+			return false, &AuthorizationRefusedError{
+				Reason:          AuthorizationRefusalLiveStoreUnavailable,
+				AuthorizationID: handle.ID,
+				Cause:           errors.New("live provisional store is nil"),
+			}
+		}
+		return false, nil
+	}
+	writeTimeout := liveProvisionalWriteTimeout
+	if s.authorizer != nil {
+		writeTimeout = s.authorizer.requestTimeout()
+	} else if s.cfg != nil && s.cfg.CanonicalWallet.RequestTimeoutMS > 0 {
+		writeTimeout = time.Duration(s.cfg.CanonicalWallet.RequestTimeoutMS) * time.Millisecond
+	}
+	saveCtx, cancel := context.WithTimeout(ctx, writeTimeout)
+	defer cancel()
+	err := s.liveProvisional.Save(saveCtx, rec)
+	if err != nil {
+		authorizationMetrics.liveProvisionalStoreUnavailable.Add(1)
+		if mode == config.CanonicalWalletModeEnforce {
+			return false, &AuthorizationRefusedError{
+				Reason:          AuthorizationRefusalLiveStoreUnavailable,
+				AuthorizationID: handle.ID,
+				Cause:           err,
+			}
+		}
+		logger.FromContext(ctx).Warn("live provisional store save failed in shadow mode", zap.String("authorization_id", handle.ID), zap.Error(err))
+		return false, nil
+	}
+	authorizationMetrics.liveProvisionalWritten.Add(1)
+	return true, nil
+}
+
+func (s *OpenAIGatewayService) abortLiveProvisional(authorizationID string, cause error) {
+	if s.liveProvisional == nil || authorizationID == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), liveRedisOperationTimeout)
+	defer cancel()
+	if err := s.liveProvisional.Abort(ctx, authorizationID, time.Now().UTC()); err != nil {
+		logger.L().Warn("abort live provisional record failed", zap.String("authorization_id", authorizationID), zap.Error(err))
+	} else {
+		authorizationMetrics.liveProvisionalAborted.Add(1)
+	}
+}
+
+func (s *OpenAIGatewayService) activateLiveProvisional(authorizationID, callHash string) {
+	if s.liveProvisional == nil || authorizationID == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), liveRedisOperationTimeout)
+	defer cancel()
+	if err := s.liveProvisional.Activate(ctx, authorizationID, callHash, time.Now().UTC()); err != nil {
+		logger.L().Warn("activate live provisional record failed", zap.String("authorization_id", authorizationID), zap.String("call_hash", callHash), zap.Error(err))
+	} else {
+		authorizationMetrics.liveProvisionalActivated.Add(1)
+	}
+}
+
+func (s *OpenAIGatewayService) claimLiveProvisionalFinalization(authorizationID string) (bool, error) {
+	if s.liveProvisional == nil || authorizationID == "" {
+		return false, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), liveRedisOperationTimeout)
+	defer cancel()
+	return s.liveProvisional.ClaimFinalization(ctx, authorizationID, time.Now().UTC())
+}
+
+func (s *OpenAIGatewayService) completeLiveProvisionalFinalization(authorizationID, eventID string, settledUnits int64) error {
+	if s.liveProvisional == nil || authorizationID == "" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), liveRedisOperationTimeout)
+	defer cancel()
+	err := s.liveProvisional.CompleteFinalization(ctx, authorizationID, eventID, settledUnits, time.Now().UTC())
+	if err == nil {
+		authorizationMetrics.liveProvisionalFinalized.Add(1)
+	}
+	return err
+}
+
+func (s *OpenAIGatewayService) releaseLiveProvisionalFinalizationClaim(authorizationID string) {
+	if s.liveProvisional == nil || authorizationID == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), liveRedisOperationTimeout)
+	defer cancel()
+	if err := s.liveProvisional.ReleaseFinalizationClaim(ctx, authorizationID); err != nil {
+		logger.L().Warn("release live provisional finalization claim failed", zap.String("authorization_id", authorizationID), zap.Error(err))
+	}
 }
