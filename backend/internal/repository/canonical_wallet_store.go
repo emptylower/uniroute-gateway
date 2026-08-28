@@ -148,10 +148,14 @@ var reserveCanonicalWalletLeaseScript = redis.NewScript(`
 // pointer KEYS[2] if it names this lease. It returns {0, pre_seal_consumed,
 // released} — the consumed figure the gateway sends as
 // gateway_consumed_units, and (3.4b, §10.2) the released figure it sends as
-// gateway_released when non-zero. After the seal the reserve script's budget
-// guard (consumed − released + amount > budget) refuses every further
-// reservation, while a retry carrying an existing marker still succeeds
-// because the duplicate check runs before the budget check. Idempotent:
+// gateway_released when non-zero. After the seal the guard refuses every
+// further reservation when released_units is 0; with releases outstanding it
+// still admits amounts up to released_units — the seal caps consumed at
+// budget, it does not close a lease that has given budget back (redesign
+// §10.2 leaves the seal untouched by design; the drain identity is unaffected
+// because it is computed from the pre-seal figures). A retry carrying an
+// existing marker still succeeds because the duplicate check runs before the
+// budget check. Idempotent:
 // sealing a sealed lease returns consumed == budget. The hash is NOT deleted
 // — GetCanonicalWalletLeaseByID still finds a sealed lease, which is what
 // keeps the explicit-id branch's marker resolution working.

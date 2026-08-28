@@ -424,6 +424,9 @@ func TestCanonicalWalletReserveGuardSubtractsReleased(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(140), consumed)
 	require.Equal(t, int64(40), released)
+	sealedConsumed, err := rdb.HGet(ctx, canonicalWalletLeaseKey("u", "L"), "consumed_units").Result()
+	require.NoError(t, err)
+	require.Equal(t, "100", sealedConsumed, "the seal caps consumed at budget — it does not preserve the pre-seal figure when released > 0")
 }
 
 // mustHoldState reads one hold hash field via HGETALL for assertions.
