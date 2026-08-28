@@ -776,6 +776,9 @@ type canonicalWalletMetrics struct {
 	settlementSplitFull      atomic.Int64
 	settlementSplitExhausted atomic.Int64
 	pendingReleaseReplayed   atomic.Int64
+	// Phase 3.5 (§11.4): the late capture and the receivable gauge.
+	lateCaptureRetargeted        atomic.Int64
+	settlementUncollectableUnits atomic.Int64
 	// §9.6 item 6's rollout-guard counters (global, like every counter here).
 	controlPlaneIncompatible atomic.Int64
 	controlPlaneProbeFailed  atomic.Int64
@@ -819,6 +822,8 @@ func CanonicalWalletBridgeStats() map[string]int64 {
 		"settlement_split_full":          m.settlementSplitFull.Load(),
 		"settlement_split_exhausted":     m.settlementSplitExhausted.Load(),
 		"pending_release_replayed":       m.pendingReleaseReplayed.Load(),
+		"late_capture_retargeted":        m.lateCaptureRetargeted.Load(),
+		"settlement_uncollectable_units": m.settlementUncollectableUnits.Load(),
 		"control_plane_incompatible":     m.controlPlaneIncompatible.Load(),
 		"control_plane_probe_failed":     m.controlPlaneProbeFailed.Load(),
 		"hold_released_not_written":      m.holdReleasedNotWritten.Load(),
@@ -1419,6 +1424,23 @@ func (b *CanonicalWalletBridge) liveProvisionalActive(ctx context.Context, autho
 // worst case grows linearly with this number.
 const walletOutboxDispatchBatch = 10
 
+// refreshReceivableGauge (§11.4) recomputes settlementUncollectableUnits —
+// the sum of amount_units over balance_shortfall dead-letters, the
+// receivable — from the durable table. Production refreshes it every 100th
+// dispatcher tick (the tick is RequestTimeoutMS — per-tick would be ~3
+// aggregates/s); tests call it directly. A store error keeps the last value.
+func (b *CanonicalWalletBridge) refreshReceivableGauge(ctx context.Context) {
+	if b == nil || b.outbox == nil {
+		return
+	}
+	units, err := b.outbox.SumDeadLetterUnits(ctx, "balance_shortfall")
+	if err != nil {
+		slog.Warn("canonical wallet receivable gauge refresh failed", "error", err)
+		return
+	}
+	canonicalWalletBridgeMetrics.settlementUncollectableUnits.Store(units)
+}
+
 func (b *CanonicalWalletBridge) runOutboxDispatcher() {
 	if b.outbox == nil || b.outboxDB == nil {
 		return // several of this file's own tests construct a bridge with a nil outbox (they don't exercise ObserveSettlement) — starting the ticker loop unconditionally would eventually dereference it. "Start only when BOTH are non-nil" is enforced in this one place.
@@ -1432,7 +1454,18 @@ func (b *CanonicalWalletBridge) runOutboxDispatcher() {
 	staleAfter := 2 * time.Duration(walletOutboxDispatchBatch) * perAttempt
 	ticker := time.NewTicker(perAttempt)
 	defer ticker.Stop()
+	ticks := int64(0)
 	for range ticker.C {
+		ticks++
+		// §11.4: the receivable gauge refreshes every 100th tick (~30 s at
+		// the default 300 ms RequestTimeoutMS) — per-tick would be ~3
+		// aggregates/s. The lag is a Phase 4 reconciliation input, not an
+		// alert source.
+		if ticks%100 == 0 {
+			gaugeCtx, cancelGauge := context.WithTimeout(context.Background(), perAttempt)
+			b.refreshReceivableGauge(gaugeCtx)
+			cancelGauge()
+		}
 		// Reclaim stale in_flight rows before claiming fresh pending ones,
 		// so a row a crashed dispatcher instance abandoned mid-delivery
 		// becomes eligible for ClaimPendingOutboxEvents again in this same
@@ -1496,8 +1529,12 @@ func (b *CanonicalWalletBridge) deliverOutboxEvent(ctx context.Context, e Canoni
 		if errors.Is(err, ErrCanonicalWalletBalanceShortfall) {
 			// Terminal (§9.3): the control plane clamped below the amount;
 			// no backoff changes the balance. Dead-letter now, reason
-			// balance_shortfall (persisted by migration 212).
+			// balance_shortfall (persisted by migration 212). §11.4: that
+			// row is the receivable — parent_event_id/split_depth tell
+			// Phase 4 which usage it belongs to.
 			canonicalWalletBridgeMetrics.deadLetterBalanceShortfall.Add(1)
+			slog.Warn("canonical wallet outbox dead-lettered balance_shortfall (the receivable)",
+				"event_id", e.EventID, "parent_event_id", e.ParentEventID, "split_depth", e.SplitDepth, "amount_units", e.AmountUnits)
 			_ = b.outbox.MarkOutboxEventDeadLetter(ctx, e.ID, b.workerID, "balance_shortfall")
 			return
 		}
@@ -1579,6 +1616,33 @@ func (b *CanonicalWalletBridge) deliverOutboxEvent(ctx context.Context, e Canoni
 				headroomUnits = *se.HeadroomUnits
 			}
 			b.splitOutboxEvent(ctx, e, lease, headroomUnits, true /* reserved: A is on the lease */)
+			return
+		}
+		// §11.4 late capture: ShipAny closed the lease — the same disposition
+		// canonicalWalletLeaseBindingIsStale gives Missing/Expired/Exhausted,
+		// under its own check because the 409 arrives from SubmitSettlement.
+		// Release the reservation IN FULL (the full form: the row is
+		// unbound, nothing more will be captured there, and the marker goes
+		// with the release so a later drain reads an exact identity), unbind,
+		// and SEAL the closed lease — the cached hash still covers the amount
+		// by the gateway's own figures (the server's refusal is invisible
+		// here), and without the seal the next ensure would answer from the
+		// cache and loop until attempts_exhausted. The next delivery then
+		// ensures a settle-purpose lease from the balance and captures there;
+		// if the balance cannot cover it the settle ensure refuses
+		// insufficient_balance → the receivable above.
+		if errors.As(err, &se) && se.Reason == "lease_not_capturable" {
+			if _, rerr := b.store.ReleaseCanonicalWalletReservation(ctx, event.PlatformUserID, event.LeaseID, event.EventID, event.AmountUnits, true /* dropMarker */); rerr != nil {
+				slog.Warn("canonical wallet late-capture release failed", "event_id", event.EventID, "lease_id", event.LeaseID, "error", rerr)
+			}
+			if bindErr := b.outbox.BindOutboxEventLease(ctx, e.ID, b.workerID, ""); bindErr != nil && !errors.Is(bindErr, ErrCanonicalWalletOutboxClaimLost) {
+				slog.Warn("canonical wallet late-capture unbind failed", "event_id", event.EventID, "error", bindErr)
+			}
+			if _, _, sealErr := b.store.SealCanonicalWalletLease(ctx, event.PlatformUserID, event.LeaseID); sealErr != nil && !errors.Is(sealErr, ErrCanonicalWalletLeaseMissing) {
+				slog.Warn("canonical wallet late-capture seal failed", "event_id", event.EventID, "lease_id", event.LeaseID, "error", sealErr)
+			}
+			canonicalWalletBridgeMetrics.lateCaptureRetargeted.Add(1)
+			_ = b.outbox.MarkOutboxEventFailed(ctx, e.ID, b.workerID, b.clock())
 			return
 		}
 		// §11.5 classification on the settlements branch too: a terminal
