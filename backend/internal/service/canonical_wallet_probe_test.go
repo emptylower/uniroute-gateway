@@ -57,7 +57,9 @@ func TestPhase34ProbeEnsureRouteAtStartup(t *testing.T) {
 		fake.withoutEnsureRoute = true
 		require.PanicsWithValue(t,
 			"canonical_wallet: control plane has no ensure route — deploy ShipAny 3.4a-S first (redesign §9.6 item 6)",
-			func() { NewCanonicalWalletBridge(p34ProbeConfig(config.CanonicalWalletModeEnforce, fake.Server.URL), &canonicalWalletStoreStub{}, nil, nil) },
+			func() {
+				NewCanonicalWalletBridge(p34ProbeConfig(config.CanonicalWalletModeEnforce, fake.Server.URL), &canonicalWalletStoreStub{}, nil, nil)
+			},
 		)
 	})
 
