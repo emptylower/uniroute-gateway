@@ -60,6 +60,8 @@ type canonicalWalletControlStub struct {
 	// tests can assert exactly what ensureLease asked the control plane for.
 	acquireCalls int
 	lastRequest  canonicalWalletLeaseRequest
+	// nilLease makes AcquireLease return the (nil, nil) grant ensureLease names.
+	nilLease bool
 }
 
 func (s *canonicalWalletControlStub) AcquireLease(_ context.Context, req canonicalWalletLeaseRequest) (*CanonicalWalletLease, error) {
@@ -67,6 +69,9 @@ func (s *canonicalWalletControlStub) AcquireLease(_ context.Context, req canonic
 	s.lastRequest = req
 	if s.leaseErr != nil {
 		return nil, s.leaseErr
+	}
+	if s.nilLease {
+		return nil, nil
 	}
 	copy := s.lease
 	return &copy, nil

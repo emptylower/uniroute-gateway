@@ -522,3 +522,43 @@ func TestOpenAIPassthroughForwardRefusalIsTerminal(t *testing.T) {
 	_, err := svc.forwardOpenAIPassthrough(context.Background(), c, account, body, nil, "gpt-5.5", resolution, false, nil, false, time.Now())
 	assertRefusalIsTerminal(t, err, dec, stub)
 }
+
+// Phase 3.3a Task 10 Step 5: with canonical_wallet.mode=disabled the decorator
+// is a pass-through — no classification, no counters, no context change.
+func TestDisabledModeDecoratorScopedCountersStayZero(t *testing.T) {
+	resetAuthorizationMetricsForTest()
+	inner := &refusalCountingStub{}
+	disabled := newAuthorizingHTTPUpstreamWithMode(inner, modeFn(config.CanonicalWalletModeDisabled))
+	svc := &OpenAIGatewayService{
+		cfg:          &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}},
+		httpUpstream: disabled,
+	}
+	body := []byte(`{"model":"gpt-5.5","stream":false,"reasoning":{"effort":"low"},"input":"hello"}`)
+	c, _ := refusalTestContext(t, "/v1/responses", body)
+	account := &Account{
+		ID: 1, Name: "oauth-test", Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+		Status: StatusActive, Schedulable: true, Concurrency: 1,
+		Credentials: map[string]any{"access_token": "test-token", "chatgpt_account_id": "test-account"},
+	}
+	// A completed (non-stream) Responses payload the forwarder accepts.
+	okPayload := `{"id":"resp_1","object":"response","status":"completed","model":"gpt-5.5","output":[{"type":"message","id":"msg_1","status":"completed","role":"assistant","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1}}`
+	inner2 := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(okPayload)),
+	}}
+	svc.httpUpstream = newAuthorizingHTTPUpstreamWithMode(inner2, modeFn(config.CanonicalWalletModeDisabled))
+	_, err := svc.Forward(context.Background(), c, account, body)
+	require.NoError(t, err)
+	m := AuthorizationMetricsSnapshot()
+	require.Equal(t, int64(0), m.WritesAuthorized)
+	require.Equal(t, int64(0), m.WritesNonBillable)
+	require.Equal(t, int64(0), m.WritesUnmarked)
+	require.Equal(t, int64(0), m.WritesRefused)
+	require.Equal(t, int64(0), m.OutcomeResult)
+	require.Equal(t, int64(0), m.OutcomeNotWritten)
+	require.Equal(t, int64(0), m.OutcomeIndeterminate)
+	require.Equal(t, int64(0), m.Refused)
+	require.Equal(t, int64(0), m.Minted, "Authorize increments Minted only after its disabled-mode early return")
+	require.Equal(t, 1, len(inner2.requests), "the write went through unchanged")
+}

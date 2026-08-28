@@ -11,7 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newSnapshotTestFixture(t *testing.T) (*BillingSnapshotService, *APIKey, *User, *Account) {
+// testing.TB (not *testing.T) so the benchmarks can reuse the fixture.
+func newSnapshotTestFixture(t testing.TB) (*BillingSnapshotService, *APIKey, *User, *Account) {
 	t.Helper()
 	cfg := &config.Config{}
 	cfg.Default.RateMultiplier = 1

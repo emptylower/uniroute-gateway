@@ -119,9 +119,14 @@ func TestDeliverOutboxEventRealFailurePaths(t *testing.T) {
 		status, err := outbox.OutboxEventStatus(ctx, e.ID)
 		require.NoError(t, err)
 		require.Equal(t, "pending", status, "a failed reservation returns the row to pending for retry")
-		leased, err := store.GetCanonicalWalletLeaseByID(ctx, platformUserID, "lease-tiny")
-		require.NoError(t, err)
-		require.Equal(t, int64(10_000), leased.BudgetUnits, "100 wire micros converted x100 = 10,000 units — the tiny lease really exists")
+		// Phase 3.3a (spec §2.0.1 step (3)): a granted lease whose remaining
+		// budget is below the amount is rejected client-side and NEVER
+		// installed — so the tiny lease no longer exists in the store. The
+		// delivery attempt fails exactly like any other ensureLease error
+		// (row back to pending, as asserted above); the terminal
+		// balance_shortfall dead-letter classification is 3.4a's.
+		_, err = store.GetCanonicalWalletLeaseByID(ctx, platformUserID, "lease-tiny")
+		require.ErrorIs(t, err, ErrCanonicalWalletLeaseMissing, "a grant below the amount is rejected client-side and never installed")
 	})
 
 	t.Run("settlement refused by control plane", func(t *testing.T) {

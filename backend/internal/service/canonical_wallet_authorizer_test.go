@@ -6,7 +6,10 @@ import (
 	"context"
 	"errors"
 	"math/rand"
+	"net/http"
+	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -195,4 +198,139 @@ func TestAuthorizeEstimateDominatesSettlement(t *testing.T) {
 		settled := settledUnitsForTest(t, auth.snapshots, snap, cost)
 		require.LessOrEqual(t, settled, h.EstimatedUnits, "draw %d: settled %d > authorized %d", i, settled, h.EstimatedUnits)
 	}
+}
+
+// Phase 3.3a Task 10 Step 1b: the shadow-mode request-path cost of Authorize.
+// The REAL bound is canonical_wallet.request_timeout_ms (default 300 ms), which
+// these stub fixtures cannot show — they measure the in-process authorizer +
+// bridge-stub overhead only, to sit beside 3.2's ≈3 µs freeze figure.
+func benchmarkAuthorize(b *testing.B, leaseOnStore bool) {
+	snapshots, apiKey, _, account := newSnapshotTestFixture(b)
+	snap, err := snapshots.Freeze(context.Background(), FreezeInput{APIKey: apiKey, User: apiKey.User, Account: account, RequestedModel: "claude-sonnet-4", BillingModel: "claude-sonnet-4", Family: BillingFamilyGeneric})
+	if err != nil {
+		b.Fatal(err)
+	}
+	apiKey.User.PlatformUserID = "platform-user-1"
+	apiKey.User.BillingCurrency = "CNY"
+
+	store := &canonicalWalletStoreStub{}
+	if leaseOnStore {
+		// Current lease covers any estimate this body produces → the fast path:
+		// one store read, no AcquireLease, no install.
+		store.lease = &CanonicalWalletLease{LeaseID: "lease-hit", Currency: "CNY", BudgetUnits: 500_000_000, ExpiresAt: time.Now().Add(time.Hour)}
+	}
+	control := &canonicalWalletControlStub{}
+	if !leaseOnStore {
+		control.lease = CanonicalWalletLease{LeaseID: "lease-miss", Currency: "CNY", BudgetUnits: 500_000_000, ExpiresAt: time.Now().Add(time.Hour)}
+	}
+	bridgeCfg := canonicalWalletTestConfig(config.CanonicalWalletModeShadow)
+	bridgeCfg.LeaseBudgetUnits = 500_000_000
+	bridge := newCanonicalWalletBridge(bridgeCfg, store, control, nil, nil)
+	cfg := &config.Config{}
+	cfg.CanonicalWallet.Mode = config.CanonicalWalletModeShadow
+	cfg.CanonicalWallet.RequestTimeoutMS = 300
+	cfg.CanonicalWallet.LeaseBudgetUnits = 500_000_000
+	auth := NewCanonicalWalletAuthorizer(cfg, bridge, snapshots)
+	in := AuthorizeInput{Snapshot: snap, Estimate: estimateFor(`{"model":"claude-sonnet-4","max_tokens":64,"messages":[]}`), User: apiKey.User}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := auth.Authorize(context.Background(), in); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkAuthorizeLeaseHit(b *testing.B)  { benchmarkAuthorize(b, true) }
+func BenchmarkAuthorizeLeaseMiss(b *testing.B) { benchmarkAuthorize(b, false) }
+
+// Phase 3.3a Task 10 Step 1 coverage: the guard branches and facades.
+
+func TestAuthorizationHandleRemainingGuardBranches(t *testing.T) {
+	resetAuthorizationMetricsForTest()
+	// RecordOutcome for an unknown token must be a silent no-op.
+	h, err := newAuthorizationHandle("shadow")
+	require.NoError(t, err)
+	h.RecordOutcome("auth_unknown.99", AuthorizationOutcomeResult, nil)
+	require.Empty(t, h.Writes())
+	// LastWriteToken with no writes.
+	fresh, err := newAuthorizationHandle("shadow")
+	require.NoError(t, err)
+	require.Equal(t, "", fresh.LastWriteToken())
+	// The typed-nil refusal error's Error/Unwrap are safe.
+	var refused *AuthorizationRefusedError
+	require.NotEmpty(t, refused.Error())
+	require.Nil(t, refused.Unwrap())
+	// describeUpstreamRequest handles a nil request.
+	require.Equal(t, "<nil request>", describeUpstreamRequest(nil))
+	// Abandoned on a nil receiver.
+	var nilHandle *AuthorizationHandle
+	require.Equal(t, "", nilHandle.Abandoned())
+	// AuthorizationIDOf with a real handle.
+	require.Equal(t, h.ID, AuthorizationIDOf(h))
+	// WithNonBillableUpstream tolerates a nil context; the mark stays readable.
+	marked := WithNonBillableUpstream(nil, NonBillableProbe)
+	reason, ok := NonBillableUpstreamFromContext(marked)
+	require.True(t, ok)
+	require.Equal(t, NonBillableProbe, reason)
+	// The mark reader tolerates a nil context.
+	got, ok := NonBillableUpstreamFromContext(nil)
+	require.False(t, ok)
+	require.Empty(t, got)
+	// WithAuthorizationHandle attaches through a nil context too.
+	withHandle := WithAuthorizationHandle(nil, h)
+	require.Same(t, h, AuthorizationHandleFromContext(withHandle))
+	// NewAuthorizingHTTPUpstream with a nil cfg degrades to disabled mode; a
+	// write through it must pass straight through and not touch the context.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) }))
+	defer srv.Close()
+	inner := &transportUpstream{transport: http.DefaultTransport}
+	dec := NewAuthorizingHTTPUpstream(inner, nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, srv.URL, strings.NewReader(`{}`))
+	require.NoError(t, err)
+	resp, err := dec.Do(req, "", 1, 1)
+	require.NoError(t, err)
+	_ = resp.Body.Close()
+	decCfg := &config.Config{}
+	decCfg.CanonicalWallet.Mode = config.CanonicalWalletModeDisabled
+	require.NotNil(t, NewAuthorizingHTTPUpstream(inner, decCfg))
+	_, err = NewAuthorizingHTTPUpstream(inner, decCfg).Do(req, "", 1, 1)
+	require.NoError(t, err)
+	// requestTimeout falls back to 300 ms without a configured timeout.
+	auth := &CanonicalWalletAuthorizer{cfg: &config.Config{}}
+	require.Equal(t, 300*time.Millisecond, auth.requestTimeout())
+	var nilAuth *CanonicalWalletAuthorizer
+	require.Equal(t, 300*time.Millisecond, nilAuth.requestTimeout())
+}
+
+func TestAuthorizeBillableAttemptFacadesAreNilSafe(t *testing.T) {
+	// Services built by tests without an authorizer degrade to token-only handles.
+	gw := &GatewayService{}
+	h, err := gw.AuthorizeBillableAttempt(context.Background(), nil, nil, EstimateInput{})
+	require.NoError(t, err)
+	require.NotEmpty(t, h.ID)
+	require.Nil(t, h.Refusal)
+
+	ogw := &OpenAIGatewayService{}
+	h2, err := ogw.AuthorizeBillableAttempt(context.Background(), nil, nil, EstimateInput{})
+	require.NoError(t, err)
+	require.NotEmpty(t, h2.ID)
+	// userOfAPIKey derives the user from the key when one exists.
+	require.Nil(t, userOfAPIKey(nil))
+	key := &APIKey{User: &User{PlatformUserID: "p1"}}
+	require.Same(t, key.User, userOfAPIKey(key))
+}
+
+func TestEnsureLeaseRejectsMissingDependenciesAndNilGrant(t *testing.T) {
+	// A bridge without its store/control dependencies fails closed.
+	broken := &CanonicalWalletBridge{}
+	_, err := broken.ensureLease(context.Background(), "user-1", "CNY", 1)
+	require.Error(t, err)
+
+	// A (nil, nil) grant from the control plane is named, not a nil deref.
+	b, store, control := newBridgeForEnsureLeaseTest(t)
+	control.nilLease = true
+	_, err = b.ensureLease(context.Background(), "user-1", "CNY", 1)
+	require.ErrorIs(t, err, ErrCanonicalWalletLeaseMissing)
+	require.Equal(t, 0, store.installCalls)
 }
