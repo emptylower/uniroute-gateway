@@ -245,6 +245,15 @@ type CanonicalWalletOutboxEvent struct {
 	LocalBalanceAfterUnits *int64
 	OccurredAt             time.Time
 	AttemptCount           int
+	// Phase 3.5 (redesign §11.9): the split columns and the token's durable
+	// join. PendingReleaseUnits != nil means the dispatcher still owes the
+	// bound lease a release of exactly that many units BEFORE it may reserve
+	// anything new (§11.3) — the release marker in Redis, not this column, is
+	// the idempotency gate.
+	ParentEventID       string
+	SplitDepth          int
+	PendingReleaseUnits *int64
+	AuthorizationID     string
 }
 
 // CanonicalWalletOutboxStore is implemented by repository.WalletOutboxStore.
@@ -277,6 +286,21 @@ type CanonicalWalletOutboxStore interface {
 	// Ownership-guarded like every other resolve method: a row this worker
 	// no longer owns returns ErrCanonicalWalletOutboxClaimLost.
 	BindOutboxEventLease(ctx context.Context, id int64, workerID, leaseID string) error
+	// SplitOutboxEvent (Phase 3.5, §11.3) splits one claimed row: the
+	// remainder (amount − capturedUnits) becomes a NEW pending row with its
+	// own event id, attempt budget and split depth; the parent's amount
+	// becomes capturedUnits and it returns to pending (delivered when
+	// capturedUnits = 0). reserved records whether the gateway already
+	// reserved the full amount at delivery — when true the parent's
+	// pending_release_units records what the dispatcher owes the bound lease.
+	// The parent's payload_hash is never touched.
+	SplitOutboxEvent(ctx context.Context, id int64, workerID string, capturedUnits int64, remainderEventID string, reserved bool) (remainderUnits int64, err error)
+	// ClearPendingRelease nulls pending_release_units after the owed release
+	// landed (§11.3).
+	ClearPendingRelease(ctx context.Context, id int64) error
+	// SumDeadLetterUnits (§11.4) sums amount_units over dead-letter rows
+	// carrying the named reason — the receivable figure.
+	SumDeadLetterUnits(ctx context.Context, reason string) (int64, error)
 	// ReclaimStaleInFlightEvents recovers rows a crashed dispatcher left
 	// stuck in_flight.
 	ReclaimStaleInFlightEvents(ctx context.Context, staleAfter time.Duration) (int64, error)

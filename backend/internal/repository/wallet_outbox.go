@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -91,11 +92,17 @@ func (s *WalletOutboxStore) InsertOutboxEventTx(ctx context.Context, tx *sql.Tx,
 	if _, err := tx.ExecContext(ctx, `SAVEPOINT wallet_outbox_insert`); err != nil {
 		return err
 	}
+	// authorization_id (Phase 3.5, §11.9) is the token's durable join; NULL
+	// when the event carries none (pre-3.3 rows and token-less paths).
+	var authorizationID any
+	if event.AuthorizationID != "" {
+		authorizationID = event.AuthorizationID
+	}
 	_, insertErr := tx.ExecContext(ctx, `
 		INSERT INTO wallet_settlement_outbox
-			(event_id, platform_user_id, lease_id, gateway_request_id, currency, amount_units, local_balance_after_units, payload_hash, occurred_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-		event.EventID, event.PlatformUserID, event.LeaseID, event.GatewayRequestID, event.Currency, event.AmountUnits, event.LocalBalanceAfterUnits, hash, event.OccurredAt,
+			(event_id, platform_user_id, lease_id, gateway_request_id, currency, amount_units, local_balance_after_units, payload_hash, occurred_at, authorization_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+		event.EventID, event.PlatformUserID, event.LeaseID, event.GatewayRequestID, event.Currency, event.AmountUnits, event.LocalBalanceAfterUnits, hash, event.OccurredAt, authorizationID,
 	)
 	if insertErr == nil {
 		_, err := tx.ExecContext(ctx, `RELEASE SAVEPOINT wallet_outbox_insert`)
@@ -135,7 +142,7 @@ func (s *WalletOutboxStore) ClaimPendingOutboxEvents(ctx context.Context, worker
 			LIMIT $1
 			FOR UPDATE SKIP LOCKED
 		)
-		RETURNING id, event_id, platform_user_id, lease_id, gateway_request_id, currency, amount_units, local_balance_after_units, occurred_at, attempt_count`, limit, workerID)
+		RETURNING id, event_id, platform_user_id, lease_id, gateway_request_id, currency, amount_units, local_balance_after_units, occurred_at, attempt_count, parent_event_id, split_depth, pending_release_units, authorization_id`, limit, workerID)
 	if err != nil {
 		return nil, err
 	}
@@ -149,10 +156,18 @@ func (s *WalletOutboxStore) ClaimPendingOutboxEvents(ctx context.Context, worker
 		// plain string field, since "" already means "no lease id yet"
 		// everywhere else this type is used.
 		var leaseID sql.NullString
-		if err := rows.Scan(&e.ID, &e.EventID, &e.PlatformUserID, &leaseID, &e.GatewayRequestID, &e.Currency, &e.AmountUnits, &e.LocalBalanceAfterUnits, &e.OccurredAt, &e.AttemptCount); err != nil {
+		var parentEventID, authorizationID sql.NullString
+		var pendingRelease sql.NullInt64
+		if err := rows.Scan(&e.ID, &e.EventID, &e.PlatformUserID, &leaseID, &e.GatewayRequestID, &e.Currency, &e.AmountUnits, &e.LocalBalanceAfterUnits, &e.OccurredAt, &e.AttemptCount, &parentEventID, &e.SplitDepth, &pendingRelease, &authorizationID); err != nil {
 			return nil, err
 		}
 		e.LeaseID = leaseID.String
+		e.ParentEventID = parentEventID.String
+		e.AuthorizationID = authorizationID.String
+		if pendingRelease.Valid {
+			v := pendingRelease.Int64
+			e.PendingReleaseUnits = &v
+		}
 		events = append(events, e)
 	}
 	return events, rows.Err()
@@ -264,6 +279,138 @@ func (s *WalletOutboxStore) BindOutboxEventLease(ctx context.Context, id int64, 
 		return service.ErrCanonicalWalletOutboxClaimLost
 	}
 	return nil
+}
+
+// SplitOutboxEvent (Phase 3.5, redesign §11.3) is ONE Postgres transaction:
+// it inserts the remainder row (its own event_id, parent_event_id = the
+// parent's event_id, split_depth = parent+1, amount A−H, unbound, attempt
+// budget of its own), rewrites the parent (amount H back to pending with
+// next_attempt_at = now — deliberately no attempt increment and no backoff;
+// or delivered with delivered_at when H = 0) and sets pending_release_units
+// to what the dispatcher still owes the bound lease (A−H; NULL when
+// reserved = false — the proactive split reserved nothing). It NEVER touches
+// the parent's payload_hash: that hash is the identity of the event as first
+// observed, and its only reader is InsertOutboxEventTx's unique-violation
+// fallback — recomputing it here would turn a later in-process re-observation
+// of the same event into a payload conflict (§11.3). A re-run with the same
+// remainderEventID is a no-op (ON CONFLICT DO NOTHING; the parent is left
+// untouched — a second rewrite would subtract H twice). Ownership-guarded
+// like every resolve method.
+func (s *WalletOutboxStore) SplitOutboxEvent(ctx context.Context, id int64, workerID string, capturedUnits int64, remainderEventID string, reserved bool) (int64, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var (
+		eventID, platformUserID, gatewayRequestID, currency string
+		amountUnits                                         int64
+		localBalance                                        sql.NullInt64
+		occurredAt                                          time.Time
+		splitDepth                                          int
+		authorizationID                                     sql.NullString
+	)
+	err = tx.QueryRowContext(ctx, `
+		SELECT event_id, platform_user_id, gateway_request_id, currency, amount_units, local_balance_after_units, occurred_at, split_depth, authorization_id
+		FROM wallet_settlement_outbox
+		WHERE id = $1 AND claimed_by = $2 AND status = 'in_flight'
+		FOR UPDATE`, id, workerID,
+	).Scan(&eventID, &platformUserID, &gatewayRequestID, &currency, &amountUnits, &localBalance, &occurredAt, &splitDepth, &authorizationID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, service.ErrCanonicalWalletOutboxClaimLost
+	}
+	if err != nil {
+		return 0, err
+	}
+	if capturedUnits < 0 || capturedUnits > amountUnits {
+		return 0, fmt.Errorf("wallet outbox split captured units %d out of range for amount %d", capturedUnits, amountUnits)
+	}
+	remainderUnits := amountUnits - capturedUnits
+
+	remainderEvent := service.CanonicalWalletSettlementEvent{
+		EventID: remainderEventID, GatewayRequestID: gatewayRequestID, PlatformUserID: platformUserID,
+		LeaseID: "", Currency: currency, AmountUnits: remainderUnits, OccurredAt: occurredAt,
+	}
+	if localBalance.Valid {
+		v := localBalance.Int64
+		remainderEvent.LocalBalanceAfterUnits = &v
+	}
+	if authorizationID.Valid {
+		remainderEvent.AuthorizationID = authorizationID.String
+	}
+	var authorizationArg any
+	if remainderEvent.AuthorizationID != "" {
+		authorizationArg = remainderEvent.AuthorizationID
+	}
+	inserted, err := tx.ExecContext(ctx, `
+		INSERT INTO wallet_settlement_outbox
+			(event_id, platform_user_id, lease_id, gateway_request_id, currency, amount_units, local_balance_after_units, payload_hash, status, attempt_count, occurred_at, authorization_id, parent_event_id, split_depth)
+		VALUES ($1, $2, NULL, $3, $4, $5, $6, $7, 'pending', 0, $8, $9, $10, $11)
+		ON CONFLICT (event_id) DO NOTHING`,
+		remainderEventID, platformUserID, gatewayRequestID, currency, remainderUnits, remainderEvent.LocalBalanceAfterUnits,
+		walletOutboxPayloadHash(remainderEvent), occurredAt, authorizationArg, eventID, splitDepth+1,
+	)
+	if err != nil {
+		return 0, err
+	}
+	if n, _ := inserted.RowsAffected(); n == 0 {
+		// The remainder row already exists (a re-run of the same split): the
+		// no-op — the parent is NOT rewritten a second time. Return the
+		// existing remainder's amount so a caller's release stays consistent.
+		var existing int64
+		if err := tx.QueryRowContext(ctx, `SELECT amount_units FROM wallet_settlement_outbox WHERE event_id = $1`, remainderEventID).Scan(&existing); err != nil {
+			return 0, err
+		}
+		if err := tx.Commit(); err != nil {
+			return 0, err
+		}
+		return existing, nil
+	}
+
+	var pendingRelease any
+	if reserved {
+		pendingRelease = remainderUnits
+	}
+	if capturedUnits == 0 {
+		// §11.3 split_full: nothing is capturable on the refusing lease; the
+		// parent is resolved in this same transaction and the whole amount
+		// moves to the remainder.
+		_, err = tx.ExecContext(ctx, `
+			UPDATE wallet_settlement_outbox
+			SET amount_units = 0, pending_release_units = $2, status = 'delivered', delivered_at = now(), dead_letter_reason = NULL, claimed_at = NULL, claimed_by = NULL
+			WHERE id = $1`, id, pendingRelease)
+	} else {
+		_, err = tx.ExecContext(ctx, `
+			UPDATE wallet_settlement_outbox
+			SET amount_units = $2, pending_release_units = $3, status = 'pending', next_attempt_at = now(), claimed_at = NULL, claimed_by = NULL
+			WHERE id = $1`, id, capturedUnits, pendingRelease)
+	}
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return remainderUnits, nil
+}
+
+// ClearPendingRelease nulls pending_release_units after the owed release
+// landed (§11.3). Not claim-guarded: the release itself is gated on the
+// per-event release marker in Redis, which is the idempotency key — this
+// column only records THAT a release is owed.
+func (s *WalletOutboxStore) ClearPendingRelease(ctx context.Context, id int64) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE wallet_settlement_outbox SET pending_release_units = NULL WHERE id = $1`, id)
+	return err
+}
+
+// SumDeadLetterUnits is the receivable figure (§11.4): the sum of
+// amount_units over dead-letter rows carrying the named reason.
+func (s *WalletOutboxStore) SumDeadLetterUnits(ctx context.Context, reason string) (int64, error) {
+	var sum sql.NullInt64
+	if err := s.db.QueryRowContext(ctx, `SELECT SUM(amount_units) FROM wallet_settlement_outbox WHERE status = 'dead_letter' AND dead_letter_reason = $1`, reason).Scan(&sum); err != nil {
+		return 0, err
+	}
+	return sum.Int64, nil
 }
 
 func (s *WalletOutboxStore) OutboxEventStatus(ctx context.Context, id int64) (string, error) {

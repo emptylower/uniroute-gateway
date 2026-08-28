@@ -498,3 +498,294 @@ func TestWalletOutboxBindEventLease(t *testing.T) {
 	err = dead.BindOutboxEventLease(ctx, claimed[0].ID, testWalletOutboxWorkerID, "lease-new")
 	require.Error(t, err)
 }
+
+// --- Phase 3.5 (redesign §11.9 + the durable parts of §11.3/§11.4) ---
+
+// splitFixture inserts one claimed in_flight row and returns its id. The
+// occurred_at is truncated to microsecond precision so the fixture hash
+// computed in Go survives the Postgres TIMESTAMPTZ round trip byte-for-byte
+// (RFC3339Nano trims trailing zeros; ns below µs would be dropped by the
+// driver, changing the formatted string).
+func splitFixture(t *testing.T, store *WalletOutboxStore, eventID string, amount int64, authID string, occurredAt time.Time) int64 {
+	t.Helper()
+	ctx := context.Background()
+	event := service.CanonicalWalletSettlementEvent{
+		EventID: eventID, GatewayRequestID: "req-" + eventID, PlatformUserID: "shipany-user-split",
+		LeaseID: "lease-split", Currency: "CNY", AmountUnits: amount, OccurredAt: occurredAt,
+		AuthorizationID: authID,
+	}
+	tx, err := integrationDB.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	require.NoError(t, store.InsertOutboxEventTx(ctx, tx, event))
+	require.NoError(t, tx.Commit())
+	claimed, err := store.ClaimPendingOutboxEvents(ctx, testWalletOutboxWorkerID, 10)
+	require.NoError(t, err)
+	require.Len(t, claimed, 1)
+	require.Equal(t, eventID, claimed[0].EventID)
+	return claimed[0].ID
+}
+
+// splitRowState reads every split-relevant column of one row.
+type splitRowState struct {
+	Status         string
+	AmountUnits    int64
+	PendingRelease sql.NullInt64
+	ClaimedBy      sql.NullString
+	ClaimedAt      sql.NullTime
+	NextAttemptAt  time.Time
+	DeliveredAt    sql.NullTime
+	PayloadHash    string
+	ParentEventID  sql.NullString
+	SplitDepth     int
+	Authorization  sql.NullString
+	AttemptCount   int
+}
+
+func readSplitRow(t *testing.T, byEventID string) splitRowState {
+	t.Helper()
+	var s splitRowState
+	require.NoError(t, integrationDB.QueryRowContext(context.Background(), `
+		SELECT status, amount_units, pending_release_units, claimed_by, claimed_at, next_attempt_at, delivered_at,
+		       payload_hash, parent_event_id, split_depth, authorization_id, attempt_count
+		FROM wallet_settlement_outbox WHERE event_id = $1`, byEventID,
+	).Scan(&s.Status, &s.AmountUnits, &s.PendingRelease, &s.ClaimedBy, &s.ClaimedAt, &s.NextAttemptAt, &s.DeliveredAt,
+		&s.PayloadHash, &s.ParentEventID, &s.SplitDepth, &s.Authorization, &s.AttemptCount))
+	return s
+}
+
+// (a) authorization_id is persisted, and the payload hash does NOT cover it:
+// the same event with and without an AuthorizationID hashes identically.
+func TestWalletOutboxAuthorizationColumnAndHashIdentity(t *testing.T) {
+	ctx := context.Background()
+	resetWalletOutboxTable(t)
+	store := NewWalletOutboxStore(integrationDB)
+	occurredAt := time.Now().UTC().Truncate(time.Microsecond)
+
+	withAuth := splitFixture(t, store, "gwusg_split_a", 10_000000, "auth-35", occurredAt)
+
+	var authBack sql.NullString
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT authorization_id FROM wallet_settlement_outbox WHERE id = $1`, withAuth).Scan(&authBack))
+	require.True(t, authBack.Valid)
+	require.Equal(t, "auth-35", authBack.String)
+
+	// A second event with an IDENTICAL payload (event_id differs — it is not
+	// hashed; every other hashed field is the same) and NO authorization: the
+	// stored payload_hash must be identical. splitFixture derives
+	// GatewayRequestID from the event id, so this one is inserted by hand
+	// with the SAME request id as the first fixture.
+	event := service.CanonicalWalletSettlementEvent{
+		EventID: "gwusg_split_b", GatewayRequestID: "req-gwusg_split_a", PlatformUserID: "shipany-user-split",
+		LeaseID: "lease-split", Currency: "CNY", AmountUnits: 10_000000, OccurredAt: occurredAt,
+	}
+	tx, err := integrationDB.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	require.NoError(t, store.InsertOutboxEventTx(ctx, tx, event))
+	require.NoError(t, tx.Commit())
+
+	hashWith := readSplitRow(t, "gwusg_split_a").PayloadHash
+	hashWithout := readSplitRow(t, "gwusg_split_b").PayloadHash
+	require.Equal(t, hashWith, hashWithout, "authorization_id must not be part of the payload hash (§11.9)")
+
+	authB := readSplitRow(t, "gwusg_split_b").Authorization
+	require.False(t, authB.Valid, "an event without an authorization stores NULL, not an empty string")
+}
+
+// (b) the split transaction: remainder insert, parent rewrite, no
+// payload_hash touch, claim ownership, the no-op re-run, ClearPendingRelease.
+func TestWalletOutboxSplitEventTransaction(t *testing.T) {
+	ctx := context.Background()
+	resetWalletOutboxTable(t)
+	store := NewWalletOutboxStore(integrationDB)
+	occurredAt := time.Now().UTC().Truncate(time.Microsecond)
+	const A = int64(10_000000)
+	const H = int64(4_000000)
+	id := splitFixture(t, store, "gwusg_split_e", A, "auth-35", occurredAt)
+	hashBefore := readSplitRow(t, "gwusg_split_e").PayloadHash
+
+	// A worker that does not own the row: claim lost, nothing changes.
+	_, err := store.SplitOutboxEvent(ctx, id, "other-worker", H, "gwusg_split_e:r1", true)
+	require.ErrorIs(t, err, service.ErrCanonicalWalletOutboxClaimLost)
+	untouched := readSplitRow(t, "gwusg_split_e")
+	require.Equal(t, "in_flight", untouched.Status)
+	require.Equal(t, A, untouched.AmountUnits)
+
+	remainderUnits, err := store.SplitOutboxEvent(ctx, id, testWalletOutboxWorkerID, H, "gwusg_split_e:r1", true)
+	require.NoError(t, err)
+	require.Equal(t, A-H, remainderUnits, "the split returns the remainder's amount")
+
+	parent := readSplitRow(t, "gwusg_split_e")
+	require.Equal(t, "pending", parent.Status, "the parent returns to pending — the next tick delivers H (§11.3)")
+	require.Equal(t, H, parent.AmountUnits)
+	require.True(t, parent.PendingRelease.Valid)
+	require.Equal(t, A-H, parent.PendingRelease.Int64, "pending_release_units records what is owed back to the lease")
+	require.False(t, parent.ClaimedBy.Valid, "claimed_by is NULL again")
+	require.False(t, parent.ClaimedAt.Valid, "claimed_at is NULL again")
+	require.LessOrEqual(t, parent.NextAttemptAt, time.Now().UTC().Add(time.Second), "next_attempt_at <= now — deliberately no attempt increment and no backoff")
+	require.Equal(t, 0, parent.AttemptCount, "the split consumes no attempt")
+	require.Equal(t, hashBefore, parent.PayloadHash, "the split NEVER touches the parent's payload_hash")
+	require.Empty(t, parent.ParentEventID.String)
+	require.Equal(t, 0, parent.SplitDepth)
+	require.Equal(t, "auth-35", parent.Authorization.String)
+
+	// The remainder row: a distinct event whose hash is the hash of the
+	// remainder AS AN EVENT (its own id, its own amount, unbound).
+	remainder := readSplitRow(t, "gwusg_split_e:r1")
+	require.Equal(t, "pending", remainder.Status)
+	require.Equal(t, A-H, remainder.AmountUnits)
+	require.True(t, remainder.ParentEventID.Valid)
+	require.Equal(t, "gwusg_split_e", remainder.ParentEventID.String)
+	require.Equal(t, 1, remainder.SplitDepth)
+	require.False(t, remainder.ClaimedBy.Valid)
+	require.Equal(t, 0, remainder.AttemptCount)
+	require.Equal(t, "auth-35", remainder.Authorization.String, "authorization_id is copied to the remainder (§11.3)")
+	expectedRemainderHash := walletOutboxPayloadHash(service.CanonicalWalletSettlementEvent{
+		EventID: "gwusg_split_e:r1", GatewayRequestID: "req-gwusg_split_e", PlatformUserID: "shipany-user-split",
+		LeaseID: "", Currency: "CNY", AmountUnits: A - H, OccurredAt: occurredAt,
+	})
+	require.Equal(t, expectedRemainderHash, remainder.PayloadHash)
+
+	// The no-op re-run: re-claim the parent, split again with the SAME
+	// remainder event id — the unique event_id makes it a no-op and the
+	// parent is untouched (a second rewrite would subtract H twice).
+	claimed, err := store.ClaimPendingOutboxEvents(ctx, testWalletOutboxWorkerID, 10)
+	require.NoError(t, err)
+	require.Len(t, claimed, 2, "the parent (pending again) and the remainder are both claimable")
+	again, err := store.SplitOutboxEvent(ctx, id, testWalletOutboxWorkerID, H, "gwusg_split_e:r1", true)
+	require.NoError(t, err)
+	require.Equal(t, A-H, again)
+	var remainderRows int
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT count(*) FROM wallet_settlement_outbox WHERE event_id = 'gwusg_split_e:r1'`).Scan(&remainderRows))
+	require.Equal(t, 1, remainderRows, "no second remainder row")
+	afterNoop := readSplitRow(t, "gwusg_split_e")
+	require.Equal(t, H, afterNoop.AmountUnits, "the parent's amount is not rewritten a second time")
+	require.True(t, afterNoop.PendingRelease.Valid)
+	require.Equal(t, A-H, afterNoop.PendingRelease.Int64)
+	require.Equal(t, hashBefore, afterNoop.PayloadHash)
+
+	// (c) ClearPendingRelease nulls the column.
+	require.NoError(t, store.ClearPendingRelease(ctx, id))
+	cleared := readSplitRow(t, "gwusg_split_e")
+	require.False(t, cleared.PendingRelease.Valid)
+}
+
+// drainPending resolves every currently-pending row so the next
+// splitFixture's claim sees exactly its own row (the H=0 split leaves a
+// claimable remainder behind).
+func drainPending(t *testing.T, store *WalletOutboxStore) {
+	t.Helper()
+	ctx := context.Background()
+	for {
+		claimed, err := store.ClaimPendingOutboxEvents(ctx, testWalletOutboxWorkerID, 10)
+		require.NoError(t, err)
+		if len(claimed) == 0 {
+			return
+		}
+		for _, e := range claimed {
+			require.NoError(t, store.MarkOutboxEventDelivered(ctx, e.ID, testWalletOutboxWorkerID))
+		}
+	}
+}
+
+// The H = 0 leg (split_full: the parent is delivered in the transaction) and
+// the proactive form (reserved = false: nothing reserved yet, so nothing is
+// owed — pending_release_units stays NULL).
+func TestWalletOutboxSplitZeroHeadroomAndProactiveForm(t *testing.T) {
+	ctx := context.Background()
+	resetWalletOutboxTable(t)
+	store := NewWalletOutboxStore(integrationDB)
+	occurredAt := time.Now().UTC().Truncate(time.Microsecond)
+	const A = int64(10_000000)
+	const H = int64(4_000000)
+
+	// H = 0, reserved: the parent is delivered with pending_release_units = A.
+	idZ := splitFixture(t, store, "gwusg_split_z", A, "auth-35", occurredAt)
+	remainderUnits, err := store.SplitOutboxEvent(ctx, idZ, testWalletOutboxWorkerID, 0, "gwusg_split_z:r1", true)
+	require.NoError(t, err)
+	require.Equal(t, A, remainderUnits)
+	parentZ := readSplitRow(t, "gwusg_split_z")
+	require.Equal(t, "delivered", parentZ.Status, "H = 0 marks the parent delivered — split_full")
+	require.True(t, parentZ.DeliveredAt.Valid, "delivered_at is set")
+	require.Equal(t, int64(0), parentZ.AmountUnits)
+	require.True(t, parentZ.PendingRelease.Valid)
+	require.Equal(t, A, parentZ.PendingRelease.Int64)
+	require.False(t, parentZ.ClaimedBy.Valid)
+	require.Equal(t, A, readSplitRow(t, "gwusg_split_z:r1").AmountUnits, "the remainder carries the whole amount")
+	drainPending(t, store)
+
+	// H = 0, proactive: delivered with pending_release_units NULL.
+	idZN := splitFixture(t, store, "gwusg_split_zn", A, "", occurredAt)
+	_, err = store.SplitOutboxEvent(ctx, idZN, testWalletOutboxWorkerID, 0, "gwusg_split_zn:r1", false)
+	require.NoError(t, err)
+	parentZN := readSplitRow(t, "gwusg_split_zn")
+	require.Equal(t, "delivered", parentZN.Status)
+	require.False(t, parentZN.PendingRelease.Valid, "reserved = false: nothing was reserved, nothing is owed")
+	drainPending(t, store)
+
+	// H > 0, proactive: back to pending with pending_release_units NULL.
+	idP := splitFixture(t, store, "gwusg_split_p", A, "", occurredAt)
+	remainderUnits, err = store.SplitOutboxEvent(ctx, idP, testWalletOutboxWorkerID, H, "gwusg_split_p:r1", false)
+	require.NoError(t, err)
+	require.Equal(t, A-H, remainderUnits)
+	parentP := readSplitRow(t, "gwusg_split_p")
+	require.Equal(t, "pending", parentP.Status)
+	require.Equal(t, H, parentP.AmountUnits)
+	require.False(t, parentP.PendingRelease.Valid, "the proactive split records no pending release")
+}
+
+// (d) ClaimPendingOutboxEvents returns the four new columns.
+func TestWalletOutboxClaimReturnsSplitColumns(t *testing.T) {
+	ctx := context.Background()
+	resetWalletOutboxTable(t)
+	store := NewWalletOutboxStore(integrationDB)
+	occurredAt := time.Now().UTC().Truncate(time.Microsecond)
+	const A = int64(10_000000)
+	const H = int64(4_000000)
+	id := splitFixture(t, store, "gwusg_split_d", A, "auth-35", occurredAt)
+	_, err := store.SplitOutboxEvent(ctx, id, testWalletOutboxWorkerID, H, "gwusg_split_d:r1", true)
+	require.NoError(t, err)
+
+	claimed, err := store.ClaimPendingOutboxEvents(ctx, testWalletOutboxWorkerID, 10)
+	require.NoError(t, err)
+	require.Len(t, claimed, 2)
+	byEvent := map[string]service.CanonicalWalletOutboxEvent{}
+	for _, e := range claimed {
+		byEvent[e.EventID] = e
+	}
+
+	parent := byEvent["gwusg_split_d"]
+	require.Empty(t, parent.ParentEventID)
+	require.Equal(t, 0, parent.SplitDepth)
+	require.Equal(t, "auth-35", parent.AuthorizationID)
+	require.NotNil(t, parent.PendingReleaseUnits)
+	require.Equal(t, A-H, *parent.PendingReleaseUnits)
+
+	remainder := byEvent["gwusg_split_d:r1"]
+	require.Equal(t, "gwusg_split_d", remainder.ParentEventID)
+	require.Equal(t, 1, remainder.SplitDepth)
+	require.Equal(t, "auth-35", remainder.AuthorizationID)
+	require.Nil(t, remainder.PendingReleaseUnits)
+}
+
+// (e) SumDeadLetterUnits is the receivable figure (§11.4): the sum of
+// amount_units over dead-letter rows carrying the named reason.
+func TestWalletOutboxSumDeadLetterUnits(t *testing.T) {
+	ctx := context.Background()
+	resetWalletOutboxTable(t)
+	store := NewWalletOutboxStore(integrationDB)
+	occurredAt := time.Now().UTC().Truncate(time.Microsecond)
+
+	idA := splitFixture(t, store, "gwusg_dl_a", 3_000000, "", occurredAt)
+	idB := splitFixture(t, store, "gwusg_dl_b", 5_000000, "", occurredAt)
+	idC := splitFixture(t, store, "gwusg_dl_c", 7_000000, "", occurredAt)
+	require.NoError(t, store.MarkOutboxEventDeadLetter(ctx, idA, testWalletOutboxWorkerID, "balance_shortfall"))
+	require.NoError(t, store.MarkOutboxEventDeadLetter(ctx, idB, testWalletOutboxWorkerID, "balance_shortfall"))
+	require.NoError(t, store.MarkOutboxEventDeadLetter(ctx, idC, testWalletOutboxWorkerID, "attempts_exhausted"))
+
+	sum, err := store.SumDeadLetterUnits(ctx, "balance_shortfall")
+	require.NoError(t, err)
+	require.Equal(t, int64(8_000000), sum, "only the named reason's rows are summed")
+
+	sum, err = store.SumDeadLetterUnits(ctx, "contract_violation")
+	require.NoError(t, err)
+	require.Equal(t, int64(0), sum, "an unknown reason sums to zero, not an error")
+}

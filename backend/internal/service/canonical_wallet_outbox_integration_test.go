@@ -4,8 +4,12 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"testing"
 	"time"
@@ -35,8 +39,11 @@ func startCanonicalWalletTestPostgres(t *testing.T, ctx context.Context) *sql.DB
 			lease_id TEXT, gateway_request_id TEXT NOT NULL, currency TEXT NOT NULL,
 			amount_units BIGINT NOT NULL, local_balance_after_units BIGINT, payload_hash TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
 			attempt_count INT NOT NULL DEFAULT 0, next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(), claimed_at TIMESTAMPTZ, claimed_by TEXT,
-			occurred_at TIMESTAMPTZ NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), delivered_at TIMESTAMPTZ, dead_letter_reason TEXT
-		)`) // same columns as Task 4 Step 2's real migration (+ 212's dead_letter_reason) — kept in sync by hand since this test owns its own throwaway database, same convention as this task's other real-Redis tests owning their own throwaway keyspace
+			occurred_at TIMESTAMPTZ NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), delivered_at TIMESTAMPTZ, dead_letter_reason TEXT,
+			authorization_id TEXT, parent_event_id TEXT, split_depth INTEGER NOT NULL DEFAULT 0, pending_release_units BIGINT
+		)`) // same columns as Task 4 Step 2's real migration (+ 212's dead_letter_reason + 214's split/authorization columns) — kept in sync by hand since this test owns its own throwaway database, same convention as this task's other real-Redis tests owning their own throwaway keyspace
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `CREATE INDEX idx_wallet_settlement_outbox_parent ON wallet_settlement_outbox (parent_event_id)`)
 	require.NoError(t, err)
 	return db
 }
@@ -52,10 +59,14 @@ func startCanonicalWalletTestPostgres(t *testing.T, ctx context.Context) *sql.DB
 type outboxStoreForTest struct{ db *sql.DB }
 
 func (o *outboxStoreForTest) InsertOutboxEventTx(ctx context.Context, tx *sql.Tx, event CanonicalWalletSettlementEvent) error {
+	var authorizationID any
+	if event.AuthorizationID != "" {
+		authorizationID = event.AuthorizationID
+	}
 	_, err := tx.ExecContext(ctx, `
-		INSERT INTO wallet_settlement_outbox (event_id, platform_user_id, lease_id, gateway_request_id, currency, amount_units, local_balance_after_units, payload_hash, occurred_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT (event_id) DO NOTHING`,
-		event.EventID, event.PlatformUserID, event.LeaseID, event.GatewayRequestID, event.Currency, event.AmountUnits, event.LocalBalanceAfterUnits, "test-hash", event.OccurredAt)
+		INSERT INTO wallet_settlement_outbox (event_id, platform_user_id, lease_id, gateway_request_id, currency, amount_units, local_balance_after_units, payload_hash, occurred_at, authorization_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT (event_id) DO NOTHING`,
+		event.EventID, event.PlatformUserID, event.LeaseID, event.GatewayRequestID, event.Currency, event.AmountUnits, event.LocalBalanceAfterUnits, "test-hash", event.OccurredAt, authorizationID)
 	return err
 }
 func (o *outboxStoreForTest) ClaimPendingOutboxEvents(ctx context.Context, workerID string, limit int) ([]CanonicalWalletOutboxEvent, error) {
@@ -74,7 +85,7 @@ func (o *outboxStoreForTest) ClaimPendingOutboxEvents(ctx context.Context, worke
 			LIMIT $1
 			FOR UPDATE SKIP LOCKED
 		)
-		RETURNING id, event_id, platform_user_id, lease_id, gateway_request_id, currency, amount_units, local_balance_after_units, occurred_at, attempt_count`, limit, workerID)
+		RETURNING id, event_id, platform_user_id, lease_id, gateway_request_id, currency, amount_units, local_balance_after_units, occurred_at, attempt_count, parent_event_id, split_depth, pending_release_units, authorization_id`, limit, workerID)
 	if err != nil {
 		return nil, err
 	}
@@ -83,10 +94,18 @@ func (o *outboxStoreForTest) ClaimPendingOutboxEvents(ctx context.Context, worke
 	for rows.Next() {
 		var e CanonicalWalletOutboxEvent
 		var leaseID sql.NullString
-		if err := rows.Scan(&e.ID, &e.EventID, &e.PlatformUserID, &leaseID, &e.GatewayRequestID, &e.Currency, &e.AmountUnits, &e.LocalBalanceAfterUnits, &e.OccurredAt, &e.AttemptCount); err != nil {
+		var parentEventID, authorizationID sql.NullString
+		var pendingRelease sql.NullInt64
+		if err := rows.Scan(&e.ID, &e.EventID, &e.PlatformUserID, &leaseID, &e.GatewayRequestID, &e.Currency, &e.AmountUnits, &e.LocalBalanceAfterUnits, &e.OccurredAt, &e.AttemptCount, &parentEventID, &e.SplitDepth, &pendingRelease, &authorizationID); err != nil {
 			return nil, err
 		}
 		e.LeaseID = leaseID.String
+		e.ParentEventID = parentEventID.String
+		e.AuthorizationID = authorizationID.String
+		if pendingRelease.Valid {
+			v := pendingRelease.Int64
+			e.PendingReleaseUnits = &v
+		}
 		events = append(events, e)
 	}
 	return events, rows.Err()
@@ -172,7 +191,139 @@ func (o *outboxStoreForTest) ReclaimStaleInFlightEvents(ctx context.Context, sta
 	return result.RowsAffected()
 }
 
-var _ CanonicalWalletOutboxStore = (*outboxStoreForTest)(nil)
+// testWalletOutboxPayloadHash is the service-package twin of
+// repository.walletOutboxPayloadHash (service cannot import repository):
+// the same fixed-shape struct, the same field order — identical hashes for
+// identical events. The struct's shape is §11.3's contract; if either copy
+// changes, both must.
+type testWalletOutboxHashPayload struct {
+	PlatformUserID         string
+	LeaseID                string
+	Currency               string
+	GatewayRequestID       string
+	AmountUnits            int64
+	LocalBalanceAfterUnits *int64
+	OccurredAt             string
+}
+
+func testWalletOutboxPayloadHash(event CanonicalWalletSettlementEvent) string {
+	payload := testWalletOutboxHashPayload{
+		PlatformUserID: event.PlatformUserID, LeaseID: event.LeaseID, Currency: event.Currency,
+		GatewayRequestID: event.GatewayRequestID, AmountUnits: event.AmountUnits,
+		LocalBalanceAfterUnits: event.LocalBalanceAfterUnits, OccurredAt: event.OccurredAt.UTC().Format(time.RFC3339Nano),
+	}
+	raw, _ := json.Marshal(payload)
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
+}
+
+// SplitOutboxEvent / ClearPendingRelease / SumDeadLetterUnits mirror
+// repository.WalletOutboxStore's implementations (Phase 3.5, §11.3/§11.4) —
+// the Phase 35 dispatcher tests drive the real split through this store.
+func (o *outboxStoreForTest) SplitOutboxEvent(ctx context.Context, id int64, workerID string, capturedUnits int64, remainderEventID string, reserved bool) (int64, error) {
+	tx, err := o.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var (
+		eventID, platformUserID, gatewayRequestID, currency string
+		amountUnits                                         int64
+		localBalance                                        sql.NullInt64
+		occurredAt                                          time.Time
+		splitDepth                                          int
+		authorizationID                                     sql.NullString
+	)
+	err = tx.QueryRowContext(ctx, `
+		SELECT event_id, platform_user_id, gateway_request_id, currency, amount_units, local_balance_after_units, occurred_at, split_depth, authorization_id
+		FROM wallet_settlement_outbox
+		WHERE id = $1 AND claimed_by = $2 AND status = 'in_flight'
+		FOR UPDATE`, id, workerID,
+	).Scan(&eventID, &platformUserID, &gatewayRequestID, &currency, &amountUnits, &localBalance, &occurredAt, &splitDepth, &authorizationID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, ErrCanonicalWalletOutboxClaimLost
+	}
+	if err != nil {
+		return 0, err
+	}
+	if capturedUnits < 0 || capturedUnits > amountUnits {
+		return 0, fmt.Errorf("wallet outbox split captured units %d out of range for amount %d", capturedUnits, amountUnits)
+	}
+	remainderUnits := amountUnits - capturedUnits
+
+	remainderEvent := CanonicalWalletSettlementEvent{
+		EventID: remainderEventID, GatewayRequestID: gatewayRequestID, PlatformUserID: platformUserID,
+		LeaseID: "", Currency: currency, AmountUnits: remainderUnits, OccurredAt: occurredAt,
+	}
+	if localBalance.Valid {
+		v := localBalance.Int64
+		remainderEvent.LocalBalanceAfterUnits = &v
+	}
+	if authorizationID.Valid {
+		remainderEvent.AuthorizationID = authorizationID.String
+	}
+	var authorizationArg any
+	if remainderEvent.AuthorizationID != "" {
+		authorizationArg = remainderEvent.AuthorizationID
+	}
+	inserted, err := tx.ExecContext(ctx, `
+		INSERT INTO wallet_settlement_outbox
+			(event_id, platform_user_id, lease_id, gateway_request_id, currency, amount_units, local_balance_after_units, payload_hash, status, attempt_count, occurred_at, authorization_id, parent_event_id, split_depth)
+		VALUES ($1, $2, NULL, $3, $4, $5, $6, $7, 'pending', 0, $8, $9, $10, $11)
+		ON CONFLICT (event_id) DO NOTHING`,
+		remainderEventID, platformUserID, gatewayRequestID, currency, remainderUnits, remainderEvent.LocalBalanceAfterUnits,
+		testWalletOutboxPayloadHash(remainderEvent), occurredAt, authorizationArg, eventID, splitDepth+1,
+	)
+	if err != nil {
+		return 0, err
+	}
+	if n, _ := inserted.RowsAffected(); n == 0 {
+		var existing int64
+		if err := tx.QueryRowContext(ctx, `SELECT amount_units FROM wallet_settlement_outbox WHERE event_id = $1`, remainderEventID).Scan(&existing); err != nil {
+			return 0, err
+		}
+		if err := tx.Commit(); err != nil {
+			return 0, err
+		}
+		return existing, nil
+	}
+
+	var pendingRelease any
+	if reserved {
+		pendingRelease = remainderUnits
+	}
+	if capturedUnits == 0 {
+		_, err = tx.ExecContext(ctx, `
+			UPDATE wallet_settlement_outbox
+			SET amount_units = 0, pending_release_units = $2, status = 'delivered', delivered_at = now(), dead_letter_reason = NULL, claimed_at = NULL, claimed_by = NULL
+			WHERE id = $1`, id, pendingRelease)
+	} else {
+		_, err = tx.ExecContext(ctx, `
+			UPDATE wallet_settlement_outbox
+			SET amount_units = $2, pending_release_units = $3, status = 'pending', next_attempt_at = now(), claimed_at = NULL, claimed_by = NULL
+			WHERE id = $1`, id, capturedUnits, pendingRelease)
+	}
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return remainderUnits, nil
+}
+
+func (o *outboxStoreForTest) ClearPendingRelease(ctx context.Context, id int64) error {
+	_, err := o.db.ExecContext(ctx, `UPDATE wallet_settlement_outbox SET pending_release_units = NULL WHERE id = $1`, id)
+	return err
+}
+
+func (o *outboxStoreForTest) SumDeadLetterUnits(ctx context.Context, reason string) (int64, error) {
+	var sum sql.NullInt64
+	if err := o.db.QueryRowContext(ctx, `SELECT SUM(amount_units) FROM wallet_settlement_outbox WHERE status = 'dead_letter' AND dead_letter_reason = $1`, reason).Scan(&sum); err != nil {
+		return 0, err
+	}
+	return sum.Int64, nil
+}
 
 var _ CanonicalWalletOutboxStore = (*outboxStoreForTest)(nil)
 
