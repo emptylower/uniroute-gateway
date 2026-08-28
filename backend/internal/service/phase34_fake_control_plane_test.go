@@ -62,7 +62,11 @@ func newFakeEnsureControlPlane(t *testing.T, now func() time.Time) *fakeEnsureCo
 	return f
 }
 
-func (f *fakeEnsureControlPlane) fund(user string, units int64) { f.mu.Lock(); f.balance[user] += units; f.mu.Unlock() }
+func (f *fakeEnsureControlPlane) fund(user string, units int64) {
+	f.mu.Lock()
+	f.balance[user] += units
+	f.mu.Unlock()
+}
 
 // seedLease installs a server-side lease directly (for cap/settle scenarios).
 func (f *fakeEnsureControlPlane) seedLease(user, id, purpose string, budget, captured int64, expires time.Time) {

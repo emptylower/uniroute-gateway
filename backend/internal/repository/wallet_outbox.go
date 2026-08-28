@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -220,6 +221,17 @@ func (s *WalletOutboxStore) MarkOutboxEventFailed(ctx context.Context, id int64,
 	next := simulatedNow.Add(backoff)
 	_, err = s.db.ExecContext(ctx, `UPDATE wallet_settlement_outbox SET status = 'pending', next_attempt_at = $3, claimed_at = NULL, claimed_by = NULL WHERE id = $1 AND status = 'in_flight' AND claimed_by = $2`, id, workerID, next)
 	return err
+}
+
+func (s *WalletOutboxStore) MarkOutboxEventDeadLetter(ctx context.Context, id int64, workerID, reason string) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE wallet_settlement_outbox SET status = 'dead_letter', attempt_count = attempt_count + 1, claimed_at = NULL, claimed_by = NULL WHERE id = $1 AND status = 'in_flight' AND claimed_by = $2`, id, workerID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 1 {
+		slog.Warn("canonical wallet outbox event dead-lettered", "id", id, "reason", reason)
+	}
+	return nil
 }
 
 // BindOutboxEventLease durably anchors this event to `leaseID` before its

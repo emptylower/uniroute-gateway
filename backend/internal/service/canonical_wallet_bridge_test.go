@@ -296,6 +296,9 @@ func (s *outboxStoreStub) MarkOutboxEventDelivered(context.Context, int64, strin
 func (s *outboxStoreStub) MarkOutboxEventFailed(context.Context, int64, string, time.Time) error {
 	return nil
 }
+func (s *outboxStoreStub) MarkOutboxEventDeadLetter(context.Context, int64, string, string) error {
+	return nil
+}
 func (s *outboxStoreStub) BindOutboxEventLease(context.Context, int64, string, string) error {
 	return nil
 }

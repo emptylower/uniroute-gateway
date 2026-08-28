@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -136,6 +137,17 @@ func (o *outboxStoreForTest) BindOutboxEventLease(ctx context.Context, id int64,
 	}
 	if affected == 0 {
 		return ErrCanonicalWalletOutboxClaimLost
+	}
+	return nil
+}
+
+func (o *outboxStoreForTest) MarkOutboxEventDeadLetter(ctx context.Context, id int64, workerID, reason string) error {
+	res, err := o.db.ExecContext(ctx, `UPDATE wallet_settlement_outbox SET status = 'dead_letter', attempt_count = attempt_count + 1, claimed_at = NULL, claimed_by = NULL WHERE id = $1 AND status = 'in_flight' AND claimed_by = $2`, id, workerID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 1 {
+		slog.Warn("canonical wallet outbox event dead-lettered", "id", id, "reason", reason)
 	}
 	return nil
 }

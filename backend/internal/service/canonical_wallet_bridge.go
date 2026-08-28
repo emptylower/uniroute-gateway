@@ -154,6 +154,12 @@ type CanonicalWalletOutboxStore interface {
 	ClaimPendingOutboxEvents(ctx context.Context, workerID string, limit int) ([]CanonicalWalletOutboxEvent, error)
 	MarkOutboxEventDelivered(ctx context.Context, id int64, workerID string) error
 	MarkOutboxEventFailed(ctx context.Context, id int64, workerID string, simulatedNow time.Time) error
+	// MarkOutboxEventDeadLetter (Phase 3.4, redesign §4) resolves a row this
+	// worker owns straight to dead_letter with a named reason — used for
+	// terminal lease errors (balance_shortfall) that no retry can fix. The
+	// reason is logged and counted; a persisted dead_letter_reason column is
+	// a 3.4a item.
+	MarkOutboxEventDeadLetter(ctx context.Context, id int64, workerID, reason string) error
 	// BindOutboxEventLease durably records WHICH lease this event's
 	// reservation is anchored to, and is called BEFORE the reservation is
 	// attempted — never after. The Redis reservation marker is keyed by
@@ -428,22 +434,23 @@ func (c *canonicalWalletHTTPClient) serviceAssertion(scope string) (string, erro
 }
 
 type canonicalWalletMetrics struct {
-	queued                atomic.Int64
-	queueDropped          atomic.Int64
-	leaseAcquireOK        atomic.Int64
-	leaseIssued           atomic.Int64
-	leaseReused           atomic.Int64
-	leaseGrantBelowAmount atomic.Int64
-	leaseGrantExpired     atomic.Int64
-	leaseAcquireError     atomic.Int64
-	leaseBindError        atomic.Int64
-	reserveOK             atomic.Int64
-	reserveError          atomic.Int64
-	settlementOK          atomic.Int64
-	settlementError       atomic.Int64
-	balanceMismatch       atomic.Int64
-	missingPlatformID     atomic.Int64
-	unsupportedCurrency   atomic.Int64
+	queued                     atomic.Int64
+	queueDropped               atomic.Int64
+	leaseAcquireOK             atomic.Int64
+	leaseIssued                atomic.Int64
+	leaseReused                atomic.Int64
+	leaseGrantBelowAmount      atomic.Int64
+	leaseGrantExpired          atomic.Int64
+	leaseAcquireError          atomic.Int64
+	leaseBindError             atomic.Int64
+	reserveOK                  atomic.Int64
+	reserveError               atomic.Int64
+	settlementOK               atomic.Int64
+	settlementError            atomic.Int64
+	balanceMismatch            atomic.Int64
+	missingPlatformID          atomic.Int64
+	unsupportedCurrency        atomic.Int64
+	deadLetterBalanceShortfall atomic.Int64
 }
 
 var canonicalWalletBridgeMetrics canonicalWalletMetrics
@@ -459,7 +466,8 @@ func CanonicalWalletBridgeStats() map[string]int64 {
 		"reserve_ok":       m.reserveOK.Load(), "reserve_error": m.reserveError.Load(),
 		"settlement_ok": m.settlementOK.Load(), "settlement_error": m.settlementError.Load(),
 		"balance_mismatch": m.balanceMismatch.Load(), "missing_platform_user_id": m.missingPlatformID.Load(),
-		"unsupported_currency": m.unsupportedCurrency.Load(),
+		"unsupported_currency":          m.unsupportedCurrency.Load(),
+		"dead_letter_balance_shortfall": m.deadLetterBalanceShortfall.Load(),
 	}
 }
 
@@ -773,6 +781,19 @@ func (b *CanonicalWalletBridge) deliverOutboxEvent(ctx context.Context, e Canoni
 	lease, err := b.resolveOutboxEventLease(ctx, e)
 	if err != nil {
 		canonicalWalletBridgeMetrics.leaseAcquireError.Add(1)
+		if errors.Is(err, ErrCanonicalWalletBalanceShortfall) {
+			// Terminal (redesign §4): the control plane clamped below the amount;
+			// no backoff changes the balance. Dead-letter now, reason balance_shortfall.
+			// (ensureLease's local under-grant guard shares this sentinel; §3 makes
+			// it unreachable, and 3.4a separates the two before this runs unflagged.)
+			canonicalWalletBridgeMetrics.deadLetterBalanceShortfall.Add(1)
+			_ = b.outbox.MarkOutboxEventDeadLetter(ctx, e.ID, b.workerID, "balance_shortfall")
+			return
+		}
+		// transport/store errors and the transient lease_contention retry on the
+		// backoff as today. ErrCanonicalWalletLeaseCapReached cannot reach here
+		// (the dispatcher ensures with purpose = settle); if it ever did, it would
+		// retry as today.
 		_ = b.outbox.MarkOutboxEventFailed(ctx, e.ID, b.workerID, time.Now().UTC())
 		return
 	}
