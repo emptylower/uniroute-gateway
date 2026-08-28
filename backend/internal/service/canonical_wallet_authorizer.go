@@ -81,6 +81,7 @@ func (a *CanonicalWalletAuthorizer) Authorize(ctx context.Context, in AuthorizeI
 		return refuse(AuthorizationRefusalEstimateFailed, "model "+in.Snapshot.BillingModel, err)
 	}
 	h.EstimatedUnits = units
+	h.Continuation = in.Estimate.Continuation
 	if in.User == nil || strings.TrimSpace(in.User.PlatformUserID) == "" {
 		authorizationMetrics.identityMissing.Add(1)
 		return refuse(AuthorizationRefusalIdentityMissing, "no platform user id", nil)

@@ -45,6 +45,10 @@ type AuthorizationHandle struct {
 	SnapshotID     string
 	LeaseID        string
 	EstimatedUnits int64
+	// Continuation is the turn's continuation classification (3.2's
+	// ClassifyWSContinuation), recorded at authorization time. Write-only in
+	// 3.3b (3.8's observation and 3.7's top-up read it later).
+	Continuation ContinuationKind
 	// Refusal is set when Authorize refused this attempt in enforce mode. The handle
 	// is still minted so the refusal carries an id; the decorator refuses any write
 	// that carries a refused handle, whatever the handler did with the error.
@@ -208,13 +212,16 @@ func AuthorizationHandleFromContext(ctx context.Context) *AuthorizationHandle {
 type NonBillableReason string
 
 const (
-	NonBillableProbe        NonBillableReason = "probe"
-	NonBillableModelListing NonBillableReason = "model_listing"
-	NonBillableQuota        NonBillableReason = "quota"
-	NonBillableCountTokens  NonBillableReason = "count_tokens"
-	NonBillableMediaFetch   NonBillableReason = "media_fetch"
-	NonBillableAccountTest  NonBillableReason = "account_test"
-	NonBillableUsageFetch   NonBillableReason = "usage_fetch"
+	NonBillableProbe          NonBillableReason = "probe"
+	NonBillableModelListing   NonBillableReason = "model_listing"
+	NonBillableQuota          NonBillableReason = "quota"
+	NonBillableCountTokens    NonBillableReason = "count_tokens"
+	NonBillableMediaFetch     NonBillableReason = "media_fetch"
+	NonBillableAccountTest    NonBillableReason = "account_test"
+	NonBillableUsageFetch     NonBillableReason = "usage_fetch"
+	NonBillableInterTurnFrame NonBillableReason = "inter_turn_frame"    // passthrough client frames between response.create turns (spec §2.0)
+	NonBillableLiveSideband   NonBillableReason = "live_sideband"       // the Live observer's frames incl. session.close (spec §2.3)
+	NonBillableWSPrewarm      NonBillableReason = "ws_generate_prewarm" // the generate:false warm-up, openai_ws_forwarder_support.go:79-81
 )
 
 type nonBillableUpstreamContextKey struct{}
