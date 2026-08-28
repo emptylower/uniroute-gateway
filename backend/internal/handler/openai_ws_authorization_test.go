@@ -35,8 +35,8 @@ type wsAuthTestHarness struct {
 }
 
 type authAttemptRecord struct {
-	turn     int
-	snapshot *service.BillingSnapshot
+	callOrdinal int
+	snapshot    *service.BillingSnapshot
 }
 
 func newWSAuthTestHarness(t *testing.T, mode string, ingressMode string) *wsAuthTestHarness {
@@ -171,7 +171,7 @@ func newWSAuthTestHarness(t *testing.T, mode string, ingressMode string) *wsAuth
 		harness.mu.Lock()
 		defer harness.mu.Unlock()
 		t := int(turnCounter.Add(1))
-		harness.authAttempts = append(harness.authAttempts, authAttemptRecord{turn: t, snapshot: snap})
+		harness.authAttempts = append(harness.authAttempts, authAttemptRecord{callOrdinal: t, snapshot: snap})
 	})
 	harness.gatewaySvc = gatewaySvc
 
@@ -282,9 +282,12 @@ func TestWSAuthorization_TwoTurnSessionsOnBothIngressModes(t *testing.T) {
 			require.NotNil(t, usageInputs[1].BillingSnapshot, "turn 2 snapshot non-nil")
 
 			require.Len(t, authAttempts, 2, "two AuthorizeTurn calls")
-			require.Equal(t, 1, authAttempts[0].turn, "turn 1 holder turn equals AuthorizeTurn arg")
+			// The hook carries no turn argument; callOrdinal records the invocation sequence (1, 2).
+			// The holder-turn match is proven by require.NotNil(t, authAttempts[i].snapshot)
+			// because openai_gateway_handler.go:2009-2011 sets turnSnap only when snapshot.turn == turn.
+			require.Equal(t, 1, authAttempts[0].callOrdinal, "turn 1 call ordinal equals 1")
 			require.NotNil(t, authAttempts[0].snapshot, "turn 1 snapshot non-nil")
-			require.Equal(t, 2, authAttempts[1].turn, "turn 2 holder turn equals AuthorizeTurn arg")
+			require.Equal(t, 2, authAttempts[1].callOrdinal, "turn 2 call ordinal equals 2")
 			require.NotNil(t, authAttempts[1].snapshot, "turn 2 snapshot non-nil")
 		})
 	}
