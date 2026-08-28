@@ -118,13 +118,23 @@ func TestAuthorizingWSFullFidelityProxies(t *testing.T) {
 	// Forwarding of every method:
 	require.NoError(t, ac.Ping(context.Background()))
 	require.Equal(t, 1, inner.pinged)
-	inner.readFrames = [][]byte{[]byte(`{"a":1}`)}
+	inner.readFrames = [][]byte{[]byte(`{"a":1}`), []byte(`{"b":2}`)}
 	mt, b, err := ac.ReadFrame(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, coderws.MessageText, mt)
 	require.JSONEq(t, `{"a":1}`, string(b))
+	msgBytes, err := ac.ReadMessage(context.Background())
+	require.NoError(t, err)
+	require.JSONEq(t, `{"b":2}`, string(msgBytes))
 	require.NoError(t, ac.Close())
 	require.True(t, inner.closed)
+
+	cfgDialer := newAuthorizingOpenAIWSClientDialer(d, &config.Config{})
+	require.NotNil(t, cfgDialer)
+	_, _, _, _ = cfgDialer.Dial(context.Background(), "ws://127.0.0.1", nil, "")
+	nilCfgDialer := newAuthorizingOpenAIWSClientDialer(d, nil)
+	require.NotNil(t, nilCfgDialer)
+	_, _, _, _ = nilCfgDialer.Dial(context.Background(), "ws://127.0.0.1", nil, "")
 }
 
 func TestAuthorizingWSIdlePingDoesNotFailOpenOnAMiss(t *testing.T) {

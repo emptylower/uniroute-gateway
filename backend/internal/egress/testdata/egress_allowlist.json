@@ -1743,6 +1743,20 @@
     "note": "egress-capable import; actual wallet classification hangs on the write site / client"
   },
   {
+    "file": "internal/service/authorizing_openai_ws_client.go",
+    "kind": "import",
+    "detail": "github.com/coder/websocket",
+    "annotation": "non-billable",
+    "note": "the WebSocket authorization boundary decorator"
+  },
+  {
+    "file": "internal/service/authorizing_openai_ws_client.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "the WebSocket authorization boundary decorator"
+  },
+  {
     "file": "internal/service/batch_image.go",
     "kind": "import",
     "detail": "net/http",
