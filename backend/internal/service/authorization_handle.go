@@ -251,7 +251,7 @@ type AuthorizationMetrics struct {
 	MisplacedMarks                                                        int64
 	OutcomeResult, OutcomeNotWritten, OutcomeIndeterminate                int64
 	SnapshotMissing, EstimateFailed, IdentityMissing, CurrencyUnsupported int64
-	LeaseUnavailable, LeaseCapReached, BalanceShortfall                    int64
+	LeaseUnavailable, LeaseCapReached, BalanceShortfall                   int64
 	Abandoned                                                             int64
 	LiveProvisionalWritten, LiveProvisionalActivated                      int64
 	LiveProvisionalAborted, LiveProvisionalFinalized                      int64
