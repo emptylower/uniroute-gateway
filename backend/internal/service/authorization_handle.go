@@ -251,7 +251,7 @@ type AuthorizationMetrics struct {
 	MisplacedMarks                                                        int64
 	OutcomeResult, OutcomeNotWritten, OutcomeIndeterminate                int64
 	SnapshotMissing, EstimateFailed, IdentityMissing, CurrencyUnsupported int64
-	LeaseUnavailable, BalanceShortfall                                    int64
+	LeaseUnavailable, LeaseCapReached, BalanceShortfall                    int64
 	Abandoned                                                             int64
 	LiveProvisionalWritten, LiveProvisionalActivated                      int64
 	LiveProvisionalAborted, LiveProvisionalFinalized                      int64
@@ -264,7 +264,7 @@ var authorizationMetrics struct {
 	misplacedMarks                                                        atomic.Int64
 	outcomeResult, outcomeNotWritten, outcomeIndeterminate                atomic.Int64
 	snapshotMissing, estimateFailed, identityMissing, currencyUnsupported atomic.Int64
-	leaseUnavailable, balanceShortfall                                    atomic.Int64
+	leaseUnavailable, leaseCapReached, balanceShortfall                   atomic.Int64
 	abandoned                                                             atomic.Int64
 	liveProvisionalWritten, liveProvisionalActivated                      atomic.Int64
 	liveProvisionalAborted, liveProvisionalFinalized                      atomic.Int64
@@ -281,7 +281,7 @@ func AuthorizationMetricsSnapshot() AuthorizationMetrics {
 		OutcomeResult:  m.outcomeResult.Load(), OutcomeNotWritten: m.outcomeNotWritten.Load(), OutcomeIndeterminate: m.outcomeIndeterminate.Load(),
 		SnapshotMissing: m.snapshotMissing.Load(), EstimateFailed: m.estimateFailed.Load(),
 		IdentityMissing: m.identityMissing.Load(), CurrencyUnsupported: m.currencyUnsupported.Load(),
-		LeaseUnavailable: m.leaseUnavailable.Load(), BalanceShortfall: m.balanceShortfall.Load(),
+		LeaseUnavailable: m.leaseUnavailable.Load(), LeaseCapReached: m.leaseCapReached.Load(), BalanceShortfall: m.balanceShortfall.Load(),
 		Abandoned:                            m.abandoned.Load(),
 		LiveProvisionalWritten:               m.liveProvisionalWritten.Load(),
 		LiveProvisionalActivated:             m.liveProvisionalActivated.Load(),
@@ -319,7 +319,7 @@ func ResetAuthorizationMetricsForTest() {
 		&m.minted, &m.refused, &m.writesAuthorized, &m.writesNonBillable, &m.writesUnmarked, &m.writesRefused,
 		&m.misplacedMarks, &m.outcomeResult, &m.outcomeNotWritten, &m.outcomeIndeterminate,
 		&m.snapshotMissing, &m.estimateFailed, &m.identityMissing, &m.currencyUnsupported,
-		&m.leaseUnavailable, &m.balanceShortfall, &m.abandoned,
+		&m.leaseUnavailable, &m.leaseCapReached, &m.balanceShortfall, &m.abandoned,
 		&m.liveProvisionalWritten, &m.liveProvisionalActivated, &m.liveProvisionalAborted,
 		&m.liveProvisionalFinalized, &m.liveProvisionalStoreUnavailable, &m.liveProvisionalSettlementNotEnqueued,
 	} {

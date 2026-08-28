@@ -102,7 +102,11 @@ func (a *CanonicalWalletAuthorizer) Authorize(ctx context.Context, in AuthorizeI
 			authorizationMetrics.balanceShortfall.Add(1)
 			return refuse(AuthorizationRefusalBalanceShortfall, "", err)
 		}
-		authorizationMetrics.leaseUnavailable.Add(1)
+		if errors.Is(err, ErrCanonicalWalletLeaseCapReached) {
+			authorizationMetrics.leaseCapReached.Add(1)
+			return refuse(AuthorizationRefusalLeaseCapReached, "", err)
+		}
+		authorizationMetrics.leaseUnavailable.Add(1) // includes the transient ErrCanonicalWalletLeaseContention
 		return refuse(AuthorizationRefusalLeaseUnavailable, "", err)
 	}
 	h.LeaseID = lease.LeaseID

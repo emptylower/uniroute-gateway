@@ -266,7 +266,6 @@ func (s *WalletOutboxStore) BindOutboxEventLease(ctx context.Context, id int64, 
 	return nil
 }
 
-
 func (s *WalletOutboxStore) OutboxEventStatus(ctx context.Context, id int64) (string, error) {
 	var status string
 	err := s.db.QueryRowContext(ctx, `SELECT status FROM wallet_settlement_outbox WHERE id = $1`, id).Scan(&status)

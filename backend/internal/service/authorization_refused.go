@@ -22,6 +22,7 @@ const (
 	AuthorizationRefusalIdentityMissing      AuthorizationRefusalReason = "identity_missing" // no platform user id — the same rule ObserveSettlement applies
 	AuthorizationRefusalCurrency             AuthorizationRefusalReason = "currency_unsupported"
 	AuthorizationRefusalBalanceShortfall     AuthorizationRefusalReason = "balance_shortfall" // ensureLease: the granted lease is below the amount (spec §2.0.1 step (3))
+	AuthorizationRefusalLeaseCapReached      AuthorizationRefusalReason = "lease_cap_reached" // Phase 3.4: the user's authorize slots are full — terminal (3.4a's per-family injected-refusal tests cover it)
 	AuthorizationRefusalLeaseUnavailable     AuthorizationRefusalReason = "lease_unavailable" // ensureLease: any other failure (control plane, store, expired grant)
 	AuthorizationRefusalLiveStoreUnavailable AuthorizationRefusalReason = "live_provisional_store_unavailable"
 )

@@ -91,6 +91,7 @@ func (o *outboxStoreForTest) ClaimPendingOutboxEvents(ctx context.Context, worke
 	}
 	return events, rows.Err()
 }
+
 // The three resolve/reclaim methods below are REAL SQL implementations
 // mirroring repository.WalletOutboxStore's semantics — required so the full
 // runOutboxDispatcher loop can execute against this store in

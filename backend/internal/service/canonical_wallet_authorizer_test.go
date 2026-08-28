@@ -340,3 +340,23 @@ func TestEnsureLeaseRejectsMissingDependenciesAndNilGrant(t *testing.T) {
 	require.ErrorIs(t, err, ErrCanonicalWalletLeaseMissing)
 	require.Equal(t, 0, store.installCalls)
 }
+
+func TestPhase34ProtoAuthorizeMapsCapReachedAndContention(t *testing.T) {
+	for _, tc := range []struct {
+		err    error
+		reason AuthorizationRefusalReason
+	}{
+		{ErrCanonicalWalletLeaseCapReached, AuthorizationRefusalLeaseCapReached},
+		{ErrCanonicalWalletLeaseContention, AuthorizationRefusalLeaseUnavailable},
+		{ErrCanonicalWalletBalanceShortfall, AuthorizationRefusalBalanceShortfall},
+	} {
+		auth, snap, apiKey, stub, _ := newAuthorizerFixture(t, config.CanonicalWalletModeEnforce)
+		stub.leaseErr = tc.err
+		_, err := auth.Authorize(context.Background(), AuthorizeInput{
+			Snapshot: snap, Estimate: estimateFor(`{"max_tokens":64}`), User: apiKey.User,
+		})
+		refused, ok := AsAuthorizationRefused(err)
+		require.True(t, ok, "%v", tc.err)
+		require.Equal(t, tc.reason, refused.Reason)
+	}
+}
