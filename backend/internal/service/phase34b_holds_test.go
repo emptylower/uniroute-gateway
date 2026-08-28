@@ -7,6 +7,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +18,17 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 )
+
+// p34bApplyHoldOutcomeMigration applies 213 to the dispatcher harness's
+// throwaway database (startCanonicalWalletTestPostgres creates only the
+// outbox table) — read directly, the constraint-6 pattern.
+func p34bApplyHoldOutcomeMigration(t *testing.T, ctx context.Context, db *sql.DB) {
+	t.Helper()
+	sqlContent, err := os.ReadFile(filepath.Join("..", "..", "migrations", "213_wallet_hold_outcome.sql"))
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, string(sqlContent))
+	require.NoError(t, err)
+}
 
 // Phase 3.4b (redesign §10.8, tests 22–29): holds armed at authorization,
 // released on not_written, converted at settlement, the seal's third value on
@@ -162,17 +175,21 @@ func TestPhase34bHoldArmedAtAuthorize(t *testing.T) {
 	require.Equal(t, h.EstimatedUnits, held)
 }
 
-// Test 23 — not_written releases; cancelled contexts are kept indeterminate;
-// a result writes nothing to the hold hash (§10.5).
+// Test 23 — not_written releases; cancelled contexts are kept indeterminate
+// (with the durable outcome row, §10.6); a result writes nothing to the hold
+// hash (§10.5).
 func TestPhase34bNotWrittenReleases(t *testing.T) {
 	ctx := context.Background()
 	rdb := startCanonicalWalletTestRedis(t, ctx)
+	db := startCanonicalWalletTestPostgres(t, ctx)
+	p34bApplyHoldOutcomeMigration(t, ctx, db)
 	store := &gatewayCacheAdapterForTest{rdb: rdb}
+	outbox := &outboxStoreForTest{db: db}
 	now := time.Now().UTC()
 	fake := newFakeEnsureControlPlane(t, func() time.Time { return now })
 	user := "shipany-user-" + uuid.NewString()
 	fake.fund(user, 10_000_000_000)
-	b := p34bBridge(t, ctx, config.CanonicalWalletModeEnforce, fake, store, now)
+	b := p34bDispatcherBridge(t, fake, store, db, outbox, now, 300)
 
 	h := p34bAuthorize(t, ctx, config.CanonicalWalletModeEnforce, b, user, `{"max_tokens":64}`)
 	tok := h.MintWriteToken()
@@ -189,7 +206,8 @@ func TestPhase34bNotWrittenReleases(t *testing.T) {
 	h.RecordOutcome(tok, AuthorizationOutcomeNotWritten, errors.New("dial tcp: connection refused"))
 	require.Equal(t, fmt.Sprintf("%d", h.EstimatedUnits), p34bHashField(t, ctx, store, user, h.LeaseID, "released_units"))
 
-	// context.Canceled is kept indeterminate (§10.5's cross-check)
+	// context.Canceled is kept indeterminate (§10.5's cross-check) and rowed
+	// (§10.6): an open outcome row with resolution NULL
 	h2 := p34bAuthorize(t, ctx, config.CanonicalWalletModeEnforce, b, user, `{"max_tokens":64}`)
 	tok2 := h2.MintWriteToken()
 	h2.RecordOutcome(tok2, AuthorizationOutcomeNotWritten, context.Canceled)
@@ -197,6 +215,9 @@ func TestPhase34bNotWrittenReleases(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "armed", hold2.State, "a cancelled context never releases")
 	require.Equal(t, "indeterminate", hold2.Class)
+	var resolution *string
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT resolution FROM wallet_hold_outcome WHERE authorization_id = $1`, h2.ID).Scan(&resolution))
+	require.Nil(t, resolution, "the indeterminate outcome row is open")
 
 	// a result writes nothing: the hash is byte-identical before/after
 	h3 := p34bAuthorize(t, ctx, config.CanonicalWalletModeEnforce, b, user, `{"max_tokens":64}`)
@@ -216,12 +237,13 @@ func TestPhase34bSettlementConvertsTheHold(t *testing.T) {
 	ctx := context.Background()
 	rdb := startCanonicalWalletTestRedis(t, ctx)
 	db := startCanonicalWalletTestPostgres(t, ctx)
+	p34bApplyHoldOutcomeMigration(t, ctx, db)
 	store := &gatewayCacheAdapterForTest{rdb: rdb}
 	outbox := &outboxStoreForTest{db: db}
 	now := time.Now().UTC()
 	fake := newFakeEnsureControlPlane(t, func() time.Time { return now })
 	user := "shipany-user-" + uuid.NewString()
-	fake.fund(user, 100_000_000_000)
+	fake.fund(user, 10_000_000_000)
 	b := p34bDispatcherBridge(t, fake, store, db, outbox, now, 300)
 
 	dupBase := canonicalWalletBridgeMetrics.holdConvertDuplicate.Load()
@@ -474,4 +496,46 @@ func TestPhase34bShadowArmsAndNeverRefuses(t *testing.T) {
 	require.NotNil(t, he.Refusal)
 	require.Equal(t, AuthorizationRefusalLeaseUnavailable, he.Refusal.Reason)
 	require.False(t, he.HoldArmed)
+}
+
+// Test 26 — an indeterminate hold is KEPT (state=armed, its units stay
+// consumed — the two commitments of §2.0.1), its outcome row is open, the
+// reaper skips it past the grace (the reaper leg lands with Task 5), and a
+// late settlement converts it and the row reads settled (§10.6/§10.5).
+func TestPhase34bIndeterminateKeptAndLateSettlementSettlesTheRow(t *testing.T) {
+	ctx := context.Background()
+	rdb := startCanonicalWalletTestRedis(t, ctx)
+	db := startCanonicalWalletTestPostgres(t, ctx)
+	p34bApplyHoldOutcomeMigration(t, ctx, db)
+	store := &gatewayCacheAdapterForTest{rdb: rdb}
+	outbox := &outboxStoreForTest{db: db}
+	now := time.Now().UTC()
+	fake := newFakeEnsureControlPlane(t, func() time.Time { return now })
+	user := "shipany-user-" + uuid.NewString()
+	fake.fund(user, 10_000_000_000)
+	b := p34bDispatcherBridge(t, fake, store, db, outbox, now, 300)
+
+	h := p34bAuthorize(t, ctx, config.CanonicalWalletModeEnforce, b, user, `{"max_tokens":64}`)
+	tok := h.MintWriteToken()
+	h.RecordOutcome(tok, AuthorizationOutcomeNotWritten, context.Canceled)
+	hold, err := store.GetCanonicalWalletHold(ctx, user, h.ID)
+	require.NoError(t, err)
+	require.Equal(t, "armed", hold.State, "the indeterminate hold keeps its units consumed")
+	require.Equal(t, "indeterminate", hold.Class)
+	require.Equal(t, fmt.Sprintf("%d", h.EstimatedUnits), p34bHashField(t, ctx, store, user, h.LeaseID, "consumed_units"))
+	var resolution *string
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT resolution FROM wallet_hold_outcome WHERE authorization_id = $1`, h.ID).Scan(&resolution))
+	require.Nil(t, resolution, "the row is open")
+
+	// a late settlement converts the held hold and settles the row
+	require.True(t, b.ObserveSettlement(CanonicalWalletSettlementEvent{
+		GatewayRequestID: "req-26", PlatformUserID: user, Currency: "CNY",
+		AmountUnits: h.EstimatedUnits / 2, OccurredAt: now, AuthorizationID: h.ID,
+	}))
+	hold, err = store.GetCanonicalWalletHold(ctx, user, h.ID)
+	require.NoError(t, err)
+	require.Equal(t, "settled", hold.State)
+	var settled string
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT resolution FROM wallet_hold_outcome WHERE authorization_id = $1`, h.ID).Scan(&settled))
+	require.Equal(t, "settled", settled, "the late conversion settles the open row")
 }

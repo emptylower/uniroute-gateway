@@ -918,6 +918,9 @@ func newCanonicalWalletBridge(cfg config.CanonicalWalletConfig, store CanonicalW
 		// resolvable only by this same instance.
 		workerID:             "sub2api-wallet-dispatcher-" + uuid.NewString(),
 		callerSlotTTLSeconds: callerSlotTTLSeconds,
+		// Phase 3.4b (§10.6): the outcome-row store on the bridge's OWN db —
+		// never a new provider (constraint 2); nil (a no-op sink) without one.
+		holdOutcomes: newWalletHoldOutcomeStore(outboxDB),
 	}
 	go b.runOutboxDispatcher()
 	return b
