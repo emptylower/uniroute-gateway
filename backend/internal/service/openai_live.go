@@ -637,7 +637,7 @@ func (s *OpenAIGatewayService) ProxyLiveSideband(
 				errCh <- readErr
 				return
 			}
-			if writeErr := upstream.WriteFrame(proxyCtx, messageType, payload); writeErr != nil {
+			if writeErr := upstream.WriteFrame(WithNonBillableUpstream(proxyCtx, NonBillableLiveSideband), messageType, payload); writeErr != nil {
 				errCh <- writeErr
 				return
 			}
@@ -706,7 +706,7 @@ func (s *OpenAIGatewayService) runLiveController(
 			return err
 		case <-maxTimer.C:
 			closeCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			_ = upstream.WriteFrame(closeCtx, coderws.MessageText, []byte(`{"type":"session.close"}`))
+			_ = upstream.WriteFrame(WithNonBillableUpstream(closeCtx, NonBillableLiveSideband), coderws.MessageText, []byte(`{"type":"session.close"}`))
 			cancel()
 			return context.DeadlineExceeded
 		case <-refreshTicker.C:
@@ -813,7 +813,7 @@ func (s *OpenAIGatewayService) runLiveObserverConnection(record *LiveCallRecord,
 			}
 		case <-maxTimer.C:
 			closeCtx, closeCancel := context.WithTimeout(context.Background(), 2*time.Second)
-			_ = upstream.WriteFrame(closeCtx, coderws.MessageText, []byte(`{"type":"session.close"}`))
+			_ = upstream.WriteFrame(WithNonBillableUpstream(closeCtx, NonBillableLiveSideband), coderws.MessageText, []byte(`{"type":"session.close"}`))
 			closeCancel()
 			return context.DeadlineExceeded
 		}
