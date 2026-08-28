@@ -301,7 +301,7 @@ func (c *canonicalWalletHTTPClient) EnsureLease(ctx context.Context, request can
 // request shape for POST /api/internal/v1/wallet/settlements (still
 // *_micros, unchanged by this phase) — kept separate from the internal
 // CanonicalWalletSettlementEvent type for the same reason
-// canonicalWalletLeaseWireResponse is kept separate from CanonicalWalletLease.
+// canonicalWalletEnsureWireResponse is kept separate from CanonicalWalletLease.
 type canonicalWalletSettlementWireRequest struct {
 	PlatformUserID          string `json:"platform_user_id"`
 	EventID                 string `json:"event_id"`
@@ -348,7 +348,7 @@ func (c *canonicalWalletHTTPClient) SubmitSettlement(ctx context.Context, event 
 	if wireResponse.CanonicalBalanceMicros != nil {
 		// Multiplying UP in scale (micros -> cny-e8-v1 units) is always
 		// exact, the same non-lossy direction already established in
-		// AcquireLease's wire conversion — the lossy rounding boundary is
+		// EnsureLease's wire conversion — the lossy rounding boundary is
 		// only ever the OTHER direction (units -> the wire's coarser micros
 		// scale, handled above with ceiling division).
 		balanceUnits, err := MulUnits(*wireResponse.CanonicalBalanceMicros, 100)
@@ -692,7 +692,7 @@ func (b *CanonicalWalletBridge) Mode() string {
 // HasCanonicalWalletHeadroom is a READ-ONLY admission gate — it does not
 // reserve anything and does not touch the Redis reservation script at all.
 // It deliberately does NOT call ensureLease: ensureLease can synchronously
-// call ShipAny's AcquireLease and INSTALL a brand-new lease when none
+// call ShipAny's EnsureLease and INSTALL a brand-new lease when none
 // exists or the current one is exhausted, and ShipAny's issueShadowLease
 // only reads available credits and inserts a lease row (it does not
 // atomically transfer credits into a leased ledger) — so repeatedly calling

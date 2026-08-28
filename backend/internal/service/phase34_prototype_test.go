@@ -234,6 +234,8 @@ func TestPhase34Proto15ExhaustionSealsDrainsAndHitsTheCap(t *testing.T) {
 	fake.setContentionOnce()
 	_, err = b.ensureLease(ctx, user+"-c", "CNY", 1, canonicalWalletLeasePurposeAuthorize, "")
 	require.ErrorIs(t, err, ErrCanonicalWalletLeaseContention)
+	_, err = store.GetCanonicalWalletLease(ctx, user+"-c")
+	require.ErrorIs(t, err, ErrCanonicalWalletLeaseMissing, "the refused ensure installed nothing for that user")
 }
 
 // Test 15 (drain half) — the cap opens iff the server's captured_units equals
