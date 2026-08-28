@@ -722,3 +722,121 @@ func TestCanonicalWalletReaperLease(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, again, "after the leader key expires a new tick can be led")
 }
+
+// TestCanonicalWalletReleaseReservationFullAndPartialForms (Phase 3.5,
+// redesign §11.2/§11.3/§11.4): the full form (dropMarker = true —
+// named_lease_id and the late capture) drops the event's reservation marker
+// after one HINCRBY released_units; the partial form (dropMarker = false —
+// the split) keeps the marker so the parent's redelivery answers {5}, and is
+// gated on a per-event RELEASE marker that carries the lease's own
+// PEXPIREAT — the idempotency key a redelivery or a crash-repair re-run
+// needs, so released_units can never be raised twice for one split.
+func TestCanonicalWalletReleaseReservationFullAndPartialForms(t *testing.T) {
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+	c := NewGatewayCache(rdb).(service.CanonicalWalletLeaseStore)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	user := "shipany-user-release"
+
+	// FULL FORM (§11.2 named_lease_id / §11.4 late capture).
+	require.NoError(t, c.InstallCanonicalWalletLease(ctx, service.CanonicalWalletLease{LeaseID: "L-full", PlatformUserID: user, Currency: "CNY", BudgetUnits: 1_000, ExpiresAt: now.Add(10 * time.Minute)}))
+	_, err := c.ReserveCanonicalWalletLease(ctx, user, "L-full", "CNY", "ev-full", 500, now)
+	require.NoError(t, err)
+
+	released, err := c.ReleaseCanonicalWalletReservation(ctx, user, "L-full", "ev-full", 500, true)
+	require.NoError(t, err)
+	require.True(t, released, "the full form reports its write")
+	rel, err := rdb.HGet(ctx, canonicalWalletLeaseKey(user, "L-full"), "released_units").Result()
+	require.NoError(t, err)
+	require.Equal(t, "500", rel, "released_units == A")
+	marker, err := rdb.Get(ctx, canonicalWalletReservationKey(user, "ev-full")).Result()
+	require.ErrorIs(t, err, redis.Nil, "the reservation marker is gone — the DEL is the full form's idempotency")
+	_ = marker
+
+	// A second full-form call finds no marker: {1}, false, no write.
+	released, err = c.ReleaseCanonicalWalletReservation(ctx, user, "L-full", "ev-full", 500, true)
+	require.NoError(t, err)
+	require.False(t, released)
+	rel, err = rdb.HGet(ctx, canonicalWalletLeaseKey(user, "L-full"), "released_units").Result()
+	require.NoError(t, err)
+	require.Equal(t, "500", rel, "nothing was written a second time")
+
+	// PARTIAL FORM (§11.3 the split): a fresh reservation, release A−H.
+	require.NoError(t, c.InstallCanonicalWalletLease(ctx, service.CanonicalWalletLease{LeaseID: "L-part", PlatformUserID: user, Currency: "CNY", BudgetUnits: 1_000, ExpiresAt: now.Add(10 * time.Minute)}))
+	_, err = c.ReserveCanonicalWalletLease(ctx, user, "L-part", "CNY", "ev-part", 500, now)
+	require.NoError(t, err)
+
+	released, err = c.ReleaseCanonicalWalletReservation(ctx, user, "L-part", "ev-part", 200, false)
+	require.NoError(t, err)
+	require.True(t, released)
+	rel, err = rdb.HGet(ctx, canonicalWalletLeaseKey(user, "L-part"), "released_units").Result()
+	require.NoError(t, err)
+	require.Equal(t, "200", rel, "released_units == A − H")
+	marker, err = rdb.Get(ctx, canonicalWalletReservationKey(user, "ev-part")).Result()
+	require.NoError(t, err)
+	require.Equal(t, "L-part", marker, "the reservation marker survives — the parent's redelivery must answer {5}")
+	// The release marker exists and ages with the lease: its PTTL equals the
+	// lease hash's own within a second (both PEXPIREATs are the lease's
+	// expires_at_ms).
+	releaseKey := canonicalWalletReleaseMarkerKey(user, "ev-part")
+	storedLease, err := rdb.Get(ctx, releaseKey).Result()
+	require.NoError(t, err)
+	require.Equal(t, "L-part", storedLease)
+	markerTTL, err := rdb.PTTL(ctx, releaseKey).Result()
+	require.NoError(t, err)
+	leaseTTL, err := rdb.PTTL(ctx, canonicalWalletLeaseKey(user, "L-part")).Result()
+	require.NoError(t, err)
+	require.LessOrEqual(t, markerTTL-leaseTTL, time.Second, "the release marker carries the lease's own PEXPIREAT")
+	require.GreaterOrEqual(t, markerTTL-leaseTTL, -time.Second, "…within a second of the lease hash's")
+
+	// A second identical partial call: {7} on the release marker — false, and
+	// released_units is NOT raised a second time.
+	released, err = c.ReleaseCanonicalWalletReservation(ctx, user, "L-part", "ev-part", 200, false)
+	require.NoError(t, err)
+	require.False(t, released, "the release marker is the partial form's idempotency gate")
+	rel, err = rdb.HGet(ctx, canonicalWalletLeaseKey(user, "L-part"), "released_units").Result()
+	require.NoError(t, err)
+	require.Equal(t, "200", rel, "never 2 × (A − H) — §11.3's idempotency bullet")
+
+	// A marker pointing at a DIFFERENT lease: {6} — false, no write.
+	require.NoError(t, c.InstallCanonicalWalletLease(ctx, service.CanonicalWalletLease{LeaseID: "L-other", PlatformUserID: user, Currency: "CNY", BudgetUnits: 1_000, ExpiresAt: now.Add(10 * time.Minute)}))
+	released, err = c.ReleaseCanonicalWalletReservation(ctx, user, "L-other", "ev-part", 100, false)
+	require.NoError(t, err)
+	require.False(t, released)
+	rel, err = rdb.HGet(ctx, canonicalWalletLeaseKey(user, "L-other"), "released_units").Result()
+	require.ErrorIs(t, err, redis.Nil, "L-other's hash was never touched")
+
+	// A MISSING lease hash with an existing reservation marker (§11.4: a
+	// closed lease whose hash aged out): released_units is not written (there
+	// is no hash), the marker follows its form, and the call reports true.
+	require.NoError(t, c.InstallCanonicalWalletLease(ctx, service.CanonicalWalletLease{LeaseID: "L-gone", PlatformUserID: user, Currency: "CNY", BudgetUnits: 1_000, ExpiresAt: now.Add(10 * time.Minute)}))
+	_, err = c.ReserveCanonicalWalletLease(ctx, user, "L-gone", "CNY", "ev-gone-full", 300, now)
+	require.NoError(t, err)
+	_, err = c.ReserveCanonicalWalletLease(ctx, user, "L-gone", "CNY", "ev-gone-part", 300, now)
+	require.NoError(t, err)
+	require.NoError(t, rdb.Del(ctx, canonicalWalletLeaseKey(user, "L-gone")).Err())
+
+	released, err = c.ReleaseCanonicalWalletReservation(ctx, user, "L-gone", "ev-gone-full", 300, true)
+	require.NoError(t, err)
+	require.True(t, released, "the write path ran — the marker went with it")
+	err = rdb.Get(ctx, canonicalWalletReservationKey(user, "ev-gone-full")).Err()
+	require.ErrorIs(t, err, redis.Nil, "full form: the marker is deleted even without the lease hash")
+
+	released, err = c.ReleaseCanonicalWalletReservation(ctx, user, "L-gone", "ev-gone-part", 100, false)
+	require.NoError(t, err)
+	require.True(t, released, "the write path ran — the release marker is still written")
+	storedLease, err = rdb.Get(ctx, canonicalWalletReleaseMarkerKey(user, "ev-gone-part")).Result()
+	require.NoError(t, err)
+	require.Equal(t, "L-gone", storedLease, "partial form: the release marker is written even without the lease hash")
+	markerGone, err := rdb.Get(ctx, canonicalWalletReservationKey(user, "ev-gone-part")).Result()
+	require.NoError(t, err)
+	require.Equal(t, "L-gone", markerGone, "partial form: the reservation marker survives even without the lease hash")
+
+	// Validation: zero/negative units and the Lua-safe bound.
+	_, err = c.ReleaseCanonicalWalletReservation(ctx, user, "L-part", "ev-zero", 0, false)
+	require.Error(t, err, "units > 0 is required")
+	_, err = c.ReleaseCanonicalWalletReservation(ctx, user, "L-part", "ev-huge", redisLuaMaxSafeInt64+1, false)
+	require.Error(t, err, "the Lua-safe bound applies")
+}

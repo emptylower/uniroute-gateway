@@ -256,6 +256,12 @@ func (s *LiveRestartLeaseStoreStub) MarkCanonicalWalletHoldClass(context.Context
 	return nil, errors.New("not implemented in this stub")
 }
 
+// Phase 3.5 (Task 2): the reservation release is not driven by any Live
+// restart test — not-implemented, same convention as above.
+func (s *LiveRestartLeaseStoreStub) ReleaseCanonicalWalletReservation(context.Context, string, string, string, int64, bool) (bool, error) {
+	return false, errors.New("not implemented in this stub")
+}
+
 type LiveRestartControlStub struct {
 	Lease *CanonicalWalletLease
 }

@@ -276,6 +276,39 @@ var markCanonicalWalletHoldClassScript = redis.NewScript(`
 	return {0, ARGV[1]}
 `)
 
+// releaseCanonicalWalletReservationScript (Phase 3.5, redesign §11.2/§11.3/
+// §11.4) releases a settlement event's reservation against the lease named
+// by the marker. KEYS: lease hash, event reservation marker, event release
+// marker. ARGV: lease_id, units, drop_marker ('1' | '0').
+// {1} = no marker (nothing owed — a re-run of the full form); {6} = the
+// marker points at a different lease (a caller naming the wrong lease — no
+// write); {7} = the partial form's release marker already exists (the
+// idempotency gate: a redelivery or a crash-repair re-run must never raise
+// released_units twice). The full form (drop_marker = '1' — named_lease_id
+// and the late capture) DELs the marker, which is ITS idempotency; the
+// partial form (drop_marker = '0' — the split) keeps the marker (the
+// parent's redelivery must answer {5} on the reserve script) and writes the
+// release marker with the lease's own PEXPIREAT so both age out together. A
+// missing lease hash (a closed lease whose hash aged out, §11.4) writes no
+// released_units but still follows its form — the money already returned
+// through the lease's expiry.
+var releaseCanonicalWalletReservationScript = redis.NewScript(`
+	local marker = redis.call('GET', KEYS[2])
+	if marker == false then return {1} end
+	if marker ~= ARGV[1] then return {6} end
+	if ARGV[3] == '0' and redis.call('EXISTS', KEYS[3]) == 1 then return {7} end
+	local lease_exists = redis.call('EXISTS', KEYS[1]) == 1
+	if lease_exists then redis.call('HINCRBY', KEYS[1], 'released_units', tonumber(ARGV[2])) end
+	if ARGV[3] == '0' then
+		redis.call('SET', KEYS[3], ARGV[1])
+		local expires_at = tonumber(redis.call('HGET', KEYS[1], 'expires_at_ms') or '0')
+		if expires_at > 0 then redis.call('PEXPIREAT', KEYS[3], expires_at) else redis.call('PEXPIRE', KEYS[3], 3600000) end
+	else
+		redis.call('DEL', KEYS[2])
+	end
+	return {0}
+`)
+
 func canonicalWalletLeaseKeyPrefix(platformUserID string) string {
 	return canonicalWalletLeasePrefix + "{" + canonicalWalletUserHash(platformUserID) + "}:"
 }
@@ -291,6 +324,14 @@ func canonicalWalletCurrentKey(platformUserID string) string {
 func canonicalWalletReservationKey(platformUserID, eventID string) string {
 	eventSum := sha256.Sum256([]byte(strings.TrimSpace(eventID)))
 	return "canonical_wallet:reservation:{" + canonicalWalletUserHash(platformUserID) + "}:" + hex.EncodeToString(eventSum[:])
+}
+
+// canonicalWalletReleaseMarkerKey (§11.2): the partial release form's
+// idempotency marker — same user hash tag (same cluster slot) as the
+// reservation marker it gates, so the script touches one slot only.
+func canonicalWalletReleaseMarkerKey(platformUserID, eventID string) string {
+	eventSum := sha256.Sum256([]byte(strings.TrimSpace(eventID)))
+	return "canonical_wallet:released:{" + canonicalWalletUserHash(platformUserID) + "}:" + hex.EncodeToString(eventSum[:])
 }
 
 // Hold keys (3.4b, §10.3). The per-hold hash and the per-user set share the
@@ -746,6 +787,60 @@ func (c *gatewayCache) MarkCanonicalWalletHoldClass(ctx context.Context, platfor
 		return c.GetCanonicalWalletHold(ctx, platformUserID, authorizationID)
 	default:
 		return nil, fmt.Errorf("unknown canonical wallet hold mark-class code %d", code)
+	}
+}
+
+// ReleaseCanonicalWalletReservation (Phase 3.5, redesign §11.2) releases a
+// settlement event's reservation on the lease its marker names. Two callers,
+// two dispositions: named_lease_id and the late capture pass dropMarker =
+// true (the event was captured elsewhere or the row is unbound — nothing
+// more will be captured here, and the DEL is the idempotency); the split
+// passes dropMarker = false (the parent redelivers against this lease and
+// its marker must survive for the reserve script's {5}) and is gated on the
+// per-event release marker. Returns true iff the script ran its write path;
+// {1}/{6}/{7} answer (false, nil).
+func (c *gatewayCache) ReleaseCanonicalWalletReservation(ctx context.Context, platformUserID, leaseID, eventID string, units int64, dropMarker bool) (bool, error) {
+	if c == nil || c.rdb == nil {
+		return false, errors.New("canonical wallet Redis store unavailable")
+	}
+	if strings.TrimSpace(platformUserID) == "" || strings.TrimSpace(leaseID) == "" || strings.TrimSpace(eventID) == "" {
+		return false, errors.New("canonical wallet reservation release requires a platform user id, a lease id and an event id")
+	}
+	if err := ensureRedisLuaSafeInt64(units); err != nil {
+		return false, err
+	}
+	if units <= 0 {
+		return false, errors.New("canonical wallet reservation release requires positive units")
+	}
+	drop := "0"
+	if dropMarker {
+		drop = "1"
+	}
+	result, err := releaseCanonicalWalletReservationScript.Run(ctx, c.rdb,
+		[]string{
+			canonicalWalletLeaseKey(platformUserID, leaseID),
+			canonicalWalletReservationKey(platformUserID, eventID),
+			canonicalWalletReleaseMarkerKey(platformUserID, eventID),
+		},
+		leaseID, units, drop,
+	).Slice()
+	if err != nil {
+		return false, err
+	}
+	if len(result) == 0 {
+		return false, errors.New("canonical wallet reservation release returned no result")
+	}
+	code, err := redisResultInt64(result[0])
+	if err != nil {
+		return false, err
+	}
+	switch code {
+	case 0:
+		return true, nil
+	case 1, 6, 7:
+		return false, nil
+	default:
+		return false, fmt.Errorf("unknown canonical wallet reservation release code %d", code)
 	}
 }
 

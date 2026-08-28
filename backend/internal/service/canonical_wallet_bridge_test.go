@@ -39,6 +39,9 @@ type canonicalWalletStoreStub struct {
 	releasedUnits int64 // per-lease released figure the release/convert stubs raise
 	holdUsers     map[string]bool
 	emptyMarkers  map[string]bool
+	// releaseReservationCalls (Phase 3.5, Task 2): the recorded
+	// ReleaseCanonicalWalletReservation calls.
+	releaseReservationCalls []canonicalWalletReservationReleaseCall
 }
 
 func (s *canonicalWalletStoreStub) holdMap() map[string]*CanonicalWalletHold {
@@ -233,6 +236,24 @@ func (s *canonicalWalletStoreStub) MarkCanonicalWalletHoldClass(_ context.Contex
 	hold.Class = class
 	copy := *hold
 	return &copy, nil
+}
+
+// releaseReservationCalls records ReleaseCanonicalWalletReservation's calls
+// (Phase 3.5, Task 2) — the unit tests assert the dispatcher's dispositions
+// through this stub without Redis.
+type canonicalWalletReservationReleaseCall struct {
+	PlatformUserID string
+	LeaseID        string
+	EventID        string
+	Units          int64
+	DropMarker     bool
+}
+
+func (s *canonicalWalletStoreStub) ReleaseCanonicalWalletReservation(_ context.Context, platformUserID, leaseID, eventID string, units int64, dropMarker bool) (bool, error) {
+	s.releaseReservationCalls = append(s.releaseReservationCalls, canonicalWalletReservationReleaseCall{
+		PlatformUserID: platformUserID, LeaseID: leaseID, EventID: eventID, Units: units, DropMarker: dropMarker,
+	})
+	return true, nil
 }
 
 type canonicalWalletControlStub struct {
@@ -479,6 +500,15 @@ func (s *outboxStoreStub) BindOutboxEventLease(context.Context, int64, string, s
 }
 func (s *outboxStoreStub) ReclaimStaleInFlightEvents(context.Context, time.Duration) (int64, error) {
 	return 0, nil
+}
+func (s *outboxStoreStub) SplitOutboxEvent(context.Context, int64, string, int64, string, bool) (int64, error) {
+	return 0, errors.New("outboxStoreStub does not implement SplitOutboxEvent")
+}
+func (s *outboxStoreStub) ClearPendingRelease(context.Context, int64) error {
+	return errors.New("outboxStoreStub does not implement ClearPendingRelease")
+}
+func (s *outboxStoreStub) SumDeadLetterUnits(context.Context, string) (int64, error) {
+	return 0, errors.New("outboxStoreStub does not implement SumDeadLetterUnits")
 }
 
 func TestObserveCanonicalWalletSettlementReturnBool(t *testing.T) {

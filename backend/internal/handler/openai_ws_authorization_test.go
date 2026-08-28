@@ -369,6 +369,12 @@ func (s *stubWalletLeaseStore) MarkCanonicalWalletHoldClass(context.Context, str
 	return nil, errors.New("not implemented in this stub")
 }
 
+// Phase 3.5 (Task 2): the reservation release is not driven by any handler
+// test — same not-implemented convention as the hold surface above.
+func (s *stubWalletLeaseStore) ReleaseCanonicalWalletReservation(context.Context, string, string, string, int64, bool) (bool, error) {
+	return false, errors.New("not implemented in this stub")
+}
+
 type openAIWSRefusalReportingAccountRepoStub struct {
 	openAIWSFailoverHandlerAccountRepoStub
 	reportedFailure *atomic.Bool

@@ -358,6 +358,25 @@ var testMarkCanonicalWalletHoldClassScript = redis.NewScript(`
 	return {0, ARGV[1]}
 `)
 
+// testReleaseCanonicalWalletReservationScript is the verbatim twin of
+// repository.releaseCanonicalWalletReservationScript (Phase 3.5, §11.2).
+var testReleaseCanonicalWalletReservationScript = redis.NewScript(`
+	local marker = redis.call('GET', KEYS[2])
+	if marker == false then return {1} end
+	if marker ~= ARGV[1] then return {6} end
+	if ARGV[3] == '0' and redis.call('EXISTS', KEYS[3]) == 1 then return {7} end
+	local lease_exists = redis.call('EXISTS', KEYS[1]) == 1
+	if lease_exists then redis.call('HINCRBY', KEYS[1], 'released_units', tonumber(ARGV[2])) end
+	if ARGV[3] == '0' then
+		redis.call('SET', KEYS[3], ARGV[1])
+		local expires_at = tonumber(redis.call('HGET', KEYS[1], 'expires_at_ms') or '0')
+		if expires_at > 0 then redis.call('PEXPIREAT', KEYS[3], expires_at) else redis.call('PEXPIRE', KEYS[3], 3600000) end
+	else
+		redis.call('DEL', KEYS[2])
+	end
+	return {0}
+`)
+
 func testCanonicalWalletUserHash(platformUserID string) string {
 	sum := sha256.Sum256([]byte(strings.TrimSpace(platformUserID)))
 	return hex.EncodeToString(sum[:])
@@ -374,6 +393,11 @@ func testCanonicalWalletCurrentKey(platformUserID string) string {
 func testCanonicalWalletReservationKey(platformUserID, eventID string) string {
 	eventSum := sha256.Sum256([]byte(strings.TrimSpace(eventID)))
 	return "canonical_wallet:reservation:{" + testCanonicalWalletUserHash(platformUserID) + "}:" + hex.EncodeToString(eventSum[:])
+}
+
+func testCanonicalWalletReleaseMarkerKey(platformUserID, eventID string) string {
+	eventSum := sha256.Sum256([]byte(strings.TrimSpace(eventID)))
+	return "canonical_wallet:released:{" + testCanonicalWalletUserHash(platformUserID) + "}:" + hex.EncodeToString(eventSum[:])
 }
 
 const testCanonicalWalletHoldPrefix = "canonical_wallet:hold:"
@@ -820,6 +844,50 @@ func (c *gatewayCacheAdapterForTest) MarkCanonicalWalletHoldClass(ctx context.Co
 }
 
 var _ CanonicalWalletLeaseStore = (*gatewayCacheAdapterForTest)(nil)
+
+// ReleaseCanonicalWalletReservation mirrors repository.gatewayCache's method
+// verbatim (Phase 3.5, §11.2) — same script, same keys, same branch codes.
+func (c *gatewayCacheAdapterForTest) ReleaseCanonicalWalletReservation(ctx context.Context, platformUserID, leaseID, eventID string, units int64, dropMarker bool) (bool, error) {
+	if strings.TrimSpace(platformUserID) == "" || strings.TrimSpace(leaseID) == "" || strings.TrimSpace(eventID) == "" {
+		return false, errors.New("canonical wallet reservation release requires a platform user id, a lease id and an event id")
+	}
+	if err := ensureTestRedisLuaSafeInt64(units); err != nil {
+		return false, err
+	}
+	if units <= 0 {
+		return false, errors.New("canonical wallet reservation release requires positive units")
+	}
+	drop := "0"
+	if dropMarker {
+		drop = "1"
+	}
+	result, err := testReleaseCanonicalWalletReservationScript.Run(ctx, c.rdb,
+		[]string{
+			testCanonicalWalletLeaseKey(platformUserID, leaseID),
+			testCanonicalWalletReservationKey(platformUserID, eventID),
+			testCanonicalWalletReleaseMarkerKey(platformUserID, eventID),
+		},
+		leaseID, units, drop,
+	).Slice()
+	if err != nil {
+		return false, err
+	}
+	if len(result) == 0 {
+		return false, errors.New("canonical wallet reservation release returned no result")
+	}
+	code, err := testRedisResultInt64(result[0])
+	if err != nil {
+		return false, err
+	}
+	switch code {
+	case 0:
+		return true, nil
+	case 1, 6, 7:
+		return false, nil
+	default:
+		return false, fmt.Errorf("unknown canonical wallet reservation release code %d", code)
+	}
+}
 
 // TestCanonicalWalletShadowModeAllowsEverythingAndReservesNothing proves the
 // disclosed Phase-2 contract for shadow mode across ALL THREE entry points:

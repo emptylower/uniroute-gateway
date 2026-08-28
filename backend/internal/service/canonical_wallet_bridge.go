@@ -205,6 +205,13 @@ type CanonicalWalletLeaseStore interface {
 	// MarkCanonicalWalletHoldClass sets class iff state = armed (a script);
 	// {7} is a CanonicalWalletHoldNotArmedError, {1} ErrCanonicalWalletHoldMissing.
 	MarkCanonicalWalletHoldClass(ctx context.Context, platformUserID, authorizationID, class string) (*CanonicalWalletHold, error)
+	// ReleaseCanonicalWalletReservation (Phase 3.5, §11.2) releases a
+	// settlement event's reservation on the lease its marker names:
+	// dropMarker = true (named_lease_id, the late capture) drops the marker —
+	// the full form; dropMarker = false (the split) keeps it and is gated on
+	// a per-event release marker — the partial form's idempotency key.
+	// Returns true iff the script ran its write path.
+	ReleaseCanonicalWalletReservation(ctx context.Context, platformUserID, leaseID, eventID string, units int64, dropMarker bool) (bool, error)
 }
 
 type CanonicalWalletSettlementEvent struct {
