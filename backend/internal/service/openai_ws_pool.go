@@ -223,12 +223,42 @@ func (l *openAIWSConnLease) MarkBroken() {
 	l.pool.evictConn(l.accountID, l.conn.id)
 }
 
+// ArmAuthorization arms the turn's handle on the leased conn. Release() clears it,
+// so a reused pooled connection never carries the previous lease's authorization
+// (spec §2.0: the pool hands the same conn to successive users). The released
+// guard matches activeConn() (openai_ws_pool.go:89-97): a released lease must not
+// arm the conn the next acquirer holds.
+func (l *openAIWSConnLease) ArmAuthorization(h *AuthorizationHandle) {
+	if l == nil || l.conn == nil || l.released.Load() {
+		return
+	}
+	if a, ok := l.conn.ws.(authorizationArmable); ok {
+		a.ArmAuthorization(h)
+	}
+}
+
+func (l *openAIWSConnLease) DisarmAuthorization() {
+	if l == nil || l.conn == nil || l.released.Load() { // symmetric with ArmAuthorization: a released lease must not clear the next acquirer's handle
+		return
+	}
+	if a, ok := l.conn.ws.(authorizationArmable); ok {
+		a.DisarmAuthorization()
+	}
+}
+
 func (l *openAIWSConnLease) Release() {
 	if l == nil || l.conn == nil {
 		return
 	}
 	if !l.released.CompareAndSwap(false, true) {
 		return
+	}
+	// Clear the turn's handle on the conn BEFORE it returns to the pool, so a
+	// reused connection never carries this lease's authorization (spec §2.0).
+	// The conn's method is called directly: `released` is already true here, so
+	// the lease's own guard would skip it.
+	if a, ok := l.conn.ws.(authorizationArmable); ok {
+		a.DisarmAuthorization()
 	}
 	l.conn.release()
 	if l.pool != nil {
@@ -617,7 +647,7 @@ type openAIWSConnPool struct {
 func newOpenAIWSConnPool(cfg *config.Config) *openAIWSConnPool {
 	pool := &openAIWSConnPool{
 		cfg:          cfg,
-		clientDialer: newDefaultOpenAIWSClientDialer(),
+		clientDialer: newAuthorizingOpenAIWSClientDialer(newDefaultOpenAIWSClientDialer(), cfg),
 		workerStopCh: make(chan struct{}),
 	}
 	pool.startBackgroundWorkers()
