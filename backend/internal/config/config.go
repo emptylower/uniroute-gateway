@@ -1592,6 +1592,18 @@ type CanonicalWalletConfig struct {
 	// "settle" = settle from the frozen snapshot. Independent of Mode so the
 	// snapshot can be proven in shadow before any hold exists.
 	BillingSnapshotMode string `mapstructure:"billing_snapshot_mode"`
+	// Holds (Phase 3.4b, redesign §10.1): "off" (default) = 3.4a byte-for-byte —
+	// no hold is armed, no callback fires, ObserveSettlement converts nothing and
+	// no reaper starts; "on" arms a hold at every authorization. Literal match.
+	Holds string `mapstructure:"holds"`
+	// OrphanGraceSeconds (§10.7): an unclassified hold older than this with no
+	// live owner is released by the reaper. A FLOOR on the finite upstream
+	// timeouts, not a bound on attempt lifetime.
+	OrphanGraceSeconds int `mapstructure:"orphan_grace_seconds"`
+	// OrphanSweepIntervalSeconds (§10.7): the reaper's tick; <= grace/2.
+	OrphanSweepIntervalSeconds int `mapstructure:"orphan_sweep_interval_seconds"`
+	// OrphanSweepBatch (§10.7): holds examined per user per tick.
+	OrphanSweepBatch int `mapstructure:"orphan_sweep_batch"`
 }
 
 // TotpConfig TOTP 双因素认证配置
@@ -2053,6 +2065,10 @@ func setDefaults() {
 	viper.SetDefault("canonical_wallet.settlement_workers", 2)
 	viper.SetDefault("canonical_wallet.enforce_ready", false)
 	viper.SetDefault("canonical_wallet.billing_snapshot_mode", "record")
+	viper.SetDefault("canonical_wallet.holds", "off")
+	viper.SetDefault("canonical_wallet.orphan_grace_seconds", 900)
+	viper.SetDefault("canonical_wallet.orphan_sweep_interval_seconds", 60)
+	viper.SetDefault("canonical_wallet.orphan_sweep_batch", 200)
 
 	// Turnstile
 	viper.SetDefault("turnstile.required", false)
@@ -2695,6 +2711,35 @@ func (c *Config) Validate() error {
 		if strings.TrimSpace(c.PlatformIdentity.Version) == "" {
 			return fmt.Errorf("platform_identity.version is required when platform_identity.enabled=true")
 		}
+	}
+	// The holds block sits before the mode switch (not inside the shadow/enforce
+	// case) so canonical_wallet.holds=on with mode=disabled is refused: the mode
+	// switch's disabled case would otherwise skip it (§10.1).
+	switch c.CanonicalWallet.Holds {
+	case "":
+		c.CanonicalWallet.Holds = "off"
+	case "off":
+	case "on":
+		if c.CanonicalWallet.Mode == "" || c.CanonicalWallet.Mode == CanonicalWalletModeDisabled {
+			return fmt.Errorf("canonical_wallet.holds=on requires canonical_wallet.mode shadow or enforce")
+		}
+		longest := 0
+		for _, t := range []int{c.Gateway.ResponseHeaderTimeout, c.Gateway.OpenAIResponseHeaderTimeout, c.Gateway.StreamDataIntervalTimeout, c.Gateway.ImageStreamDataIntervalTimeout} {
+			if t > longest {
+				longest = t
+			}
+		}
+		if c.CanonicalWallet.OrphanGraceSeconds < longest || c.CanonicalWallet.OrphanGraceSeconds < 60 {
+			return fmt.Errorf("canonical_wallet.orphan_grace_seconds must be >= every finite upstream timeout (%d) and >= 60", longest)
+		}
+		if c.CanonicalWallet.OrphanSweepIntervalSeconds < 5 || c.CanonicalWallet.OrphanSweepIntervalSeconds > c.CanonicalWallet.OrphanGraceSeconds/2 {
+			return fmt.Errorf("canonical_wallet.orphan_sweep_interval_seconds must be between 5 and orphan_grace_seconds/2 (%d)", c.CanonicalWallet.OrphanGraceSeconds/2)
+		}
+		if c.CanonicalWallet.OrphanSweepBatch < 1 || c.CanonicalWallet.OrphanSweepBatch > 1000 {
+			return fmt.Errorf("canonical_wallet.orphan_sweep_batch must be between 1 and 1000")
+		}
+	default:
+		return fmt.Errorf("canonical_wallet.holds must be off or on")
 	}
 	switch c.CanonicalWallet.Mode {
 	case "", CanonicalWalletModeDisabled:

@@ -2738,6 +2738,52 @@ func TestValidateCanonicalWalletEnforceGate(t *testing.T) {
 	})
 }
 
+func TestValidateCanonicalWalletHolds(t *testing.T) {
+	base := func() *Config {
+		c, err := newCanonicalWalletValidateConfig(t, CanonicalWalletModeShadow, false, false) // config_test.go:2701 — env vars + Load(), which already validated
+		require.NoError(t, err)
+		c.CanonicalWallet.Holds = "on"
+		c.CanonicalWallet.OrphanGraceSeconds = 900
+		c.CanonicalWallet.OrphanSweepIntervalSeconds = 60
+		c.CanonicalWallet.OrphanSweepBatch = 200
+		return c
+	}
+	t.Run("off by default and accepted", func(t *testing.T) {
+		c := base(); c.CanonicalWallet.Holds = ""
+		require.NoError(t, c.Validate()); require.Equal(t, "off", c.CanonicalWallet.Holds) // Validate() (config.go:2617) is re-callable on the mutated struct; every subtest re-validates c rather than building a fresh one
+	})
+	t.Run("literal match", func(t *testing.T) {
+		c := base(); c.CanonicalWallet.Holds = "ON"
+		require.ErrorContains(t, c.Validate(), "canonical_wallet.holds must be off or on")
+	})
+	t.Run("on with mode disabled is refused", func(t *testing.T) {
+		c := base(); c.CanonicalWallet.Mode = CanonicalWalletModeDisabled
+		require.ErrorContains(t, c.Validate(), "canonical_wallet.holds=on requires canonical_wallet.mode shadow or enforce")
+	})
+	t.Run("grace below the longest finite upstream timeout", func(t *testing.T) {
+		c := base(); c.CanonicalWallet.OrphanGraceSeconds = 599
+		require.ErrorContains(t, c.Validate(), "canonical_wallet.orphan_grace_seconds must be >= every finite upstream timeout")
+	})
+	t.Run("grace tracks image_stream_data_interval_timeout", func(t *testing.T) {
+		c := base(); c.Gateway.ImageStreamDataIntervalTimeout = 1800
+		require.ErrorContains(t, c.Validate(), "canonical_wallet.orphan_grace_seconds must be >= every finite upstream timeout (1800)")
+		c.CanonicalWallet.OrphanGraceSeconds = 1800; c.CanonicalWallet.OrphanSweepIntervalSeconds = 60
+		require.NoError(t, c.Validate())
+	})
+	t.Run("interval above half the grace", func(t *testing.T) {
+		c := base(); c.CanonicalWallet.OrphanSweepIntervalSeconds = 451
+		require.ErrorContains(t, c.Validate(), "canonical_wallet.orphan_sweep_interval_seconds must be between 5 and orphan_grace_seconds/2")
+	})
+	t.Run("batch range", func(t *testing.T) {
+		c := base(); c.CanonicalWallet.OrphanSweepBatch = 0
+		require.ErrorContains(t, c.Validate(), "canonical_wallet.orphan_sweep_batch must be between 1 and 1000")
+	})
+	t.Run("off skips the reaper validations", func(t *testing.T) {
+		c := base(); c.CanonicalWallet.Holds = "off"; c.CanonicalWallet.OrphanGraceSeconds = 1
+		require.NoError(t, c.Validate())
+	})
+}
+
 func TestPhase34ProtoExpirySkewMarginValidation(t *testing.T) {
 	cfg, err := newCanonicalWalletValidateConfig(t, CanonicalWalletModeShadow, false, false) // config_test.go:2701
 	require.NoError(t, err)
