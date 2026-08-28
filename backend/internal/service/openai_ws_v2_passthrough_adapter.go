@@ -652,6 +652,25 @@ func (c *openAIWSClientFrameConn) Close() error {
 	return nil
 }
 
+func (s *OpenAIGatewayService) authorizePassthroughTurn(hooks *OpenAIWSIngressHooks, upstream openAIWSClientConn, turn int, payload []byte, sessionHasAccumulatedUsage bool, priorIn, priorOut int) (*AuthorizationHandle, error) {
+	if hooks == nil || hooks.AuthorizeTurn == nil {
+		return nil, nil
+	}
+	est := EstimateInputFromRequestBody(payload, EstimateInputOptions{})
+	est.Continuation = ClassifyWSContinuation(payload, sessionHasAccumulatedUsage) // spec §2.0: previous_response_id or store-on → warm/cold
+	if sessionHasAccumulatedUsage {
+		est.PriorTurnInputTokens, est.PriorTurnOutputTokens = priorIn, priorOut
+	}
+	h, err := hooks.AuthorizeTurn(turn, est)
+	if err != nil {
+		return nil, err
+	}
+	if a, ok := upstream.(authorizationArmable); ok {
+		a.ArmAuthorization(h)
+	}
+	return h, nil
+}
+
 func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	ctx context.Context,
 	c *gin.Context,
@@ -902,6 +921,9 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	}
 
 	completedTurns := atomic.Int32{}
+	lastTurnInput := atomic.Int64{}
+	lastTurnOutput := atomic.Int64{}
+	sessionHasUsage := atomic.Bool{}
 	turnLifecycle := newOpenAIWSPassthroughTurnLifecycle(true)
 	clientFrameConn := &openAIWSClientFrameConn{
 		conn:                 clientConn,
@@ -1023,6 +1045,10 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			//     service_tier 时按 default 处理，billing 应如实反映。
 			if policyErr == nil && blocked == nil && isResponseCreate {
 				usageMeta.updateFromResponseCreate(out, model, requestModelForThisFrame)
+				storeDisabled := s.isOpenAIWSStoreDisabledInRequestRaw(out, account)
+				if _, authErr := s.authorizePassthroughTurn(hooks, upstreamConn, turnNo, out, sessionHasUsage.Load() && !storeDisabled, int(lastTurnInput.Load()), int(lastTurnOutput.Load())); authErr != nil {
+					return out, nil, authErr
+				}
 				acceptedTurn = true
 			}
 			return out, blocked, policyErr
@@ -1040,6 +1066,10 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			_ = clientConn.Write(writeCtx, coderws.MessageText, eventBytes)
 			cancel()
 		},
+	}
+	turn1StoreDisabled := s.isOpenAIWSStoreDisabledInRequestRaw(firstClientMessage, account)
+	if _, authErr := s.authorizePassthroughTurn(hooks, upstreamConn, 1, firstClientMessage, sessionHasUsage.Load() && !turn1StoreDisabled, 0, 0); authErr != nil {
+		return authErr
 	}
 	upstreamFirstMessageSent := false
 	firstWriteCtx, cancelFirstWrite := context.WithTimeout(ctx, s.openAIWSWriteTimeout())
@@ -1063,7 +1093,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			if msgType == coderws.MessageText && strings.TrimSpace(gjson.GetBytes(payload, "type").String()) == "response.create" {
 				return msgType, payload, nil
 			}
-			if writeErr := upstreamFrameConn.WriteFrame(readCtx, msgType, payload); writeErr != nil {
+			if writeErr := upstreamFrameConn.WriteFrame(WithNonBillableUpstream(readCtx, NonBillableInterTurnFrame), msgType, payload); writeErr != nil {
 				return msgType, payload, writeErr
 			}
 		}
@@ -1092,6 +1122,9 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				)
 			},
 			OnTurnComplete: func(turn openaiwsv2.RelayTurnResult) {
+				lastTurnInput.Store(int64(turn.Usage.InputTokens))
+				lastTurnOutput.Store(int64(turn.Usage.OutputTokens))
+				sessionHasUsage.Store(true)
 				turnNo := int(completedTurns.Add(1))
 				turnRequestModel, turnUpstreamModel := usageMeta.turnModels(turn.RequestModel)
 				turnResult := &OpenAIForwardResult{
@@ -1140,6 +1173,9 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			AfterClientWrite: func(msgType coderws.MessageType, payload []byte, writeErr error) {
 				if msgType == coderws.MessageText && openAIWSPassthroughIsTerminalOutput(payload) {
 					turnLifecycle.finishTerminalWrite(writeErr == nil, clientFrameConn.markTurnCompleted)
+					if a, ok := upstreamConn.(authorizationArmable); ok {
+						a.DisarmAuthorization()
+					}
 				}
 			},
 			BeforeRelayCancel: func(exit openaiwsv2.RelayExit) {
@@ -1309,6 +1345,9 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			relayErr,
 		)
 	}
+	if a, ok := upstreamConn.(authorizationArmable); ok {
+		a.DisarmAuthorization()
+	}
 	turnErr := wrapOpenAIWSIngressTurnError(
 		relayExit.Stage,
 		relayErr,
@@ -1324,6 +1363,9 @@ func openAIWSPassthroughRelayClientClose(exit openaiwsv2.RelayExit, completedTur
 	var closeErr *OpenAIWSClientCloseError
 	if errors.As(exit.Err, &closeErr) {
 		return closeErr.StatusCode(), closeErr.Reason(), true
+	}
+	if errors.Is(exit.Err, ErrAuthorizationRefused) {
+		return coderws.StatusCode(AuthorizationRefusedWSCloseStatus), AuthorizationRefusedWSCloseReason, true
 	}
 	var activeTurnTimeoutErr *openAIWSPassthroughActiveTurnTimeoutError
 	if errors.As(exit.Err, &activeTurnTimeoutErr) {
