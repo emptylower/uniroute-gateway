@@ -414,6 +414,7 @@ type OpenAIGatewayService struct {
 	userPlatformQuotaRepo UserPlatformQuotaRepository
 	exchangeRates         *ExchangeRateService
 	canonicalWallet       *CanonicalWalletBridge
+	authorizer            *CanonicalWalletAuthorizer
 	liveAttestation       liveattestation.Provider
 	liveAttestationCipher SecretEncryptor
 
@@ -527,6 +528,7 @@ func NewOpenAIGatewayService(
 	}
 	if walletStore, ok := cache.(CanonicalWalletLeaseStore); ok {
 		svc.canonicalWallet = NewCanonicalWalletBridge(cfg, walletStore, db, outbox)
+		svc.authorizer = NewCanonicalWalletAuthorizer(cfg, svc.canonicalWallet, billingSnapshots)
 	} else if cfg != nil && (cfg.CanonicalWallet.Mode == config.CanonicalWalletModeShadow || cfg.CanonicalWallet.Mode == config.CanonicalWalletModeEnforce) {
 		slog.Error("canonical wallet bridge configured without a Redis lease store; OpenAI shadow observations are disabled")
 	}

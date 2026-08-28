@@ -84,3 +84,21 @@ func (s *BillingSnapshotService) freezeOutcome(snap *BillingSnapshot, err error,
 	logger.LegacyPrintf("service.billing_snapshot", "freeze failed in %s mode for model %q (settling live): %v", s.Mode(), billingModel, err)
 	return nil, nil
 }
+
+// AuthorizeBillableAttempt is the authorization point for the generic families:
+// call it immediately after FreezeBillingSnapshot returned a snapshot, before the
+// Forward call, and attach the handle to the request context (Task 7).
+func (s *GatewayService) AuthorizeBillableAttempt(ctx context.Context, snap *BillingSnapshot, apiKey *APIKey, estimate EstimateInput) (*AuthorizationHandle, error) {
+	return s.authorizer.Authorize(ctx, AuthorizeInput{Snapshot: snap, Estimate: estimate, User: userOfAPIKey(apiKey)})
+}
+
+func (s *OpenAIGatewayService) AuthorizeBillableAttempt(ctx context.Context, snap *BillingSnapshot, apiKey *APIKey, estimate EstimateInput) (*AuthorizationHandle, error) {
+	return s.authorizer.Authorize(ctx, AuthorizeInput{Snapshot: snap, Estimate: estimate, User: userOfAPIKey(apiKey)})
+}
+
+func userOfAPIKey(apiKey *APIKey) *User {
+	if apiKey == nil {
+		return nil
+	}
+	return apiKey.User
+}

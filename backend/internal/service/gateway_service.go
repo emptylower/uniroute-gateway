@@ -716,6 +716,7 @@ type GatewayService struct {
 	userPlatformQuotaRepo UserPlatformQuotaRepository
 	exchangeRates         *ExchangeRateService
 	canonicalWallet       *CanonicalWalletBridge
+	authorizer            *CanonicalWalletAuthorizer
 	publicationStore      ModelAuthorizationStore
 	modeProvider          GovernanceModeProvider
 

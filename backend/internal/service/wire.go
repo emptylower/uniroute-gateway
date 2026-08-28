@@ -1067,6 +1067,10 @@ func ProvideGatewayService(
 		balanceNotifyService, userPlatformQuotaRepo,
 	)
 	svc.billingSnapshotSettler = billingSnapshotSettler{snapshots: billingSnapshots, billing: billingService}
+	// Phase 3.3a: the authorization point reads the bridge NewGatewayService
+	// already populated (gateway_service.go:890) — no new constructor parameter,
+	// no wire change. A nil bridge degrades to token-only handles inside Authorize.
+	svc.authorizer = NewCanonicalWalletAuthorizer(cfg, svc.canonicalWallet, billingSnapshots)
 	svc.SetPublicationStore(store)
 	svc.SetGovernanceModeProvider(modeProvider)
 	return svc
