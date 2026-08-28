@@ -112,9 +112,23 @@ func (f *fakeEnsureControlPlane) lease(user, id string) *fakeLease {
 
 func (l *fakeLease) headroom() int64 { return l.Budget - l.Captured - l.Released }
 
+// fakeAmountObject renders an int64 as Phase 0's four-field amount object —
+// the ONLY shape the v2 wire carries (§9.2).
+func fakeAmountObject(units int64) map[string]any {
+	return map[string]any{"amount_units": strconv.FormatInt(units, 10), "currency": "CNY", "scale": 8, "unit_version": "cny-e8-v1"}
+}
+
 func (f *fakeEnsureControlPlane) refuse(w http.ResponseWriter, reason string) {
+	f.refuseClamped(w, reason, "")
+}
+
+func (f *fakeEnsureControlPlane) refuseClamped(w http.ResponseWriter, reason, clampedBy string) {
 	w.WriteHeader(http.StatusConflict)
-	_ = json.NewEncoder(w).Encode(map[string]any{"code": -1, "message": reason, "data": map[string]string{"reason": reason}})
+	data := map[string]any{"reason": reason}
+	if clampedBy != "" {
+		data["clamped_by"] = clampedBy
+	}
+	_ = json.NewEncoder(w).Encode(map[string]any{"code": -1, "message": reason, "data": data})
 }
 
 func (f *fakeEnsureControlPlane) handle(w http.ResponseWriter, r *http.Request) {
@@ -137,9 +151,10 @@ func (f *fakeEnsureControlPlane) handle(w http.ResponseWriter, r *http.Request) 
 		}
 		now := f.now()
 		user := strings.TrimSpace(req.PlatformUserID)
+		minHeadroom := mustUnits(req.MinHeadroom)
 		// drain: close the named lease iff the gateway's consumed equals our captured (§3.3)
 		for _, d := range req.Drained {
-			if l := f.lease(user, d.LeaseID); l != nil && l.Status == "active" && d.GatewayConsumedUnits == l.Captured {
+			if l := f.lease(user, d.LeaseID); l != nil && l.Status == "active" && mustUnits(d.GatewayConsumed) == l.Captured {
 				l.Status = "closed"
 				l.Released = l.Budget - l.Captured
 				f.balance[user] += l.Released
@@ -152,7 +167,7 @@ func (f *fakeEnsureControlPlane) handle(w http.ResponseWriter, r *http.Request) 
 			if l.Status != "active" {
 				continue
 			}
-			if l.ExpiresAt.After(now) && l.headroom() >= req.MinHeadroomUnits {
+			if l.ExpiresAt.After(now) && l.headroom() >= minHeadroom {
 				covering = append(covering, l)
 			}
 			if l.Purpose == "authorize" && (l.ExpiresAt.After(now) || (l.headroom() > 0 && l.ExpiresAt.After(now.Add(-f.grace)))) {
@@ -182,9 +197,9 @@ func (f *fakeEnsureControlPlane) handle(w http.ResponseWriter, r *http.Request) 
 				return
 			}
 			// step 4: issue with the clamp
-			budget := req.RequestedBudgetUnits
-			if req.MinHeadroomUnits > budget {
-				budget = req.MinHeadroomUnits
+			budget := mustUnits(req.RequestedBudget)
+			if minHeadroom > budget {
+				budget = minHeadroom
 			}
 			if budget > f.perLeaseMax {
 				budget = f.perLeaseMax
@@ -192,8 +207,8 @@ func (f *fakeEnsureControlPlane) handle(w http.ResponseWriter, r *http.Request) 
 			if budget > f.balance[user] {
 				budget = f.balance[user]
 			}
-			if budget < req.MinHeadroomUnits {
-				f.refuse(w, "insufficient_balance")
+			if budget < minHeadroom {
+				f.refuseClamped(w, "insufficient_balance", "balance")
 				return
 			}
 			f.seq++
@@ -205,10 +220,11 @@ func (f *fakeEnsureControlPlane) handle(w http.ResponseWriter, r *http.Request) 
 			outcome = "issued"
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{
-			"lease_id": pick.ID, "platform_user_id": user, "currency": "CNY",
-			"budget_units": pick.Budget, "captured_units": pick.Captured, "released_units": pick.Released,
-			"headroom_units": pick.headroom(), "expires_at": pick.ExpiresAt.UTC().Format(time.RFC3339Nano),
-			"capture_seq": 0, "outcome": outcome, "clamped_by": "none",
+			"lease_id": pick.ID, "platform_user_id": user, "currency": "CNY", "unit_version": "cny-e8-v1", "scale": 8,
+			"budget": fakeAmountObject(pick.Budget), "reserved": fakeAmountObject(0), "captured": fakeAmountObject(pick.Captured),
+			"released": fakeAmountObject(pick.Released), "headroom": fakeAmountObject(pick.headroom()),
+			"capture_seq": 0, "status": pick.Status, "expires_at": pick.ExpiresAt.UTC().Format(time.RFC3339Nano),
+			"outcome": outcome, "clamped_by": "none",
 		}})
 	case "/api/internal/v1/wallet/settlements":
 		var req canonicalWalletSettlementWireRequest

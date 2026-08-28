@@ -13,6 +13,8 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -203,38 +205,80 @@ func newCanonicalWalletHTTPClient(cfg config.CanonicalWalletConfig, client *http
 	return &canonicalWalletHTTPClient{cfg: cfg, client: client, now: func() time.Time { return time.Now().UTC() }}
 }
 
-// canonicalWalletEnsureRequest is redesign §3's request, units-native
-// (cny-e8-v1). No idempotency key: ensure is idempotent by transaction.
+// canonicalWalletEnsureRequest is redesign §3's request on the v2 wire —
+// every amount a Phase 0 amount object (§9.2), no bare integer crosses the
+// wire. No idempotency key: ensure is idempotent by transaction.
 type canonicalWalletEnsureRequest struct {
 	PlatformUserID       string                      `json:"platform_user_id"`
 	Currency             string                      `json:"currency"`
 	Purpose              string                      `json:"purpose"`
-	MinHeadroomUnits     int64                       `json:"min_headroom_units"`
-	RequestedBudgetUnits int64                       `json:"requested_budget_units"`
+	MinHeadroom          canonicalWalletAmountObject `json:"min_headroom"`
+	RequestedBudget      canonicalWalletAmountObject `json:"requested_budget"`
 	RequestedTTLSeconds  int                         `json:"requested_ttl_seconds"`
 	PreferLeaseID        string                      `json:"prefer_lease_id,omitempty"`
-	Drained              []canonicalWalletDrainEntry `json:"drained,omitempty"`
+	Drained              []canonicalWalletDrainEntry `json:"drained,omitempty"` // nil marshals to null; ShipAny accepts null as absent
 	CallerSlotTTLSeconds int                         `json:"caller_slot_ttl_seconds"`
 	GatewayAttemptID     string                      `json:"gateway_attempt_id,omitempty"`
 }
 
 type canonicalWalletDrainEntry struct {
-	LeaseID              string `json:"lease_id"`
-	GatewayConsumedUnits int64  `json:"gateway_consumed_units"`
+	LeaseID         string                      `json:"lease_id"`
+	GatewayConsumed canonicalWalletAmountObject `json:"gateway_consumed"`
+	// GatewayReleased (3.4b): the drain identity becomes
+	// consumed == captured + gateway_released once releases exist.
+	GatewayReleased *canonicalWalletAmountObject `json:"gateway_released,omitempty"`
 }
 
+// canonicalWalletEnsureWireResponse is §9.2's response: leaseWireView plus
+// headroom/outcome/clamped_by, every amount an object.
 type canonicalWalletEnsureWireResponse struct {
-	LeaseID        string    `json:"lease_id"`
-	PlatformUserID string    `json:"platform_user_id"`
-	Currency       string    `json:"currency"`
-	BudgetUnits    int64     `json:"budget_units"`
-	CapturedUnits  int64     `json:"captured_units"`
-	ReleasedUnits  int64     `json:"released_units"`
-	HeadroomUnits  int64     `json:"headroom_units"`
-	ExpiresAt      time.Time `json:"expires_at"`
-	CaptureSeq     int64     `json:"capture_seq"`
-	Outcome        string    `json:"outcome"`
-	ClampedBy      string    `json:"clamped_by"`
+	LeaseID        string                      `json:"lease_id"`
+	PlatformUserID string                      `json:"platform_user_id"`
+	Currency       string                      `json:"currency"`
+	UnitVersion    string                      `json:"unit_version"`
+	Scale          int                         `json:"scale"`
+	Budget         canonicalWalletAmountObject `json:"budget"`
+	Reserved       canonicalWalletAmountObject `json:"reserved"`
+	Captured       canonicalWalletAmountObject `json:"captured"`
+	Released       canonicalWalletAmountObject `json:"released"`
+	Headroom       canonicalWalletAmountObject `json:"headroom"`
+	CaptureSeq     int64                       `json:"capture_seq"`
+	Status         string                      `json:"status"`
+	ExpiresAt      time.Time                   `json:"expires_at"`
+	Outcome        string                      `json:"outcome"`
+	ClampedBy      string                      `json:"clamped_by"`
+}
+
+// canonicalWalletAmountObject is Phase 0's four-field amount (redesign §9.2). The
+// decimal string is the ONLY carrier of the value; no bare integer crosses the wire.
+type canonicalWalletAmountObject struct {
+	AmountUnits string `json:"amount_units"`
+	Currency    string `json:"currency"`
+	Scale       int    `json:"scale"`
+	UnitVersion string `json:"unit_version"`
+}
+
+func newCanonicalWalletAmountObject(units int64) canonicalWalletAmountObject {
+	return canonicalWalletAmountObject{AmountUnits: strconv.FormatInt(units, 10), Currency: "CNY", Scale: 8, UnitVersion: "cny-e8-v1"}
+}
+
+var canonicalWalletDecimalUnitsPattern = regexp.MustCompile(`^(0|[1-9][0-9]{0,18})$`)
+
+// parseCanonicalWalletAmountObject is strict on every field: decimal string only (no sign,
+// no leading zero, ≤ 19 digits — ShipAny's units.ts:53-85 twin), CNY, scale 8,
+// cny-e8-v1, and a value int64 can hold.
+func parseCanonicalWalletAmountObject(field string, a canonicalWalletAmountObject) (int64, error) {
+	if a.Currency != "CNY" || a.Scale != 8 || a.UnitVersion != "cny-e8-v1" {
+		return 0, fmt.Errorf("%s: not a cny-e8-v1 amount object", field)
+	}
+	if !canonicalWalletDecimalUnitsPattern.MatchString(a.AmountUnits) {
+		return 0, fmt.Errorf("%s.amount_units: not a decimal integer string", field)
+	}
+	v, err := strconv.ParseInt(a.AmountUnits, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s.amount_units: exceeds int64", field)
+	}
+	return v, nil
 }
 
 type canonicalWalletEnsureResult struct {
@@ -273,7 +317,29 @@ func (c *canonicalWalletHTTPClient) EnsureLease(ctx context.Context, request can
 		}
 		return nil, err
 	}
-	if strings.TrimSpace(wire.LeaseID) == "" || strings.TrimSpace(wire.PlatformUserID) != strings.TrimSpace(request.PlatformUserID) || wire.BudgetUnits <= 0 || wire.CapturedUnits < 0 || wire.ReleasedUnits < 0 || wire.HeadroomUnits < 0 || wire.HeadroomUnits > wire.BudgetUnits || wire.ExpiresAt.IsZero() || (wire.Outcome != "reused" && wire.Outcome != "issued") {
+	// §9.2: every response amount is parsed by the strict parser — a parse
+	// failure is a decode-class error and takes the generic transport path.
+	budget, err := parseCanonicalWalletAmountObject("budget", wire.Budget)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := parseCanonicalWalletAmountObject("reserved", wire.Reserved); err != nil {
+		return nil, err
+	}
+	if _, err := parseCanonicalWalletAmountObject("captured", wire.Captured); err != nil {
+		return nil, err
+	}
+	if _, err := parseCanonicalWalletAmountObject("released", wire.Released); err != nil {
+		return nil, err
+	}
+	headroom, err := parseCanonicalWalletAmountObject("headroom", wire.Headroom)
+	if err != nil {
+		return nil, err
+	}
+	// The §4 invariants, restated over the parsed int64s. The sign clauses are
+	// gone — the parser rejects a sign — and §9.2's status is added: only an
+	// active lease may be installed.
+	if strings.TrimSpace(wire.LeaseID) == "" || strings.TrimSpace(wire.PlatformUserID) != strings.TrimSpace(request.PlatformUserID) || budget <= 0 || headroom > budget || wire.ExpiresAt.IsZero() || wire.Status != "active" || (wire.Outcome != "reused" && wire.Outcome != "issued") {
 		return nil, errors.New("control plane returned an invalid canonical wallet lease")
 	}
 	currency, err := RequireCNYBillingCurrency(wire.Currency)
@@ -283,15 +349,15 @@ func (c *canonicalWalletHTTPClient) EnsureLease(ctx context.Context, request can
 	if currency != strings.ToUpper(strings.TrimSpace(request.Currency)) {
 		return nil, ErrCanonicalWalletLeaseCurrencyMismatch
 	}
-	// redesign §4: consumed := budget − headroom_units (captured + released as the server sees them)
-	consumed, err := SubUnits(wire.BudgetUnits, wire.HeadroomUnits)
+	// redesign §4: consumed := budget − headroom (captured + released as the server sees them)
+	consumed, err := SubUnits(budget, headroom)
 	if err != nil {
 		return nil, err
 	}
 	return &canonicalWalletEnsureResult{
 		Lease: CanonicalWalletLease{
 			LeaseID: wire.LeaseID, PlatformUserID: strings.TrimSpace(request.PlatformUserID), Currency: currency,
-			BudgetUnits: wire.BudgetUnits, ConsumedUnits: consumed, ExpiresAt: wire.ExpiresAt,
+			BudgetUnits: budget, ConsumedUnits: consumed, ExpiresAt: wire.ExpiresAt,
 		},
 		Outcome: wire.Outcome, ClampedBy: wire.ClampedBy,
 	}, nil
@@ -957,7 +1023,7 @@ func (b *CanonicalWalletBridge) ensureLease(ctx context.Context, platformUserID,
 	}
 	request := canonicalWalletEnsureRequest{
 		PlatformUserID: strings.TrimSpace(platformUserID), Currency: currency, Purpose: string(purpose),
-		MinHeadroomUnits: amountUnits, RequestedBudgetUnits: b.cfg.LeaseBudgetUnits, RequestedTTLSeconds: b.cfg.LeaseTTLSeconds,
+		MinHeadroom: newCanonicalWalletAmountObject(amountUnits), RequestedBudget: newCanonicalWalletAmountObject(b.cfg.LeaseBudgetUnits), RequestedTTLSeconds: b.cfg.LeaseTTLSeconds,
 		PreferLeaseID: preferLeaseID, CallerSlotTTLSeconds: b.callerSlotTTLSeconds,
 	}
 	if cached != nil {
@@ -966,7 +1032,7 @@ func (b *CanonicalWalletBridge) ensureLease(ctx context.Context, platformUserID,
 			return nil, sealErr
 		}
 		if sealErr == nil {
-			request.Drained = []canonicalWalletDrainEntry{{LeaseID: cached.LeaseID, GatewayConsumedUnits: preSealConsumed}}
+			request.Drained = []canonicalWalletDrainEntry{{LeaseID: cached.LeaseID, GatewayConsumed: newCanonicalWalletAmountObject(preSealConsumed)}}
 		}
 	}
 	result, err := b.control.EnsureLease(ctx, request)

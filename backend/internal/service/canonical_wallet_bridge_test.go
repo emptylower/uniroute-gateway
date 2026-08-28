@@ -151,16 +151,27 @@ func TestCanonicalWalletHTTPClientUsesShortScopedAssertion(t *testing.T) {
 		exp, _ := claims.GetExpirationTime()
 		require.LessOrEqual(t, exp.Time.Sub(iat.Time), 60*time.Second)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":{"lease_id":"lease-1","platform_user_id":"user-1","currency":"CNY","budget_units":1000,"captured_units":0,"released_units":0,"headroom_units":1000,"expires_at":"2030-01-01T00:00:00Z","capture_seq":0,"outcome":"issued","clamped_by":"none"}}`))
+		_, _ = w.Write([]byte(`{"data":{"lease_id":"lease-1","platform_user_id":"user-1","currency":"CNY","unit_version":"cny-e8-v1","scale":8,"budget":{"amount_units":"1000","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"reserved":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"captured":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"released":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"headroom":{"amount_units":"1000","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"capture_seq":0,"status":"active","expires_at":"2030-01-01T00:00:00Z","outcome":"issued","clamped_by":"none"}}`))
 	}))
 	defer server.Close()
 
 	cfg := canonicalWalletTestConfig(config.CanonicalWalletModeShadow)
 	cfg.ControlPlaneURL, cfg.Secret, cfg.Issuer, cfg.Audience, cfg.Version = server.URL, secret, "gateway", "shipany", "v7"
 	client := newCanonicalWalletHTTPClient(cfg, server.Client())
-	res, err := client.EnsureLease(context.Background(), canonicalWalletEnsureRequest{PlatformUserID: "user-1", Currency: "CNY", Purpose: "authorize", MinHeadroomUnits: 1, RequestedBudgetUnits: 1000, RequestedTTLSeconds: 60, CallerSlotTTLSeconds: 1800})
+	res, err := client.EnsureLease(context.Background(), canonicalWalletEnsureRequest{PlatformUserID: "user-1", Currency: "CNY", Purpose: "authorize", MinHeadroom: newCanonicalWalletAmountObject(1), RequestedBudget: newCanonicalWalletAmountObject(1000), RequestedTTLSeconds: 60, CallerSlotTTLSeconds: 1800})
 	require.NoError(t, err)
 	require.Equal(t, "lease-1", res.Lease.LeaseID)
+}
+
+// mustUnits parses an amount object with the production-strict parser — the
+// test fakes and wire assertions decode §9.2's objects through exactly the
+// code the HTTP client uses, never a lenient second implementation.
+func mustUnits(a canonicalWalletAmountObject) int64 {
+	v, err := parseCanonicalWalletAmountObject("test", a)
+	if err != nil {
+		panic(err)
+	}
+	return v
 }
 
 func TestCanonicalWalletSettlementEventIDIsStableAcrossRepricing(t *testing.T) {

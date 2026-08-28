@@ -56,7 +56,7 @@ func TestCanonicalWalletOutboxRetryReservesAgainstTheOriginalLease(t *testing.T)
 			// lease-a: 5 CNY of budget, expiring far in the future so it
 			// stays resolvable BY ID after it stops being the user's
 			// current lease.
-			_, _ = w.Write([]byte(`{"data":{"lease_id":"lease-a","platform_user_id":"` + req.PlatformUserID + `","currency":"CNY","budget_units":500000000,"captured_units":0,"released_units":0,"headroom_units":500000000,"expires_at":"2030-01-01T00:00:00Z","capture_seq":0,"outcome":"issued","clamped_by":"none"}}`))
+			_, _ = w.Write([]byte(`{"data":{"lease_id":"lease-a","platform_user_id":"` + req.PlatformUserID + `","currency":"CNY","unit_version":"cny-e8-v1","scale":8,"budget":{"amount_units":"500000000","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"reserved":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"captured":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"released":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"headroom":{"amount_units":"500000000","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"capture_seq":0,"status":"active","expires_at":"2030-01-01T00:00:00Z","outcome":"issued","clamped_by":"none"}}`))
 		case "/api/internal/v1/wallet/settlements":
 			var req canonicalWalletSettlementWireRequest
 			require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
@@ -165,7 +165,7 @@ func TestCanonicalWalletDeliverOutboxEventClaimLost(t *testing.T) {
 		if r.URL.Path == "/api/internal/v2/wallet/leases/ensure" {
 			var req canonicalWalletEnsureRequest
 			require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
-			_, _ = w.Write([]byte(`{"data":{"lease_id":"lease-lost","platform_user_id":"` + req.PlatformUserID + `","currency":"CNY","budget_units":500000000,"captured_units":0,"released_units":0,"headroom_units":500000000,"expires_at":"2030-01-01T00:00:00Z","capture_seq":0,"outcome":"issued","clamped_by":"none"}}`))
+			_, _ = w.Write([]byte(`{"data":{"lease_id":"lease-lost","platform_user_id":"` + req.PlatformUserID + `","currency":"CNY","unit_version":"cny-e8-v1","scale":8,"budget":{"amount_units":"500000000","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"reserved":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"captured":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"released":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"headroom":{"amount_units":"500000000","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"capture_seq":0,"status":"active","expires_at":"2030-01-01T00:00:00Z","outcome":"issued","clamped_by":"none"}}`))
 			return
 		}
 		http.NotFound(w, r)
@@ -223,7 +223,7 @@ func TestCanonicalWalletDeliverOutboxEventStaleBindingAndExpiredFallback(t *test
 		case "/api/internal/v2/wallet/leases/ensure":
 			var req canonicalWalletEnsureRequest
 			require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
-			_, _ = w.Write([]byte(`{"data":{"lease_id":"lease-fresh","platform_user_id":"` + req.PlatformUserID + `","currency":"CNY","budget_units":500000000,"captured_units":0,"released_units":0,"headroom_units":500000000,"expires_at":"2030-01-01T00:00:00Z","capture_seq":0,"outcome":"issued","clamped_by":"none"}}`))
+			_, _ = w.Write([]byte(`{"data":{"lease_id":"lease-fresh","platform_user_id":"` + req.PlatformUserID + `","currency":"CNY","unit_version":"cny-e8-v1","scale":8,"budget":{"amount_units":"500000000","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"reserved":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"captured":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"released":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"headroom":{"amount_units":"500000000","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"capture_seq":0,"status":"active","expires_at":"2030-01-01T00:00:00Z","outcome":"issued","clamped_by":"none"}}`))
 		case "/api/internal/v1/wallet/settlements":
 			var req canonicalWalletSettlementWireRequest
 			require.NoError(t, json.NewDecoder(r.Body).Decode(&req))

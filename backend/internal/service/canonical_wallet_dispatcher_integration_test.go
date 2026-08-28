@@ -43,7 +43,7 @@ func TestCanonicalWalletOutboxDispatcherDeliversEndToEnd(t *testing.T) {
 			require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
 			receivedEnsureRequests = append(receivedEnsureRequests, req)
 			require.Equal(t, "CNY", req.Currency)
-			_, _ = w.Write([]byte(`{"data":{"lease_id":"lease-e2e","platform_user_id":"` + req.PlatformUserID + `","currency":"CNY","budget_units":500000000,"captured_units":0,"released_units":0,"headroom_units":500000000,"expires_at":"2030-01-01T00:00:00Z","capture_seq":0,"outcome":"issued","clamped_by":"none"}}`))
+			_, _ = w.Write([]byte(`{"data":{"lease_id":"lease-e2e","platform_user_id":"` + req.PlatformUserID + `","currency":"CNY","unit_version":"cny-e8-v1","scale":8,"budget":{"amount_units":"500000000","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"reserved":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"captured":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"released":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"headroom":{"amount_units":"500000000","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"capture_seq":0,"status":"active","expires_at":"2030-01-01T00:00:00Z","outcome":"issued","clamped_by":"none"}}`))
 		case "/api/internal/v1/wallet/settlements":
 			var req canonicalWalletSettlementWireRequest
 			require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
@@ -101,8 +101,8 @@ func TestCanonicalWalletOutboxDispatcherDeliversEndToEnd(t *testing.T) {
 	// requested_budget_units — the server takes the max (§3 step 4), so the
 	// client no longer computes it.
 	require.Len(t, receivedEnsureRequests, 1)
-	require.Equal(t, amountUnits, receivedEnsureRequests[0].MinHeadroomUnits, "the amount is the min_headroom ask")
-	require.Equal(t, cfg.LeaseBudgetUnits, receivedEnsureRequests[0].RequestedBudgetUnits, "requested_budget is the configured lease budget")
+	require.Equal(t, amountUnits, mustUnits(receivedEnsureRequests[0].MinHeadroom), "the amount is the min_headroom ask")
+	require.Equal(t, cfg.LeaseBudgetUnits, mustUnits(receivedEnsureRequests[0].RequestedBudget), "requested_budget is the configured lease budget")
 	require.Len(t, receivedSettlements, 1)
 	require.Equal(t, "lease-e2e", receivedSettlements[0].LeaseID, "the settlement is anchored to the lease the reservation actually landed on")
 	require.Equal(t, int64(300000), receivedSettlements[0].AmountMicros, "30,000,000 units = 300,000 micros")

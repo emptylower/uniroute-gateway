@@ -100,7 +100,7 @@ func TestDeliverOutboxEventRealFailurePaths(t *testing.T) {
 		controlPlane := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var req canonicalWalletEnsureRequest
 			_ = json.NewDecoder(r.Body).Decode(&req)
-			_, _ = w.Write([]byte(`{"data":{"lease_id":"lease-tiny","platform_user_id":"` + req.PlatformUserID + `","currency":"CNY","budget_units":100,"captured_units":0,"released_units":0,"headroom_units":100,"expires_at":"2030-01-01T00:00:00Z","capture_seq":0,"outcome":"issued","clamped_by":"none"}}`))
+			_, _ = w.Write([]byte(`{"data":{"lease_id":"lease-tiny","platform_user_id":"` + req.PlatformUserID + `","currency":"CNY","unit_version":"cny-e8-v1","scale":8,"budget":{"amount_units":"100","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"reserved":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"captured":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"released":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"headroom":{"amount_units":"100","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"capture_seq":0,"status":"active","expires_at":"2030-01-01T00:00:00Z","outcome":"issued","clamped_by":"none"}}`))
 		}))
 		defer controlPlane.Close()
 		cfg := canonicalWalletTestConfig(config.CanonicalWalletModeEnforce)
@@ -147,7 +147,7 @@ func TestDeliverOutboxEventRealFailurePaths(t *testing.T) {
 			case "/api/internal/v2/wallet/leases/ensure":
 				var req canonicalWalletEnsureRequest
 				_ = json.NewDecoder(r.Body).Decode(&req)
-				_, _ = w.Write([]byte(`{"data":{"lease_id":"lease-refuse","platform_user_id":"` + req.PlatformUserID + `","currency":"CNY","budget_units":500000000,"captured_units":0,"released_units":0,"headroom_units":500000000,"expires_at":"2030-01-01T00:00:00Z","capture_seq":0,"outcome":"issued","clamped_by":"none"}}`))
+				_, _ = w.Write([]byte(`{"data":{"lease_id":"lease-refuse","platform_user_id":"` + req.PlatformUserID + `","currency":"CNY","unit_version":"cny-e8-v1","scale":8,"budget":{"amount_units":"500000000","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"reserved":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"captured":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"released":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"headroom":{"amount_units":"500000000","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"capture_seq":0,"status":"active","expires_at":"2030-01-01T00:00:00Z","outcome":"issued","clamped_by":"none"}}`))
 			case "/api/internal/v1/wallet/settlements":
 				refused = true
 				_, _ = w.Write([]byte(`{"data":{"accepted":false,"duplicate":false}}`))
@@ -211,23 +211,23 @@ func TestEnsureLeaseAndDoJSONRemainingRealPaths(t *testing.T) {
 	cfg.ControlPlaneURL, cfg.Secret = "http://127.0.0.1:1", strings.Repeat("s", 32)
 	client := newCanonicalWalletHTTPClient(cfg, nil)
 	_, err := client.EnsureLease(ctx, canonicalWalletEnsureRequest{
-		PlatformUserID: "user-1", Currency: "CNY", Purpose: "authorize", MinHeadroomUnits: 1, RequestedBudgetUnits: 1, RequestedTTLSeconds: 60, CallerSlotTTLSeconds: 1800,
+		PlatformUserID: "user-1", Currency: "CNY", Purpose: "authorize", MinHeadroom: newCanonicalWalletAmountObject(1), RequestedBudget: newCanonicalWalletAmountObject(1), RequestedTTLSeconds: 60, CallerSlotTTLSeconds: 1800,
 	})
 	require.Error(t, err)
 
 	// Phase 3.4: the v2 lease wire is units-native — the x100 conversion the
 	// old overflow leg exercised is gone (redesign §6). The same property in
 	// the new wire: a wire figure beyond int64's range must be REJECTED (the
-	// JSON decode of budget_units fails), never accepted or wrapped.
+	// strict amount-object parser fails), never accepted or wrapped.
 	overflowServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"data":{"lease_id":"l","platform_user_id":"user-1","currency":"CNY","budget_units":92233720368547758080,"captured_units":0,"released_units":0,"headroom_units":0,"expires_at":"2030-01-01T00:00:00Z","outcome":"issued"}}`))
+		_, _ = w.Write([]byte(`{"data":{"lease_id":"l","platform_user_id":"user-1","currency":"CNY","unit_version":"cny-e8-v1","scale":8,"budget":{"amount_units":"92233720368547758080","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"reserved":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"captured":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"released":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"headroom":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"expires_at":"2030-01-01T00:00:00Z","status":"active","outcome":"issued"}}`))
 	}))
 	defer overflowServer.Close()
 	cfg2 := canonicalWalletTestConfig(config.CanonicalWalletModeShadow)
 	cfg2.ControlPlaneURL, cfg2.Secret = overflowServer.URL, strings.Repeat("s", 32)
 	client2 := newCanonicalWalletHTTPClient(cfg2, overflowServer.Client())
 	_, err = client2.EnsureLease(ctx, canonicalWalletEnsureRequest{
-		PlatformUserID: "user-1", Currency: "CNY", Purpose: "authorize", MinHeadroomUnits: 1, RequestedBudgetUnits: 1, RequestedTTLSeconds: 60, CallerSlotTTLSeconds: 1800,
+		PlatformUserID: "user-1", Currency: "CNY", Purpose: "authorize", MinHeadroom: newCanonicalWalletAmountObject(1), RequestedBudget: newCanonicalWalletAmountObject(1), RequestedTTLSeconds: 60, CallerSlotTTLSeconds: 1800,
 	})
 	require.Error(t, err, "a wire budget beyond int64's range must be rejected, not accepted")
 

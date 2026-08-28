@@ -211,7 +211,7 @@ func TestPhase34Proto15ExhaustionSealsDrainsAndHitsTheCap(t *testing.T) {
 	drainReq := fake.requests[1]
 	require.Len(t, drainReq.Drained, 1)
 	require.Equal(t, l1.LeaseID, drainReq.Drained[0].LeaseID)
-	require.Equal(t, int64(450_000_000), drainReq.Drained[0].GatewayConsumedUnits, "the PRE-seal consumed is what is sent")
+	require.Equal(t, int64(450_000_000), mustUnits(drainReq.Drained[0].GatewayConsumed), "the PRE-seal consumed is what is sent")
 	sealed, err := store.GetCanonicalWalletLeaseByID(ctx, user, l1.LeaseID)
 	require.NoError(t, err)
 	require.Equal(t, sealed.BudgetUnits, sealed.ConsumedUnits, "l1 is sealed")
@@ -267,7 +267,7 @@ func TestPhase34Proto15DrainOpensTheSlotWhenCapturedEqualsConsumed(t *testing.T)
 	require.NotEqual(t, l3.LeaseID, l5.LeaseID)
 	last := fake.requests[len(fake.requests)-1]
 	require.Equal(t, l3.LeaseID, last.Drained[0].LeaseID)
-	require.Equal(t, int64(450_000_000), last.Drained[0].GatewayConsumedUnits)
+	require.Equal(t, int64(450_000_000), mustUnits(last.Drained[0].GatewayConsumed))
 }
 
 // Test 15a (drain half): a drain WITHOUT a seal against a lease that took a
@@ -286,8 +286,8 @@ func TestPhase34Proto15aDrainWithoutSealDoesNotClose(t *testing.T) {
 	client := newCanonicalWalletHTTPClient(cfg, fake.Server.Client())
 	// a drain claiming consumed == 0 (an unsealed, stale read) must not close it
 	res, err := client.EnsureLease(ctx, canonicalWalletEnsureRequest{
-		PlatformUserID: user, Currency: "CNY", Purpose: "authorize", MinHeadroomUnits: 1, RequestedBudgetUnits: 500_000_000, RequestedTTLSeconds: 300,
-		Drained: []canonicalWalletDrainEntry{{LeaseID: "srv-a", GatewayConsumedUnits: 0}}, CallerSlotTTLSeconds: 1800,
+		PlatformUserID: user, Currency: "CNY", Purpose: "authorize", MinHeadroom: newCanonicalWalletAmountObject(1), RequestedBudget: newCanonicalWalletAmountObject(500_000_000), RequestedTTLSeconds: 300,
+		Drained: []canonicalWalletDrainEntry{{LeaseID: "srv-a", GatewayConsumed: newCanonicalWalletAmountObject(0)}}, CallerSlotTTLSeconds: 1800,
 	})
 	require.NoError(t, err)
 	require.Equal(t, "active", fake.status(user, "srv-a"), "captured (100,000,000) is not the reported consumed (0): ignored")
@@ -314,8 +314,8 @@ func TestPhase34Proto17DenseRisingFixture(t *testing.T) {
 		require.NoError(t, err, "event %d", i)
 		require.GreaterOrEqual(t, lease.RemainingUnits(), amount, "headroom covers the amount")
 		req := fake.requests[len(fake.requests)-1]
-		require.Equal(t, amount, req.MinHeadroomUnits, "never a request below the amount")
-		require.Equal(t, int64(500_000_000), req.RequestedBudgetUnits, "requested_budget is the configured lease budget; the server takes the max")
+		require.Equal(t, amount, mustUnits(req.MinHeadroom), "never a request below the amount")
+		require.Equal(t, int64(500_000_000), mustUnits(req.RequestedBudget), "requested_budget is the configured lease budget; the server takes the max")
 		require.Equal(t, amount, lease.BudgetUnits, "never a doubled budget: budget == max(cfg, amount) == amount here")
 		// exhaust it on the gateway and settle it FULLY on the server: captured == the
 		// pre-seal consumed, so this lease's drain VERIFIES on the next ensure and it is

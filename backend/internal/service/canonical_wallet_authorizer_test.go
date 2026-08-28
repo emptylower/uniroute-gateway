@@ -153,11 +153,12 @@ func TestAuthorizeRequestsExactlyTheEstimate(t *testing.T) {
 	auth, snap, apiKey, control, _ := newAuthorizerFixture(t, config.CanonicalWalletModeShadow)
 	h, err := auth.Authorize(context.Background(), AuthorizeInput{Snapshot: snap, Estimate: estimateFor(`{"max_tokens":64}`), User: apiKey.User})
 	require.NoError(t, err)
-	// Phase 3.4 (v2 wire): the ask is the amount itself as min_headroom_units
-	// plus the CONFIGURED lease budget as requested_budget_units — the server
-	// takes the max (§3 step 4), so the client no longer computes it.
-	require.Equal(t, h.EstimatedUnits, control.lastEnsure.MinHeadroomUnits)
-	require.Equal(t, int64(500_000_000), control.lastEnsure.RequestedBudgetUnits)
+	// Phase 3.4a (v2 wire, §9.2): the ask is the amount itself as the
+	// min_headroom amount object plus the CONFIGURED lease budget as
+	// requested_budget — the server takes the max (§3 step 4), so the client
+	// no longer computes it.
+	require.Equal(t, h.EstimatedUnits, mustUnits(control.lastEnsure.MinHeadroom))
+	require.Equal(t, int64(500_000_000), mustUnits(control.lastEnsure.RequestedBudget))
 }
 
 func TestEstimateInputFromRequestBody(t *testing.T) {

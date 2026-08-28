@@ -70,22 +70,31 @@ func TestCanonicalWalletSubmitSettlementRejectsControlPlaneRefusal(t *testing.T)
 	require.Error(t, err)
 }
 
-// EnsureLease speaks ShipAny's v2 units-native (cny-e8-v1) wire shape —
-// no micros conversion on the lease path — and must REJECT a non-CNY
-// currency outright instead of coercing it to CNY.
+// EnsureLease speaks ShipAny's v2 amount-object (cny-e8-v1) wire shape —
+// every amount a Phase 0 object, no bare integer crosses the wire (§9.2) —
+// and must REJECT a non-CNY currency outright instead of coercing it to CNY.
 func TestCanonicalWalletEnsureLeaseWireResponseIsUnitsNative(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req canonicalWalletEnsureRequest
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
-		require.Equal(t, int64(500_000_000), req.RequestedBudgetUnits, "requested budget stays in cny-e8-v1 units")
-		_, _ = w.Write([]byte(`{"data":{"lease_id":"lease-wire","platform_user_id":"user-1","currency":"CNY","budget_units":500000000,"captured_units":250000000,"released_units":0,"headroom_units":250000000,"expires_at":"2030-01-01T00:00:00Z","capture_seq":1,"outcome":"reused","clamped_by":"none"}}`))
+		require.Equal(t, "500000000", req.RequestedBudget.AmountUnits, "requested budget stays in cny-e8-v1 units")
+		require.Equal(t, "cny-e8-v1", req.RequestedBudget.UnitVersion)
+		require.Equal(t, 8, req.RequestedBudget.Scale)
+		require.Equal(t, "CNY", req.RequestedBudget.Currency)
+		_, _ = w.Write([]byte(`{"data":{"lease_id":"lease-wire","platform_user_id":"user-1","currency":"CNY","unit_version":"cny-e8-v1","scale":8,
+			"budget":{"amount_units":"500000000","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},
+			"reserved":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},
+			"captured":{"amount_units":"250000000","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},
+			"released":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},
+			"headroom":{"amount_units":"250000000","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},
+			"capture_seq":1,"status":"active","expires_at":"2030-01-01T00:00:00Z","outcome":"reused","clamped_by":"none"}}`))
 	}))
 	defer server.Close()
 	cfg := canonicalWalletTestConfig(config.CanonicalWalletModeShadow)
 	cfg.ControlPlaneURL, cfg.Secret = server.URL, strings.Repeat("s", 32)
 	client := newCanonicalWalletHTTPClient(cfg, server.Client())
 	res, err := client.EnsureLease(context.Background(), canonicalWalletEnsureRequest{
-		PlatformUserID: "user-1", Currency: "CNY", Purpose: "authorize", MinHeadroomUnits: 1, RequestedBudgetUnits: 500_000_000, RequestedTTLSeconds: 60, CallerSlotTTLSeconds: 1800,
+		PlatformUserID: "user-1", Currency: "CNY", Purpose: "authorize", MinHeadroom: newCanonicalWalletAmountObject(1), RequestedBudget: newCanonicalWalletAmountObject(500_000_000), RequestedTTLSeconds: 60, CallerSlotTTLSeconds: 1800,
 	})
 	require.NoError(t, err)
 	require.Equal(t, int64(500_000_000), res.Lease.BudgetUnits)
@@ -95,19 +104,34 @@ func TestCanonicalWalletEnsureLeaseWireResponseIsUnitsNative(t *testing.T) {
 }
 
 func TestCanonicalWalletEnsureLeaseRejectsInvalidWireResponses(t *testing.T) {
+	amount := func(units string) string {
+		return `{"amount_units":"` + units + `","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"}`
+	}
+	// amountFields renders the five amount fields of a v2 response around the
+	// named objects; every case must fail for ITS OWN clause, so the unnamed
+	// amounts are valid.
+	amountFields := func(budget, captured, headroom string) string {
+		return `"budget":` + amount(budget) + `,"reserved":` + amount("0") + `,"captured":` + amount(captured) + `,"released":` + amount("0") + `,"headroom":` + amount(headroom)
+	}
 	cases := []struct {
 		name    string
 		body    string
 		wantErr string
 	}{
-		{"empty lease id", `{"data":{"lease_id":"","platform_user_id":"user-1","currency":"CNY","budget_units":500000000,"captured_units":0,"released_units":0,"headroom_units":500000000,"expires_at":"2030-01-01T00:00:00Z","outcome":"issued"}}`, "invalid"},
-		{"wrong platform user", `{"data":{"lease_id":"l","platform_user_id":"someone-else","currency":"CNY","budget_units":500000000,"captured_units":0,"released_units":0,"headroom_units":500000000,"expires_at":"2030-01-01T00:00:00Z","outcome":"issued"}}`, "invalid"},
-		{"zero budget", `{"data":{"lease_id":"l","platform_user_id":"user-1","currency":"CNY","budget_units":0,"captured_units":0,"released_units":0,"headroom_units":0,"expires_at":"2030-01-01T00:00:00Z","outcome":"issued"}}`, "invalid"},
-		{"negative captured", `{"data":{"lease_id":"l","platform_user_id":"user-1","currency":"CNY","budget_units":500000000,"captured_units":-1,"released_units":0,"headroom_units":500000000,"expires_at":"2030-01-01T00:00:00Z","outcome":"issued"}}`, "invalid"},
-		{"headroom over budget", `{"data":{"lease_id":"l","platform_user_id":"user-1","currency":"CNY","budget_units":500000000,"captured_units":0,"released_units":0,"headroom_units":500000001,"expires_at":"2030-01-01T00:00:00Z","outcome":"issued"}}`, "invalid"},
-		{"bad outcome", `{"data":{"lease_id":"l","platform_user_id":"user-1","currency":"CNY","budget_units":500000000,"captured_units":0,"released_units":0,"headroom_units":500000000,"expires_at":"2030-01-01T00:00:00Z","outcome":"maybe"}}`, "invalid"},
-		{"zero expiry", `{"data":{"lease_id":"l","platform_user_id":"user-1","currency":"CNY","budget_units":500000000,"captured_units":0,"released_units":0,"headroom_units":500000000,"expires_at":"0001-01-01T00:00:00Z","outcome":"issued"}}`, "invalid"},
-		{"non-CNY currency", `{"data":{"lease_id":"l","platform_user_id":"user-1","currency":"USD","budget_units":500000000,"captured_units":0,"released_units":0,"headroom_units":500000000,"expires_at":"2030-01-01T00:00:00Z","outcome":"issued"}}`, "unsupported currency"},
+		{"empty lease id", `{"data":{"lease_id":"","platform_user_id":"user-1","currency":"CNY",` + amountFields("500000000", "0", "500000000") + `,"expires_at":"2030-01-01T00:00:00Z","status":"active","outcome":"issued"}}`, "invalid"},
+		{"wrong platform user", `{"data":{"lease_id":"l","platform_user_id":"someone-else","currency":"CNY",` + amountFields("500000000", "0", "500000000") + `,"expires_at":"2030-01-01T00:00:00Z","status":"active","outcome":"issued"}}`, "invalid"},
+		{"zero budget", `{"data":{"lease_id":"l","platform_user_id":"user-1","currency":"CNY",` + amountFields("0", "0", "0") + `,"expires_at":"2030-01-01T00:00:00Z","status":"active","outcome":"issued"}}`, "invalid"},
+		{"negative captured", `{"data":{"lease_id":"l","platform_user_id":"user-1","currency":"CNY",` + amountFields("500000000", "-1", "500000000") + `,"expires_at":"2030-01-01T00:00:00Z","status":"active","outcome":"issued"}}`, "not a decimal integer string"},
+		{"headroom over budget", `{"data":{"lease_id":"l","platform_user_id":"user-1","currency":"CNY",` + amountFields("500000000", "0", "500000001") + `,"expires_at":"2030-01-01T00:00:00Z","status":"active","outcome":"issued"}}`, "invalid"},
+		{"bad outcome", `{"data":{"lease_id":"l","platform_user_id":"user-1","currency":"CNY",` + amountFields("500000000", "0", "500000000") + `,"expires_at":"2030-01-01T00:00:00Z","status":"active","outcome":"maybe"}}`, "invalid"},
+		{"zero expiry", `{"data":{"lease_id":"l","platform_user_id":"user-1","currency":"CNY",` + amountFields("500000000", "0", "500000000") + `,"expires_at":"0001-01-01T00:00:00Z","status":"active","outcome":"issued"}}`, "invalid"},
+		{"non-CNY currency", `{"data":{"lease_id":"l","platform_user_id":"user-1","currency":"USD",` + amountFields("500000000", "0", "500000000") + `,"expires_at":"2030-01-01T00:00:00Z","status":"active","outcome":"issued"}}`, "unsupported currency"},
+		// §9.2 strictness: the decimal string is the only carrier of the value.
+		{"budget beyond int64", `{"data":{"lease_id":"l","platform_user_id":"user-1","currency":"CNY","budget":{"amount_units":"9223372036854775808","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"reserved":` + amount("0") + `,"captured":` + amount("0") + `,"released":` + amount("0") + `,"headroom":` + amount("500000000") + `,"expires_at":"2030-01-01T00:00:00Z","status":"active","outcome":"issued"}}`, "exceeds int64"},
+		{"negative budget", `{"data":{"lease_id":"l","platform_user_id":"user-1","currency":"CNY","budget":{"amount_units":"-1","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"reserved":` + amount("0") + `,"captured":` + amount("0") + `,"released":` + amount("0") + `,"headroom":` + amount("500000000") + `,"expires_at":"2030-01-01T00:00:00Z","status":"active","outcome":"issued"}}`, "not a decimal integer string"},
+		{"leading zero budget", `{"data":{"lease_id":"l","platform_user_id":"user-1","currency":"CNY","budget":{"amount_units":"01","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"reserved":` + amount("0") + `,"captured":` + amount("0") + `,"released":` + amount("0") + `,"headroom":` + amount("500000000") + `,"expires_at":"2030-01-01T00:00:00Z","status":"active","outcome":"issued"}}`, "not a decimal integer string"},
+		{"non-CNY amount object", `{"data":{"lease_id":"l","platform_user_id":"user-1","currency":"CNY","budget":{"amount_units":"500000000","currency":"USD","scale":8,"unit_version":"cny-e8-v1"},"reserved":` + amount("0") + `,"captured":` + amount("0") + `,"released":` + amount("0") + `,"headroom":` + amount("500000000") + `,"expires_at":"2030-01-01T00:00:00Z","status":"active","outcome":"issued"}}`, "not a cny-e8-v1 amount object"},
+		{"status closed", `{"data":{"lease_id":"l","platform_user_id":"user-1","currency":"CNY",` + amountFields("500000000", "0", "500000000") + `,"expires_at":"2030-01-01T00:00:00Z","status":"closed","outcome":"issued"}}`, "invalid"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -119,7 +143,7 @@ func TestCanonicalWalletEnsureLeaseRejectsInvalidWireResponses(t *testing.T) {
 			cfg.ControlPlaneURL, cfg.Secret = server.URL, strings.Repeat("s", 32)
 			client := newCanonicalWalletHTTPClient(cfg, server.Client())
 			_, err := client.EnsureLease(context.Background(), canonicalWalletEnsureRequest{
-				PlatformUserID: "user-1", Currency: "CNY", Purpose: "authorize", MinHeadroomUnits: 1, RequestedBudgetUnits: 500_000_000, RequestedTTLSeconds: 60, CallerSlotTTLSeconds: 1800,
+				PlatformUserID: "user-1", Currency: "CNY", Purpose: "authorize", MinHeadroom: newCanonicalWalletAmountObject(1), RequestedBudget: newCanonicalWalletAmountObject(500_000_000), RequestedTTLSeconds: 60, CallerSlotTTLSeconds: 1800,
 			})
 			require.Error(t, err)
 			require.Contains(t, err.Error(), tc.wantErr)
@@ -129,14 +153,14 @@ func TestCanonicalWalletEnsureLeaseRejectsInvalidWireResponses(t *testing.T) {
 
 func TestCanonicalWalletEnsureLeaseRejectsNonCNYRequestedCurrency(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"data":{"lease_id":"l","platform_user_id":"user-1","currency":"USD","budget_units":500000000,"captured_units":0,"released_units":0,"headroom_units":500000000,"expires_at":"2030-01-01T00:00:00Z","outcome":"issued"}}`))
+		_, _ = w.Write([]byte(`{"data":{"lease_id":"l","platform_user_id":"user-1","currency":"USD","budget":{"amount_units":"500000000","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"headroom":{"amount_units":"500000000","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"expires_at":"2030-01-01T00:00:00Z","status":"active","outcome":"issued"}}`))
 	}))
 	defer server.Close()
 	cfg := canonicalWalletTestConfig(config.CanonicalWalletModeShadow)
 	cfg.ControlPlaneURL, cfg.Secret = server.URL, strings.Repeat("s", 32)
 	client := newCanonicalWalletHTTPClient(cfg, server.Client())
 	_, err := client.EnsureLease(context.Background(), canonicalWalletEnsureRequest{
-		PlatformUserID: "user-1", Currency: "USD", Purpose: "authorize", MinHeadroomUnits: 1, RequestedBudgetUnits: 500_000_000, RequestedTTLSeconds: 60, CallerSlotTTLSeconds: 1800,
+		PlatformUserID: "user-1", Currency: "USD", Purpose: "authorize", MinHeadroom: newCanonicalWalletAmountObject(1), RequestedBudget: newCanonicalWalletAmountObject(500_000_000), RequestedTTLSeconds: 60, CallerSlotTTLSeconds: 1800,
 	})
 	// The v2 client validates the REQUESTED currency before the call leaves
 	// the gateway — a non-CNY request is rejected outright either way.
@@ -279,19 +303,28 @@ func TestPhase34ProtoEnsureWireRoundTripAndRefusals(t *testing.T) {
 			_, _ = w.Write([]byte(`{"code":-1,"message":"` + refuse + `","data":{"reason":"` + refuse + `"}}`))
 			return
 		}
-		_, _ = w.Write([]byte(`{"data":{"lease_id":"srv-1","platform_user_id":"u1","currency":"CNY","budget_units":500000000,"captured_units":100000000,"released_units":0,"headroom_units":400000000,"expires_at":"2030-01-01T00:00:00Z","capture_seq":3,"outcome":"reused","clamped_by":"none"}}`))
+		_, _ = w.Write([]byte(`{"data":{"lease_id":"srv-1","platform_user_id":"u1","currency":"CNY","unit_version":"cny-e8-v1","scale":8,
+			"budget":{"amount_units":"500000000","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},
+			"reserved":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},
+			"captured":{"amount_units":"100000000","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},
+			"released":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},
+			"headroom":{"amount_units":"400000000","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},
+			"capture_seq":3,"status":"active","expires_at":"2030-01-01T00:00:00Z","outcome":"reused","clamped_by":"none"}}`))
 	}))
 	defer srv.Close()
 	cfg := canonicalWalletTestConfig(config.CanonicalWalletModeEnforce)
 	cfg.ControlPlaneURL, cfg.Secret = srv.URL, strings.Repeat("s", 32)
 	client := newCanonicalWalletHTTPClient(cfg, srv.Client())
-	req := canonicalWalletEnsureRequest{PlatformUserID: "u1", Currency: "CNY", Purpose: "authorize", MinHeadroomUnits: 1, RequestedBudgetUnits: 500_000_000, RequestedTTLSeconds: 300, CallerSlotTTLSeconds: 1800}
+	req := canonicalWalletEnsureRequest{PlatformUserID: "u1", Currency: "CNY", Purpose: "authorize", MinHeadroom: newCanonicalWalletAmountObject(1), RequestedBudget: newCanonicalWalletAmountObject(500_000_000), RequestedTTLSeconds: 300, CallerSlotTTLSeconds: 1800}
 
 	res, err := client.EnsureLease(context.Background(), req)
 	require.NoError(t, err)
 	require.Empty(t, gotHeader.Get("Idempotency-Key"), "ensure is idempotent by transaction: no gwlease_ window key")
 	require.True(t, strings.HasPrefix(gotHeader.Get("Authorization"), "Bearer "))
 	require.Equal(t, req, gotBody)
+	require.Equal(t, "1", gotBody.MinHeadroom.AmountUnits)
+	require.Equal(t, "500000000", gotBody.RequestedBudget.AmountUnits)
+	require.Equal(t, "cny-e8-v1", gotBody.MinHeadroom.UnitVersion)
 	require.Equal(t, "reused", res.Outcome)
 	require.Equal(t, int64(500_000_000), res.Lease.BudgetUnits)
 	require.Equal(t, int64(100_000_000), res.Lease.ConsumedUnits, "consumed = budget − headroom_units")
