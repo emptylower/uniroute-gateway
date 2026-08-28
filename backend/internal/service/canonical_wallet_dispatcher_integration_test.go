@@ -44,7 +44,7 @@ func TestCanonicalWalletOutboxDispatcherDeliversEndToEnd(t *testing.T) {
 			receivedEnsureRequests = append(receivedEnsureRequests, req)
 			require.Equal(t, "CNY", req.Currency)
 			_, _ = w.Write([]byte(`{"data":{"lease_id":"lease-e2e","platform_user_id":"` + req.PlatformUserID + `","currency":"CNY","unit_version":"cny-e8-v1","scale":8,"budget":{"amount_units":"500000000","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"reserved":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"captured":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"released":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"headroom":{"amount_units":"500000000","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"capture_seq":0,"status":"active","expires_at":"2030-01-01T00:00:00Z","outcome":"issued","clamped_by":"none"}}`))
-		case "/api/internal/v1/wallet/settlements":
+		case "/api/internal/v2/wallet/settlements":
 			var req canonicalWalletSettlementWireRequest
 			require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
 			receivedSettlements = append(receivedSettlements, req)
@@ -52,7 +52,7 @@ func TestCanonicalWalletOutboxDispatcherDeliversEndToEnd(t *testing.T) {
 			case settlementSignal <- struct{}{}:
 			default:
 			}
-			_, _ = w.Write([]byte(`{"data":{"accepted":true,"duplicate":false,"canonical_balance_micros":4970000}}`))
+			_, _ = w.Write([]byte(`{"data":{"accepted":true,"duplicate":false,"named_lease_id":null,"event":{"event_id":"` + req.EventID + `","lease_id":"lease-e2e","amount":{"amount_units":"30000000","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"lease_capture_seq":1,"lease_captured_before":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"lease_captured_after":{"amount_units":"30000000","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"occurred_at":"2026-01-01T00:00:00Z"},"lease":{"lease_id":"lease-e2e","platform_user_id":"user-1","currency":"CNY","unit_version":"cny-e8-v1","scale":8,"budget":{"amount_units":"500000000","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"reserved":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"captured":{"amount_units":"30000000","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"released":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"capture_seq":1,"status":"active","expires_at":"2030-01-01T00:00:00Z"},"canonical_balance":{"amount_units":"497000000","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"}}}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -105,7 +105,7 @@ func TestCanonicalWalletOutboxDispatcherDeliversEndToEnd(t *testing.T) {
 	require.Equal(t, cfg.LeaseBudgetUnits, mustUnits(receivedEnsureRequests[0].RequestedBudget), "requested_budget is the configured lease budget")
 	require.Len(t, receivedSettlements, 1)
 	require.Equal(t, "lease-e2e", receivedSettlements[0].LeaseID, "the settlement is anchored to the lease the reservation actually landed on")
-	require.Equal(t, int64(300000), receivedSettlements[0].AmountMicros, "30,000,000 units = 300,000 micros")
+	require.Equal(t, "30000000", receivedSettlements[0].Amount.AmountUnits, "30,000,000 units cross the v2 wire as exactly 30,000,000")
 
 	// The reservation really consumed the Redis lease.
 	leased, err := store.GetCanonicalWalletLeaseByID(ctx, platformUserID, "lease-e2e")

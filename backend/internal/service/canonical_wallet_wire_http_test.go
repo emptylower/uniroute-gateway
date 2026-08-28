@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -14,21 +15,25 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Wire-boundary proof for SubmitSettlement: ShipAny's settlements route still
-// speaks *_micros at 1,000,000-per-CNY while everything internal is
-// cny-e8-v1 units at 100,000,000-per-CNY. The conversion direction here is
-// units->micros with CEILING division (never settle less than reserved),
-// and the response's canonical_balance_micros converts back x100 exactly.
-func TestCanonicalWalletSubmitSettlementWireConvertsUnitsToMicrosWithCeiling(t *testing.T) {
-	localBalance := int64(123_456789) // deliberately NOT a whole number of micros
+// Wire-boundary proof for SubmitSettlement (Phase 3.5, §11.2 — retargeted
+// from the v1 micros wire, same values on both sides of the boundary): the
+// v2 settlements route is units-native — the event's cny-e8-v1 units cross
+// the wire EXACTLY as the amount object's decimal string, no conversion in
+// either direction, and local_balance_after is dropped from the request (the
+// drift comparison happens client-side against the response).
+func TestCanonicalWalletSubmitSettlementWireIsUnitsExact(t *testing.T) {
 	var received canonicalWalletSettlementWireRequest
+	var rawBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/api/internal/v1/wallet/settlements", r.URL.Path)
+		require.Equal(t, "/api/internal/v2/wallet/settlements", r.URL.Path)
 		require.Equal(t, "POST", r.Method)
 		require.True(t, strings.HasPrefix(r.Header.Get("Idempotency-Key"), "gwusg_"))
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&received))
+		raw, readErr := io.ReadAll(r.Body)
+		require.NoError(t, readErr)
+		require.NoError(t, json.Unmarshal(raw, &received))
+		require.NoError(t, json.Unmarshal(raw, &rawBody))
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":{"accepted":true,"duplicate":false,"canonical_balance_micros":987654}}`))
+		_, _ = w.Write([]byte(`{"data":{"accepted":true,"duplicate":false,"named_lease_id":null,"event":{"event_id":"gwusg_test","lease_id":"lease-1","amount":{"amount_units":"101","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"lease_capture_seq":1,"lease_captured_before":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"lease_captured_after":{"amount_units":"101","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"occurred_at":"2026-08-26T12:00:00Z"},"lease":{"lease_id":"lease-1","platform_user_id":"user-1","currency":"CNY","unit_version":"cny-e8-v1","scale":8,"budget":{"amount_units":"1000","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"reserved":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"captured":{"amount_units":"101","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"released":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"capture_seq":1,"status":"active","expires_at":"2030-01-01T00:00:00Z"},"canonical_balance":{"amount_units":"98765400","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"}}}`))
 	}))
 	defer server.Close()
 
@@ -37,24 +42,33 @@ func TestCanonicalWalletSubmitSettlementWireConvertsUnitsToMicrosWithCeiling(t *
 	client := newCanonicalWalletHTTPClient(cfg, server.Client())
 	result, err := client.SubmitSettlement(context.Background(), CanonicalWalletSettlementEvent{
 		EventID: "gwusg_test", GatewayRequestID: "req-1", PlatformUserID: "user-1", LeaseID: "lease-1",
-		Currency: "CNY", AmountUnits: 101, // 101 units = 1.01 micros -> ceiling to 2 micros
-		LocalBalanceAfterUnits: &localBalance, // 123456789 units = 1234567.89 micros -> ceiling to 1234568
+		Currency: "CNY", AmountUnits: 101, // 101 units cross the wire as exactly "101"
+		LocalBalanceAfterUnits: ptrOf(int64(123_456789)), // deliberately NOT a whole micro — never converted, never sent
 		OccurredAt:             time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC),
 	})
 	require.NoError(t, err)
 	require.True(t, result.Accepted)
 
-	require.Equal(t, int64(2), received.AmountMicros, "ceiling division: (101+99)/100 = 2 — the wire amount must never be smaller than what was reserved")
-	require.NotNil(t, received.LocalBalanceAfterMicros)
-	require.Equal(t, int64(1234568), *received.LocalBalanceAfterMicros, "ceiling division on the local balance too")
+	require.Equal(t, "101", received.Amount.AmountUnits, "units-native: the wire amount is the event's units exactly — never smaller, never larger")
+	require.Equal(t, "CNY", received.Amount.Currency)
+	require.Equal(t, 8, received.Amount.Scale)
+	require.Equal(t, "cny-e8-v1", received.Amount.UnitVersion)
 	require.Equal(t, "2026-08-26T12:00:00Z", received.OccurredAt)
 	require.Equal(t, "req-1", received.GatewayRequestID)
 	require.Equal(t, "lease-1", received.LeaseID)
+	require.Nil(t, rawBody["local_balance_after"], "§11.2: local_balance_after is dropped from the request — the drift comparison happens client-side")
+	require.Nil(t, rawBody["local_balance_after_units"])
 
-	// Response balance converts UP in scale (micros -> units), always exact.
+	// The strict parser: the response's event amount and canonical balance
+	// come back as int64 units, no ×100 anywhere.
+	require.Equal(t, int64(101), result.CapturedUnits)
+	require.Equal(t, int64(1), result.LeaseCaptureSeq)
+	require.Equal(t, "", result.NamedLeaseID, "a null named_lease_id parses to the empty string")
 	require.NotNil(t, result.CanonicalBalanceUnits)
-	require.Equal(t, int64(98_765400), *result.CanonicalBalanceUnits, "987654 micros x100 = 98,765,400 units")
+	require.Equal(t, int64(98_765_400), *result.CanonicalBalanceUnits, "98,765,400 units on the wire = 98,765,400 units parsed")
 }
+
+func ptrOf(v int64) *int64 { return &v }
 
 func TestCanonicalWalletSubmitSettlementRejectsControlPlaneRefusal(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -177,7 +191,7 @@ func TestCanonicalWalletDoJSONNon2xxReturnsError(t *testing.T) {
 	cfg.ControlPlaneURL, cfg.Secret = server.URL, strings.Repeat("s", 32)
 	client := newCanonicalWalletHTTPClient(cfg, server.Client())
 	var resp map[string]any
-	err := client.doJSON(context.Background(), http.MethodPost, "/api/internal/v1/wallet/settlements", canonicalWalletSettlementScope, "key", map[string]string{"a": "b"}, &resp)
+	err := client.doJSON(context.Background(), http.MethodPost, "/api/internal/v2/wallet/settlements", canonicalWalletSettlementScope, "key", map[string]string{"a": "b"}, &resp)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "status 502")
 }

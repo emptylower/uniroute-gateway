@@ -65,12 +65,37 @@ type fakeEnsureControlPlane struct {
 	withoutEnsureRoute bool
 	// probeCalls counts GET requests on the ensure path (§9.6 item 6's probe).
 	probeCalls int
-	Server     *httptest.Server
+	// Phase 3.5 (§11.2/§11.10): the v2 settlements route's state.
+	events         map[string]map[string]fakeSettlementEvent // user → event_id → the captured event
+	captureSeqs    map[string]int64                          // lease id → applied settlement count
+	settlementReqs []canonicalWalletSettlementWireRequest    // every settlement request, in order (G5's wire evidence)
+	omitHeadroom   bool                                      // answer lease_over_capture WITHOUT data.headroom (the absent-field leg)
+	responses      map[string]*fakeCannedResponse            // path → canned response (f.respondWith)
+	Server         *httptest.Server
+}
+
+// fakeSettlementEvent is the fake's wallet_settlement_event row.
+type fakeSettlementEvent struct {
+	LeaseID string
+	Units   int64
+}
+
+// fakeCannedResponse is f.respondWith's entry: answer this path with
+// status/body, `times` times (-1 = until cleared).
+type fakeCannedResponse struct {
+	Status int
+	Body   string
+	Times  int
 }
 
 func newFakeEnsureControlPlane(t *testing.T, now func() time.Time) *fakeEnsureControlPlane {
 	t.Helper()
-	f := &fakeEnsureControlPlane{now: now, cap: 3, perLeaseMax: 10_000_000_000, grace: 30 * time.Minute, balance: map[string]int64{}, leases: map[string][]*fakeLease{}}
+	f := &fakeEnsureControlPlane{
+		now: now, cap: 3, perLeaseMax: 10_000_000_000, grace: 30 * time.Minute,
+		balance: map[string]int64{}, leases: map[string][]*fakeLease{},
+		events: map[string]map[string]fakeSettlementEvent{}, captureSeqs: map[string]int64{},
+		responses: map[string]*fakeCannedResponse{},
+	}
 	f.Server = httptest.NewServer(http.HandlerFunc(f.handle))
 	t.Cleanup(f.Server.Close)
 	return f
@@ -122,6 +147,70 @@ func (f *fakeEnsureControlPlane) probeCallsLocked() int {
 	return f.probeCalls
 }
 
+// close (Phase 3.5, §11.4): set a lease's Status to closed — the grace
+// sweep or a verified drain already ran.
+func (f *fakeEnsureControlPlane) close(user, id string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lease(user, id).Status = "closed"
+}
+
+// respondWith (Phase 3.5, test 37): answer `path` with status/body, `times`
+// times (-1 = until cleared). Consulted before the route's own handling.
+func (f *fakeEnsureControlPlane) respondWith(path string, status int, body string, times int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.responses[path] = &fakeCannedResponse{Status: status, Body: body, Times: times}
+}
+
+// clearResponse removes a canned response.
+func (f *fakeEnsureControlPlane) clearResponse(path string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.responses, path)
+}
+
+// canned answers for r.URL.Path, if one remains; called with f.mu held.
+func (f *fakeEnsureControlPlane) canned(w http.ResponseWriter, r *http.Request) bool {
+	c := f.responses[r.URL.Path]
+	if c == nil {
+		return false
+	}
+	if c.Times > 0 {
+		c.Times--
+		if c.Times == 0 {
+			delete(f.responses, r.URL.Path)
+		}
+	}
+	w.WriteHeader(c.Status)
+	_, _ = w.Write([]byte(c.Body))
+	return true
+}
+
+// fakeLeaseWireView is leaseWireView's twelve fields (lease-wire.ts) — the
+// same view the ensure handler builds, shared by the v2 settlements route.
+// Called with f.mu held.
+func (f *fakeEnsureControlPlane) fakeLeaseWireView(user string, l *fakeLease) map[string]any {
+	return map[string]any{
+		"lease_id": l.ID, "platform_user_id": user, "currency": "CNY", "unit_version": "cny-e8-v1", "scale": 8,
+		"budget": fakeAmountObject(l.Budget), "reserved": fakeAmountObject(0), "captured": fakeAmountObject(l.Captured),
+		"released": fakeAmountObject(l.Released), "capture_seq": f.captureSeqs[l.ID], "status": l.Status,
+		"expires_at": l.ExpiresAt.UTC().Format(time.RFC3339Nano),
+	}
+}
+
+// fakeCanonicalBalance is the v2 route's canonical_balance: grant balance
+// plus every ACTIVE lease's open headroom (what the user can still spend).
+func (f *fakeEnsureControlPlane) fakeCanonicalBalance(user string) int64 {
+	total := f.balance[user]
+	for _, l := range f.leases[user] {
+		if l.Status == "active" {
+			total += l.headroom()
+		}
+	}
+	return total
+}
+
 func (f *fakeEnsureControlPlane) purpose(user, id string) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -147,7 +236,14 @@ func fakeAmountObject(units int64) map[string]any {
 }
 
 func (f *fakeEnsureControlPlane) refuse(w http.ResponseWriter, reason string) {
-	f.refuseClamped(w, reason, "")
+	f.refuseStatus(w, http.StatusConflict, reason)
+}
+
+// refuseStatus is ShipAny's fail(status, reason, message) shape with the
+// caller's status (404 lease_not_found vs the 409 family, §11.5).
+func (f *fakeEnsureControlPlane) refuseStatus(w http.ResponseWriter, status int, reason string) {
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]any{"code": -1, "message": reason, "data": map[string]any{"reason": reason}})
 }
 
 func (f *fakeEnsureControlPlane) refuseClamped(w http.ResponseWriter, reason, clampedBy string) {
@@ -302,24 +398,87 @@ func (f *fakeEnsureControlPlane) handle(w http.ResponseWriter, r *http.Request) 
 			"capture_seq": 0, "status": pick.Status, "expires_at": pick.ExpiresAt.UTC().Format(time.RFC3339Nano),
 			"outcome": outcome, "clamped_by": "none",
 		}})
-	case "/api/internal/v1/wallet/settlements":
+	case "/api/internal/v2/wallet/settlements":
+		// Phase 3.5 (§11.2): the fake's units-native v2 settlements route —
+		// per-event identity, named_lease_id, lease_over_capture with
+		// data.headroom, lease_not_capturable on a closed lease,
+		// settlement_payload_conflict, and the strict amount-object wire.
+		if f.canned(w, r) {
+			return
+		}
 		var req canonicalWalletSettlementWireRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		l := f.lease(strings.TrimSpace(req.PlatformUserID), req.LeaseID)
+		f.settlementReqs = append(f.settlementReqs, req)
+		user := strings.TrimSpace(req.PlatformUserID)
+		units := mustUnits(req.Amount)
+		if f.events[user] == nil {
+			f.events[user] = map[string]fakeSettlementEvent{}
+		}
+		if stored, known := f.events[user][req.EventID]; known {
+			// Per-event identity first: a different amount is a payload
+			// conflict; the same amount is a duplicate, and named_lease_id
+			// names the lease the redelivery asked for when that is not the
+			// lease the event actually captured on (§11.2).
+			if stored.Units != units {
+				f.refuse(w, "settlement_payload_conflict")
+				return
+			}
+			l := f.lease(user, stored.LeaseID)
+			var named any
+			if stored.LeaseID != req.LeaseID {
+				named = req.LeaseID
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{
+				"accepted": true, "duplicate": true, "named_lease_id": named,
+				"event": map[string]any{
+					"event_id": req.EventID, "lease_id": stored.LeaseID, "amount": fakeAmountObject(stored.Units),
+					"lease_capture_seq":     f.captureSeqs[stored.LeaseID],
+					"lease_captured_before": fakeAmountObject(l.Captured), "lease_captured_after": fakeAmountObject(l.Captured),
+					"occurred_at": req.OccurredAt,
+				},
+				"lease":             f.fakeLeaseWireView(user, l),
+				"canonical_balance": fakeAmountObject(f.fakeCanonicalBalance(user)),
+			}})
+			return
+		}
+		l := f.lease(user, req.LeaseID)
 		if l == nil {
-			f.refuse(w, "lease_missing")
+			f.refuseStatus(w, http.StatusNotFound, "lease_not_found")
 			return
 		}
-		units := req.AmountMicros * 100
+		if l.Status != "active" {
+			f.refuse(w, "lease_not_capturable")
+			return
+		}
 		if units > l.headroom() {
-			f.refuse(w, "lease_over_capture")
+			if f.omitHeadroom {
+				f.refuse(w, "lease_over_capture")
+				return
+			}
+			w.WriteHeader(http.StatusConflict)
+			_ = json.NewEncoder(w).Encode(map[string]any{"code": -1, "message": "lease_over_capture", "data": map[string]any{"reason": "lease_over_capture", "headroom": fakeAmountObject(l.headroom())}})
 			return
 		}
+		before := l.Captured
 		l.Captured += units
-		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"accepted": true, "duplicate": false}})
+		f.captureSeqs[l.ID]++
+		seq := f.captureSeqs[l.ID]
+		f.events[user][req.EventID] = fakeSettlementEvent{LeaseID: l.ID, Units: units}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{
+			"accepted": true, "duplicate": false, "named_lease_id": nil,
+			"event": map[string]any{
+				"event_id": req.EventID, "lease_id": l.ID, "amount": fakeAmountObject(units),
+				"lease_capture_seq":     seq,
+				"lease_captured_before": fakeAmountObject(before),
+				"lease_captured_after":  fakeAmountObject(l.Captured),
+				"occurred_at":           req.OccurredAt,
+			},
+			"lease":             f.fakeLeaseWireView(user, l),
+			"canonical_balance": fakeAmountObject(f.fakeCanonicalBalance(user)),
+		}})
 	default:
 		http.NotFound(w, r)
 	}

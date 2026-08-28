@@ -152,7 +152,7 @@ func TestDeliverOutboxEventRealFailurePaths(t *testing.T) {
 				var req canonicalWalletEnsureRequest
 				_ = json.NewDecoder(r.Body).Decode(&req)
 				_, _ = w.Write([]byte(`{"data":{"lease_id":"lease-refuse","platform_user_id":"` + req.PlatformUserID + `","currency":"CNY","unit_version":"cny-e8-v1","scale":8,"budget":{"amount_units":"500000000","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"reserved":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"captured":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"released":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"headroom":{"amount_units":"500000000","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"capture_seq":0,"status":"active","expires_at":"2030-01-01T00:00:00Z","outcome":"issued","clamped_by":"none"}}`))
-			case "/api/internal/v1/wallet/settlements":
+			case "/api/internal/v2/wallet/settlements":
 				refused = true
 				_, _ = w.Write([]byte(`{"data":{"accepted":false,"duplicate":false}}`))
 			default:

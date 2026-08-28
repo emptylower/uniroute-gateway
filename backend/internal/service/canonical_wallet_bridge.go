@@ -89,6 +89,10 @@ const (
 	// silently stop matching.
 	canonicalWalletEnsurePath      = "/api/internal/v2/wallet/leases/ensure"
 	canonicalWalletSettlementScope = "wallet:settlement"
+	// canonicalWalletSettlementsPath (Phase 3.5, §11.2): the units-native v2
+	// route — the only settlements route this client speaks; the v1 micros
+	// path is deleted, not kept behind a switch.
+	canonicalWalletSettlementsPath = "/api/internal/v2/wallet/settlements"
 )
 
 type CanonicalWalletLease struct {
@@ -234,6 +238,11 @@ type CanonicalWalletSettlementResult struct {
 	Accepted              bool   `json:"accepted"`
 	Duplicate             bool   `json:"duplicate"`
 	CanonicalBalanceUnits *int64 `json:"-"`
+	// Phase 3.5 (§11.2): the v2 response's own fields.
+	NamedLeaseID    string `json:"-"` // the lease a duplicate's redelivery named, when it differs from the event's
+	EventLeaseID    string `json:"-"` // event.lease_id — the lease the event actually captured on
+	CapturedUnits   int64  `json:"-"` // event.amount, the strict parser
+	LeaseCaptureSeq int64  `json:"-"`
 }
 
 // CanonicalWalletOutboxEvent carries every field the outbox dispatcher needs
@@ -496,65 +505,95 @@ func (c *canonicalWalletHTTPClient) EnsureLease(ctx context.Context, request can
 	}, nil
 }
 
-// canonicalWalletSettlementWireRequest matches ShipAny's actual current
-// request shape for POST /api/internal/v1/wallet/settlements (still
-// *_micros, unchanged by this phase) — kept separate from the internal
-// CanonicalWalletSettlementEvent type for the same reason
-// canonicalWalletEnsureWireResponse is kept separate from CanonicalWalletLease.
-type canonicalWalletSettlementWireRequest struct {
-	PlatformUserID          string `json:"platform_user_id"`
-	EventID                 string `json:"event_id"`
-	LeaseID                 string `json:"lease_id"`
-	Currency                string `json:"currency"`
-	AmountMicros            int64  `json:"amount_micros"`
-	LocalBalanceAfterMicros *int64 `json:"local_balance_after_micros,omitempty"`
-	GatewayRequestID        string `json:"gateway_request_id,omitempty"`
-	OccurredAt              string `json:"occurred_at"`
+// canonicalWalletLeaseWireView is leaseWireView's twelve fields exactly
+// (lease-wire.ts: lease_id, platform_user_id, currency, unit_version, scale,
+// budget, reserved, captured, released, capture_seq, status, expires_at) —
+// a DEDICATED struct: the settlements route's lease field is this view and
+// nothing else, while the ensure response ADDS headroom/outcome/clamped_by;
+// reusing the ensure type here would let a zero-valued headroom leak into a
+// strict parse that this route never sends.
+type canonicalWalletLeaseWireView struct {
+	LeaseID        string                      `json:"lease_id"`
+	PlatformUserID string                      `json:"platform_user_id"`
+	Currency       string                      `json:"currency"`
+	UnitVersion    string                      `json:"unit_version"`
+	Scale          int                         `json:"scale"`
+	Budget         canonicalWalletAmountObject `json:"budget"`
+	Reserved       canonicalWalletAmountObject `json:"reserved"`
+	Captured       canonicalWalletAmountObject `json:"captured"`
+	Released       canonicalWalletAmountObject `json:"released"`
+	CaptureSeq     int64                       `json:"capture_seq"`
+	Status         string                      `json:"status"`
+	ExpiresAt      time.Time                   `json:"expires_at"`
 }
 
-// canonicalWalletSettlementWireResponse matches ShipAny's actual current
-// response shape (still canonical_balance_micros, unchanged by this phase).
+// canonicalWalletSettlementWireRequest is Phase 3.5's request (§11.2): the
+// event's units exactly, no conversion in either direction; currency is
+// sent for symmetry with ensure but the v2 route ignores it;
+// local_balance_after is dropped (the drift comparison happens client-side
+// against the response).
+type canonicalWalletSettlementWireRequest struct {
+	PlatformUserID   string                      `json:"platform_user_id"`
+	EventID          string                      `json:"event_id"`
+	LeaseID          string                      `json:"lease_id"`
+	Currency         string                      `json:"currency"`
+	Amount           canonicalWalletAmountObject `json:"amount"`
+	GatewayRequestID string                      `json:"gateway_request_id,omitempty"`
+	OccurredAt       string                      `json:"occurred_at"`
+}
+
+type canonicalWalletSettlementWireEvent struct {
+	EventID             string                      `json:"event_id"`
+	LeaseID             string                      `json:"lease_id"`
+	Amount              canonicalWalletAmountObject `json:"amount"`
+	LeaseCaptureSeq     int64                       `json:"lease_capture_seq"`
+	LeaseCapturedBefore canonicalWalletAmountObject `json:"lease_captured_before"`
+	LeaseCapturedAfter  canonicalWalletAmountObject `json:"lease_captured_after"`
+	OccurredAt          string                      `json:"occurred_at"`
+}
+
 type canonicalWalletSettlementWireResponse struct {
-	Accepted               bool   `json:"accepted"`
-	Duplicate              bool   `json:"duplicate"`
-	CanonicalBalanceMicros *int64 `json:"canonical_balance_micros,omitempty"`
+	Accepted         bool                               `json:"accepted"`
+	Duplicate        bool                               `json:"duplicate"`
+	NamedLeaseID     *string                            `json:"named_lease_id"`
+	Event            canonicalWalletSettlementWireEvent `json:"event"`
+	Lease            canonicalWalletLeaseWireView       `json:"lease"`
+	CanonicalBalance canonicalWalletAmountObject        `json:"canonical_balance"`
 }
 
 func (c *canonicalWalletHTTPClient) SubmitSettlement(ctx context.Context, event CanonicalWalletSettlementEvent) (*CanonicalWalletSettlementResult, error) {
-	// Ceiling division, same direction and same reasoning as ensureLease's
-	// requestedMicros conversion: rounding up means ShipAny is never told
-	// to settle LESS than the lease actually reserved for this event, only
-	// possibly up to 99 units (0.99 millionths of a CNY) more.
-	amountMicros := (event.AmountUnits + 99) / 100
-	var localBalanceAfterMicros *int64
-	if event.LocalBalanceAfterUnits != nil {
-		v := (*event.LocalBalanceAfterUnits + 99) / 100
-		localBalanceAfterMicros = &v
-	}
 	wireRequest := canonicalWalletSettlementWireRequest{
 		PlatformUserID: event.PlatformUserID, EventID: event.EventID, LeaseID: event.LeaseID, Currency: event.Currency,
-		AmountMicros: amountMicros, LocalBalanceAfterMicros: localBalanceAfterMicros,
+		Amount:           newCanonicalWalletAmountObject(event.AmountUnits),
 		GatewayRequestID: event.GatewayRequestID, OccurredAt: event.OccurredAt.UTC().Format(time.RFC3339Nano),
 	}
 	var wireResponse canonicalWalletSettlementWireResponse
-	if err := c.doJSON(ctx, http.MethodPost, "/api/internal/v1/wallet/settlements", canonicalWalletSettlementScope, event.EventID, wireRequest, &wireResponse); err != nil {
+	if err := c.doJSON(ctx, http.MethodPost, canonicalWalletSettlementsPath, canonicalWalletSettlementScope, event.EventID, wireRequest, &wireResponse); err != nil {
 		return nil, err
 	}
 	if !wireResponse.Accepted && !wireResponse.Duplicate {
 		return nil, errors.New("control plane rejected canonical wallet settlement")
 	}
-	result := &CanonicalWalletSettlementResult{Accepted: wireResponse.Accepted, Duplicate: wireResponse.Duplicate}
-	if wireResponse.CanonicalBalanceMicros != nil {
-		// Multiplying UP in scale (micros -> cny-e8-v1 units) is always
-		// exact, the same non-lossy direction already established in
-		// EnsureLease's wire conversion — the lossy rounding boundary is
-		// only ever the OTHER direction (units -> the wire's coarser micros
-		// scale, handled above with ceiling division).
-		balanceUnits, err := MulUnits(*wireResponse.CanonicalBalanceMicros, 100)
-		if err != nil {
-			return nil, fmt.Errorf("convert control plane canonical balance to cny-e8-v1 units: %w", err)
-		}
-		result.CanonicalBalanceUnits = &balanceUnits
+	// §9.2/§11.2: the amounts this client consumes are parsed by the strict
+	// parser — a parse failure is a decode-class error.
+	capturedUnits, err := parseCanonicalWalletAmountObject("event.amount", wireResponse.Event.Amount)
+	if err != nil {
+		return nil, err
+	}
+	balanceUnits, err := parseCanonicalWalletAmountObject("canonical_balance", wireResponse.CanonicalBalance)
+	if err != nil {
+		return nil, err
+	}
+	result := &CanonicalWalletSettlementResult{
+		Accepted:              wireResponse.Accepted,
+		Duplicate:             wireResponse.Duplicate,
+		CapturedUnits:         capturedUnits,
+		EventLeaseID:          wireResponse.Event.LeaseID,
+		LeaseCaptureSeq:       wireResponse.Event.LeaseCaptureSeq,
+		CanonicalBalanceUnits: &balanceUnits,
+	}
+	if wireResponse.NamedLeaseID != nil {
+		result.NamedLeaseID = *wireResponse.NamedLeaseID
 	}
 	return result, nil
 }
@@ -682,6 +721,9 @@ type canonicalWalletMetrics struct {
 	missingPlatformID          atomic.Int64
 	unsupportedCurrency        atomic.Int64
 	deadLetterBalanceShortfall atomic.Int64
+	// Phase 3.5 (§11.2): the v2 settlements client's counters.
+	namedLeaseReleased atomic.Int64
+	balanceBehindLocal atomic.Int64
 	// §9.6 item 6's rollout-guard counters (global, like every counter here).
 	controlPlaneIncompatible atomic.Int64
 	controlPlaneProbeFailed  atomic.Int64
@@ -717,6 +759,8 @@ func CanonicalWalletBridgeStats() map[string]int64 {
 		"balance_mismatch": m.balanceMismatch.Load(), "missing_platform_user_id": m.missingPlatformID.Load(),
 		"unsupported_currency":          m.unsupportedCurrency.Load(),
 		"dead_letter_balance_shortfall": m.deadLetterBalanceShortfall.Load(),
+		"named_lease_released":          m.namedLeaseReleased.Load(),
+		"balance_behind_local":          m.balanceBehindLocal.Load(),
 		"control_plane_incompatible":    m.controlPlaneIncompatible.Load(),
 		"control_plane_probe_failed":    m.controlPlaneProbeFailed.Load(),
 		"hold_released_not_written":     m.holdReleasedNotWritten.Load(),
@@ -1432,21 +1476,45 @@ func (b *CanonicalWalletBridge) deliverOutboxEvent(ctx context.Context, e Canoni
 		return
 	}
 	canonicalWalletBridgeMetrics.settlementOK.Add(1)
-	// Balance-mismatch (drift) detection, restored from the pre-outbox
-	// inline path — now comparing in the internal *Units scale on both
-	// sides (SubmitSettlement converts the wire response's
-	// canonical_balance_micros to CanonicalBalanceUnits before returning).
+	// §11.2 named_lease_id: a duplicate whose redelivery named a lease other
+	// than the lease the EVENT captured on means this retry reserved on the
+	// named lease at delivery while ShipAny captured on the original —
+	// release that reservation in the FULL form (dropMarker: the event was
+	// captured elsewhere, nothing more will be captured here, and the DEL is
+	// the idempotency). A null named_lease_id releases nothing.
+	if result.Duplicate && result.NamedLeaseID != "" && result.NamedLeaseID != result.EventLeaseID {
+		if _, rerr := b.store.ReleaseCanonicalWalletReservation(ctx, event.PlatformUserID, result.NamedLeaseID, event.EventID, event.AmountUnits, true); rerr != nil {
+			slog.Warn("canonical wallet named-lease release failed", "event_id", event.EventID, "named_lease_id", result.NamedLeaseID, "error", rerr)
+		} else {
+			canonicalWalletBridgeMetrics.namedLeaseReleased.Add(1)
+		}
+	}
+	// Balance-mismatch (drift) detection, Phase 3.5's quantum (§11.2): a
+	// delta within one credit (1,000,000 units — the v2 route's own
+	// units→credits ceiling) is the float-derived local balance's rounding,
+	// not a mismatch; beyond it both figures are logged. A canonical figure
+	// BELOW the local one by more than the quantum is additionally counted
+	// under its own key — grant-batch expiry steps the canonical figure down
+	// with no gateway counterpart.
 	attrs := []any{"event_id", event.EventID, "lease_id", event.LeaseID, "duplicate", result.Duplicate, "amount_units", event.AmountUnits}
 	if result.CanonicalBalanceUnits != nil && event.LocalBalanceAfterUnits != nil {
 		delta := *result.CanonicalBalanceUnits - *event.LocalBalanceAfterUnits
-		if delta != 0 {
+		if delta > canonicalWalletDriftQuantumUnits || delta < -canonicalWalletDriftQuantumUnits {
 			canonicalWalletBridgeMetrics.balanceMismatch.Add(1)
 			attrs = append(attrs, "balance_delta_units", delta, "canonical_balance_units", *result.CanonicalBalanceUnits, "local_balance_after_units", *event.LocalBalanceAfterUnits)
+			if delta < -canonicalWalletDriftQuantumUnits {
+				canonicalWalletBridgeMetrics.balanceBehindLocal.Add(1)
+			}
 		}
 	}
 	slog.Info("canonical wallet settlement delivered", attrs...)
 	_ = b.outbox.MarkOutboxEventDelivered(ctx, e.ID, b.workerID)
 }
+
+// canonicalWalletDriftQuantumUnits (§11.2): one credit — the v2 route's own
+// units→credits rounding quantum. Deltas within it are the local balance's
+// float rounding; beyond it the two ledgers genuinely disagree.
+const canonicalWalletDriftQuantumUnits = 1_000_000
 
 // canonicalWalletLeaseBindingIsStale reports whether a reservation failure
 // against an ALREADY-BOUND lease proves that binding can never succeed, so it
