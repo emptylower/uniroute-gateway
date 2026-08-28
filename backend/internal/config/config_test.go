@@ -155,6 +155,9 @@ func TestLoadCanonicalWalletEnforceIsAcceptedNowThatAdmissionIsWired(t *testing.
 	t.Setenv("CANONICAL_WALLET_MODE", CanonicalWalletModeEnforce)
 	t.Setenv("CANONICAL_WALLET_CONTROL_PLANE_URL", "https://control.example.test")
 	t.Setenv("CANONICAL_WALLET_SECRET", strings.Repeat("w", 32))
+	// Phase 3.3a gates enforce behind the activation flag: a fully-valid enforce
+	// configuration must set canonical_wallet.enforce_ready=true (3.8 flips it).
+	t.Setenv("CANONICAL_WALLET_ENFORCE_READY", "true")
 	cfg, err := Load()
 	require.NoError(t, err, "enforce mode must be a valid configuration now that the headroom check is actually wired into billing eligibility")
 	require.Equal(t, CanonicalWalletModeEnforce, cfg.CanonicalWallet.Mode)
@@ -2690,4 +2693,47 @@ func TestModelCatalogConfigOverrides(t *testing.T) {
 	if mc.RequestTimeoutSeconds != 30 || mc.MaxPayloadBytes != 64<<20 || mc.MaxItems != 10000 {
 		t.Fatalf("overrides not applied: %+v", mc)
 	}
+}
+
+// newCanonicalWalletValidateConfig loads a fully valid config through Load()
+// (resetViperWithJWTSecret + env) with the canonical wallet mode, the
+// enforce_ready gate and Batch Image switched by parameter.
+func newCanonicalWalletValidateConfig(t *testing.T, mode string, enforceReady bool, batchEnabled bool) (*Config, error) {
+	t.Helper()
+	resetViperWithJWTSecret(t)
+	t.Setenv("CANONICAL_WALLET_MODE", mode)
+	t.Setenv("CANONICAL_WALLET_CONTROL_PLANE_URL", "https://control.example.test")
+	t.Setenv("CANONICAL_WALLET_SECRET", strings.Repeat("w", 32))
+	if enforceReady {
+		t.Setenv("CANONICAL_WALLET_ENFORCE_READY", "true")
+	}
+	if batchEnabled {
+		t.Setenv("BATCH_IMAGE_ENABLED", "true")
+	}
+	return Load()
+}
+
+func TestValidateCanonicalWalletEnforceGate(t *testing.T) {
+	t.Run("enforce without enforce_ready is refused", func(t *testing.T) {
+		_, err := newCanonicalWalletValidateConfig(t, CanonicalWalletModeEnforce, false, false)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "enforce_ready")
+	})
+	t.Run("enforce with ready and batch image enabled is refused", func(t *testing.T) {
+		_, err := newCanonicalWalletValidateConfig(t, CanonicalWalletModeEnforce, true, true)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "batch_image.enabled")
+	})
+	t.Run("enforce with ready and batch image disabled passes these checks", func(t *testing.T) {
+		_, err := newCanonicalWalletValidateConfig(t, CanonicalWalletModeEnforce, true, false)
+		require.NoError(t, err)
+	})
+	t.Run("shadow with batch image enabled is not refused", func(t *testing.T) {
+		_, err := newCanonicalWalletValidateConfig(t, CanonicalWalletModeShadow, false, true)
+		require.NoError(t, err)
+	})
+	t.Run("shadow without enforce_ready is not refused", func(t *testing.T) {
+		_, err := newCanonicalWalletValidateConfig(t, CanonicalWalletModeShadow, false, false)
+		require.NoError(t, err)
+	})
 }

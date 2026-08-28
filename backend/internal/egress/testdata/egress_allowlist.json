@@ -1,0 +1,3026 @@
+[
+  {
+    "file": "internal/config/config.go",
+    "kind": "import",
+    "detail": "net/textproto",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/config/config.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/admin/account_handler.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/admin/audit_log_handler.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/admin/dashboard_snapshot_v2_handler.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/admin/model_authorization_activation_handler.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/admin/model_governance_connection_handler.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/admin/model_governance_probe_handler.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/admin/model_quarantine_handler.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/admin/model_registry_handler.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/admin/ops_alerts_handler.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/admin/ops_auth_cache_health_handler.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/admin/ops_dashboard_handler.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/admin/ops_handler.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/admin/ops_ingress_reject_handler.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/admin/ops_ingress_reject_handler.go",
+    "kind": "import",
+    "detail": "net/netip",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/admin/ops_realtime_handler.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/admin/ops_settings_handler.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/admin/ops_snapshot_v2_handler.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/admin/ops_system_log_handler.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/admin/ops_ws_handler.go",
+    "kind": "import",
+    "detail": "github.com/gorilla/websocket",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/admin/ops_ws_handler.go",
+    "kind": "import",
+    "detail": "net",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/admin/ops_ws_handler.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/admin/ops_ws_handler.go",
+    "kind": "import",
+    "detail": "net/netip",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/admin/ops_ws_handler.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/admin/scheduled_test_handler.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/admin/setting_handler_update.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/admin/system_handler.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/admin/usage_handler.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/auth_dingtalk_client.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/auth_dingtalk_client.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/auth_dingtalk_oauth.go",
+    "kind": "construct",
+    "detail": "AuthHandler.dingTalkClient: \u0026http.Client{}",
+    "annotation": "non-billable",
+    "note": "dingtalk oauth client"
+  },
+  {
+    "file": "internal/handler/auth_dingtalk_oauth.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/auth_dingtalk_oauth.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/auth_email_oauth.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/auth_email_oauth.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/auth_linuxdo_oauth.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/auth_linuxdo_oauth.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/auth_oauth_pending_flow.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/auth_oauth_pending_flow.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/auth_oidc_oauth.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/auth_oidc_oauth.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/auth_wechat_oauth.go",
+    "kind": "construct",
+    "detail": "exchangeWeChatOAuthCode: \u0026http.Client{}",
+    "annotation": "non-billable",
+    "note": "wechat oauth client"
+  },
+  {
+    "file": "internal/handler/auth_wechat_oauth.go",
+    "kind": "construct",
+    "detail": "fetchWeChatUserInfo: \u0026http.Client{}",
+    "annotation": "non-billable",
+    "note": "wechat oauth client"
+  },
+  {
+    "file": "internal/handler/auth_wechat_oauth.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/auth_wechat_oauth.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/batch_image_handler.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/concurrency_error_response.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/content_moderation_helper.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/failover_loop.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/gateway_handler.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/gateway_handler_chat_completions.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/gateway_handler_responses.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/gateway_helper.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/gateway_key_billing.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/gemini_v1beta_handler.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/grok_media.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/image_task_handler.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/image_task_handler.go",
+    "kind": "import",
+    "detail": "net/http/httptest",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/no_account_error.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/openai_alpha_search.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/openai_chat_completions.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/openai_codex_models_handler.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/openai_embeddings.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/openai_gateway_count_tokens.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/openai_gateway_handler.go",
+    "kind": "import",
+    "detail": "github.com/coder/websocket",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/openai_gateway_handler.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/openai_images.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/openai_live.go",
+    "kind": "import",
+    "detail": "github.com/coder/websocket",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/openai_live.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/openai_live.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/ops_error_logger.go",
+    "kind": "import",
+    "detail": "net",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/ops_error_logger.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/page_handler.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/page_handler.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/payment_webhook_handler.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/payment_webhook_handler.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/request_body_limit.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/security_audit_errors.go",
+    "kind": "import",
+    "detail": "github.com/coder/websocket",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/security_audit_errors.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/security_audit_helper.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/setting_handler.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/stream_error_event.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/usage_handler.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/handler/user_msg_queue_helper.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/middleware/rate_limiter.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/payment/provider/airwallex.go",
+    "kind": "construct",
+    "detail": "Airwallex.do: \u0026http.Client{}",
+    "annotation": "non-billable",
+    "note": "payment provider client"
+  },
+  {
+    "file": "internal/payment/provider/airwallex.go",
+    "kind": "construct",
+    "detail": "NewAirwallex: \u0026http.Client{}",
+    "annotation": "non-billable",
+    "note": "payment provider client"
+  },
+  {
+    "file": "internal/payment/provider/airwallex.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/payment/provider/airwallex.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/payment/provider/alipay.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/payment/provider/easypay.go",
+    "kind": "construct",
+    "detail": "EasyPay.postRaw: \u0026http.Client{}",
+    "annotation": "non-billable",
+    "note": "payment provider client"
+  },
+  {
+    "file": "internal/payment/provider/easypay.go",
+    "kind": "construct",
+    "detail": "NewEasyPay: \u0026http.Client{}",
+    "annotation": "non-billable",
+    "note": "payment provider client"
+  },
+  {
+    "file": "internal/payment/provider/easypay.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/payment/provider/easypay.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/payment/provider/wxpay.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/payment/provider/wxpay.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/pkg/antigravity/client.go",
+    "kind": "construct",
+    "detail": "NewClient: \u0026http.Client{}",
+    "annotation": "non-billable",
+    "note": "antigravity SDK client"
+  },
+  {
+    "file": "internal/pkg/antigravity/client.go",
+    "kind": "factory",
+    "detail": "Client.fetchAvailableModelsHTTPClient",
+    "annotation": "non-billable",
+    "note": "antigravity model-listing client"
+  },
+  {
+    "file": "internal/pkg/antigravity/client.go",
+    "kind": "import",
+    "detail": "net",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/pkg/antigravity/client.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/pkg/antigravity/client.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/pkg/antigravity/oauth.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/pkg/antigravity/oauth.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/pkg/errors/errors.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/pkg/errors/http.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/pkg/errors/types.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/pkg/geminicli/drive_client.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/pkg/geminicli/oauth.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/pkg/geminicli/oauth.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/pkg/googleapi/status.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/pkg/httpclient/pool.go",
+    "kind": "construct",
+    "detail": "buildClient: \u0026http.Client{}",
+    "annotation": "non-billable",
+    "note": "shared httpclient pool"
+  },
+  {
+    "file": "internal/pkg/httpclient/pool.go",
+    "kind": "construct",
+    "detail": "validatedTransport.RoundTrip: RoundTrip",
+    "annotation": "non-billable",
+    "note": "httpclient pool transport (RoundTrip)"
+  },
+  {
+    "file": "internal/pkg/httpclient/pool.go",
+    "kind": "factory",
+    "detail": "GetClient",
+    "annotation": "non-billable",
+    "note": "shared httpclient pool factory"
+  },
+  {
+    "file": "internal/pkg/httpclient/pool.go",
+    "kind": "factory",
+    "detail": "buildClient",
+    "annotation": "non-billable",
+    "note": "shared httpclient pool factory"
+  },
+  {
+    "file": "internal/pkg/httpclient/pool.go",
+    "kind": "import",
+    "detail": "net",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/pkg/httpclient/pool.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/pkg/httputil/body.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/pkg/ip/ip.go",
+    "kind": "import",
+    "detail": "net",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/pkg/oauth/oauth.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/pkg/openai/engine_fingerprint_signal.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/pkg/openai/oauth.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/pkg/proxyurl/parse.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/pkg/proxyutil/dialer.go",
+    "kind": "import",
+    "detail": "net",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/pkg/proxyutil/dialer.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/pkg/proxyutil/dialer.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/pkg/response/response.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/pkg/servertiming/http.go",
+    "kind": "construct",
+    "detail": "Do: http.DefaultClient",
+    "annotation": "non-billable",
+    "note": "servertiming instrumentation"
+  },
+  {
+    "file": "internal/pkg/servertiming/http.go",
+    "kind": "construct",
+    "detail": "InstrumentClient: \u0026http.Client{}",
+    "annotation": "non-billable",
+    "note": "servertiming instrumentation"
+  },
+  {
+    "file": "internal/pkg/servertiming/http.go",
+    "kind": "construct",
+    "detail": "timingRoundTripper.RoundTrip: RoundTrip",
+    "annotation": "non-billable",
+    "note": "servertiming transport (RoundTrip)"
+  },
+  {
+    "file": "internal/pkg/servertiming/http.go",
+    "kind": "factory",
+    "detail": "InstrumentClient",
+    "annotation": "non-billable",
+    "note": "servertiming instrumentation"
+  },
+  {
+    "file": "internal/pkg/servertiming/http.go",
+    "kind": "factory",
+    "detail": "WrapRoundTripper",
+    "annotation": "non-billable",
+    "note": "servertiming instrumentation"
+  },
+  {
+    "file": "internal/pkg/servertiming/http.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/pkg/tlsfingerprint/dialer.go",
+    "kind": "import",
+    "detail": "net",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/pkg/tlsfingerprint/dialer.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/pkg/tlsfingerprint/dialer.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/pkg/websearch/brave.go",
+    "kind": "construct",
+    "detail": "NewBraveProvider: http.DefaultClient",
+    "annotation": "non-billable",
+    "note": "websearch Brave provider client"
+  },
+  {
+    "file": "internal/pkg/websearch/brave.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/pkg/websearch/brave.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/pkg/websearch/manager.go",
+    "kind": "construct",
+    "detail": "newHTTPClient: \u0026http.Client{}",
+    "annotation": "non-billable",
+    "note": "websearch manager pooled client"
+  },
+  {
+    "file": "internal/pkg/websearch/manager.go",
+    "kind": "factory",
+    "detail": "Manager.getOrCreateHTTPClient",
+    "annotation": "non-billable",
+    "note": "websearch manager pooled client factory"
+  },
+  {
+    "file": "internal/pkg/websearch/manager.go",
+    "kind": "factory",
+    "detail": "newHTTPClient",
+    "annotation": "non-billable",
+    "note": "websearch manager client factory"
+  },
+  {
+    "file": "internal/pkg/websearch/manager.go",
+    "kind": "import",
+    "detail": "crypto/tls",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/pkg/websearch/manager.go",
+    "kind": "import",
+    "detail": "net",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/pkg/websearch/manager.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/pkg/websearch/manager.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/pkg/websearch/tavily.go",
+    "kind": "construct",
+    "detail": "NewTavilyProvider: http.DefaultClient",
+    "annotation": "non-billable",
+    "note": "websearch Tavily provider client"
+  },
+  {
+    "file": "internal/pkg/websearch/tavily.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/pkg/xai/billing.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/pkg/xai/oauth.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/pkg/xai/quota.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/pkg/xai/sso_device.go",
+    "kind": "construct",
+    "detail": "ConvertSSOToBuild: \u0026http.Client{}",
+    "annotation": "non-billable",
+    "note": "non-wallet egress client (construction/factory)"
+  },
+  {
+    "file": "internal/pkg/xai/sso_device.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/pkg/xai/sso_device.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/repository/backup_s3_store.go",
+    "kind": "import",
+    "detail": "github.com/aws/aws-sdk-go-v2/service/s3",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/repository/claude_oauth_service.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/repository/claude_oauth_service.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/repository/claude_usage_service.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/repository/gemini_oauth_client.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/repository/github_release_service.go",
+    "kind": "construct",
+    "detail": "NewGitHubReleaseClient: \u0026http.Client{}",
+    "annotation": "non-billable",
+    "note": "github release check client"
+  },
+  {
+    "file": "internal/repository/github_release_service.go",
+    "kind": "factory",
+    "detail": "cloneHTTPClient",
+    "annotation": "non-billable",
+    "note": "github release check client factory"
+  },
+  {
+    "file": "internal/repository/github_release_service.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/repository/github_release_service.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/repository/grok_oauth_client.go",
+    "kind": "factory",
+    "detail": "createGrokSSOHTTPClient",
+    "annotation": "non-billable",
+    "note": "grok SSO device client"
+  },
+  {
+    "file": "internal/repository/grok_oauth_client.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/repository/grok_oauth_client.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/repository/http_upstream.go",
+    "kind": "construct",
+    "detail": "grokAccessDeniedFallbackTransport.RoundTrip: RoundTrip",
+    "annotation": "non-billable",
+    "note": "grok fallback transport (RoundTrip; one-response invariant test names it)"
+  },
+  {
+    "file": "internal/repository/http_upstream.go",
+    "kind": "construct",
+    "detail": "httpUpstreamService.getClientEntry: \u0026http.Client{}",
+    "annotation": "port",
+    "note": "the decorated HTTP port: one client pool behind repository.NewHTTPUpstream (spec §2.0)"
+  },
+  {
+    "file": "internal/repository/http_upstream.go",
+    "kind": "construct",
+    "detail": "httpUpstreamService.getClientEntryWithTLS: \u0026http.Client{}",
+    "annotation": "port",
+    "note": "the decorated HTTP port: TLS-fingerprint client pool behind repository.NewHTTPUpstream"
+  },
+  {
+    "file": "internal/repository/http_upstream.go",
+    "kind": "factory",
+    "detail": "httpClientForUpstreamRequest",
+    "annotation": "non-billable",
+    "note": "non-wallet egress client (construction/factory)"
+  },
+  {
+    "file": "internal/repository/http_upstream.go",
+    "kind": "factory",
+    "detail": "httpClientWithGrokAccessDeniedFallback",
+    "annotation": "non-billable",
+    "note": "non-wallet egress client (construction/factory)"
+  },
+  {
+    "file": "internal/repository/http_upstream.go",
+    "kind": "import",
+    "detail": "crypto/tls",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/repository/http_upstream.go",
+    "kind": "import",
+    "detail": "net",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/repository/http_upstream.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/repository/http_upstream.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/repository/image_storage_s3.go",
+    "kind": "import",
+    "detail": "github.com/aws/aws-sdk-go-v2/service/s3",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/repository/openai_oauth_service.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/repository/openai_oauth_service.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/repository/pricing_service.go",
+    "kind": "construct",
+    "detail": "NewPricingRemoteClient: \u0026http.Client{}",
+    "annotation": "non-billable",
+    "note": "remote pricing feed client"
+  },
+  {
+    "file": "internal/repository/pricing_service.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/repository/proxy_probe_service.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/repository/redis.go",
+    "kind": "import",
+    "detail": "crypto/tls",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/repository/req_client_pool.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/repository/s3_client.go",
+    "kind": "import",
+    "detail": "github.com/aws/aws-sdk-go-v2/aws",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/repository/s3_client.go",
+    "kind": "import",
+    "detail": "github.com/aws/aws-sdk-go-v2/aws/signer/v4",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/repository/s3_client.go",
+    "kind": "import",
+    "detail": "github.com/aws/aws-sdk-go-v2/config",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/repository/s3_client.go",
+    "kind": "import",
+    "detail": "github.com/aws/aws-sdk-go-v2/credentials",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/repository/s3_client.go",
+    "kind": "import",
+    "detail": "github.com/aws/aws-sdk-go-v2/service/s3",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/repository/turnstile_service.go",
+    "kind": "construct",
+    "detail": "NewTurnstileVerifier: \u0026http.Client{}",
+    "annotation": "non-billable",
+    "note": "turnstile captcha verifier"
+  },
+  {
+    "file": "internal/repository/turnstile_service.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/repository/turnstile_service.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/securityaudit/coordinator.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/securityaudit/prompt_outbound_security.go",
+    "kind": "construct",
+    "detail": "NewSecureHTTPClient: \u0026http.Client{}",
+    "annotation": "non-billable",
+    "note": "prompt security audit client"
+  },
+  {
+    "file": "internal/securityaudit/prompt_outbound_security.go",
+    "kind": "factory",
+    "detail": "NewSecureHTTPClient",
+    "annotation": "non-billable",
+    "note": "prompt security audit client factory"
+  },
+  {
+    "file": "internal/securityaudit/prompt_outbound_security.go",
+    "kind": "import",
+    "detail": "crypto/tls",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/securityaudit/prompt_outbound_security.go",
+    "kind": "import",
+    "detail": "net",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/securityaudit/prompt_outbound_security.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/securityaudit/prompt_outbound_security.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/securityaudit/prompt_qwen3guard.go",
+    "kind": "factory",
+    "detail": "OpenAICompatibleScanner.clientFor",
+    "annotation": "non-billable",
+    "note": "qwen3guard scanner client"
+  },
+  {
+    "file": "internal/securityaudit/prompt_qwen3guard.go",
+    "kind": "import",
+    "detail": "net",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/securityaudit/prompt_qwen3guard.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/securityaudit/prompt_service.go",
+    "kind": "import",
+    "detail": "net",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/securityaudit/prompt_service.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/server/http.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/server/middleware/admin_compliance.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/server/middleware/api_key_auth.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/server/middleware/cors.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/server/middleware/ingress_reject.go",
+    "kind": "import",
+    "detail": "net/netip",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/server/middleware/middleware.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/server/middleware/panel_rate_limit.go",
+    "kind": "import",
+    "detail": "net",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/server/middleware/panel_rate_limit.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/server/middleware/platform_identity_auth.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/server/middleware/recovery.go",
+    "kind": "import",
+    "detail": "net",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/server/middleware/recovery.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/server/middleware/request_body_limit.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/server/middleware/server_timing.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/server/routes/common.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/server/routes/gateway.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/account_endpoint_probe.go",
+    "kind": "construct",
+    "detail": "NewAccountEndpointProbeService: \u0026http.Client{}",
+    "annotation": "non-billable",
+    "note": "account endpoint probe client"
+  },
+  {
+    "file": "internal/service/account_endpoint_probe.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/account_endpoint_probe.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/account_header_override.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/account_test_service.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/account_test_service.go",
+    "kind": "import",
+    "detail": "net/http/httptest",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/account_usage_service.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/admin_account.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/admin_compliance.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/admin_group.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/admin_proxy.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/admin_service.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/anthropic_apikey_auth.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/antigravity_credits_overages.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/antigravity_gateway_claude.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/antigravity_gateway_compat.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/antigravity_gateway_compat_stream.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/antigravity_gateway_gemini.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/antigravity_gateway_retry.go",
+    "kind": "import",
+    "detail": "net",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/antigravity_gateway_retry.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/antigravity_gateway_service.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/antigravity_gateway_streaming.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/antigravity_gateway_upstream.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/antigravity_internal500_penalty.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/auth_email_binding.go",
+    "kind": "import",
+    "detail": "net/mail",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/auth_email_oauth_auto.go",
+    "kind": "import",
+    "detail": "net/mail",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/auth_oauth_email_flow.go",
+    "kind": "import",
+    "detail": "net/mail",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/auth_service.go",
+    "kind": "import",
+    "detail": "net/mail",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/authorization_refused.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/authorizing_http_upstream.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/authorizing_http_upstream.go",
+    "kind": "import",
+    "detail": "net/http/httptrace",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/batch_image.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/batch_image_download.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/batch_image_processor.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/batch_image_provider.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/batch_image_provider_gemini.go",
+    "kind": "construct",
+    "detail": "batchImageDefaultHTTPClient: http.DefaultClient",
+    "annotation": "billable-outside-this-wallet",
+    "note": "Batch Image Gemini client — debits outside the canonical wallet (spec §2.5)"
+  },
+  {
+    "file": "internal/service/batch_image_provider_gemini.go",
+    "kind": "factory",
+    "detail": "batchImageDefaultHTTPClient",
+    "annotation": "billable-outside-this-wallet",
+    "note": "Batch Image Gemini client factory — debits outside the canonical wallet (spec §2.5)"
+  },
+  {
+    "file": "internal/service/batch_image_provider_gemini.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/batch_image_provider_gemini.go",
+    "kind": "import",
+    "detail": "net/textproto",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/batch_image_provider_gemini.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/batch_image_provider_vertex.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/batch_image_provider_vertex.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/batch_image_queue.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/bedrock_request.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/bedrock_signer.go",
+    "kind": "import",
+    "detail": "github.com/aws/aws-sdk-go-v2/aws",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/bedrock_signer.go",
+    "kind": "import",
+    "detail": "github.com/aws/aws-sdk-go-v2/aws/signer/v4",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/bedrock_signer.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/bedrock_stream.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/canonical_wallet_bridge.go",
+    "kind": "construct",
+    "detail": "newCanonicalWalletHTTPClient: \u0026http.Client{}",
+    "annotation": "non-billable",
+    "note": "canonical wallet control-plane client (money path itself, non-billable)"
+  },
+  {
+    "file": "internal/service/canonical_wallet_bridge.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/catalog_http_client.go",
+    "kind": "construct",
+    "detail": "NewCatalogHTTPClient: \u0026http.Client{}",
+    "annotation": "non-billable",
+    "note": "catalog client"
+  },
+  {
+    "file": "internal/service/catalog_http_client.go",
+    "kind": "import",
+    "detail": "net",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/catalog_http_client.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/catalog_http_client.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/channel_monitor_checker.go",
+    "kind": "construct",
+    "detail": "newSSRFSafeHTTPClient: \u0026http.Client{}",
+    "annotation": "non-billable",
+    "note": "channel monitor SSRF-safe client"
+  },
+  {
+    "file": "internal/service/channel_monitor_checker.go",
+    "kind": "factory",
+    "detail": "newSSRFSafeHTTPClient",
+    "annotation": "non-billable",
+    "note": "channel monitor SSRF-safe client factory"
+  },
+  {
+    "file": "internal/service/channel_monitor_checker.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/channel_monitor_checker.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/channel_monitor_ssrf.go",
+    "kind": "import",
+    "detail": "net",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/channel_monitor_validate.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/claude_code_validator.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/content_moderation.go",
+    "kind": "construct",
+    "detail": "ContentModerationService.callModerationOnceWithInput: http.DefaultClient",
+    "annotation": "non-billable",
+    "note": "content moderation client"
+  },
+  {
+    "file": "internal/service/content_moderation.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/content_moderation.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/crs_sync_service.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/email_service.go",
+    "kind": "import",
+    "detail": "crypto/tls",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/email_service.go",
+    "kind": "import",
+    "detail": "net",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/email_service.go",
+    "kind": "import",
+    "detail": "net/smtp",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/email_service.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/exchange_rate.go",
+    "kind": "construct",
+    "detail": "NewExchangeRateService: \u0026http.Client{}",
+    "annotation": "non-billable",
+    "note": "FX rate client"
+  },
+  {
+    "file": "internal/service/exchange_rate.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/exchange_rate.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/gateway_anthropic_passthrough.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/gateway_bedrock.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/gateway_count_tokens.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/gateway_forward.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/gateway_forward_as_chat_completions.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/gateway_forward_as_responses.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/gateway_service.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/gateway_upstream_request.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/gateway_upstream_request.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/gateway_upstream_response.go",
+    "kind": "import",
+    "detail": "net",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/gateway_upstream_response.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/gateway_websearch_emulation.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/gemini_chat_completions_compat_service.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/gemini_messages_compat_service.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/gemini_oauth_service.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/grok_credential_failure.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/grok_media.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/grok_media.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/grok_oauth_service.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/grok_quota_fetcher.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/grok_quota_service.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/grok_upstream_errors.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/header_util.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/http_upstream_port.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/identity_service.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/image_storage.go",
+    "kind": "construct",
+    "detail": "defaultImageDownloadHTTPClient: \u0026http.Client{}",
+    "annotation": "non-billable",
+    "note": "image download client (media_fetch)"
+  },
+  {
+    "file": "internal/service/image_storage.go",
+    "kind": "factory",
+    "detail": "defaultImageDownloadHTTPClient",
+    "annotation": "non-billable",
+    "note": "image download client factory (media_fetch)"
+  },
+  {
+    "file": "internal/service/image_storage.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/image_task.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/model_not_found_error.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/notification_email_service.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/ollama_cloud_usage.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/ollama_cloud_usage.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_account_runtime_block_fastpath.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_agent_identity.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_alpha_search.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_alpha_search.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_apikey_responses_probe.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_chatgpt_headers.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_client_restriction_detector.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_codex_identity.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_codex_models_service.go",
+    "kind": "import",
+    "detail": "net",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_codex_models_service.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_codex_models_service.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_codex_pat_service.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_compact_probe.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_compact_sse_keepalive.go",
+    "kind": "import",
+    "detail": "net",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_compact_sse_keepalive.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_compact_stream_bridge.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_embeddings.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_endpoint_url.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_first_output_timeout.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_gateway_cc_pipeline.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_gateway_chat_completions.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_gateway_chat_completions_raw.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_gateway_count_tokens.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_gateway_forward.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_gateway_grok.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_gateway_grok_cache.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_gateway_grok_chat_bridge.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_gateway_messages.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_gateway_messages_chat_fallback.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_gateway_passthrough.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_gateway_request_body.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_gateway_response_handling.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_gateway_responses_chat_fallback.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_gateway_service.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_gateway_upstream_errors.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_gateway_usage.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_images.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_images.go",
+    "kind": "import",
+    "detail": "net/textproto",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_images_json_keepalive.go",
+    "kind": "import",
+    "detail": "net",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_images_json_keepalive.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_images_responses.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_live.go",
+    "kind": "import",
+    "detail": "github.com/coder/websocket",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_live.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_live.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_messages_continuation.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_oauth_service.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_quota_service.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_responses_rejected_field_retry.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_silent_refusal.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_upstream_transport_error.go",
+    "kind": "import",
+    "detail": "net",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_upstream_transport_error.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_ws_client.go",
+    "kind": "construct",
+    "detail": "coderOpenAIWSClientDialer.proxyHTTPClient: \u0026http.Client{}",
+    "annotation": "port",
+    "note": "the WS port dialer client (decorated at 3.3b)"
+  },
+  {
+    "file": "internal/service/openai_ws_client.go",
+    "kind": "factory",
+    "detail": "coderOpenAIWSClientDialer.proxyHTTPClient",
+    "annotation": "port",
+    "note": "the WS port dialer client factory (decorated at 3.3b)"
+  },
+  {
+    "file": "internal/service/openai_ws_client.go",
+    "kind": "import",
+    "detail": "github.com/coder/websocket",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_ws_client.go",
+    "kind": "import",
+    "detail": "github.com/coder/websocket/wsjson",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_ws_client.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_ws_client.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_ws_client_read.go",
+    "kind": "import",
+    "detail": "github.com/coder/websocket",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_ws_forwarder.go",
+    "kind": "import",
+    "detail": "github.com/coder/websocket",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_ws_forwarder_ingress.go",
+    "kind": "import",
+    "detail": "github.com/coder/websocket",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_ws_forwarder_ingress.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_ws_forwarder_ingress.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_ws_forwarder_logutil.go",
+    "kind": "import",
+    "detail": "github.com/coder/websocket",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_ws_forwarder_logutil.go",
+    "kind": "import",
+    "detail": "net",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_ws_forwarder_logutil.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_ws_forwarder_payload.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_ws_forwarder_payload.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_ws_forwarder_support.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_ws_forwarder_v2.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_ws_forwarder_v2.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_ws_http_bridge.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_ws_pool.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_ws_v2/passthrough_relay.go",
+    "kind": "import",
+    "detail": "github.com/coder/websocket",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_ws_v2/passthrough_relay.go",
+    "kind": "import",
+    "detail": "net",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_ws_v2_passthrough_adapter.go",
+    "kind": "import",
+    "detail": "github.com/coder/websocket",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_ws_v2_passthrough_adapter.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/openai_ws_v2_passthrough_adapter.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/payment_order.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/payment_resume_service.go",
+    "kind": "import",
+    "detail": "net",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/payment_resume_service.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/proxy.go",
+    "kind": "import",
+    "detail": "net",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/proxy.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/ratelimit_service.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/setting_public.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/update_service.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/upstream_billing_probe.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/upstream_connection.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/upstream_models.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/upstream_response_limit.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/usage_cleanup_service.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/user_service.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/vertex_service_account.go",
+    "kind": "construct",
+    "detail": "newVertexServiceAccountHTTPClient: \u0026http.Client{}",
+    "annotation": "non-billable",
+    "note": "vertex service account token client"
+  },
+  {
+    "file": "internal/service/vertex_service_account.go",
+    "kind": "factory",
+    "detail": "newVertexServiceAccountHTTPClient",
+    "annotation": "non-billable",
+    "note": "vertex service account token client factory"
+  },
+  {
+    "file": "internal/service/vertex_service_account.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/vertex_service_account.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/setup/cli.go",
+    "kind": "import",
+    "detail": "net/mail",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/setup/handler.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/setup/handler.go",
+    "kind": "import",
+    "detail": "net/mail",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/setup/setup.go",
+    "kind": "import",
+    "detail": "crypto/tls",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/testutil/httptest.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/testutil/httptest.go",
+    "kind": "import",
+    "detail": "net/http/httptest",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/util/httputil/httputil.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/util/responseheaders/responseheaders.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/util/urlvalidator/validator.go",
+    "kind": "import",
+    "detail": "net",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/util/urlvalidator/validator.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/web/embed_off.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/web/embed_on.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/web/embed_on.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/web/static_cache.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  }
+]

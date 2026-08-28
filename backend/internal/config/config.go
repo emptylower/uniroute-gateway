@@ -2721,6 +2721,16 @@ func (c *Config) Validate() error {
 		if c.CanonicalWallet.SettlementWorkers < 1 || c.CanonicalWallet.SettlementWorkers > 64 {
 			return fmt.Errorf("canonical_wallet.settlement_workers must be between 1 and 64")
 		}
+		if c.CanonicalWallet.Mode == CanonicalWalletModeEnforce {
+			if !c.CanonicalWallet.EnforceReady {
+				// enforce_ready (config.go:1584, default false) was declared and read
+				// nowhere; from 3.3a on, enforce withholds money-bearing traffic, so it is gated.
+				return fmt.Errorf("canonical_wallet.mode=enforce requires canonical_wallet.enforce_ready=true (the Phase 3.8 activation gate)")
+			}
+			if c.BatchImage.Enabled {
+				return fmt.Errorf("canonical_wallet.mode=enforce cannot start with batch_image.enabled=true: Batch Image debits outside the canonical wallet (spec §2.5, G10)")
+			}
+		}
 	default:
 		return fmt.Errorf("canonical_wallet.mode must be one of: disabled/shadow/enforce")
 	}

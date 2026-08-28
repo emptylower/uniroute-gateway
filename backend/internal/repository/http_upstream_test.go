@@ -10,10 +10,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
@@ -948,4 +950,167 @@ func hasEntry(svc *httpUpstreamService, target *upstreamClientEntry) bool {
 		}
 	}
 	return false
+}
+
+// Phase 3.3a (spec §2.0 / §6 item 10): no transport in the HTTPUpstream chain
+// may let more than one wire request's result settle per Do.
+// grokAccessDeniedFallbackTransport is the ONE existing multi-write transport,
+// named here; a new one fails this test.
+func TestHTTPUpstreamTransportChainSingleResponseInvariant(t *testing.T) {
+	base := &http.Transport{}
+	client := httpClientWithGrokAccessDeniedFallback(&http.Client{Transport: base})
+	names := roundTripperChainTypeNames(client.Transport)
+	require.Equal(t, []string{"*repository.grokAccessDeniedFallbackTransport", "*http.Transport"}, names)
+}
+
+// The PRODUCTION chain, not only the hand-built one: acquire the pooled client
+// exactly as Do does (http_upstream.go:202-211) and pin the same set.
+func TestHTTPUpstreamProductionTransportChainSingleResponseInvariant(t *testing.T) {
+	cfg := &config.Config{Gateway: config.GatewayConfig{ResponseHeaderTimeout: 300}}
+	svc := newHTTPUpstreamService(cfg)
+	entry, err := svc.acquireClientWithProfile("", 1, 1, service.HTTPUpstreamProfileDefault)
+	require.NoError(t, err)
+
+	req, err := http.NewRequest(http.MethodPost, "https://api.example.com/v1/x", bytes.NewReader([]byte(`{}`)))
+	require.NoError(t, err)
+	client := httpClientForUpstreamRequest(entry.client, req)
+	client = httpClientWithGrokAccessDeniedFallback(client)
+	names := roundTripperChainTypeNames(client.Transport)
+	require.Equal(t, []string{"*repository.grokAccessDeniedFallbackTransport", "*http.Transport"}, names)
+}
+
+// roundTripperChainTypeNames follows every struct field implementing
+// http.RoundTripper until *http.Transport (reflection).
+func roundTripperChainTypeNames(rt http.RoundTripper) []string {
+	var roundTripperType = reflect.TypeOf((*http.RoundTripper)(nil)).Elem()
+	var names []string
+	for rt != nil {
+		names = append(names, reflect.TypeOf(rt).String())
+		if _, ok := rt.(*http.Transport); ok {
+			break
+		}
+		v := reflect.ValueOf(rt)
+		if v.Kind() == reflect.Ptr {
+			v = v.Elem()
+		}
+		if v.Kind() != reflect.Struct {
+			break
+		}
+		var next http.RoundTripper
+		t := v.Type()
+		for i := 0; i < t.NumField(); i++ {
+			if !t.Field(i).Type.Implements(roundTripperType) {
+				continue
+			}
+			field := v.Field(i)
+			if field.CanInterface() {
+				next = field.Interface().(http.RoundTripper)
+			} else {
+				// Unexported field: read it through an unsafe alias (test-only).
+				next = reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Interface().(http.RoundTripper)
+			}
+			break
+		}
+		rt = next
+	}
+	return names
+}
+
+// closeTrackingReadCloser records Close so the one-response assertions can
+// prove the superseded body was released exactly once.
+type closeTrackingReadCloser struct {
+	io.Reader
+	closed *atomic.Bool
+}
+
+func (c closeTrackingReadCloser) Close() error {
+	c.closed.Store(true)
+	return nil
+}
+
+func TestGrokAccessDeniedFallbackReturnsExactlyOneResponse(t *testing.T) {
+	newRequest := func(t *testing.T, body string) *http.Request {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodPost, "https://"+grokCLIProxyHost+"/v1/responses", strings.NewReader(body))
+		require.NoError(t, err)
+		req.Header.Set("Authorization", "Bearer oauth-token")
+		req.Header.Set("X-XAI-Token-Auth", "xai-grok-cli")
+		return req
+	}
+
+	t.Run("successful fallback: two RoundTrips, ONE response, the 403 body closed", func(t *testing.T) {
+		var calls int
+		forbiddenClosed := &atomic.Bool{}
+		fallbackClosed := &atomic.Bool{}
+		base := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			calls++
+			if calls == 1 {
+				return &http.Response{
+					StatusCode: http.StatusForbidden,
+					Header:     make(http.Header),
+					Body: closeTrackingReadCloser{
+						Reader: strings.NewReader(`{"error":"Access denied"}`),
+						closed: forbiddenClosed,
+					},
+					Request: req,
+				}, nil
+			}
+			require.Equal(t, grokOfficialAPIHost, req.URL.Hostname())
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body: closeTrackingReadCloser{
+					Reader: strings.NewReader(`{"id":"response-ok"}`),
+					closed: fallbackClosed,
+				},
+				Request: req,
+			}, nil
+		})
+		transport := &grokAccessDeniedFallbackTransport{base: base}
+		resp, err := transport.RoundTrip(newRequest(t, `{"model":"grok-4.5","input":"hello"}`))
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+		require.Equal(t, 2, calls, "the fallback re-sends the replayable request")
+		require.Equal(t, http.StatusOK, resp.StatusCode, "exactly ONE response settles: the 200")
+		require.True(t, forbiddenClosed.Load(), "the superseded 403 body must be closed")
+		require.False(t, fallbackClosed.Load(), "the returned 200 body stays open for the caller")
+		require.NoError(t, resp.Body.Close())
+	})
+
+	t.Run("failing fallback: the original 403 is returned and the 500 body closed", func(t *testing.T) {
+		var calls int
+		forbiddenClosed := &atomic.Bool{}
+		fallbackClosed := &atomic.Bool{}
+		base := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			calls++
+			if calls == 1 {
+				return &http.Response{
+					StatusCode: http.StatusForbidden,
+					Header:     make(http.Header),
+					Body: closeTrackingReadCloser{
+						Reader: strings.NewReader(`{"error":"Access denied"}`),
+						closed: forbiddenClosed,
+					},
+					Request: req,
+				}, nil
+			}
+			return &http.Response{
+				StatusCode: http.StatusInternalServerError,
+				Header:     make(http.Header),
+				Body: closeTrackingReadCloser{
+					Reader: strings.NewReader(`{"error":"boom"}`),
+					closed: fallbackClosed,
+				},
+				Request: req,
+			}, nil
+		})
+		transport := &grokAccessDeniedFallbackTransport{base: base}
+		resp, err := transport.RoundTrip(newRequest(t, `{"model":"grok-4.5","input":"hello"}`))
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+		require.Equal(t, 2, calls)
+		require.Equal(t, http.StatusForbidden, resp.StatusCode, "the original 403 is returned")
+		require.True(t, fallbackClosed.Load(), "the failed fallback's 500 body must be closed")
+		require.NoError(t, resp.Body.Close())
+	})
 }

@@ -1,0 +1,440 @@
+[
+  {
+    "file": "internal/repository/claude_usage_service.go",
+    "func": "claudeUsageService.FetchUsageWithOptions",
+    "ordinal": 1,
+    "method": "DoWithTLS",
+    "annotation": "non-billable",
+    "note": "Phase 3.3a mark: usage_fetch"
+  },
+  {
+    "file": "internal/service/account_test_service.go",
+    "func": "AccountTestService.testBedrockAccountConnection",
+    "ordinal": 1,
+    "method": "DoWithTLS",
+    "annotation": "non-billable",
+    "note": "Phase 3.3a mark: account_test"
+  },
+  {
+    "file": "internal/service/account_test_service.go",
+    "func": "AccountTestService.testClaudeAccountConnection",
+    "ordinal": 1,
+    "method": "DoWithTLS",
+    "annotation": "non-billable",
+    "note": "Phase 3.3a mark: account_test"
+  },
+  {
+    "file": "internal/service/account_test_service.go",
+    "func": "AccountTestService.testClaudeVertexServiceAccountConnection",
+    "ordinal": 1,
+    "method": "DoWithTLS",
+    "annotation": "non-billable",
+    "note": "Phase 3.3a mark: account_test"
+  },
+  {
+    "file": "internal/service/account_test_service.go",
+    "func": "AccountTestService.testGeminiAccountConnection",
+    "ordinal": 1,
+    "method": "DoWithTLS",
+    "annotation": "non-billable",
+    "note": "Phase 3.3a mark: account_test"
+  },
+  {
+    "file": "internal/service/account_test_service.go",
+    "func": "AccountTestService.testGrokAccountConnection",
+    "ordinal": 1,
+    "method": "Do",
+    "annotation": "non-billable",
+    "note": "Phase 3.3a mark: account_test"
+  },
+  {
+    "file": "internal/service/account_test_service.go",
+    "func": "AccountTestService.testOpenAIAccountConnection",
+    "ordinal": 1,
+    "method": "DoWithTLS",
+    "annotation": "non-billable",
+    "note": "Phase 3.3a mark: account_test"
+  },
+  {
+    "file": "internal/service/account_test_service.go",
+    "func": "AccountTestService.testOpenAIChatCompletionsConnection",
+    "ordinal": 1,
+    "method": "DoWithTLS",
+    "annotation": "non-billable",
+    "note": "Phase 3.3a mark: account_test"
+  },
+  {
+    "file": "internal/service/account_test_service.go",
+    "func": "AccountTestService.testOpenAICompactConnection",
+    "ordinal": 1,
+    "method": "DoWithTLS",
+    "annotation": "non-billable",
+    "note": "Phase 3.3a mark: account_test"
+  },
+  {
+    "file": "internal/service/account_test_service.go",
+    "func": "AccountTestService.testOpenAIImageAPIKey",
+    "ordinal": 1,
+    "method": "DoWithTLS",
+    "annotation": "non-billable",
+    "note": "Phase 3.3a mark: account_test"
+  },
+  {
+    "file": "internal/service/account_test_service.go",
+    "func": "AccountTestService.testOpenAIImageOAuth",
+    "ordinal": 1,
+    "method": "Do",
+    "annotation": "non-billable",
+    "note": "Phase 3.3a mark: account_test"
+  },
+  {
+    "file": "internal/service/antigravity_credits_overages.go",
+    "func": "AntigravityGatewayService.attemptCreditsOveragesRetry",
+    "ordinal": 1,
+    "method": "Do",
+    "annotation": "billable"
+  },
+  {
+    "file": "internal/service/antigravity_gateway_gemini.go",
+    "func": "AntigravityGatewayService.ForwardGemini",
+    "ordinal": 1,
+    "method": "Do",
+    "annotation": "billable"
+  },
+  {
+    "file": "internal/service/antigravity_gateway_retry.go",
+    "func": "AntigravityGatewayService.antigravityRetryLoop",
+    "ordinal": 1,
+    "method": "Do",
+    "annotation": "billable"
+  },
+  {
+    "file": "internal/service/antigravity_gateway_retry.go",
+    "func": "AntigravityGatewayService.handleSingleAccountRetryInPlace",
+    "ordinal": 1,
+    "method": "Do",
+    "annotation": "billable"
+  },
+  {
+    "file": "internal/service/antigravity_gateway_retry.go",
+    "func": "AntigravityGatewayService.handleSmartRetry",
+    "ordinal": 1,
+    "method": "Do",
+    "annotation": "billable"
+  },
+  {
+    "file": "internal/service/antigravity_gateway_upstream.go",
+    "func": "AntigravityGatewayService.ForwardUpstream",
+    "ordinal": 1,
+    "method": "Do",
+    "annotation": "billable"
+  },
+  {
+    "file": "internal/service/gateway_anthropic_passthrough.go",
+    "func": "GatewayService.forwardAnthropicAPIKeyPassthroughWithInput",
+    "ordinal": 1,
+    "method": "DoWithTLS",
+    "annotation": "billable"
+  },
+  {
+    "file": "internal/service/gateway_bedrock.go",
+    "func": "GatewayService.executeBedrockUpstream",
+    "ordinal": 1,
+    "method": "DoWithTLS",
+    "annotation": "billable"
+  },
+  {
+    "file": "internal/service/gateway_count_tokens.go",
+    "func": "GatewayService.ForwardCountTokens",
+    "ordinal": 1,
+    "method": "DoWithTLS",
+    "annotation": "non-billable",
+    "note": "Phase 3.3a mark: count_tokens"
+  },
+  {
+    "file": "internal/service/gateway_count_tokens.go",
+    "func": "GatewayService.ForwardCountTokens",
+    "ordinal": 2,
+    "method": "DoWithTLS",
+    "annotation": "non-billable",
+    "note": "Phase 3.3a mark: count_tokens"
+  },
+  {
+    "file": "internal/service/gateway_count_tokens.go",
+    "func": "GatewayService.forwardCountTokensAnthropicAPIKeyPassthrough",
+    "ordinal": 1,
+    "method": "DoWithTLS",
+    "annotation": "non-billable",
+    "note": "Phase 3.3a mark: count_tokens"
+  },
+  {
+    "file": "internal/service/gateway_forward.go",
+    "func": "GatewayService.Forward",
+    "ordinal": 1,
+    "method": "DoWithTLS",
+    "annotation": "billable"
+  },
+  {
+    "file": "internal/service/gateway_forward.go",
+    "func": "GatewayService.Forward",
+    "ordinal": 2,
+    "method": "DoWithTLS",
+    "annotation": "billable"
+  },
+  {
+    "file": "internal/service/gateway_forward.go",
+    "func": "GatewayService.Forward",
+    "ordinal": 3,
+    "method": "DoWithTLS",
+    "annotation": "billable"
+  },
+  {
+    "file": "internal/service/gateway_forward.go",
+    "func": "GatewayService.Forward",
+    "ordinal": 4,
+    "method": "DoWithTLS",
+    "annotation": "billable"
+  },
+  {
+    "file": "internal/service/gateway_forward_as_chat_completions.go",
+    "func": "GatewayService.ForwardAsChatCompletions",
+    "ordinal": 1,
+    "method": "DoWithTLS",
+    "annotation": "billable"
+  },
+  {
+    "file": "internal/service/gateway_forward_as_responses.go",
+    "func": "GatewayService.ForwardAsResponses",
+    "ordinal": 1,
+    "method": "DoWithTLS",
+    "annotation": "billable"
+  },
+  {
+    "file": "internal/service/gemini_chat_completions_compat_service.go",
+    "func": "GeminiMessagesCompatService.forwardClaudeBodyAsChatCompletions",
+    "ordinal": 1,
+    "method": "Do",
+    "annotation": "billable"
+  },
+  {
+    "file": "internal/service/gemini_messages_compat_service.go",
+    "func": "GeminiMessagesCompatService.ForwardAIStudioGET",
+    "ordinal": 1,
+    "method": "Do",
+    "annotation": "billable"
+  },
+  {
+    "file": "internal/service/gemini_messages_compat_service.go",
+    "func": "GeminiMessagesCompatService.ForwardNative",
+    "ordinal": 1,
+    "method": "Do",
+    "annotation": "billable"
+  },
+  {
+    "file": "internal/service/gemini_messages_compat_service.go",
+    "func": "GeminiMessagesCompatService.Forward",
+    "ordinal": 1,
+    "method": "Do",
+    "annotation": "billable"
+  },
+  {
+    "file": "internal/service/grok_media.go",
+    "func": "OpenAIGatewayService.ForwardGrokMedia",
+    "ordinal": 1,
+    "method": "Do",
+    "annotation": "billable"
+  },
+  {
+    "file": "internal/service/grok_media.go",
+    "func": "OpenAIGatewayService.forwardGrokMediaVideoContent",
+    "ordinal": 1,
+    "method": "Do",
+    "annotation": "non-billable",
+    "note": "Phase 3.3a mark: media_fetch (generation POST in another function stays billable)"
+  },
+  {
+    "file": "internal/service/grok_media.go",
+    "func": "OpenAIGatewayService.forwardGrokMediaVideoContent",
+    "ordinal": 2,
+    "method": "Do",
+    "annotation": "non-billable",
+    "note": "Phase 3.3a mark: media_fetch (generation POST in another function stays billable)"
+  },
+  {
+    "file": "internal/service/grok_quota_service.go",
+    "func": "GrokQuotaService.fetchBilling",
+    "ordinal": 1,
+    "method": "Do",
+    "annotation": "non-billable",
+    "note": "Phase 3.3a mark: quota"
+  },
+  {
+    "file": "internal/service/grok_quota_service.go",
+    "func": "GrokQuotaService.probeUsage",
+    "ordinal": 1,
+    "method": "Do",
+    "annotation": "non-billable",
+    "note": "Phase 3.3a mark: quota"
+  },
+  {
+    "file": "internal/service/ollama_cloud_usage.go",
+    "func": "OllamaCloudUsageService.refreshLoadedAccount",
+    "ordinal": 1,
+    "method": "Do",
+    "annotation": "non-billable",
+    "note": "Phase 3.3a mark: usage_fetch"
+  },
+  {
+    "file": "internal/service/openai_alpha_search.go",
+    "func": "OpenAIGatewayService.ForwardAlphaSearch",
+    "ordinal": 1,
+    "method": "Do",
+    "annotation": "billable"
+  },
+  {
+    "file": "internal/service/openai_alpha_search.go",
+    "func": "OpenAIGatewayService.forwardAlphaSearchViaResponsesWebSearch",
+    "ordinal": 1,
+    "method": "Do",
+    "annotation": "billable"
+  },
+  {
+    "file": "internal/service/openai_apikey_responses_probe.go",
+    "func": "AccountTestService.ProbeOpenAIAPIKeyResponsesSupport",
+    "ordinal": 1,
+    "method": "DoWithTLS",
+    "annotation": "non-billable",
+    "note": "Phase 3.3a mark: probe"
+  },
+  {
+    "file": "internal/service/openai_codex_models_service.go",
+    "func": "OpenAIGatewayService.fetchCodexModelsManifestUpstream",
+    "ordinal": 1,
+    "method": "Do",
+    "annotation": "non-billable",
+    "note": "Phase 3.3a mark: model_listing"
+  },
+  {
+    "file": "internal/service/openai_embeddings.go",
+    "func": "OpenAIGatewayService.ForwardEmbeddings",
+    "ordinal": 1,
+    "method": "Do",
+    "annotation": "billable"
+  },
+  {
+    "file": "internal/service/openai_gateway_cc_pipeline.go",
+    "func": "OpenAIGatewayService.sendCCUpstreamRequest",
+    "ordinal": 1,
+    "method": "Do",
+    "annotation": "billable"
+  },
+  {
+    "file": "internal/service/openai_gateway_chat_completions.go",
+    "func": "OpenAIGatewayService.ForwardAsChatCompletions",
+    "ordinal": 1,
+    "method": "Do",
+    "annotation": "billable"
+  },
+  {
+    "file": "internal/service/openai_gateway_count_tokens.go",
+    "func": "OpenAIGatewayService.ForwardCountTokensAsAnthropic",
+    "ordinal": 1,
+    "method": "Do",
+    "annotation": "non-billable",
+    "note": "Phase 3.3a mark: count_tokens"
+  },
+  {
+    "file": "internal/service/openai_gateway_forward.go",
+    "func": "OpenAIGatewayService.Forward",
+    "ordinal": 1,
+    "method": "Do",
+    "annotation": "billable"
+  },
+  {
+    "file": "internal/service/openai_gateway_grok.go",
+    "func": "OpenAIGatewayService.describeGrokComposerImage",
+    "ordinal": 1,
+    "method": "Do",
+    "annotation": "billable"
+  },
+  {
+    "file": "internal/service/openai_gateway_grok.go",
+    "func": "OpenAIGatewayService.forwardGrokResponses",
+    "ordinal": 1,
+    "method": "Do",
+    "annotation": "billable"
+  },
+  {
+    "file": "internal/service/openai_gateway_grok_chat_bridge.go",
+    "func": "OpenAIGatewayService.forwardGrokChatCompletionsViaResponses",
+    "ordinal": 1,
+    "method": "Do",
+    "annotation": "billable"
+  },
+  {
+    "file": "internal/service/openai_gateway_messages.go",
+    "func": "OpenAIGatewayService.ForwardAsAnthropic",
+    "ordinal": 1,
+    "method": "Do",
+    "annotation": "billable"
+  },
+  {
+    "file": "internal/service/openai_gateway_passthrough.go",
+    "func": "OpenAIGatewayService.forwardOpenAIPassthrough",
+    "ordinal": 1,
+    "method": "Do",
+    "annotation": "billable"
+  },
+  {
+    "file": "internal/service/openai_images.go",
+    "func": "OpenAIGatewayService.forwardOpenAIImagesAPIKey",
+    "ordinal": 1,
+    "method": "Do",
+    "annotation": "billable"
+  },
+  {
+    "file": "internal/service/openai_images_responses.go",
+    "func": "OpenAIGatewayService.forwardOpenAIImagesOAuth",
+    "ordinal": 1,
+    "method": "Do",
+    "annotation": "billable"
+  },
+  {
+    "file": "internal/service/openai_live.go",
+    "func": "OpenAIGatewayService.createUpstreamLiveCall",
+    "ordinal": 1,
+    "method": "Do",
+    "annotation": "billable"
+  },
+  {
+    "file": "internal/service/openai_ws_http_bridge.go",
+    "func": "OpenAIGatewayService.proxyOpenAIWSHTTPBridgeTurn",
+    "ordinal": 1,
+    "method": "Do",
+    "annotation": "billable"
+  },
+  {
+    "file": "internal/service/upstream_billing_probe.go",
+    "func": "UpstreamBillingProbeService.probeLoadedAccount",
+    "ordinal": 1,
+    "method": "DoWithTLS",
+    "annotation": "non-billable",
+    "note": "Phase 3.3a mark: probe"
+  },
+  {
+    "file": "internal/service/upstream_models.go",
+    "func": "AccountTestService.doUpstreamModelsRequest",
+    "ordinal": 1,
+    "method": "DoWithTLS",
+    "annotation": "non-billable",
+    "note": "Phase 3.3a mark: model_listing"
+  },
+  {
+    "file": "internal/service/upstream_models.go",
+    "func": "AccountTestService.doUpstreamModelsRequest",
+    "ordinal": 2,
+    "method": "DoWithTLS",
+    "annotation": "non-billable",
+    "note": "Phase 3.3a mark: model_listing"
+  }
+]
