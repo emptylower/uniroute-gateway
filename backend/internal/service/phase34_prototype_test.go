@@ -325,3 +325,39 @@ func TestPhase34Proto17DenseRisingFixture(t *testing.T) {
 	}
 	require.Equal(t, 8, fake.issuances)
 }
+
+// Test 20 — a Redis loss under a retry carrying its lease id recovers the same
+// lease through prefer_lease_id (§4 explicit-id branch); before 3.4 this failed
+// with ErrCanonicalWalletLeaseMissing.
+func TestPhase34Proto20ExplicitIDBranchRecoversThroughPreferLeaseID(t *testing.T) {
+	ctx := context.Background()
+	rdb := startCanonicalWalletTestRedis(t, ctx)
+	store := &gatewayCacheAdapterForTest{rdb: rdb}
+	now := time.Now().UTC()
+	fake := newFakeEnsureControlPlane(t, func() time.Time { return now })
+	user := "shipany-user-" + uuid.NewString()
+	fake.fund(user, 10_000_000_000)
+	b := p34HTTPBridge(t, ctx, fake, store, now)
+
+	first := CanonicalWalletSettlementEvent{GatewayRequestID: "req-retry", PlatformUserID: user, Currency: "CNY", AmountUnits: 100_000_000}
+	allowed, err := b.CheckAndReserve(ctx, first)
+	require.NoError(t, err)
+	require.True(t, allowed)
+	cur, err := store.GetCanonicalWalletLease(ctx, user)
+	require.NoError(t, err)
+
+	require.NoError(t, rdb.FlushAll(ctx).Err()) // the loss
+
+	retry := first
+	retry.LeaseID = cur.LeaseID // the retry carries the lease id it reserved against
+	allowed, err = b.CheckAndReserve(ctx, retry)
+	require.NoError(t, err, "recovered through prefer_lease_id instead of ErrCanonicalWalletLeaseMissing")
+	require.True(t, allowed)
+	last := fake.requests[len(fake.requests)-1]
+	require.Equal(t, cur.LeaseID, last.PreferLeaseID)
+	require.Empty(t, last.Drained, "nothing in hand to drain after the loss")
+	require.Equal(t, 1, fake.issuances, "reused, not issued")
+	re, err := store.GetCanonicalWalletLeaseByID(ctx, user, cur.LeaseID)
+	require.NoError(t, err)
+	require.Equal(t, int64(100_000_000), re.ConsumedUnits, "the retry's reservation landed on the recovered lease")
+}
