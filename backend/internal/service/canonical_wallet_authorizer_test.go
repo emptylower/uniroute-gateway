@@ -374,3 +374,51 @@ func TestPhase34ProtoAuthorizeMapsCapReachedAndContention(t *testing.T) {
 		require.Equal(t, tc.reason, refused.Reason)
 	}
 }
+
+// Test 29's unit half (§10.4): the {4} re-ensure happens EXACTLY once — the
+// stub counts ArmCanonicalWalletHold calls == 2 and ensureLease's control
+// calls == 2 (neverPersist keeps the cache empty so both ensures go to the
+// control plane); the second refusal is lease_unavailable.
+func TestPhase34bAuthorizeArmRefusedReEnsuresOnce(t *testing.T) {
+	resetAuthorizationMetricsForTest()
+	auth, snap, apiKey, control, store := newAuthorizerFixture(t, config.CanonicalWalletModeEnforce)
+	// holds on: the bridge fixture must carry the flag.
+	auth.bridge.cfg.Holds = "on"
+	auth.bridge.cfg.OrphanGraceSeconds = 900
+	store.neverPersist = true // both ensureLease calls reach the control plane
+	store.armErr = ErrCanonicalWalletLeaseExhausted
+	h, err := auth.Authorize(context.Background(), AuthorizeInput{
+		Snapshot: snap, Estimate: estimateFor(`{"max_tokens":64}`), User: apiKey.User,
+	})
+	require.True(t, errors.Is(err, ErrAuthorizationRefused))
+	refused, ok := AsAuthorizationRefused(err)
+	require.True(t, ok)
+	require.Equal(t, AuthorizationRefusalLeaseUnavailable, refused.Reason)
+	require.False(t, h.HoldArmed)
+	require.Equal(t, 2, store.armCalls, "the arm was attempted exactly twice")
+	require.Equal(t, 2, control.ensureCalls, "the re-ensure happened exactly once past the first ensure")
+	require.Equal(t, int64(1), authorizationMetrics.holdArmRetried.Load())
+	require.Equal(t, int64(1), authorizationMetrics.holdArmRefused.Load())
+}
+
+// Test 22's unit half (§10.1/§10.4): holds ON arms exactly one hold keyed by
+// the handle id, with HeldUnits == the estimate; the handle carries it.
+func TestPhase34bAuthorizeArmsOneHoldAtTheEstimate(t *testing.T) {
+	resetAuthorizationMetricsForTest()
+	auth, snap, apiKey, _, store := newAuthorizerFixture(t, config.CanonicalWalletModeEnforce)
+	auth.bridge.cfg.Holds = "on"
+	auth.bridge.cfg.OrphanGraceSeconds = 900
+	h, err := auth.Authorize(context.Background(), AuthorizeInput{
+		Snapshot: snap, Estimate: estimateFor(`{"max_tokens":64}`), User: apiKey.User,
+	})
+	require.NoError(t, err)
+	require.True(t, h.HoldArmed)
+	require.Equal(t, h.EstimatedUnits, h.HeldUnits)
+	require.Equal(t, "lease-1", h.LeaseID)
+	require.Len(t, store.holdMap(), 1)
+	hold, ok := store.holdMap()[h.ID]
+	require.True(t, ok, "the hold is keyed by the handle id")
+	require.Equal(t, "armed", hold.State)
+	require.Equal(t, h.EstimatedUnits, hold.HeldUnits)
+	require.Equal(t, int64(1), authorizationMetrics.holdsArmed.Load())
+}

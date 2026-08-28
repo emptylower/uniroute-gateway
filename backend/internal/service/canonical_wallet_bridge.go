@@ -654,6 +654,17 @@ type canonicalWalletMetrics struct {
 	// §9.6 item 6's rollout-guard counters (global, like every counter here).
 	controlPlaneIncompatible atomic.Int64
 	controlPlaneProbeFailed  atomic.Int64
+	// Phase 3.4b (§10.4/§10.5): the hold counters.
+	holdReleasedNotWritten      atomic.Int64
+	holdReleaseError            atomic.Int64
+	holdConverted               atomic.Int64
+	holdConvertError            atomic.Int64
+	holdConvertDuplicate        atomic.Int64
+	holdSettlementAfterRelease  atomic.Int64
+	holdConvertOverrunReleased  atomic.Int64
+	holdMissingAtSettlement     atomic.Int64
+	holdIndeterminateClassified atomic.Int64
+	holdIndeterminateRowFailed  atomic.Int64
 }
 
 var canonicalWalletBridgeMetrics canonicalWalletMetrics
@@ -673,6 +684,16 @@ func CanonicalWalletBridgeStats() map[string]int64 {
 		"dead_letter_balance_shortfall": m.deadLetterBalanceShortfall.Load(),
 		"control_plane_incompatible":    m.controlPlaneIncompatible.Load(),
 		"control_plane_probe_failed":    m.controlPlaneProbeFailed.Load(),
+		"hold_released_not_written":     m.holdReleasedNotWritten.Load(),
+		"hold_release_error":            m.holdReleaseError.Load(),
+		"hold_converted":                m.holdConverted.Load(),
+		"hold_convert_error":            m.holdConvertError.Load(),
+		"hold_convert_duplicate":        m.holdConvertDuplicate.Load(),
+		"hold_settlement_after_release": m.holdSettlementAfterRelease.Load(),
+		"hold_convert_overrun_released": m.holdConvertOverrunReleased.Load(),
+		"hold_missing_at_settlement":    m.holdMissingAtSettlement.Load(),
+		"hold_indeterminate_classified": m.holdIndeterminateClassified.Load(),
+		"hold_indeterminate_row_failed": m.holdIndeterminateRowFailed.Load(),
 	}
 }
 
@@ -693,6 +714,102 @@ type CanonicalWalletBridge struct {
 	// observedForTest (Phase 3.3a): test-only hook invoked at the top of
 	// ObserveSettlement so the token's arrival can be asserted in-process.
 	observedForTest func(CanonicalWalletSettlementEvent)
+	// holdOutcomes (Phase 3.4b, §10.6): the durable outcome-row sink, built
+	// from the bridge's own outbox DB (never a new provider — constraint 2);
+	// the nil-safe no-op until Task 4 constructs the real store.
+	holdOutcomes walletHoldOutcomeSink
+}
+
+// walletHoldOutcomeSink is the durable outcome row's write surface (§10.6).
+// A nil receiver is a no-op on every method — the bridges built with a nil
+// outboxDB (most tests) must never panic on an indeterminate classification.
+type walletHoldOutcomeSink interface {
+	InsertIndeterminate(ctx context.Context, hold CanonicalWalletHold, platformUserID string, at time.Time) error
+	InsertAbandoned(ctx context.Context, hold CanonicalWalletHold, platformUserID string, at time.Time) error
+	MarkSettled(ctx context.Context, authorizationID, eventID string, at time.Time) error
+	MarkExpiredOlderThan(ctx context.Context, cutoff, at time.Time) (int64, error)
+}
+
+// noopHoldOutcomeSink is Task 3's placeholder (commit order matters): the
+// indeterminate classification writes the class and defers the row to Task 4.
+type noopHoldOutcomeSink struct{}
+
+func (noopHoldOutcomeSink) InsertIndeterminate(context.Context, CanonicalWalletHold, string, time.Time) error {
+	return nil
+}
+func (noopHoldOutcomeSink) InsertAbandoned(context.Context, CanonicalWalletHold, string, time.Time) error {
+	return nil
+}
+func (noopHoldOutcomeSink) MarkSettled(context.Context, string, string, time.Time) error { return nil }
+func (noopHoldOutcomeSink) MarkExpiredOlderThan(context.Context, time.Time, time.Time) (int64, error) {
+	return 0, nil
+}
+
+// HoldsEnabled (§10.1): canonical_wallet.holds == on and a bridge that acts.
+// Off is 3.4a byte-for-byte — every hold path in this file is behind this
+// predicate.
+func (b *CanonicalWalletBridge) HoldsEnabled() bool {
+	return b != nil && b.cfg.Holds == "on" && b.cfg.Mode != config.CanonicalWalletModeDisabled
+}
+
+// graceMS is the hold's PEXPIREAT margin past its lease (§10.3): the hold
+// outlives its lease hash by one orphan grace so the reaper can still record
+// an abandoned outcome for an orphan whose lease expired first.
+func (b *CanonicalWalletBridge) graceMS() int64 {
+	if b == nil || b.cfg.OrphanGraceSeconds <= 0 {
+		return 0
+	}
+	return int64(time.Duration(b.cfg.OrphanGraceSeconds) * time.Second / time.Millisecond)
+}
+
+// holdOutcome is installed on the handle by Authorize when a hold was armed
+// (§10.4/§10.5). Invoked by RecordOutcome outside the handle's mutex; never
+// re-enters the handle — everything it needs is in its closure and params.
+func (b *CanonicalWalletBridge) holdOutcome(platformUserID, authorizationID string) func(string, AuthorizationOutcome, error) {
+	return func(_ string, outcome AuthorizationOutcome, err error) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(b.cfg.RequestTimeoutMS)*time.Millisecond)
+		defer cancel()
+		switch outcome {
+		case AuthorizationOutcomeNotWritten:
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				// §10.5's cross-check (the 3.3 residual): a cancelled context
+				// may have reached the wire before WroteHeaders fired — kept
+				// indeterminate, never released.
+				b.markHoldIndeterminate(ctx, platformUserID, authorizationID)
+				return
+			}
+			if _, rerr := b.store.ReleaseCanonicalWalletHold(ctx, platformUserID, authorizationID, "released", "not_written"); rerr != nil && !errors.Is(rerr, ErrCanonicalWalletHoldMissing) && !isHoldNotArmed(rerr) {
+				canonicalWalletBridgeMetrics.holdReleaseError.Add(1)
+				slog.Warn("canonical wallet hold release failed", "authorization_id", authorizationID, "error", rerr)
+				return
+			}
+			canonicalWalletBridgeMetrics.holdReleasedNotWritten.Add(1)
+		case AuthorizationOutcomeIndeterminate:
+			b.markHoldIndeterminate(ctx, platformUserID, authorizationID)
+		default: // result: nothing is written (§10.5)
+		}
+	}
+}
+
+// markHoldIndeterminate sets class=indeterminate iff the hold is still armed
+// (an atomic script — a concurrent release must not be overwritten) and then
+// writes the durable outcome row (§10.6; the no-op sink until Task 4).
+func (b *CanonicalWalletBridge) markHoldIndeterminate(ctx context.Context, platformUserID, authorizationID string) {
+	hold, err := b.store.MarkCanonicalWalletHoldClass(ctx, platformUserID, authorizationID, "indeterminate")
+	if err != nil {
+		if !errors.Is(err, ErrCanonicalWalletHoldMissing) && !isHoldNotArmed(err) {
+			slog.Warn("canonical wallet hold indeterminate mark failed", "authorization_id", authorizationID, "error", err)
+		}
+		return
+	}
+	canonicalWalletBridgeMetrics.holdIndeterminateClassified.Add(1)
+	if b.holdOutcomes == nil {
+		return
+	}
+	if err := b.holdOutcomes.InsertIndeterminate(ctx, *hold, platformUserID, b.clock()); err != nil {
+		canonicalWalletBridgeMetrics.holdIndeterminateRowFailed.Add(1)
+		slog.Warn("canonical wallet hold outcome row insert failed", "authorization_id", authorizationID, "error", err)
+	}
 }
 
 // clock is the only way this file reads the injectable clock. Several existing
@@ -854,6 +971,35 @@ func (b *CanonicalWalletBridge) ObserveSettlement(event CanonicalWalletSettlemen
 	if event.AuthorizationToken != "" {
 		logger.LegacyPrintf("service.authorization", "shadow: settlement %s carries authorization token %s (authorization %s)", event.EventID, event.AuthorizationToken, event.AuthorizationID)
 	}
+	// Phase 3.4b (§10.5): the settlement converts the hold IN-PROCESS, before
+	// the outbox insert — the event's AuthorizationID is in memory here and
+	// nowhere else (the outbox payload omits it until 3.5). The conversion
+	// runs under its OWN budget so the Lua round trip never eats the outbox
+	// transaction's.
+	var holdConv CanonicalWalletHoldConversion
+	if b.HoldsEnabled() && event.AuthorizationID != "" {
+		convCtx, convCancel := context.WithTimeout(context.Background(), time.Duration(b.cfg.RequestTimeoutMS)*time.Millisecond)
+		conv, cerr := b.store.ConvertCanonicalWalletHold(convCtx, event.PlatformUserID, event.AuthorizationID, event.EventID, event.AmountUnits, b.clock())
+		convCancel()
+		holdConv = conv
+		switch {
+		case cerr != nil:
+			canonicalWalletBridgeMetrics.holdConvertError.Add(1) // proceed unbound: money-safe (the hold stays armed; the reaper resolves it)
+		case conv.Code == 0:
+			event.LeaseID = conv.LeaseID
+			canonicalWalletBridgeMetrics.holdConverted.Add(1)
+		case conv.Code == 7 && conv.EventID != "":
+			canonicalWalletBridgeMetrics.holdConvertDuplicate.Add(1) // a retried submission; the outbox dedups the row
+		case conv.Code == 7: // released / abandoned: real usage after the money went back (§10.5)
+			canonicalWalletBridgeMetrics.holdSettlementAfterRelease.Add(1)
+			event.LeaseID = ""
+		case conv.Code == 4:
+			canonicalWalletBridgeMetrics.holdConvertOverrunReleased.Add(1)
+			event.LeaseID = ""
+		default: // 1 missing, 3 lease gone: the event proceeds untouched — a caller-supplied LeaseID deliberately stays (3.4a's test 19b depends on it)
+			canonicalWalletBridgeMetrics.holdMissingAtSettlement.Add(1)
+		}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(b.cfg.RequestTimeoutMS)*time.Millisecond)
 	defer cancel()
 	tx, err := b.outboxDB.BeginTx(ctx, nil)
@@ -874,6 +1020,14 @@ func (b *CanonicalWalletBridge) ObserveSettlement(event CanonicalWalletSettlemen
 		return false
 	}
 	canonicalWalletBridgeMetrics.queued.Add(1)
+	// §10.6's MarkSettled runs AFTER the commit, and only then — a rolled-back
+	// settlement must never leave a settled row. Best effort.
+	if b.HoldsEnabled() && event.AuthorizationID != "" && b.holdOutcomes != nil &&
+		(holdConv.Code == 0 || (holdConv.Code == 7 && holdConv.EventID != "")) {
+		markCtx, markCancel := context.WithTimeout(context.Background(), time.Duration(b.cfg.RequestTimeoutMS)*time.Millisecond)
+		_ = b.holdOutcomes.MarkSettled(markCtx, event.AuthorizationID, event.EventID, b.clock())
+		markCancel()
+	}
 	return true
 }
 
@@ -1231,12 +1385,20 @@ func (b *CanonicalWalletBridge) ensureLease(ctx context.Context, platformUserID,
 		PreferLeaseID: preferLeaseID, CallerSlotTTLSeconds: b.callerSlotTTLSeconds,
 	}
 	if cached != nil {
-		preSealConsumed, _, sealErr := b.store.SealCanonicalWalletLease(ctx, platformUserID, cached.LeaseID) // the released figure joins the drain entry in Task 3 (§10.2)
+		preSealConsumed, preSealReleased, sealErr := b.store.SealCanonicalWalletLease(ctx, platformUserID, cached.LeaseID)
 		if sealErr != nil && !errors.Is(sealErr, ErrCanonicalWalletLeaseMissing) {
 			return nil, sealErr
 		}
 		if sealErr == nil {
-			request.Drained = []canonicalWalletDrainEntry{{LeaseID: cached.LeaseID, GatewayConsumed: newCanonicalWalletAmountObject(preSealConsumed)}}
+			// §10.2: the drain identity is consumed == captured + released —
+			// gateway_released rides the wire only when releases exist, so a
+			// 3.4a-S control plane that ignores the field sees the 3.4a wire.
+			entry := canonicalWalletDrainEntry{LeaseID: cached.LeaseID, GatewayConsumed: newCanonicalWalletAmountObject(preSealConsumed)}
+			if preSealReleased > 0 {
+				released := newCanonicalWalletAmountObject(preSealReleased)
+				entry.GatewayReleased = &released
+			}
+			request.Drained = []canonicalWalletDrainEntry{entry}
 		}
 	}
 	result, err := b.control.EnsureLease(ctx, request)

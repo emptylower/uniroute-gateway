@@ -110,6 +110,34 @@ func (a *CanonicalWalletAuthorizer) Authorize(ctx context.Context, in AuthorizeI
 		return refuse(AuthorizationRefusalLeaseUnavailable, "", err)
 	}
 	h.LeaseID = lease.LeaseID
+	// Phase 3.4b (§10.4): with holds on, Authorize continues past the ensure
+	// and arms this attempt's hold at the estimate E. On the guard's {4} — a
+	// concurrent reservation took the headroom between ensureLease's covering
+	// read and the arm — the ensure is re-run ONCE with no prefer_lease_id and
+	// the arm retried on what it returns; a second refusal (or any re-ensure
+	// error) is lease_unavailable (transient class; no new refusal reason —
+	// the constant would have no distinct producer). Shadow admits either way.
+	if a.bridge.HoldsEnabled() {
+		leaseID, held, _, aerr := a.bridge.store.ArmCanonicalWalletHold(leaseCtx, in.User.PlatformUserID, lease.LeaseID, currency, h.ID, units, a.bridge.graceMS(), a.bridge.clock())
+		if errors.Is(aerr, ErrCanonicalWalletLeaseExhausted) || errors.Is(aerr, ErrCanonicalWalletLeaseMissing) || errors.Is(aerr, ErrCanonicalWalletLeaseExpired) {
+			authorizationMetrics.holdArmRetried.Add(1)
+			lease, err = a.bridge.ensureLease(leaseCtx, in.User.PlatformUserID, currency, units, canonicalWalletLeasePurposeAuthorize, "")
+			if err == nil {
+				leaseID, held, _, aerr = a.bridge.store.ArmCanonicalWalletHold(leaseCtx, in.User.PlatformUserID, lease.LeaseID, currency, h.ID, units, a.bridge.graceMS(), a.bridge.clock())
+			}
+		}
+		if aerr != nil || err != nil {
+			authorizationMetrics.holdArmRefused.Add(1)
+			cause := aerr
+			if cause == nil {
+				cause = err
+			}
+			return refuse(AuthorizationRefusalLeaseUnavailable, "hold", cause) // shadow admits inside refuse
+		}
+		h.LeaseID, h.HoldArmed, h.HeldUnits = leaseID, true, held
+		h.onOutcome = a.bridge.holdOutcome(in.User.PlatformUserID, h.ID)
+		authorizationMetrics.holdsArmed.Add(1)
+	}
 	return h, nil
 }
 

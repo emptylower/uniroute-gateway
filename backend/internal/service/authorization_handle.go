@@ -45,6 +45,10 @@ type AuthorizationHandle struct {
 	SnapshotID     string
 	LeaseID        string
 	EstimatedUnits int64
+	// HoldArmed/HeldUnits (Phase 3.4b, §10.4): set when Authorize armed this
+	// attempt's hold; false/0 when holds are off (3.4a byte-for-byte).
+	HoldArmed bool
+	HeldUnits int64
 	// Continuation is the turn's continuation classification (3.2's
 	// ClassifyWSContinuation), recorded at authorization time. Write-only in
 	// 3.3b (3.8's observation and 3.7's top-up read it later).
@@ -58,6 +62,10 @@ type AuthorizationHandle struct {
 	seq       uint64
 	writes    []AuthorizationWrite
 	abandoned string
+	// onOutcome (§10.4): installed by Authorize when a hold was armed; invoked
+	// by RecordOutcome AFTER h.mu is released — the callback does a Redis
+	// round trip and must never re-enter the handle.
+	onOutcome func(token string, outcome AuthorizationOutcome, err error)
 }
 
 func newAuthorizationID() (string, error) {
@@ -91,20 +99,28 @@ func (h *AuthorizationHandle) MintWriteToken() string {
 	return tok
 }
 
-// RecordOutcome stores the decorator's classification of the write named by token.
+// RecordOutcome stores the decorator's classification of the write named by token
+// and, when Authorize armed a hold, invokes the outcome callback OUTSIDE h.mu
+// (§10.4): the callback does a Redis round trip, takes no handle lock, and must
+// never re-enter the handle.
 func (h *AuthorizationHandle) RecordOutcome(token string, outcome AuthorizationOutcome, err error) {
 	if h == nil || token == "" {
 		return
 	}
 	h.mu.Lock()
-	defer h.mu.Unlock()
+	var cb func(string, AuthorizationOutcome, error)
 	for i := len(h.writes) - 1; i >= 0; i-- {
 		if h.writes[i].Token == token {
 			h.writes[i].Outcome = outcome
 			h.writes[i].EndedAt = time.Now().UTC()
 			h.writes[i].Err = err
-			return
+			cb = h.onOutcome
+			break
 		}
+	}
+	h.mu.Unlock()
+	if cb != nil {
+		cb(token, outcome, err) // OUTSIDE h.mu (§10.4)
 	}
 }
 
@@ -256,6 +272,8 @@ type AuthorizationMetrics struct {
 	LiveProvisionalWritten, LiveProvisionalActivated                      int64
 	LiveProvisionalAborted, LiveProvisionalFinalized                      int64
 	LiveProvisionalStoreUnavailable, LiveProvisionalSettlementNotEnqueued int64
+	// Phase 3.4b (§10.4): the hold arm counters.
+	HoldsArmed, HoldArmRetried, HoldArmRefused int64
 }
 
 var authorizationMetrics struct {
@@ -269,6 +287,8 @@ var authorizationMetrics struct {
 	liveProvisionalWritten, liveProvisionalActivated                      atomic.Int64
 	liveProvisionalAborted, liveProvisionalFinalized                      atomic.Int64
 	liveProvisionalStoreUnavailable, liveProvisionalSettlementNotEnqueued atomic.Int64
+	// Phase 3.4b (§10.4): the hold arm counters.
+	holdsArmed, holdArmRetried, holdArmRefused atomic.Int64
 }
 
 func AuthorizationMetricsSnapshot() AuthorizationMetrics {
@@ -289,6 +309,9 @@ func AuthorizationMetricsSnapshot() AuthorizationMetrics {
 		LiveProvisionalFinalized:             m.liveProvisionalFinalized.Load(),
 		LiveProvisionalStoreUnavailable:      m.liveProvisionalStoreUnavailable.Load(),
 		LiveProvisionalSettlementNotEnqueued: m.liveProvisionalSettlementNotEnqueued.Load(),
+		HoldsArmed:                           m.holdsArmed.Load(),
+		HoldArmRetried:                       m.holdArmRetried.Load(),
+		HoldArmRefused:                       m.holdArmRefused.Load(),
 	}
 }
 
@@ -322,6 +345,7 @@ func ResetAuthorizationMetricsForTest() {
 		&m.leaseUnavailable, &m.leaseCapReached, &m.balanceShortfall, &m.abandoned,
 		&m.liveProvisionalWritten, &m.liveProvisionalActivated, &m.liveProvisionalAborted,
 		&m.liveProvisionalFinalized, &m.liveProvisionalStoreUnavailable, &m.liveProvisionalSettlementNotEnqueued,
+		&m.holdsArmed, &m.holdArmRetried, &m.holdArmRefused,
 	} {
 		c.Store(0)
 	}

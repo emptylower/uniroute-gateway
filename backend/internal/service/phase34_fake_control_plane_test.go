@@ -195,14 +195,22 @@ func (f *fakeEnsureControlPlane) handle(w http.ResponseWriter, r *http.Request) 
 		now := f.now()
 		user := strings.TrimSpace(req.PlatformUserID)
 		minHeadroom := mustUnits(req.MinHeadroom)
-		// (1) drain (§3.3, §9.1): a VERIFIED drain closes the lease as today;
-		// an unverified drain MARKS it — the server's own row, idempotent.
+		// (1) drain (§3.3, §9.1; 3.4b §10.2): a VERIFIED drain closes the lease
+		// as today — the identity is consumed == captured + gateway_released,
+		// with the RELEASED figure taken from the ENTRY (the gateway's own
+		// number), never from this fake's l.Released (the server's close
+		// accounting — conflating them would make the check circular); an
+		// unverified drain MARKS it — the server's own row, idempotent.
 		for _, d := range req.Drained {
 			l := f.lease(user, d.LeaseID)
 			if l == nil || l.Status != "active" {
 				continue
 			}
-			if mustUnits(d.GatewayConsumed) == l.Captured {
+			gatewayReleased := int64(0)
+			if d.GatewayReleased != nil {
+				gatewayReleased = mustUnits(*d.GatewayReleased)
+			}
+			if mustUnits(d.GatewayConsumed) == l.Captured+gatewayReleased {
 				l.Status = "closed"
 				l.Released = l.Budget - l.Captured
 				f.balance[user] += l.Released
