@@ -54,6 +54,17 @@ func startLiveRestartPostgres(t *testing.T, ctx context.Context) *sql.DB {
 	_, err = db.ExecContext(ctx, string(provSQL))
 	require.NoError(t, err)
 
+	// Phase 3.5 (migrations 212 + 214): the outbox insert writes
+	// authorization_id and 214's comments name 212's dead_letter_reason.
+	deadLetterSQL, err := os.ReadFile(filepath.Join("..", "..", "migrations", "212_wallet_outbox_dead_letter_reason.sql"))
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, string(deadLetterSQL))
+	require.NoError(t, err)
+	splitSQL, err := os.ReadFile(filepath.Join("..", "..", "migrations", "214_wallet_outbox_split_and_authorization.sql"))
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, string(splitSQL))
+	require.NoError(t, err)
+
 	return db
 }
 
