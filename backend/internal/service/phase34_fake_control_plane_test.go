@@ -65,7 +65,7 @@ type fakeEnsureControlPlane struct {
 	withoutEnsureRoute bool
 	// probeCalls counts GET requests on the ensure path (§9.6 item 6's probe).
 	probeCalls int
-	Server            *httptest.Server
+	Server     *httptest.Server
 }
 
 func newFakeEnsureControlPlane(t *testing.T, now func() time.Time) *fakeEnsureControlPlane {
