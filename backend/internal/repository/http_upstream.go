@@ -151,15 +151,23 @@ type httpUpstreamService struct {
 	openAIHTTP2Fallbacks sync.Map
 }
 
-// NewHTTPUpstream 创建通用 HTTP 上游服务
+// NewHTTPUpstream is the single construction point of the port in the DI graph
+// (internal/repository/wire.go:170 → cmd/server/wire_gen.go:124). The
+// authorization decorator is installed HERE — never by editing wire_gen.go, which
+// the next go generate would erase in the open direction (spec §2.0).
+func NewHTTPUpstream(cfg *config.Config) service.HTTPUpstream {
+	return service.NewAuthorizingHTTPUpstream(newHTTPUpstreamService(cfg), cfg)
+}
+
+// newHTTPUpstreamService 创建通用 HTTP 上游服务
 // 使用配置中的连接池参数构建 Transport
 //
 // 参数:
 //   - cfg: 全局配置，包含连接池参数和隔离策略
 //
 // 返回:
-//   - service.HTTPUpstream 接口实现
-func NewHTTPUpstream(cfg *config.Config) service.HTTPUpstream {
+//   - *httpUpstreamService 未加授权装饰器的端口实现（仅测试直接使用）
+func newHTTPUpstreamService(cfg *config.Config) *httpUpstreamService {
 	return &httpUpstreamService{
 		cfg:     cfg,
 		clients: make(map[string]*upstreamClientEntry),

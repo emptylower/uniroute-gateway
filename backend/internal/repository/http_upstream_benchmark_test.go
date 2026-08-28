@@ -26,11 +26,7 @@ func BenchmarkHTTPUpstreamProxyClient(b *testing.B) {
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{ResponseHeaderTimeout: 300},
 	}
-	upstream := NewHTTPUpstream(cfg)
-	svc, ok := upstream.(*httpUpstreamService)
-	if !ok {
-		b.Fatalf("类型断言失败，无法获取 httpUpstreamService")
-	}
+	svc := newHTTPUpstreamService(cfg)
 
 	proxyURL := "http://127.0.0.1:8080"
 	b.ReportAllocs() // 报告内存分配统计

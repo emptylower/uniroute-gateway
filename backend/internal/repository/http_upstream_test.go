@@ -193,9 +193,7 @@ func TestHTTPUpstreamDoAppliesGrokCLIIdentityBeforeOAuthRoundTrip(t *testing.T) 
 
 	for _, endpoint := range []string{"responses", "chat/completions"} {
 		t.Run(endpoint, func(t *testing.T) {
-			upstream := NewHTTPUpstream(nil)
-			svc, ok := upstream.(*httpUpstreamService)
-			require.True(t, ok)
+			svc := newHTTPUpstreamService(nil)
 
 			const accountID int64 = 4084
 			isolation := svc.getIsolationMode()
@@ -243,9 +241,7 @@ func TestHTTPUpstreamDoAppliesGrokCLIIdentityBeforeOAuthRoundTrip(t *testing.T) 
 }
 
 func TestHTTPUpstreamDoFallsBackToOfficialGrokAPIOnCLIAccessDenied(t *testing.T) {
-	upstream := NewHTTPUpstream(nil)
-	svc, ok := upstream.(*httpUpstreamService)
-	require.True(t, ok)
+	svc := newHTTPUpstreamService(nil)
 
 	const accountID int64 = 4421
 	isolation := svc.getIsolationMode()
@@ -562,10 +558,7 @@ func (s *HTTPUpstreamSuite) SetupTest() {
 // newService 创建测试用的 httpUpstreamService 实例
 // 返回具体类型以便访问内部状态进行断言
 func (s *HTTPUpstreamSuite) newService() *httpUpstreamService {
-	up := NewHTTPUpstream(s.cfg)
-	svc, ok := up.(*httpUpstreamService)
-	require.True(s.T(), ok, "expected *httpUpstreamService")
-	return svc
+	return newHTTPUpstreamService(s.cfg)
 }
 
 // TestDefaultResponseHeaderTimeout 测试默认响应头超时配置
@@ -580,9 +573,7 @@ func (s *HTTPUpstreamSuite) TestDefaultResponseHeaderTimeout() {
 
 // TestNilConfigResponseHeaderTimeoutFallback 验证 nil 配置使用代码级兜底值。
 func (s *HTTPUpstreamSuite) TestNilConfigResponseHeaderTimeoutFallback() {
-	up := NewHTTPUpstream(nil)
-	svc, ok := up.(*httpUpstreamService)
-	require.True(s.T(), ok, "expected *httpUpstreamService")
+	svc := newHTTPUpstreamService(nil)
 	entry := mustGetOrCreateClient(s.T(), svc, "", 0, 0)
 	transport, ok := entry.client.Transport.(*http.Transport)
 	require.True(s.T(), ok, "expected *http.Transport")
