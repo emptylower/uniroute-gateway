@@ -294,6 +294,40 @@ func TestTryFinalizeLiveCallBillingFailureDoesNotClaim(t *testing.T) {
 	require.Equal(t, LiveProvisionalStatusActive, provRec.Status)
 }
 
+// Disabled-mode FINALIZE mirror of TestCreateLiveCallDisabledModeIsUnchanged:
+// tryFinalizeLiveCall in disabled mode issues zero provisional store I/O
+// (review round 2 note 7) and observes no settlement.
+func TestTryFinalizeLiveCallDisabledModeIsUnchanged(t *testing.T) {
+	f, rec := newLiveFinalizationFixture(t, config.CanonicalWalletModeDisabled)
+
+	var observedCount atomic.Int64
+	f.bridge.observedForTest = func(event CanonicalWalletSettlementEvent) {
+		observedCount.Add(1)
+	}
+
+	success := f.svc.tryFinalizeLiveCall(rec)
+	require.True(t, success)
+
+	f.provStore.mu.Lock()
+	require.Equal(t, 0, f.provStore.totalCalls, "disabled mode finalize must issue zero provisional store I/O calls")
+	f.provStore.mu.Unlock()
+
+	require.Equal(t, int64(0), observedCount.Load(), "no settlement may be observed in disabled mode")
+	require.Equal(t, int64(0), LiveProvisionalMetricsSnapshot().Finalized)
+	require.Equal(t, int64(0), LiveProvisionalMetricsSnapshot().SettlementNotEnqueued)
+
+	// The row the fixture injected is untouched (still active, never claimed)
+	provRec, err := f.provStore.Get(context.Background(), rec.AuthorizationID)
+	require.NoError(t, err)
+	require.Equal(t, LiveProvisionalStatusActive, provRec.Status)
+	require.Empty(t, provRec.SettlementEventID)
+
+	// Live call is closed exactly as today
+	controller, err := f.liveStore.GetLiveController(context.Background(), rec.CallHash)
+	require.NoError(t, err)
+	require.Equal(t, LiveControllerClosed, controller)
+}
+
 func TestTryFinalizeLiveCallLegacyRecordWithoutAuthorizationTokenSucceeds(t *testing.T) {
 	f, rec := newLiveFinalizationFixture(t, config.CanonicalWalletModeShadow)
 	rec.AuthorizationID = ""

@@ -16,7 +16,7 @@ import (
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 )
 
-func startLiveProvisionalTestPostgres(t *testing.T, ctx context.Context) *sql.DB {
+func startLiveProvisionalTestPostgres(t testing.TB, ctx context.Context) *sql.DB {
 	t.Helper()
 	container, err := tcpostgres.Run(ctx, "postgres:18.1-alpine3.23",
 		tcpostgres.WithDatabase("live_provisional_test"),
@@ -177,4 +177,42 @@ func TestLiveProvisionalStoreLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, LiveProvisionalStatusAborted, gotAborted.Status)
 	require.NotNil(t, gotAborted.TerminalAt)
+}
+
+// BenchmarkLiveProvisionalSaveActivate measures the disclosed synchronous
+// request-path cost of constraint 8: one provisional INSERT (Save) plus the
+// provisional → active UPDATE (Activate) against real Postgres (testcontainers),
+// fresh token and call hash per iteration so every Save is a real insert.
+func BenchmarkLiveProvisionalSaveActivate(b *testing.B) {
+	ctx := context.Background()
+	db := startLiveProvisionalTestPostgres(b, ctx)
+	store := newLiveProvisionalStore(db)
+
+	rec := &LiveProvisionalRecord{
+		UserID:            101,
+		APIKeyID:          202,
+		AccountID:         303,
+		BillingCurrency:   "CNY",
+		BillingSnapshotID: "snap_bench",
+		EstimatedUnits:    50000,
+		CreatedAt:         time.Now().UTC().Truncate(time.Microsecond),
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		token := "auth_" + uuid.NewString()
+		rec.Token = token
+		rec.AuthorizationID = token
+		rec.CallHash = ""
+		rec.Status = LiveProvisionalStatusProvisional
+		rec.Windows = []LiveWindow{
+			{WindowSeq: 1, LeaseID: "", Token: token, PendingUnits: 50000, SettledUnits: 0},
+		}
+		if err := store.Save(ctx, rec); err != nil {
+			b.Fatal(err)
+		}
+		if err := store.Activate(ctx, token, "call_hash_"+token, time.Now().UTC()); err != nil {
+			b.Fatal(err)
+		}
+	}
 }
