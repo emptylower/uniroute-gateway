@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -24,9 +25,18 @@ import (
 )
 
 type wsAuthTestHarness struct {
-	server      *httptest.Server
-	upstream    *httptest.Server
-	accountRepo *openAIWSFailoverHandlerAccountRepoStub
+	server       *httptest.Server
+	upstream     *httptest.Server
+	accountRepo  *openAIWSFailoverHandlerAccountRepoStub
+	gatewaySvc   *service.OpenAIGatewayService
+	usageInputs  []*service.OpenAIRecordUsageInput
+	authAttempts []authAttemptRecord
+	mu           sync.Mutex
+}
+
+type authAttemptRecord struct {
+	turn     int
+	snapshot *service.BillingSnapshot
 }
 
 func newWSAuthTestHarness(t *testing.T, mode string, ingressMode string) *wsAuthTestHarness {
@@ -89,6 +99,8 @@ func newWSAuthTestHarness(t *testing.T, mode string, ingressMode string) *wsAuth
 	cfg := &config.Config{}
 	cfg.RunMode = config.RunModeSimple
 	cfg.Default.RateMultiplier = 1
+	cfg.Billing.ExchangeRate.BootstrapUSDToCNY = 7.0
+	cfg.CanonicalWallet.BillingSnapshotMode = "record"
 	cfg.Security.URLAllowlist.Enabled = false
 	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
 	cfg.Gateway.OpenAIWS.Enabled = true
@@ -101,6 +113,27 @@ func newWSAuthTestHarness(t *testing.T, mode string, ingressMode string) *wsAuth
 	cfg.CanonicalWallet.Mode = mode
 
 	billingCacheSvc := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil, nil)
+	pricingSvc := service.NewPricingService(cfg, nil)
+	pricingSvc.SetModelPricingForTest("gpt-5.1", &service.LiteLLMModelPricing{
+		InputCostPerToken:  0.000003,
+		OutputCostPerToken: 0.000015,
+		MaxInputTokens:     128000,
+		MaxOutputTokens:    4096,
+	})
+	billingSvc := service.NewBillingService(cfg, pricingSvc)
+	resolver := service.NewModelPricingResolver(nil, billingSvc)
+	fx := service.NewExchangeRateService(cfg)
+	snapshots := service.NewBillingSnapshotService(cfg, resolver, billingSvc, fx, nil)
+	leaseStore := &stubWalletLeaseStore{
+		lease: &service.CanonicalWalletLease{
+			LeaseID:        "lease_ws_auth_test",
+			PlatformUserID: "user_1801",
+			Currency:       "CNY",
+			BudgetUnits:    1_000_000_000,
+			ConsumedUnits:  0,
+			ExpiresAt:      time.Now().Add(time.Hour),
+		},
+	}
 	gatewaySvc := service.NewOpenAIGatewayService(
 		harness.accountRepo,
 		nil,
@@ -108,24 +141,39 @@ func newWSAuthTestHarness(t *testing.T, mode string, ingressMode string) *wsAuth
 		nil,
 		nil,
 		nil,
-		nil,
+		leaseStore,
 		cfg, nil, nil,
 		nil,
 		nil,
-		service.NewBillingService(cfg, nil),
+		billingSvc,
 		nil,
 		billingCacheSvc,
 		nil,
 		&service.DeferredService{},
 		nil,
 		nil,
+		resolver,
 		nil,
 		nil,
 		nil,
 		nil,
-		nil,
-		nil,
+		snapshots,
 	)
+
+	gatewaySvc.SetRecordUsageHookForTest(func(input *service.OpenAIRecordUsageInput) {
+		harness.mu.Lock()
+		defer harness.mu.Unlock()
+		harness.usageInputs = append(harness.usageInputs, input)
+	})
+
+	turnCounter := &atomic.Int64{}
+	gatewaySvc.SetAuthorizeBillableAttemptHookForTest(func(snap *service.BillingSnapshot, apiKey *service.APIKey, estimate service.EstimateInput) {
+		harness.mu.Lock()
+		defer harness.mu.Unlock()
+		t := int(turnCounter.Add(1))
+		harness.authAttempts = append(harness.authAttempts, authAttemptRecord{turn: t, snapshot: snap})
+	})
+	harness.gatewaySvc = gatewaySvc
 
 	cache := &concurrencyCacheMock{
 		acquireUserSlotFn: func(ctx context.Context, userID int64, maxConcurrency int, requestID string) (bool, error) {
@@ -142,19 +190,13 @@ func newWSAuthTestHarness(t *testing.T, mode string, ingressMode string) *wsAuth
 		concurrencyHelper:   NewConcurrencyHelper(service.NewConcurrencyService(cache), SSEPingFormatNone, time.Second),
 	}
 
-	groupID := int64(4301)
 	apiKey := &service.APIKey{
-		ID:      1901,
-		GroupID: &groupID,
+		ID: 1901,
 		User: &service.User{
 			ID:              1801,
+			PlatformUserID:  "user_1801",
 			Status:          service.StatusActive,
-			BillingCurrency: service.CurrencyUSD,
-		},
-		Group: &service.Group{
-			ID:       groupID,
-			Platform: service.PlatformOpenAI,
-			Status:   service.StatusActive,
+			BillingCurrency: "CNY",
 		},
 	}
 
@@ -224,25 +266,103 @@ func TestWSAuthorization_TwoTurnSessionsOnBothIngressModes(t *testing.T) {
 			metrics := service.AuthorizationMetricsSnapshot()
 			require.Equal(t, int64(2), metrics.WritesAuthorized, "two turns authorized")
 			require.Equal(t, int64(0), metrics.WritesRefused)
+
+			harness.mu.Lock()
+			usageInputs := harness.usageInputs
+			authAttempts := harness.authAttempts
+			harness.mu.Unlock()
+
+			require.Len(t, usageInputs, 2, "two RecordUsage calls")
+			require.NotEmpty(t, usageInputs[0].AuthorizationToken, "turn 1 token non-empty")
+			require.NotEmpty(t, usageInputs[0].AuthorizationID, "turn 1 authorization ID non-empty")
+			require.NotEmpty(t, usageInputs[1].AuthorizationToken, "turn 2 token non-empty")
+			require.NotEmpty(t, usageInputs[1].AuthorizationID, "turn 2 authorization ID non-empty")
+			require.NotEqual(t, usageInputs[0].AuthorizationToken, usageInputs[1].AuthorizationToken, "two distinct tokens across turns 1 and 2")
+			require.NotNil(t, usageInputs[0].BillingSnapshot, "turn 1 snapshot non-nil")
+			require.NotNil(t, usageInputs[1].BillingSnapshot, "turn 2 snapshot non-nil")
+
+			require.Len(t, authAttempts, 2, "two AuthorizeTurn calls")
+			require.Equal(t, 1, authAttempts[0].turn, "turn 1 holder turn equals AuthorizeTurn arg")
+			require.NotNil(t, authAttempts[0].snapshot, "turn 1 snapshot non-nil")
+			require.Equal(t, 2, authAttempts[1].turn, "turn 2 holder turn equals AuthorizeTurn arg")
+			require.NotNil(t, authAttempts[1].snapshot, "turn 2 snapshot non-nil")
 		})
 	}
 }
 
 type stubWalletLeaseStore struct {
-	service.GatewayCache
+	lease *service.CanonicalWalletLease
 }
 
-func (s *stubWalletLeaseStore) GetCanonicalWalletLease(ctx context.Context, platformUserID, currency string) (*service.CanonicalWalletLease, error) {
-	return nil, nil
+func (s *stubWalletLeaseStore) GetSessionAccountID(ctx context.Context, groupID int64, sessionHash string) (int64, error) {
+	return 0, errors.New("not found")
 }
-func (s *stubWalletLeaseStore) PutCanonicalWalletLease(ctx context.Context, lease service.CanonicalWalletLease, ttl time.Duration) error {
+func (s *stubWalletLeaseStore) SetSessionAccountID(ctx context.Context, groupID int64, sessionHash string, accountID int64, ttl time.Duration) error {
 	return nil
 }
-func (s *stubWalletLeaseStore) ClearCanonicalWalletLease(ctx context.Context, platformUserID, currency string) error {
+func (s *stubWalletLeaseStore) RefreshSessionTTL(ctx context.Context, groupID int64, sessionHash string, ttl time.Duration) error {
 	return nil
 }
-func (s *stubWalletLeaseStore) ReserveCanonicalWalletLease(ctx context.Context, platformUserID, currency string, amountUnits int64, gatewayRequestID string, reservationTTL time.Duration) (*service.CanonicalWalletReservation, error) {
-	return nil, nil
+func (s *stubWalletLeaseStore) DeleteSessionAccountID(ctx context.Context, groupID int64, sessionHash string) error {
+	return nil
+}
+func (s *stubWalletLeaseStore) InstallCanonicalWalletLease(ctx context.Context, lease service.CanonicalWalletLease) error {
+	s.lease = &lease
+	return nil
+}
+func (s *stubWalletLeaseStore) GetCanonicalWalletLease(ctx context.Context, platformUserID string) (*service.CanonicalWalletLease, error) {
+	return s.lease, nil
+}
+func (s *stubWalletLeaseStore) GetCanonicalWalletLeaseByID(ctx context.Context, platformUserID, leaseID string) (*service.CanonicalWalletLease, error) {
+	return s.lease, nil
+}
+func (s *stubWalletLeaseStore) ReserveCanonicalWalletLease(ctx context.Context, platformUserID, leaseID, currency, eventID string, amountUnits int64, now time.Time) (*service.CanonicalWalletReservation, error) {
+	if s.lease == nil {
+		return nil, errors.New("no lease")
+	}
+	return &service.CanonicalWalletReservation{
+		Lease: *s.lease,
+	}, nil
+}
+
+type openAIWSRefusalReportingAccountRepoStub struct {
+	openAIWSFailoverHandlerAccountRepoStub
+	reportedFailure *atomic.Bool
+}
+
+func (s *openAIWSRefusalReportingAccountRepoStub) SetRateLimited(ctx context.Context, id int64, resetAt time.Time) error {
+	if s.reportedFailure != nil {
+		s.reportedFailure.Store(true)
+	}
+	return s.openAIWSFailoverHandlerAccountRepoStub.SetRateLimited(ctx, id, resetAt)
+}
+
+func (s *openAIWSRefusalReportingAccountRepoStub) SetError(ctx context.Context, id int64, errorMsg string) error {
+	if s.reportedFailure != nil {
+		s.reportedFailure.Store(true)
+	}
+	return nil
+}
+
+func (s *openAIWSRefusalReportingAccountRepoStub) SetTempUnschedulable(ctx context.Context, id int64, until time.Time, reason string) error {
+	if s.reportedFailure != nil {
+		s.reportedFailure.Store(true)
+	}
+	return nil
+}
+
+func (s *openAIWSRefusalReportingAccountRepoStub) SetModelRateLimit(ctx context.Context, id int64, scope string, resetAt time.Time, reason ...string) error {
+	if s.reportedFailure != nil {
+		s.reportedFailure.Store(true)
+	}
+	return nil
+}
+
+func (s *openAIWSRefusalReportingAccountRepoStub) SetOverloaded(ctx context.Context, id int64, until time.Time) error {
+	if s.reportedFailure != nil {
+		s.reportedFailure.Store(true)
+	}
+	return nil
 }
 
 func TestWSAuthorization_RefusalCloses4402WithoutReportingAccountFailure(t *testing.T) {
@@ -279,7 +399,10 @@ func TestWSAuthorization_RefusalCloses4402WithoutReportingAccountFailure(t *test
 			"openai_apikey_responses_websockets_v2_mode":    service.OpenAIWSIngressModePassthrough,
 		},
 	}
-	accountRepo := &openAIWSFailoverHandlerAccountRepoStub{accounts: []service.Account{account}}
+	accountRepo := &openAIWSRefusalReportingAccountRepoStub{
+		openAIWSFailoverHandlerAccountRepoStub: openAIWSFailoverHandlerAccountRepoStub{accounts: []service.Account{account}},
+		reportedFailure:                        &reportedFailure,
+	}
 
 	cfg := &config.Config{}
 	cfg.RunMode = config.RunModeSimple
@@ -323,6 +446,11 @@ func TestWSAuthorization_RefusalCloses4402WithoutReportingAccountFailure(t *test
 		nil,
 		snapshots,
 	)
+	gatewaySvc.SetReportScheduleResultHookForTest(func(accountID int64, model string, success bool, firstTokenMs *int) {
+		if !success {
+			reportedFailure.Store(true)
+		}
+	})
 
 	cache := &concurrencyCacheMock{
 		acquireUserSlotFn: func(ctx context.Context, userID int64, maxConcurrency int, requestID string) (bool, error) {
@@ -347,7 +475,7 @@ func TestWSAuthorization_RefusalCloses4402WithoutReportingAccountFailure(t *test
 			ID:              1802,
 			PlatformUserID:  "user_1802",
 			Status:          service.StatusActive,
-			BillingCurrency: service.CurrencyUSD,
+			BillingCurrency: "CNY",
 		},
 		Group: &service.Group{
 			ID:       groupID,

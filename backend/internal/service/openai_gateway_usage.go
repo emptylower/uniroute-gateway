@@ -138,6 +138,9 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	if input == nil {
 		return errors.New("openai usage input is nil")
 	}
+	if s != nil && s.recordUsageHookForTest != nil {
+		s.recordUsageHookForTest(input)
+	}
 	result := input.Result
 	if result == nil {
 		return errors.New("openai usage result is nil")

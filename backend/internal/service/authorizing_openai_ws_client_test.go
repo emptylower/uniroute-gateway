@@ -129,12 +129,49 @@ func TestAuthorizingWSFullFidelityProxies(t *testing.T) {
 	require.NoError(t, ac.Close())
 	require.True(t, inner.closed)
 
-	cfgDialer := newAuthorizingOpenAIWSClientDialer(d, &config.Config{})
+	cfg := &config.Config{}
+	cfg.CanonicalWallet.Mode = config.CanonicalWalletModeShadow
+	cfgDialer := newAuthorizingOpenAIWSClientDialer(d, cfg)
 	require.NotNil(t, cfgDialer)
-	_, _, _, _ = cfgDialer.Dial(context.Background(), "ws://127.0.0.1", nil, "")
-	nilCfgDialer := newAuthorizingOpenAIWSClientDialer(d, nil)
-	require.NotNil(t, nilCfgDialer)
-	_, _, _, _ = nilCfgDialer.Dial(context.Background(), "ws://127.0.0.1", nil, "")
+	cfgConn, _, _, err := cfgDialer.Dial(context.Background(), "ws://127.0.0.1", nil, "")
+	require.NoError(t, err)
+	require.NoError(t, cfgConn.WriteJSON(context.Background(), map[string]any{"type": "response.create"}))
+
+	errDialer := &bareWSDialer{conn: nil}
+	wrappedErrDialer := newAuthorizingOpenAIWSClientDialer(errDialer, cfg)
+	failConn, _, _, err := wrappedErrDialer.Dial(context.Background(), "ws://127.0.0.1", nil, "")
+	require.Nil(t, failConn)
+	require.NoError(t, err)
+}
+
+func TestAuthorizingWSDialerNilConfigDisabledPassThrough(t *testing.T) {
+	resetAuthorizationMetricsForTest()
+	inner := &fakeWSConn{}
+	d := &fakeWSDialer{conn: inner}
+	dialer := newAuthorizingOpenAIWSClientDialer(d, nil)
+	conn, status, _, err := dialer.Dial(context.Background(), "wss://x", nil, "")
+	require.NoError(t, err)
+	require.Equal(t, http.StatusSwitchingProtocols, status)
+
+	ac, ok := conn.(*authorizingOpenAIWSClientConn)
+	require.True(t, ok)
+
+	ctx := context.Background()
+	require.NoError(t, ac.WriteJSON(ctx, map[string]any{"type": "response.create"}))
+	require.NoError(t, ac.WriteFrame(ctx, coderws.MessageText, []byte(`{"type":"response.create"}`)))
+	require.Len(t, inner.writes, 2)
+	require.Equal(t, int64(0), AuthorizationMetricsSnapshot().WritesUnmarked)
+	require.Equal(t, int64(0), AuthorizationMetricsSnapshot().WritesAuthorized)
+	require.Equal(t, int64(0), AuthorizationMetricsSnapshot().WritesRefused)
+}
+
+func TestAuthorizingWSConnWriteFrameWithoutFrameConnFailsClosed(t *testing.T) {
+	inner := &fakeWSConn{}
+	bare := &bareWSConn{inner: inner}
+	wrapped := &authorizingOpenAIWSClientConn{inner: bare, mode: modeFn("enforce")}
+	err := wrapped.WriteFrame(context.Background(), coderws.MessageText, []byte(`{"type":"response.create"}`))
+	require.ErrorIs(t, err, errOpenAIWSConnClosed)
+	require.Empty(t, inner.writes)
 }
 
 func TestAuthorizingWSIdlePingDoesNotFailOpenOnAMiss(t *testing.T) {
@@ -231,6 +268,25 @@ func TestAuthorizingWSClassification(t *testing.T) {
 		require.Nil(t, ac.ArmedAuthorization())
 		err := ac.WriteJSON(context.Background(), map[string]any{})
 		require.True(t, errors.Is(err, ErrAuthorizationRefused))
+	})
+	t.Run("a handle with Refusal set is refused with WritesRefused incremented and zero writes", func(t *testing.T) {
+		resetAuthorizationMetricsForTest()
+		inner := &fakeWSConn{}
+		ac, _ := dialWrapped(t, config.CanonicalWalletModeEnforce, inner)
+		h, _ := newAuthorizationHandle("enforce")
+		refusalErr := &AuthorizationRefusedError{Reason: AuthorizationRefusalBalanceShortfall, Detail: "insufficient balance"}
+		h.Refusal = refusalErr
+		ac.ArmAuthorization(h)
+
+		err := ac.WriteJSON(context.Background(), map[string]any{"type": "response.create"})
+		require.ErrorIs(t, err, refusalErr)
+		require.Empty(t, inner.writes)
+		require.Equal(t, int64(1), AuthorizationMetricsSnapshot().WritesRefused)
+
+		err = ac.WriteFrame(context.Background(), coderws.MessageText, []byte(`{"type":"response.create"}`))
+		require.ErrorIs(t, err, refusalErr)
+		require.Empty(t, inner.writes)
+		require.Equal(t, int64(2), AuthorizationMetricsSnapshot().WritesRefused)
 	})
 	t.Run("Ping and Close are never gated", func(t *testing.T) {
 		inner := &fakeWSConn{}

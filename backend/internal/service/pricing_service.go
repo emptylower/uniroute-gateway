@@ -1118,3 +1118,15 @@ func isNumeric(s string) bool {
 	}
 	return true
 }
+
+func (s *PricingService) SetModelPricingForTest(model string, pricing *LiteLLMModelPricing) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.pricingData == nil {
+		s.pricingData = make(map[string]*LiteLLMModelPricing)
+	}
+	s.pricingData[strings.ToLower(strings.TrimSpace(model))] = pricing
+}

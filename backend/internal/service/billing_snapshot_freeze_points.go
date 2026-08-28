@@ -93,6 +93,9 @@ func (s *GatewayService) AuthorizeBillableAttempt(ctx context.Context, snap *Bil
 }
 
 func (s *OpenAIGatewayService) AuthorizeBillableAttempt(ctx context.Context, snap *BillingSnapshot, apiKey *APIKey, estimate EstimateInput) (*AuthorizationHandle, error) {
+	if s != nil && s.authorizeAttemptHookForTest != nil {
+		s.authorizeAttemptHookForTest(snap, apiKey, estimate)
+	}
 	return s.authorizer.Authorize(ctx, AuthorizeInput{Snapshot: snap, Estimate: estimate, User: userOfAPIKey(apiKey)})
 }
 

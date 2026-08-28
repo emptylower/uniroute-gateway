@@ -2634,16 +2634,16 @@
   {
     "file": "internal/service/openai_ws_client.go",
     "kind": "construct",
-    "detail": "coderOpenAIWSClientDialer.proxyHTTPClient: \u0026http.Client{}",
+    "detail": "coderOpenAIWSClientDialer.proxyHTTPClient: &http.Client{}",
     "annotation": "port",
-    "note": "the WS port dialer client (decorated at 3.3b)"
+    "note": "the WS port dialer client (decorated at 3.3b; prewarm writes through this port are marked NonBillableWSPrewarm)"
   },
   {
     "file": "internal/service/openai_ws_client.go",
     "kind": "factory",
     "detail": "coderOpenAIWSClientDialer.proxyHTTPClient",
     "annotation": "port",
-    "note": "the WS port dialer client factory (decorated at 3.3b)"
+    "note": "the WS port dialer client factory (decorated at 3.3b; prewarm writes through this port are marked NonBillableWSPrewarm)"
   },
   {
     "file": "internal/service/openai_ws_client.go",

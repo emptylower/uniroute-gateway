@@ -2190,6 +2190,9 @@ func (s *OpenAIGatewayService) isOpenAIAccountTransportCompatible(account *Accou
 }
 
 func (s *OpenAIGatewayService) ReportOpenAIAccountScheduleResult(accountID int64, model string, success bool, firstTokenMs *int) {
+	if s != nil && s.reportScheduleResultHookForTest != nil {
+		s.reportScheduleResultHookForTest(accountID, model, success, firstTokenMs)
+	}
 	if success {
 		s.clearOpenAIAccountModelTransientState(accountID, normalizeOpenAIAccountModelTransientModel(model))
 	}

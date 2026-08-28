@@ -920,7 +920,11 @@ func TestIngressDisabledModeIsByteForByteUnchanged(t *testing.T) {
 		hooks := &OpenAIWSIngressHooks{
 			AuthorizeTurn: func(turn int, estimate EstimateInput) (*AuthorizationHandle, error) {
 				authorizeCalled <- turn
-				return nil, nil // disabled mode mints no handle (Authorize's disabled early return)
+				// Authorize does mint a handle in disabled mode (canonical_wallet_authorizer.go:54-59);
+				// returning nil here simulates a minimal hook, while frame-equality and zero-counter
+				// assertions below are the substantive proof, and the decorator's disabled short-circuit
+				// is covered by TestAuthorizingWSClassification.
+				return nil, nil
 			},
 		}
 		serverErrCh := make(chan error, 1)

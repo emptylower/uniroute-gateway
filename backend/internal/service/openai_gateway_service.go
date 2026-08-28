@@ -450,6 +450,10 @@ type OpenAIGatewayService struct {
 	liveUsageFallback                   sync.Map // key: call hash, value: *liveUsageFallbackBucket
 	liveFinalizeRetrying                sync.Map // key: call hash, value: struct{}
 
+	recordUsageHookForTest          func(input *OpenAIRecordUsageInput)
+	authorizeAttemptHookForTest     func(snap *BillingSnapshot, apiKey *APIKey, estimate EstimateInput)
+	reportScheduleResultHookForTest func(accountID int64, model string, success bool, firstTokenMs *int)
+
 	// billingSnapshotSettler (Phase 3.2) carries the snapshot service into the
 	// settlement seam; a zero value means snapshots are off.
 	billingSnapshotSettler
@@ -541,6 +545,24 @@ func NewOpenAIGatewayService(
 	go svc.runLiveFinalizationRecovery()
 	svc.logOpenAIWSModeBootstrap()
 	return svc
+}
+
+func (s *OpenAIGatewayService) SetRecordUsageHookForTest(hook func(input *OpenAIRecordUsageInput)) {
+	if s != nil {
+		s.recordUsageHookForTest = hook
+	}
+}
+
+func (s *OpenAIGatewayService) SetAuthorizeBillableAttemptHookForTest(hook func(snap *BillingSnapshot, apiKey *APIKey, estimate EstimateInput)) {
+	if s != nil {
+		s.authorizeAttemptHookForTest = hook
+	}
+}
+
+func (s *OpenAIGatewayService) SetReportScheduleResultHookForTest(hook func(accountID int64, model string, success bool, firstTokenMs *int)) {
+	if s != nil {
+		s.reportScheduleResultHookForTest = hook
+	}
 }
 
 // ResolveChannelMapping 解析渠道级模型映射（代理到 ChannelService）
