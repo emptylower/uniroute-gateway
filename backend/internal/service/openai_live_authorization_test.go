@@ -91,6 +91,9 @@ func (s *inMemoryLiveProvisionalStore) Abort(ctx context.Context, token string, 
 func (s *inMemoryLiveProvisionalStore) ClaimFinalization(ctx context.Context, token string, claimedAt time.Time) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.saveErr != nil {
+		return false, s.saveErr
+	}
 	rec, ok := s.records[token]
 	if !ok || rec.Status != LiveProvisionalStatusActive {
 		return false, nil
@@ -102,6 +105,9 @@ func (s *inMemoryLiveProvisionalStore) ClaimFinalization(ctx context.Context, to
 func (s *inMemoryLiveProvisionalStore) CompleteFinalization(ctx context.Context, token, settlementEventID string, settledUnits int64, terminalAt time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.saveErr != nil {
+		return s.saveErr
+	}
 	rec, ok := s.records[token]
 	if !ok || rec.Status != LiveProvisionalStatusFinalizing {
 		return ErrLiveProvisionalNotFound
@@ -245,6 +251,8 @@ func newLiveAuthTestFixture(t *testing.T, mode string) *liveAuthTestFixture {
 		exchangeRates:          snapService.exchangeRates,
 		billingSnapshotSettler: billingSnapshotSettler{snapshots: snapService, billing: snapService.billing},
 		authorizer:             authorizer,
+		canonicalWallet:        bridge,
+		deferredService:        NewDeferredService(nil, nil, time.Second),
 		usageBillingRepo:       &openAIRecordUsageBillingRepoStub{},
 		usageLogRepo:           &liveTestUsageRepo{},
 	}

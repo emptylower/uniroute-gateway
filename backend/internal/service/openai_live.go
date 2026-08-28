@@ -993,24 +993,62 @@ func (s *OpenAIGatewayService) tryFinalizeLiveCall(record *LiveCallRecord) bool 
 	}
 	liveTargetPlatform := PlatformOpenAI
 	usageLog.GovernanceTargetPlatform = &liveTargetPlatform
+	if record.BillingSnapshotID != "" {
+		snapID := record.BillingSnapshotID
+		usageLog.BillingSnapshotID = &snapID
+	}
 	apiKey := &APIKey{ID: record.APIKeyID, UserID: record.UserID, GroupID: liveOptionalID(record.GroupID), Quota: record.APIKeyQuota, RateLimit5h: record.RateLimit5h, RateLimit1d: record.RateLimit1d, RateLimit7d: record.RateLimit7d}
-	user := &User{ID: record.UserID, BillingCurrency: record.BillingCurrency}
+	user := &User{ID: record.UserID, PlatformUserID: record.PlatformUserID, BillingCurrency: record.BillingCurrency}
 	account := &Account{ID: record.AccountID}
 	var subscription *UserSubscription
 	if record.SubscriptionID > 0 {
 		subscription = &UserSubscription{ID: record.SubscriptionID, UserID: record.UserID, GroupID: record.GroupID}
 	}
-	if _, billingErr := applyUsageBilling(context.Background(), record.CallHash, usageLog, &postUsageBillingParams{
-		Cost: &CostBreakdown{InputCost: inputCost, OutputCost: outputCost, CacheReadCost: cacheReadCost, TotalCost: sourceCost, ActualCost: actualCost, BillingMode: string(BillingModeToken)},
+	cost := &CostBreakdown{InputCost: inputCost, OutputCost: outputCost, CacheReadCost: cacheReadCost, TotalCost: sourceCost, ActualCost: actualCost, BillingMode: string(BillingModeToken)}
+
+	claimed := false
+	if record.AuthorizationID != "" {
+		var claimErr error
+		claimed, claimErr = s.claimLiveProvisionalFinalization(record.AuthorizationID)
+		if claimErr != nil {
+			authorizationMetrics.liveProvisionalStoreUnavailable.Add(1)
+			logger.L().Warn("openai.live_provisional_claim_failed", zap.String("authorization_id", record.AuthorizationID), zap.Error(claimErr))
+		} else if s.liveProvisional != nil && !claimed {
+			return true // concurrent finalize in progress
+		}
+	}
+
+	applied, billingResult, billingErr := applyUsageBillingDetailed(context.Background(), record.CallHash, usageLog, &postUsageBillingParams{
+		Cost: cost,
 		User: user, APIKey: apiKey, Account: account, Subscription: subscription,
 		IsSubscriptionBill:    record.SubscriptionBilling,
 		AccountRateMultiplier: record.AccountRateMultiplier,
 		APIKeyService:         liveAPIKeyQuotaUpdater{},
 		Platform:              PlatformOpenAI,
-	}, s.billingDeps(), s.usageBillingRepo); billingErr != nil {
+	}, s.billingDeps(), s.usageBillingRepo)
+	if billingErr != nil {
+		if claimed {
+			s.releaseLiveProvisionalFinalizationClaim(record.AuthorizationID)
+		}
 		logger.L().Error("openai.live_billing_failed", zap.String("call_hash", record.CallHash), zap.Error(billingErr))
 		return false
 	}
+
+	cwMode := s.canonicalWalletMode()
+	enqueued := observeCanonicalWalletSettlement(s.canonicalWallet, record.CallHash, user, cost, record.SubscriptionBilling, applied, billingResult, record.AuthorizationToken, record.AuthorizationID)
+	if cwMode != config.CanonicalWalletModeDisabled && !enqueued {
+		authorizationMetrics.liveProvisionalSettlementNotEnqueued.Add(1)
+	}
+
+	if record.AuthorizationID != "" {
+		eventID := CanonicalWalletSettlementEventID(record.CallHash, record.PlatformUserID, user.BillingCurrency)
+		settledUnits, _ := canonicalWalletUnitsFromCNY(cost.ActualCost)
+		if completeErr := s.completeLiveProvisionalFinalization(record.AuthorizationID, eventID, settledUnits); completeErr != nil {
+			authorizationMetrics.liveProvisionalStoreUnavailable.Add(1)
+			logger.L().Warn("openai.live_provisional_complete_failed", zap.String("authorization_id", record.AuthorizationID), zap.Error(completeErr))
+		}
+	}
+
 	usageCtx, usageCancel := detachedBillingContext(context.Background())
 	_, usageErr := s.usageLogRepo.Create(usageCtx, usageLog)
 	usageCancel()
@@ -1327,4 +1365,17 @@ func (s *OpenAIGatewayService) releaseLiveProvisionalFinalizationClaim(authoriza
 	if err := s.liveProvisional.ReleaseFinalizationClaim(ctx, authorizationID); err != nil {
 		logger.L().Warn("release live provisional finalization claim failed", zap.String("authorization_id", authorizationID), zap.Error(err))
 	}
+}
+
+func (s *OpenAIGatewayService) canonicalWalletMode() string {
+	if s == nil {
+		return config.CanonicalWalletModeDisabled
+	}
+	if s.authorizer != nil {
+		return s.authorizer.mode()
+	}
+	if s.cfg != nil {
+		return s.cfg.CanonicalWallet.Mode
+	}
+	return config.CanonicalWalletModeDisabled
 }
