@@ -28,9 +28,7 @@ func p34Bridge(t *testing.T, ctx context.Context, cfgMode string, store Canonica
 	cfg := canonicalWalletTestConfig(cfgMode)
 	cfg.ExpirySkewMarginMS = int(p34Margin / time.Millisecond)
 	cfg.LeaseBudgetUnits = 500_000_000 // 5 CNY, the production default
-	b := newCanonicalWalletBridge(cfg, store, control, nil, nil, 0)
-	b.now = func() time.Time { return now }
-	return b
+	return newCanonicalWalletBridge(cfg, store, control, nil, nil, 0, func() time.Time { return now })
 }
 
 // Test 15a (seal): after a seal, a NEW reservation on the lease is refused by
@@ -109,7 +107,10 @@ func TestPhase34Proto18SkewMarginTreatsNearExpiryAsExpired(t *testing.T) {
 	require.Equal(t, 0, control2.ensureCalls)
 }
 
-// p34HTTPBridge: real Redis + the §3 fake over HTTP + a fixed clock shared by both.
+// p34HTTPBridge: real Redis + the §3 fake over HTTP + a fixed clock shared by
+// both. The HTTP client's own `now` stays wall-clock — it mints the JWT — but
+// the fake verifies nothing about iat, so sharing the fixed clock there keeps
+// the two halves deterministic (§9.5 scopes the injection to the BRIDGE).
 func p34HTTPBridge(t *testing.T, ctx context.Context, fake *fakeEnsureControlPlane, store CanonicalWalletLeaseStore, now time.Time) *CanonicalWalletBridge {
 	t.Helper()
 	cfg := canonicalWalletTestConfig(config.CanonicalWalletModeEnforce)
@@ -118,9 +119,7 @@ func p34HTTPBridge(t *testing.T, ctx context.Context, fake *fakeEnsureControlPla
 	cfg.LeaseBudgetUnits = 500_000_000
 	client := newCanonicalWalletHTTPClient(cfg, fake.Server.Client())
 	client.now = func() time.Time { return now }
-	b := newCanonicalWalletBridge(cfg, store, client, nil, nil, 0)
-	b.now = func() time.Time { return now }
-	return b
+	return newCanonicalWalletBridge(cfg, store, client, nil, nil, 0, func() time.Time { return now })
 }
 
 // p34Fill issues (or reuses) a lease for a 100,000,000 ask, exhausts it on the

@@ -201,7 +201,7 @@ func TestEnsureCanonicalWalletHeadroomGuardsAndErrors(t *testing.T) {
 	// ordinary exhaustion denial) propagates.
 	rdb := startCanonicalWalletTestRedis(t, ctx)
 	store := &gatewayCacheAdapterForTest{rdb: rdb}
-	enforce := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeEnforce), store, &canonicalWalletControlStub{}, nil, nil, 0)
+	enforce := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeEnforce), store, &canonicalWalletControlStub{}, nil, nil, 0, nil)
 	ok, err = enforce.EnsureCanonicalWalletHeadroom(ctx, "req-g", "shipany-user-"+uuid.NewString(), "lease-missing", "CNY", 1, 100)
 	require.ErrorIs(t, err, ErrCanonicalWalletLeaseMissing)
 	require.False(t, ok)

@@ -592,12 +592,24 @@ func NewCanonicalWalletBridge(cfg *config.Config, store CanonicalWalletLeaseStor
 	if cfg.Gateway.ConcurrencySlotTTLMinutes > 0 {
 		slot = cfg.Gateway.ConcurrencySlotTTLMinutes * 60
 	}
-	return newCanonicalWalletBridge(cfg.CanonicalWallet, store, newCanonicalWalletHTTPClient(cfg.CanonicalWallet, nil), outboxDB, outbox, slot)
+	// §9.5: production keeps UTC wall time — the injection exists for the
+	// skew-margin and expiry tests.
+	return newCanonicalWalletBridge(cfg.CanonicalWallet, store, newCanonicalWalletHTTPClient(cfg.CanonicalWallet, nil), outboxDB, outbox, slot, nil)
 }
 
-func newCanonicalWalletBridge(cfg config.CanonicalWalletConfig, store CanonicalWalletLeaseStore, control canonicalWalletControlPlane, outboxDB *sql.DB, outbox CanonicalWalletOutboxStore, callerSlotTTLSeconds int) *CanonicalWalletBridge {
+// newCanonicalWalletBridge takes the injectable clock as its LAST parameter
+// (§9.5): every lease-expiry decision and every reserve-script `now` in this
+// file reads b.clock(). The HTTP client's own clock is deliberately NOT this
+// one — it mints the service assertion (iat/exp), which the verifier checks
+// against wall-clock. A nil clock means UTC wall time. Assigning b.now after
+// construction is forbidden: the dispatcher goroutine starts inside this
+// constructor and would race the assignment.
+func newCanonicalWalletBridge(cfg config.CanonicalWalletConfig, store CanonicalWalletLeaseStore, control canonicalWalletControlPlane, outboxDB *sql.DB, outbox CanonicalWalletOutboxStore, callerSlotTTLSeconds int, clock func() time.Time) *CanonicalWalletBridge {
 	if callerSlotTTLSeconds <= 0 {
 		callerSlotTTLSeconds = 1800 // gateway.concurrency_slot_ttl_minutes' default (30) × 60
+	}
+	if clock == nil {
+		clock = func() time.Time { return time.Now().UTC() }
 	}
 	b := &CanonicalWalletBridge{
 		cfg:      cfg,
@@ -605,7 +617,7 @@ func newCanonicalWalletBridge(cfg config.CanonicalWalletConfig, store CanonicalW
 		control:  control,
 		outboxDB: outboxDB,
 		outbox:   outbox,
-		now:      func() time.Time { return time.Now().UTC() },
+		now:      clock,
 		// This dispatcher instance's opaque claim token — generated once
 		// per bridge, never per tick, so every row this instance claims is
 		// resolvable only by this same instance.
@@ -710,7 +722,7 @@ func (b *CanonicalWalletBridge) CheckAndReserve(ctx context.Context, event Canon
 		}
 		return false, err
 	}
-	reservation, err := b.store.ReserveCanonicalWalletLease(ctx, event.PlatformUserID, lease.LeaseID, event.Currency, event.EventID, event.AmountUnits, time.Now().UTC())
+	reservation, err := b.store.ReserveCanonicalWalletLease(ctx, event.PlatformUserID, lease.LeaseID, event.Currency, event.EventID, event.AmountUnits, b.clock())
 	if b.cfg.Mode == config.CanonicalWalletModeShadow {
 		return true, nil
 	}
@@ -743,7 +755,7 @@ func (b *CanonicalWalletBridge) EnsureCanonicalWalletHeadroom(ctx context.Contex
 	topUpEventID := CanonicalWalletSettlementEventID(
 		fmt.Sprintf("%s:topup:%d", gatewayRequestID, topUpSequence), platformUserID, currency,
 	)
-	_, err := b.store.ReserveCanonicalWalletLease(ctx, platformUserID, leaseID, currency, topUpEventID, additionalUnits, time.Now().UTC())
+	_, err := b.store.ReserveCanonicalWalletLease(ctx, platformUserID, leaseID, currency, topUpEventID, additionalUnits, b.clock())
 	if b.cfg.Mode == config.CanonicalWalletModeShadow {
 		return true, nil
 	}
@@ -874,7 +886,7 @@ func (b *CanonicalWalletBridge) deliverOutboxEvent(ctx context.Context, e Canoni
 		// backoff as today (§9.3). ErrCanonicalWalletLeaseCapReached cannot
 		// reach here (the dispatcher ensures with purpose = settle); if it
 		// ever did, it would retry as today.
-		_ = b.outbox.MarkOutboxEventFailed(ctx, e.ID, b.workerID, time.Now().UTC())
+		_ = b.outbox.MarkOutboxEventFailed(ctx, e.ID, b.workerID, b.clock())
 		return
 	}
 	// Bind BEFORE reserving, never after. Binding afterwards leaves a crash
@@ -890,11 +902,11 @@ func (b *CanonicalWalletBridge) deliverOutboxEvent(ctx context.Context, e Canoni
 				return
 			}
 			canonicalWalletBridgeMetrics.leaseBindError.Add(1)
-			_ = b.outbox.MarkOutboxEventFailed(ctx, e.ID, b.workerID, time.Now().UTC())
+			_ = b.outbox.MarkOutboxEventFailed(ctx, e.ID, b.workerID, b.clock())
 			return
 		}
 	}
-	reservation, err := b.store.ReserveCanonicalWalletLease(ctx, event.PlatformUserID, lease.LeaseID, event.Currency, event.EventID, event.AmountUnits, time.Now().UTC())
+	reservation, err := b.store.ReserveCanonicalWalletLease(ctx, event.PlatformUserID, lease.LeaseID, event.Currency, event.EventID, event.AmountUnits, b.clock())
 	if err != nil {
 		// A bound lease that has since gone missing, expired, or run out can
 		// never accept this event. The Lua script checks the event's
@@ -909,7 +921,7 @@ func (b *CanonicalWalletBridge) deliverOutboxEvent(ctx context.Context, e Canoni
 			_ = b.outbox.BindOutboxEventLease(ctx, e.ID, b.workerID, "")
 		}
 		canonicalWalletBridgeMetrics.reserveError.Add(1)
-		_ = b.outbox.MarkOutboxEventFailed(ctx, e.ID, b.workerID, time.Now().UTC())
+		_ = b.outbox.MarkOutboxEventFailed(ctx, e.ID, b.workerID, b.clock())
 		return
 	}
 	canonicalWalletBridgeMetrics.reserveOK.Add(1)
@@ -917,7 +929,7 @@ func (b *CanonicalWalletBridge) deliverOutboxEvent(ctx context.Context, e Canoni
 	result, err := b.control.SubmitSettlement(ctx, event)
 	if err != nil {
 		canonicalWalletBridgeMetrics.settlementError.Add(1)
-		_ = b.outbox.MarkOutboxEventFailed(ctx, e.ID, b.workerID, time.Now().UTC())
+		_ = b.outbox.MarkOutboxEventFailed(ctx, e.ID, b.workerID, b.clock())
 		return
 	}
 	canonicalWalletBridgeMetrics.settlementOK.Add(1)

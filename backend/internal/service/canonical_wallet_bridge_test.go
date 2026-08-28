@@ -23,6 +23,9 @@ type canonicalWalletStoreStub struct {
 	// ensureLease rejection tests assert a rejected grant is never installed.
 	installCalls int
 	reserveCalls int
+	// lastReserveNow (Phase 3.4a, §9.5): the `now` the bridge handed the
+	// reserve script — the clock-injection test asserts it is b.clock().
+	lastReserveNow time.Time
 	// neverPersist (review note M3): InstallCanonicalWalletLease becomes a
 	// no-op so benchmark iterations keep missing.
 	neverPersist bool
@@ -53,8 +56,9 @@ func (s *canonicalWalletStoreStub) GetCanonicalWalletLeaseByID(_ context.Context
 	copy := *s.lease
 	return &copy, nil
 }
-func (s *canonicalWalletStoreStub) ReserveCanonicalWalletLease(_ context.Context, _, _, _, _ string, amount int64, _ time.Time) (*CanonicalWalletReservation, error) {
+func (s *canonicalWalletStoreStub) ReserveCanonicalWalletLease(_ context.Context, _, _, _, _ string, amount int64, now time.Time) (*CanonicalWalletReservation, error) {
 	s.reserveCalls++
+	s.lastReserveNow = now
 	if s.reserveErr != nil {
 		return nil, s.reserveErr
 	}
@@ -121,12 +125,12 @@ func TestCanonicalWalletCheckAndReserveFailsClosedOnlyInEnforceMode(t *testing.T
 	failure := errors.New("control plane unavailable")
 	event := CanonicalWalletSettlementEvent{GatewayRequestID: "req-1", PlatformUserID: "user-1", Currency: "CNY", AmountUnits: 1}
 
-	shadow := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeShadow), &canonicalWalletStoreStub{}, &canonicalWalletControlStub{leaseErr: failure}, nil, nil, 0)
+	shadow := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeShadow), &canonicalWalletStoreStub{}, &canonicalWalletControlStub{leaseErr: failure}, nil, nil, 0, nil)
 	allowed, err := shadow.CheckAndReserve(context.Background(), event)
 	require.NoError(t, err)
 	require.True(t, allowed)
 
-	enforce := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeEnforce), &canonicalWalletStoreStub{}, &canonicalWalletControlStub{leaseErr: failure}, nil, nil, 0)
+	enforce := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeEnforce), &canonicalWalletStoreStub{}, &canonicalWalletControlStub{leaseErr: failure}, nil, nil, 0, nil)
 	allowed, err = enforce.CheckAndReserve(context.Background(), event)
 	require.ErrorIs(t, err, failure)
 	require.False(t, allowed)
@@ -212,7 +216,7 @@ func newBridgeForEnsureLeaseTest(t *testing.T) (*CanonicalWalletBridge, *canonic
 	control := &canonicalWalletControlStub{}
 	cfg := canonicalWalletTestConfig(config.CanonicalWalletModeShadow)
 	cfg.LeaseBudgetUnits = 500_000_000
-	return newCanonicalWalletBridge(cfg, store, control, nil, nil, 0), store, control
+	return newCanonicalWalletBridge(cfg, store, control, nil, nil, 0, nil), store, control
 }
 
 func TestEnsureLeaseRejectsGrantBelowAmount(t *testing.T) {
@@ -250,7 +254,7 @@ func TestEnsureLeaseAcceptsGrantBelowBudgetButAboveAmount(t *testing.T) {
 
 func TestObserveSettlementReturnBoolGuards(t *testing.T) {
 	// disabled mode
-	disabled := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeDisabled), &canonicalWalletStoreStub{}, &canonicalWalletControlStub{}, nil, nil, 0)
+	disabled := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeDisabled), &canonicalWalletStoreStub{}, &canonicalWalletControlStub{}, nil, nil, 0, nil)
 	require.False(t, disabled.ObserveSettlement(CanonicalWalletSettlementEvent{PlatformUserID: "u1", Currency: "CNY", AmountUnits: 100}))
 
 	// nil bridge
@@ -258,7 +262,7 @@ func TestObserveSettlementReturnBoolGuards(t *testing.T) {
 	require.False(t, nilBridge.ObserveSettlement(CanonicalWalletSettlementEvent{PlatformUserID: "u1", Currency: "CNY", AmountUnits: 100}))
 
 	// shadow mode with nil outboxDB / outbox
-	shadow := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeShadow), &canonicalWalletStoreStub{}, &canonicalWalletControlStub{}, nil, nil, 0)
+	shadow := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeShadow), &canonicalWalletStoreStub{}, &canonicalWalletControlStub{}, nil, nil, 0, nil)
 	require.False(t, shadow.ObserveSettlement(CanonicalWalletSettlementEvent{PlatformUserID: "u1", Currency: "CNY", AmountUnits: 100}))
 
 	// missing platform user id
@@ -278,7 +282,7 @@ func TestObserveSettlementReturnBoolGuards(t *testing.T) {
 	outboxStub := &outboxStoreStub{}
 	mock.ExpectBegin()
 	mock.ExpectCommit()
-	shadowWithOutbox := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeShadow), &canonicalWalletStoreStub{}, &canonicalWalletControlStub{}, db, outboxStub, 0)
+	shadowWithOutbox := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeShadow), &canonicalWalletStoreStub{}, &canonicalWalletControlStub{}, db, outboxStub, 0, nil)
 	require.True(t, shadowWithOutbox.ObserveSettlement(CanonicalWalletSettlementEvent{PlatformUserID: "u1", Currency: "CNY", AmountUnits: 100}))
 	require.NoError(t, mock.ExpectationsWereMet())
 
@@ -290,7 +294,7 @@ func TestObserveSettlementReturnBoolGuards(t *testing.T) {
 	failingOutbox := &outboxStoreStub{insertErr: errors.New("db insert failed")}
 	mockFail.ExpectBegin()
 	mockFail.ExpectRollback()
-	shadowFailing := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeShadow), &canonicalWalletStoreStub{}, &canonicalWalletControlStub{}, dbFail, failingOutbox, 0)
+	shadowFailing := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeShadow), &canonicalWalletStoreStub{}, &canonicalWalletControlStub{}, dbFail, failingOutbox, 0, nil)
 	require.False(t, shadowFailing.ObserveSettlement(CanonicalWalletSettlementEvent{PlatformUserID: "u1", Currency: "CNY", AmountUnits: 100}))
 	require.NoError(t, mockFail.ExpectationsWereMet())
 }
@@ -322,7 +326,7 @@ func (s *outboxStoreStub) ReclaimStaleInFlightEvents(context.Context, time.Durat
 }
 
 func TestObserveCanonicalWalletSettlementReturnBool(t *testing.T) {
-	shadow := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeShadow), &canonicalWalletStoreStub{}, &canonicalWalletControlStub{}, nil, nil, 0)
+	shadow := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeShadow), &canonicalWalletStoreStub{}, &canonicalWalletControlStub{}, nil, nil, 0, nil)
 	user := &User{ID: 1, PlatformUserID: "u1", BillingCurrency: "CNY", Balance: 10.0}
 	cost := &CostBreakdown{ActualCost: 1.0}
 
@@ -343,6 +347,57 @@ func TestObserveCanonicalWalletSettlementReturnBool(t *testing.T) {
 
 	// nil cost -> false
 	require.False(t, observeCanonicalWalletSettlement(shadow, "req-1", user, nil, false, true, nil, "tok", "auth"))
+}
+
+// Phase 3.4a (§9.5): the bridge's clock goes through the CONSTRUCTOR, and
+// every lease-expiry decision and every reserve-script `now` reads b.clock().
+func TestBridgeClockFlowsThroughTheConstructor(t *testing.T) {
+	fixed := time.Date(2031, 5, 4, 3, 2, 1, 0, time.UTC)
+	// The cached lease is unexpired and covering by WALL clock but long past
+	// by the FIXED clock — only b.clock() can see it as expired.
+	store := &canonicalWalletStoreStub{lease: &CanonicalWalletLease{
+		LeaseID: "lease-stale-by-fixed-clock", PlatformUserID: "user-clock", Currency: "CNY",
+		BudgetUnits: 500_000_000, ExpiresAt: time.Now().UTC().Add(5 * time.Minute),
+	}}
+	control := &canonicalWalletControlStub{lease: CanonicalWalletLease{
+		LeaseID: "lease-fresh", PlatformUserID: "user-clock", Currency: "CNY",
+		BudgetUnits: 500_000_000, ExpiresAt: fixed.Add(5 * time.Minute),
+	}}
+	cfg := canonicalWalletTestConfig(config.CanonicalWalletModeEnforce)
+	cfg.ExpirySkewMarginMS = 100
+	b := newCanonicalWalletBridge(cfg, store, control, nil, nil, 0, func() time.Time { return fixed })
+	require.NotNil(t, b.now, "the constructor installs the injected clock")
+
+	allowed, err := b.CheckAndReserve(context.Background(), CanonicalWalletSettlementEvent{
+		GatewayRequestID: "req-clock", PlatformUserID: "user-clock", Currency: "CNY", AmountUnits: 1_000_000,
+	})
+	require.NoError(t, err)
+	require.True(t, allowed)
+	require.Equal(t, 1, control.ensureCalls, "the cached lease was expired BY THE FIXED CLOCK, so ensure ran")
+	require.Equal(t, fixed, store.lastReserveNow, "the reserve script's now is b.clock() — 2031, never wall-clock")
+}
+
+// §9.5's exclusion: the HTTP client's own clock stays wall-clock — it mints
+// the service assertion's iat/exp, and a fake clock there would produce JWTs
+// the verifier rejects. Proven on the client NewCanonicalWalletBridge builds.
+func TestNewCanonicalWalletBridgeClientStaysOnWallClock(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.CanonicalWallet = canonicalWalletTestConfig(config.CanonicalWalletModeShadow)
+	b := NewCanonicalWalletBridge(cfg, &canonicalWalletStoreStub{}, nil, nil)
+	require.NotNil(t, b)
+	client, ok := b.control.(*canonicalWalletHTTPClient)
+	require.True(t, ok, "NewCanonicalWalletBridge wires the HTTP client")
+	assertion, err := client.serviceAssertion(canonicalWalletLeaseScope)
+	require.NoError(t, err)
+	claims := jwt.MapClaims{}
+	token, err := jwt.ParseWithClaims(strings.TrimPrefix(assertion, "Bearer "), claims, func(token *jwt.Token) (any, error) {
+		return []byte(strings.Repeat("w", 32)), nil
+	})
+	require.NoError(t, err)
+	require.True(t, token.Valid)
+	iat, _ := claims.GetIssuedAt()
+	require.NotNil(t, iat)
+	require.LessOrEqual(t, time.Since(iat.Time), 5*time.Second, "iat is minted on wall-clock, not the bridge clock")
 }
 
 func TestPhase34ProtoCallerSlotTTLIsWiredFromGatewayConfig(t *testing.T) {

@@ -21,7 +21,7 @@ func NewLiveProvisionalStoreForTest(db *sql.DB) LiveProvisionalStore {
 }
 
 func NewCanonicalWalletBridgeForTest(cfg config.CanonicalWalletConfig, store CanonicalWalletLeaseStore, control canonicalWalletControlPlane, outboxDB *sql.DB, outbox CanonicalWalletOutboxStore) *CanonicalWalletBridge {
-	return newCanonicalWalletBridge(cfg, store, control, outboxDB, outbox, 0)
+	return newCanonicalWalletBridge(cfg, store, control, outboxDB, outbox, 0, nil)
 }
 
 func HashLiveCallIDForTest(callID string) string {

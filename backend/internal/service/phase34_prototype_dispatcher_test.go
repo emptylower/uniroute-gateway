@@ -22,9 +22,9 @@ func p34DispatcherBridge(t *testing.T, fake *fakeEnsureControlPlane, store Canon
 	cfg.LeaseBudgetUnits = 500_000_000
 	client := newCanonicalWalletHTTPClient(cfg, fake.Server.Client())
 	client.now = func() time.Time { return now }
-	b := newCanonicalWalletBridge(cfg, store, client, db, outbox, 0)
-	b.now = func() time.Time { return now } // set after the goroutine starts — see Known limits
-	return b
+	// §9.5: the clock goes through the CONSTRUCTOR — the dispatcher goroutine
+	// sees it from its first tick (the old post-construction assignment raced it).
+	return newCanonicalWalletBridge(cfg, store, client, db, outbox, 0, func() time.Time { return now })
 }
 
 // p34WaitOutboxStatus polls the row (status values are the strings
