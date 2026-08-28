@@ -330,13 +330,13 @@ func TestAuthorizeBillableAttemptFacadesAreNilSafe(t *testing.T) {
 func TestEnsureLeaseRejectsMissingDependenciesAndNilGrant(t *testing.T) {
 	// A bridge without its store/control dependencies fails closed.
 	broken := &CanonicalWalletBridge{}
-	_, err := broken.ensureLease(context.Background(), "user-1", "CNY", 1)
+	_, err := broken.ensureLease(context.Background(), "user-1", "CNY", 1, canonicalWalletLeasePurposeAuthorize, "")
 	require.Error(t, err)
 
 	// A (nil, nil) grant from the control plane is named, not a nil deref.
 	b, store, control := newBridgeForEnsureLeaseTest(t)
 	control.nilLease = true
-	_, err = b.ensureLease(context.Background(), "user-1", "CNY", 1)
+	_, err = b.ensureLease(context.Background(), "user-1", "CNY", 1, canonicalWalletLeasePurposeAuthorize, "")
 	require.ErrorIs(t, err, ErrCanonicalWalletLeaseMissing)
 	require.Equal(t, 0, store.installCalls)
 }

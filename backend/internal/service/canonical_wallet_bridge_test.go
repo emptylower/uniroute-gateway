@@ -209,7 +209,7 @@ func TestEnsureLeaseRejectsGrantBelowAmount(t *testing.T) {
 	// budget is below the amount being authorized (spec §2.0.1 step (3)).
 	b, store, control := newBridgeForEnsureLeaseTest(t)
 	control.lease = CanonicalWalletLease{LeaseID: "lease-1", Currency: "CNY", BudgetUnits: 100_000_000, ConsumedUnits: 0, ExpiresAt: time.Now().Add(5 * time.Minute)}
-	_, err := b.ensureLease(context.Background(), "user-1", "CNY", 200_000_000)
+	_, err := b.ensureLease(context.Background(), "user-1", "CNY", 200_000_000, canonicalWalletLeasePurposeAuthorize, "")
 	require.ErrorIs(t, err, ErrCanonicalWalletBalanceShortfall)
 	require.Equal(t, 0, store.installCalls, "a rejected grant is never installed")
 }
@@ -217,7 +217,7 @@ func TestEnsureLeaseRejectsGrantBelowAmount(t *testing.T) {
 func TestEnsureLeaseRejectsExpiredGrant(t *testing.T) {
 	b, store, control := newBridgeForEnsureLeaseTest(t)
 	control.lease = CanonicalWalletLease{LeaseID: "lease-1", Currency: "CNY", BudgetUnits: 500_000_000, ExpiresAt: time.Now().Add(-time.Second)}
-	_, err := b.ensureLease(context.Background(), "user-1", "CNY", 1_000_000)
+	_, err := b.ensureLease(context.Background(), "user-1", "CNY", 1_000_000, canonicalWalletLeasePurposeAuthorize, "")
 	require.ErrorIs(t, err, ErrCanonicalWalletLeaseExpired)
 	require.Equal(t, 0, store.installCalls)
 }
@@ -227,7 +227,7 @@ func TestEnsureLeaseAcceptsGrantBelowBudgetButAboveAmount(t *testing.T) {
 	// only a lease below the AMOUNT is rejected (index 3.3 exit).
 	b, store, control := newBridgeForEnsureLeaseTest(t)
 	control.lease = CanonicalWalletLease{LeaseID: "lease-1", Currency: "CNY", BudgetUnits: 3_000_000, ExpiresAt: time.Now().Add(5 * time.Minute)}
-	lease, err := b.ensureLease(context.Background(), "user-1", "CNY", 1_000_000)
+	lease, err := b.ensureLease(context.Background(), "user-1", "CNY", 1_000_000, canonicalWalletLeasePurposeAuthorize, "")
 	require.NoError(t, err)
 	require.Equal(t, "lease-1", lease.LeaseID)
 	require.Equal(t, 1, store.installCalls)

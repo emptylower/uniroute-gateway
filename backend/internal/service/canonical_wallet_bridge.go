@@ -431,6 +431,8 @@ type canonicalWalletMetrics struct {
 	queued                atomic.Int64
 	queueDropped          atomic.Int64
 	leaseAcquireOK        atomic.Int64
+	leaseIssued           atomic.Int64
+	leaseReused           atomic.Int64
 	leaseGrantBelowAmount atomic.Int64
 	leaseGrantExpired     atomic.Int64
 	leaseAcquireError     atomic.Int64
@@ -451,6 +453,7 @@ func CanonicalWalletBridgeStats() map[string]int64 {
 	return map[string]int64{
 		"queued": m.queued.Load(), "queue_dropped": m.queueDropped.Load(),
 		"lease_acquire_ok": m.leaseAcquireOK.Load(), "lease_acquire_error": m.leaseAcquireError.Load(),
+		"lease_issued": m.leaseIssued.Load(), "lease_reused": m.leaseReused.Load(),
 		"lease_grant_below_amount": m.leaseGrantBelowAmount.Load(), "lease_grant_expired": m.leaseGrantExpired.Load(),
 		"lease_bind_error": m.leaseBindError.Load(),
 		"reserve_ok":       m.reserveOK.Load(), "reserve_error": m.reserveError.Load(),
@@ -611,13 +614,10 @@ func (b *CanonicalWalletBridge) CheckAndReserve(ctx context.Context, event Canon
 	}
 	var lease *CanonicalWalletLease
 	var err error
-	if strings.TrimSpace(event.LeaseID) != "" {
-		// A retry supplies the exact lease id it was reserved against the
-		// first time — resolve THAT lease specifically.
-		lease, err = b.store.GetCanonicalWalletLeaseByID(ctx, event.PlatformUserID, event.LeaseID)
-	} else {
-		lease, err = b.ensureLease(ctx, event.PlatformUserID, event.Currency, event.AmountUnits)
-	}
+	// Phase 3.4: the explicit-id branch now lives inside ensureLease — on a
+	// miss the retry recovers through prefer_lease_id (redesign §4) instead
+	// of failing with ErrCanonicalWalletLeaseMissing.
+	lease, err = b.ensureLease(ctx, event.PlatformUserID, event.Currency, event.AmountUnits, canonicalWalletLeasePurposeAuthorize, strings.TrimSpace(event.LeaseID))
 	if err != nil {
 		if b.cfg.Mode == config.CanonicalWalletModeShadow {
 			return true, nil
@@ -869,7 +869,7 @@ func canonicalWalletLeaseBindingIsStale(err error) bool {
 // a money bug rather than a delay. Do not reintroduce a relative TTL here.
 func (b *CanonicalWalletBridge) resolveOutboxEventLease(ctx context.Context, e CanonicalWalletOutboxEvent) (*CanonicalWalletLease, error) {
 	if e.LeaseID == "" {
-		return b.ensureLease(ctx, e.PlatformUserID, e.Currency, e.AmountUnits)
+		return b.ensureLease(ctx, e.PlatformUserID, e.Currency, e.AmountUnits, canonicalWalletLeasePurposeSettle, "")
 	}
 	if b.store == nil {
 		return nil, errors.New("canonical wallet bridge dependencies unavailable")
@@ -881,55 +881,104 @@ func (b *CanonicalWalletBridge) resolveOutboxEventLease(ctx context.Context, e C
 		// marker somewhere.
 		return nil, err
 	}
-	if err == nil && lease != nil && lease.Currency == e.Currency && !b.leaseExpiredAt(lease, b.clock()) {
+	if errors.Is(err, ErrCanonicalWalletLeaseMissing) {
+		// Phase 3.4 (redesign §4): a MISSING bound lease recovers through
+		// prefer_lease_id instead of failing the delivery. Inside ensureLease
+		// this tries GetByID once more — a second harmless miss — then sends
+		// prefer_lease_id with no drain.
+		return b.ensureLease(ctx, e.PlatformUserID, e.Currency, e.AmountUnits, canonicalWalletLeasePurposeSettle, e.LeaseID)
+	}
+	if lease != nil && lease.Currency == e.Currency && !b.leaseExpiredAt(lease, b.clock()) {
 		return lease, nil
 	}
-	return b.ensureLease(ctx, e.PlatformUserID, e.Currency, e.AmountUnits)
+	return b.ensureLease(ctx, e.PlatformUserID, e.Currency, e.AmountUnits, canonicalWalletLeasePurposeSettle, "")
 }
 
-func (b *CanonicalWalletBridge) ensureLease(ctx context.Context, platformUserID, currency string, amountUnits int64) (*CanonicalWalletLease, error) {
+// ensureLease (Phase 3.4, redesign §4) is cache-then-ensure. It reads the
+// cached lease — the user's current lease, or on the explicit-id branch the
+// lease named by preferLeaseID — and returns it when it covers the ask
+// (currency, expiry beyond the skew margin, remaining ≥ amount). On the
+// explicit-id branch a lease that EXISTS is returned as-is regardless of
+// cover: the caller is a retry whose reservation marker lives on that lease,
+// and the reserve script's duplicate check (which runs before its budget
+// check) resolves it; sealing or replacing it here would send the retry to a
+// different lease and manufacture a cross-lease conflict. §4's only change to
+// that branch is "on a miss it calls ensure with prefer_lease_id". Otherwise
+// the non-covering lease in hand is SEALED (§3.3) and sent as the drained
+// entry with the pre-seal consumed, and the control plane's ensure answers
+// reused or issued under its own transaction order — no window idempotency
+// key, no epoch. Refusals arrive as the named errors; the grant is installed
+// under the existing monotone rule with consumed = budget − headroom_units.
+// No hold is armed here.
+func (b *CanonicalWalletBridge) ensureLease(ctx context.Context, platformUserID, currency string, amountUnits int64, purpose canonicalWalletLeasePurpose, preferLeaseID string) (*CanonicalWalletLease, error) {
 	if b.store == nil || b.control == nil {
 		return nil, errors.New("canonical wallet bridge dependencies unavailable")
 	}
-	lease, err := b.store.GetCanonicalWalletLease(ctx, platformUserID)
-	if b.leaseCovers(lease, currency, amountUnits, b.clock()) {
-		return lease, nil
+	now := b.clock()
+	var cached *CanonicalWalletLease
+	var err error
+	if preferLeaseID != "" {
+		cached, err = b.store.GetCanonicalWalletLeaseByID(ctx, platformUserID, preferLeaseID)
+		if err == nil && cached != nil {
+			return cached, nil // explicit-id branch: the lease exists → the reserve script decides
+		}
+	} else {
+		cached, err = b.store.GetCanonicalWalletLease(ctx, platformUserID)
 	}
-	// Phase 3.4 (Task 3a minimal adaptation): the v1 acquire call and its
-	// units→micros ceiling conversion are gone — the ensure wire is
-	// units-native and the server takes max(requested_budget, min_headroom).
-	result, err := b.control.EnsureLease(ctx, canonicalWalletEnsureRequest{
-		PlatformUserID: platformUserID, Currency: currency, Purpose: string(canonicalWalletLeasePurposeAuthorize),
-		MinHeadroomUnits: amountUnits, RequestedBudgetUnits: b.cfg.LeaseBudgetUnits,
-		RequestedTTLSeconds: b.cfg.LeaseTTLSeconds, CallerSlotTTLSeconds: b.callerSlotTTLSeconds,
-	})
+	if err != nil && !errors.Is(err, ErrCanonicalWalletLeaseMissing) {
+		return nil, err // a Redis transport failure is not a miss
+	}
+	if err != nil {
+		cached = nil
+	}
+	if b.leaseCovers(cached, currency, amountUnits, now) {
+		return cached, nil
+	}
+	request := canonicalWalletEnsureRequest{
+		PlatformUserID: strings.TrimSpace(platformUserID), Currency: currency, Purpose: string(purpose),
+		MinHeadroomUnits: amountUnits, RequestedBudgetUnits: b.cfg.LeaseBudgetUnits, RequestedTTLSeconds: b.cfg.LeaseTTLSeconds,
+		PreferLeaseID: preferLeaseID, CallerSlotTTLSeconds: b.callerSlotTTLSeconds,
+	}
+	if cached != nil {
+		preSealConsumed, sealErr := b.store.SealCanonicalWalletLease(ctx, platformUserID, cached.LeaseID)
+		if sealErr != nil && !errors.Is(sealErr, ErrCanonicalWalletLeaseMissing) {
+			return nil, sealErr
+		}
+		if sealErr == nil {
+			request.Drained = []canonicalWalletDrainEntry{{LeaseID: cached.LeaseID, GatewayConsumedUnits: preSealConsumed}}
+		}
+	}
+	result, err := b.control.EnsureLease(ctx, request)
 	if err != nil {
 		return nil, err
 	}
 	if result == nil {
-		return nil, ErrCanonicalWalletLeaseMissing // a (nil, nil) grant was a latent nil deref one line later; name it
+		return nil, ErrCanonicalWalletLeaseMissing
 	}
-	lease = &result.Lease
-	now := b.clock()
-	if b.leaseExpiredAt(lease, now) {
+	lease := result.Lease
+	if b.leaseExpiredAt(&lease, now) {
 		canonicalWalletBridgeMetrics.leaseGrantExpired.Add(1)
 		return nil, fmt.Errorf("%w: lease %s expired at %s", ErrCanonicalWalletLeaseExpired, lease.LeaseID, lease.ExpiresAt.UTC().Format(time.RFC3339Nano))
 	}
 	if lease.RemainingUnits() < amountUnits {
+		// Shares ErrCanonicalWalletBalanceShortfall with the server's
+		// insufficient_balance refusal. Against a §3-conformant server this
+		// guard is unreachable (ensure never answers below min_headroom_units);
+		// 3.4a separates the two (lease_grant_below_amount vs
+		// insufficient_balance) before the dispatcher's dead-letter runs unflagged.
 		canonicalWalletBridgeMetrics.leaseGrantBelowAmount.Add(1)
-		// Dispatcher consequence: on the outbox path (resolveOutboxEventLease)
-		// this error fails the delivery attempt like any other ensureLease
-		// error today — retried on the backoff and moved to dead_letter after
-		// walletOutboxMaxAttempts. The terminal balance_shortfall dead-letter
-		// classification on the first occurrence is 3.4a's (it needs the
-		// issuance row to tell clamped from undersized).
 		return nil, fmt.Errorf("%w: granted %d units, %d required", ErrCanonicalWalletBalanceShortfall, lease.RemainingUnits(), amountUnits)
 	}
-	if err := b.store.InstallCanonicalWalletLease(ctx, *lease); err != nil {
+	if err := b.store.InstallCanonicalWalletLease(ctx, lease); err != nil {
 		return nil, err
 	}
 	canonicalWalletBridgeMetrics.leaseAcquireOK.Add(1)
-	return lease, nil
+	if result.Outcome == "issued" {
+		canonicalWalletBridgeMetrics.leaseIssued.Add(1)
+	} else {
+		canonicalWalletBridgeMetrics.leaseReused.Add(1)
+	}
+	return &lease, nil
 }
 
 func CanonicalWalletSettlementEventID(requestID, platformUserID, currency string) string {

@@ -96,7 +96,7 @@ func (a *CanonicalWalletAuthorizer) Authorize(ctx context.Context, in AuthorizeI
 	}
 	leaseCtx, cancel := context.WithTimeout(ctx, a.requestTimeout())
 	defer cancel()
-	lease, err := a.bridge.ensureLease(leaseCtx, in.User.PlatformUserID, currency, units)
+	lease, err := a.bridge.ensureLease(leaseCtx, in.User.PlatformUserID, currency, units, canonicalWalletLeasePurposeAuthorize, "")
 	if err != nil {
 		if errors.Is(err, ErrCanonicalWalletBalanceShortfall) {
 			authorizationMetrics.balanceShortfall.Add(1)
