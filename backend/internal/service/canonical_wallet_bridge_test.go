@@ -29,6 +29,23 @@ type canonicalWalletStoreStub struct {
 	// neverPersist (review note M3): InstallCanonicalWalletLease becomes a
 	// no-op so benchmark iterations keep missing.
 	neverPersist bool
+	// holds (Phase 3.4b, Task 2): the recording hold map the unit authorizer
+	// tests drive — arm/release/convert/mark-class with the scripts' branch
+	// semantics over in-memory state, plus the counters test 29's unit half
+	// asserts.
+	holds         map[string]*CanonicalWalletHold
+	armCalls      int
+	armErr        error // when non-nil, ArmCanonicalWalletHold refuses with it (the {4} leg)
+	releasedUnits int64 // per-lease released figure the release/convert stubs raise
+	holdUsers     map[string]bool
+	emptyMarkers  map[string]bool
+}
+
+func (s *canonicalWalletStoreStub) holdMap() map[string]*CanonicalWalletHold {
+	if s.holds == nil {
+		s.holds = map[string]*CanonicalWalletHold{}
+	}
+	return s.holds
 }
 
 func (s *canonicalWalletStoreStub) InstallCanonicalWalletLease(_ context.Context, lease CanonicalWalletLease) error {
@@ -68,15 +85,154 @@ func (s *canonicalWalletStoreStub) ReserveCanonicalWalletLease(_ context.Context
 	return &CanonicalWalletReservation{Lease: copy}, nil
 }
 
-func (s *canonicalWalletStoreStub) SealCanonicalWalletLease(_ context.Context, _, leaseID string) (int64, error) {
+func (s *canonicalWalletStoreStub) SealCanonicalWalletLease(_ context.Context, _, leaseID string) (int64, int64, error) {
 	if s.lease == nil || s.lease.LeaseID != leaseID {
-		return 0, ErrCanonicalWalletLeaseMissing
+		return 0, 0, ErrCanonicalWalletLeaseMissing
 	}
 	pre := s.lease.ConsumedUnits
+	released := s.releasedUnits
 	sealed := *s.lease
 	sealed.ConsumedUnits = sealed.BudgetUnits
 	s.lease = &sealed
-	return pre, nil
+	return pre, released, nil
+}
+
+func (s *canonicalWalletStoreStub) ArmCanonicalWalletHold(_ context.Context, platformUserID, leaseID, _, authorizationID string, units int64, _ int64, now time.Time) (string, int64, bool, error) {
+	s.armCalls++
+	if s.armErr != nil {
+		return "", 0, false, s.armErr
+	}
+	if existing, ok := s.holdMap()[authorizationID]; ok {
+		return existing.LeaseID, existing.HeldUnits, true, nil
+	}
+	if s.lease != nil {
+		copy := *s.lease
+		copy.ConsumedUnits += units
+		s.lease = &copy
+	}
+	s.holdMap()[authorizationID] = &CanonicalWalletHold{
+		AuthorizationID: authorizationID, LeaseID: leaseID, HeldUnits: units, ArmedAt: now, State: "armed",
+	}
+	if s.holdUsers == nil {
+		s.holdUsers = map[string]bool{}
+	}
+	s.holdUsers[platformUserID] = true
+	return leaseID, units, false, nil
+}
+
+func (s *canonicalWalletStoreStub) ReleaseCanonicalWalletHold(_ context.Context, _, authorizationID, stateAfter, classAfter string) (int64, error) {
+	hold, ok := s.holdMap()[authorizationID]
+	if !ok {
+		return 0, ErrCanonicalWalletHoldMissing
+	}
+	if hold.State != "armed" {
+		return 0, &CanonicalWalletHoldNotArmedError{State: hold.State, EventID: hold.EventID}
+	}
+	s.releasedUnits += hold.HeldUnits
+	hold.State = stateAfter
+	if classAfter != "" {
+		hold.Class = classAfter
+	}
+	return hold.HeldUnits, nil
+}
+
+func (s *canonicalWalletStoreStub) ConvertCanonicalWalletHold(_ context.Context, _, authorizationID, eventID string, actualUnits int64, _ time.Time) (CanonicalWalletHoldConversion, error) {
+	hold, ok := s.holdMap()[authorizationID]
+	if !ok {
+		return CanonicalWalletHoldConversion{Code: 1}, nil
+	}
+	if hold.State != "armed" {
+		return CanonicalWalletHoldConversion{Code: 7, State: hold.State, EventID: hold.EventID}, nil
+	}
+	if actualUnits <= hold.HeldUnits {
+		s.releasedUnits += hold.HeldUnits - actualUnits
+		hold.State = "settled"
+		hold.EventID = eventID
+		return CanonicalWalletHoldConversion{Code: 0, LeaseID: hold.LeaseID}, nil
+	}
+	excess := actualUnits - hold.HeldUnits
+	if s.lease != nil && s.lease.ConsumedUnits-s.releasedUnits+excess <= s.lease.BudgetUnits {
+		copy := *s.lease
+		copy.ConsumedUnits += excess
+		s.lease = &copy
+		hold.State = "settled"
+		hold.EventID = eventID
+		return CanonicalWalletHoldConversion{Code: 0, LeaseID: hold.LeaseID}, nil
+	}
+	s.releasedUnits += hold.HeldUnits
+	hold.State = "released"
+	return CanonicalWalletHoldConversion{Code: 4}, nil
+}
+
+func (s *canonicalWalletStoreStub) GetCanonicalWalletHold(_ context.Context, _, authorizationID string) (*CanonicalWalletHold, error) {
+	hold, ok := s.holdMap()[authorizationID]
+	if !ok {
+		return nil, ErrCanonicalWalletHoldMissing
+	}
+	copy := *hold
+	return &copy, nil
+}
+
+func (s *canonicalWalletStoreStub) ListCanonicalWalletHolds(_ context.Context, _ string, limit int) ([]string, error) {
+	var ids []string
+	for id := range s.holdMap() {
+		ids = append(ids, id)
+		if limit > 0 && len(ids) >= limit {
+			break
+		}
+	}
+	return ids, nil
+}
+
+func (s *canonicalWalletStoreStub) ListCanonicalWalletHoldUsers(_ context.Context, _ uint64, _ int64) ([]string, uint64, error) {
+	var users []string
+	for u := range s.holdUsers {
+		users = append(users, u)
+	}
+	return users, 0, nil
+}
+
+func (s *canonicalWalletStoreStub) PruneCanonicalWalletHoldUser(_ context.Context, platformUserID string) error {
+	delete(s.holdUsers, platformUserID)
+	return nil
+}
+
+func (s *canonicalWalletStoreStub) TryCanonicalWalletReaperLease(context.Context, time.Duration) (bool, error) {
+	return true, nil
+}
+
+func (s *canonicalWalletStoreStub) ForgetCanonicalWalletHold(_ context.Context, _, authorizationID string) error {
+	// SREM-only on the real store; the recording stub drops the hold so
+	// repeated sweeps stay finite in unit tests.
+	delete(s.holdMap(), authorizationID)
+	return nil
+}
+
+func (s *canonicalWalletStoreStub) MarkCanonicalWalletHoldUserEmpty(_ context.Context, platformUserID string, _ time.Duration) (bool, error) {
+	if s.emptyMarkers == nil {
+		s.emptyMarkers = map[string]bool{}
+	}
+	seen := s.emptyMarkers[platformUserID]
+	s.emptyMarkers[platformUserID] = true
+	return seen, nil
+}
+
+func (s *canonicalWalletStoreStub) ClearCanonicalWalletHoldUserEmpty(_ context.Context, platformUserID string) error {
+	delete(s.emptyMarkers, platformUserID)
+	return nil
+}
+
+func (s *canonicalWalletStoreStub) MarkCanonicalWalletHoldClass(_ context.Context, _, authorizationID, class string) (*CanonicalWalletHold, error) {
+	hold, ok := s.holdMap()[authorizationID]
+	if !ok {
+		return nil, ErrCanonicalWalletHoldMissing
+	}
+	if hold.State != "armed" {
+		return nil, &CanonicalWalletHoldNotArmedError{State: hold.State, EventID: hold.EventID}
+	}
+	hold.Class = class
+	copy := *hold
+	return &copy, nil
 }
 
 type canonicalWalletControlStub struct {

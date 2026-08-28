@@ -328,6 +328,47 @@ func (s *stubWalletLeaseStore) ReserveCanonicalWalletLease(ctx context.Context, 
 	}, nil
 }
 
+// Phase 3.4b (Task 2): the hold surface is not driven by any handler test —
+// not-implemented stubs keep the (partial) lease-store surface loud. (This
+// stub never carried SealCanonicalWalletLease either; ProvideBillingCacheService's
+// type assertion therefore does not select it.)
+func (s *stubWalletLeaseStore) ArmCanonicalWalletHold(context.Context, string, string, string, string, int64, int64, time.Time) (string, int64, bool, error) {
+	return "", 0, false, errors.New("not implemented in this stub")
+}
+func (s *stubWalletLeaseStore) ReleaseCanonicalWalletHold(context.Context, string, string, string, string) (int64, error) {
+	return 0, errors.New("not implemented in this stub")
+}
+func (s *stubWalletLeaseStore) ConvertCanonicalWalletHold(context.Context, string, string, string, int64, time.Time) (service.CanonicalWalletHoldConversion, error) {
+	return service.CanonicalWalletHoldConversion{}, errors.New("not implemented in this stub")
+}
+func (s *stubWalletLeaseStore) GetCanonicalWalletHold(context.Context, string, string) (*service.CanonicalWalletHold, error) {
+	return nil, errors.New("not implemented in this stub")
+}
+func (s *stubWalletLeaseStore) ListCanonicalWalletHolds(context.Context, string, int) ([]string, error) {
+	return nil, errors.New("not implemented in this stub")
+}
+func (s *stubWalletLeaseStore) ListCanonicalWalletHoldUsers(context.Context, uint64, int64) ([]string, uint64, error) {
+	return nil, 0, errors.New("not implemented in this stub")
+}
+func (s *stubWalletLeaseStore) PruneCanonicalWalletHoldUser(context.Context, string) error {
+	return errors.New("not implemented in this stub")
+}
+func (s *stubWalletLeaseStore) TryCanonicalWalletReaperLease(context.Context, time.Duration) (bool, error) {
+	return false, errors.New("not implemented in this stub")
+}
+func (s *stubWalletLeaseStore) ForgetCanonicalWalletHold(context.Context, string, string) error {
+	return errors.New("not implemented in this stub")
+}
+func (s *stubWalletLeaseStore) MarkCanonicalWalletHoldUserEmpty(context.Context, string, time.Duration) (bool, error) {
+	return false, errors.New("not implemented in this stub")
+}
+func (s *stubWalletLeaseStore) ClearCanonicalWalletHoldUserEmpty(context.Context, string) error {
+	return errors.New("not implemented in this stub")
+}
+func (s *stubWalletLeaseStore) MarkCanonicalWalletHoldClass(context.Context, string, string, string) (*service.CanonicalWalletHold, error) {
+	return nil, errors.New("not implemented in this stub")
+}
+
 type openAIWSRefusalReportingAccountRepoStub struct {
 	openAIWSFailoverHandlerAccountRepoStub
 	reportedFailure *atomic.Bool

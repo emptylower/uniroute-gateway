@@ -245,6 +245,7 @@ var testReserveCanonicalWalletLeaseScript = redis.NewScript(`
 	local currency = redis.call('HGET', KEYS[1], 'currency')
 	local budget = tonumber(redis.call('HGET', KEYS[1], 'budget_units') or '0')
 	local consumed = tonumber(redis.call('HGET', KEYS[1], 'consumed_units') or '0')
+	local released = tonumber(redis.call('HGET', KEYS[1], 'released_units') or '0')
 	local expires_at = tonumber(redis.call('HGET', KEYS[1], 'expires_at_ms') or '0')
 	if currency ~= ARGV[1] then return {2} end
 	if expires_at <= tonumber(ARGV[4]) then return {3} end
@@ -256,7 +257,7 @@ var testReserveCanonicalWalletLeaseScript = redis.NewScript(`
 		return {6}
 	end
 	local amount = tonumber(ARGV[2])
-	if amount <= 0 or consumed + amount > budget then return {4} end
+	if amount <= 0 or consumed - released + amount > budget then return {4} end
 	local updated = consumed + amount
 	redis.call('HSET', KEYS[1], 'consumed_units', updated)
 	-- ABSOLUTE deadline, matching the lease hash's own PEXPIREAT. A relative
@@ -274,12 +275,87 @@ var testSealCanonicalWalletLeaseScript = redis.NewScript(`
 	if redis.call('EXISTS', KEYS[1]) == 0 then return {1} end
 	local budget = tonumber(redis.call('HGET', KEYS[1], 'budget_units') or '0')
 	local consumed = tonumber(redis.call('HGET', KEYS[1], 'consumed_units') or '0')
+	local released = tonumber(redis.call('HGET', KEYS[1], 'released_units') or '0')
 	redis.call('HSET', KEYS[1], 'consumed_units', budget)
 	local current = redis.call('GET', KEYS[2])
 	if current ~= false and current == ARGV[1] then
 		redis.call('DEL', KEYS[2])
 	end
-	return {0, consumed}
+	return {0, consumed, released}
+`)
+
+var testArmCanonicalWalletHoldScript = redis.NewScript(`
+	if redis.call('EXISTS', KEYS[1]) == 0 then return {1} end
+	if redis.call('HGET', KEYS[1], 'currency') ~= ARGV[1] then return {2} end
+	local budget = tonumber(redis.call('HGET', KEYS[1], 'budget_units') or '0')
+	local consumed = tonumber(redis.call('HGET', KEYS[1], 'consumed_units') or '0')
+	local released = tonumber(redis.call('HGET', KEYS[1], 'released_units') or '0')
+	local expires_at = tonumber(redis.call('HGET', KEYS[1], 'expires_at_ms') or '0')
+	if expires_at <= tonumber(ARGV[3]) then return {3} end
+	if redis.call('EXISTS', KEYS[2]) == 1 then
+		return {5, redis.call('HGET', KEYS[2], 'lease_id'), tonumber(redis.call('HGET', KEYS[2], 'held_units'))}
+	end
+	local units = tonumber(ARGV[2])
+	if units <= 0 or consumed - released + units > budget then return {4} end
+	redis.call('HSET', KEYS[1], 'consumed_units', consumed + units)
+	redis.call('HSET', KEYS[2], 'lease_id', redis.call('HGET', KEYS[1], 'lease_id'), 'held_units', units, 'armed_at_ms', ARGV[3], 'class', '', 'state', 'armed', 'event_id', '')
+	redis.call('PEXPIREAT', KEYS[2], expires_at + tonumber(ARGV[5]))
+	redis.call('SADD', KEYS[3], ARGV[4])
+	return {0, redis.call('HGET', KEYS[1], 'lease_id'), units}
+`)
+
+var testReleaseCanonicalWalletHoldScript = redis.NewScript(`
+	if redis.call('EXISTS', KEYS[1]) == 0 then return {1} end
+	if redis.call('HGET', KEYS[1], 'state') ~= 'armed' then return {7, redis.call('HGET', KEYS[1], 'state'), redis.call('HGET', KEYS[1], 'event_id')} end
+	local held = tonumber(redis.call('HGET', KEYS[1], 'held_units'))
+	if redis.call('EXISTS', KEYS[3]) == 1 then redis.call('HINCRBY', KEYS[3], 'released_units', held) end
+	redis.call('HSET', KEYS[1], 'state', ARGV[2])
+	if ARGV[3] ~= '' then redis.call('HSET', KEYS[1], 'class', ARGV[3]) end
+	redis.call('SREM', KEYS[2], ARGV[1])
+	return {0, held}
+`)
+
+var testConvertCanonicalWalletHoldScript = redis.NewScript(`
+	if redis.call('EXISTS', KEYS[1]) == 0 then return {1} end
+	local state = redis.call('HGET', KEYS[1], 'state')
+	if state ~= 'armed' then return {7, state, redis.call('HGET', KEYS[1], 'event_id')} end
+	local held = tonumber(redis.call('HGET', KEYS[1], 'held_units'))
+	local actual = tonumber(ARGV[3])
+	local lease_id = redis.call('HGET', KEYS[1], 'lease_id')
+	local lease_exists = redis.call('EXISTS', KEYS[3]) == 1
+	local expires_at = tonumber(redis.call('HGET', KEYS[3], 'expires_at_ms') or '0')
+	if actual <= held then
+		if lease_exists then
+			redis.call('HINCRBY', KEYS[3], 'released_units', held - actual)
+			redis.call('SET', KEYS[4], lease_id); redis.call('PEXPIREAT', KEYS[4], expires_at)
+		end
+		redis.call('HSET', KEYS[1], 'state', 'settled', 'event_id', ARGV[2]); redis.call('SREM', KEYS[2], ARGV[1])
+		if not lease_exists then return {3} end
+		return {0, lease_id}
+	end
+	local excess = actual - held
+	if lease_exists then
+		local budget = tonumber(redis.call('HGET', KEYS[3], 'budget_units') or '0')
+		local consumed = tonumber(redis.call('HGET', KEYS[3], 'consumed_units') or '0')
+		local released = tonumber(redis.call('HGET', KEYS[3], 'released_units') or '0')
+		if expires_at > tonumber(ARGV[4]) and consumed - released + excess <= budget then
+			redis.call('HINCRBY', KEYS[3], 'consumed_units', excess)
+			redis.call('SET', KEYS[4], lease_id); redis.call('PEXPIREAT', KEYS[4], expires_at)
+			redis.call('HSET', KEYS[1], 'state', 'settled', 'event_id', ARGV[2]); redis.call('SREM', KEYS[2], ARGV[1])
+			return {0, lease_id}
+		end
+		redis.call('HINCRBY', KEYS[3], 'released_units', held)
+	end
+	redis.call('HSET', KEYS[1], 'state', 'released'); redis.call('SREM', KEYS[2], ARGV[1])
+	return {4}
+`)
+
+var testMarkCanonicalWalletHoldClassScript = redis.NewScript(`
+	if redis.call('EXISTS', KEYS[1]) == 0 then return {1} end
+	local state = redis.call('HGET', KEYS[1], 'state')
+	if state ~= 'armed' then return {7, state, redis.call('HGET', KEYS[1], 'event_id')} end
+	redis.call('HSET', KEYS[1], 'class', ARGV[1])
+	return {0, ARGV[1]}
 `)
 
 func testCanonicalWalletUserHash(platformUserID string) string {
@@ -298,6 +374,22 @@ func testCanonicalWalletCurrentKey(platformUserID string) string {
 func testCanonicalWalletReservationKey(platformUserID, eventID string) string {
 	eventSum := sha256.Sum256([]byte(strings.TrimSpace(eventID)))
 	return "canonical_wallet:reservation:{" + testCanonicalWalletUserHash(platformUserID) + "}:" + hex.EncodeToString(eventSum[:])
+}
+
+const testCanonicalWalletHoldPrefix = "canonical_wallet:hold:"
+const testCanonicalWalletHoldSetPrefix = "canonical_wallet:holds:"
+const testCanonicalWalletHoldUsersKey = "canonical_wallet:hold_users"
+const testCanonicalWalletReaperTickKey = "canonical_wallet:reaper:tick"
+const testCanonicalWalletHoldUserEmptyPrefix = "canonical_wallet:holds_empty:"
+
+func testCanonicalWalletHoldKey(platformUserID, authorizationID string) string {
+	return testCanonicalWalletHoldPrefix + "{" + testCanonicalWalletUserHash(platformUserID) + "}:" + authorizationID
+}
+func testCanonicalWalletHoldSetKey(platformUserID string) string {
+	return testCanonicalWalletHoldSetPrefix + "{" + testCanonicalWalletUserHash(platformUserID) + "}"
+}
+func testCanonicalWalletHoldUserEmptyKey(platformUserID string) string {
+	return testCanonicalWalletHoldUserEmptyPrefix + "{" + testCanonicalWalletUserHash(platformUserID) + "}"
 }
 func testParseCanonicalWalletLease(values map[string]string) (*CanonicalWalletLease, error) {
 	budget, err := strconv.ParseInt(values["budget_units"], 10, 64)
@@ -434,31 +526,297 @@ func (c *gatewayCacheAdapterForTest) ReserveCanonicalWalletLease(ctx context.Con
 	}
 }
 
-func (c *gatewayCacheAdapterForTest) SealCanonicalWalletLease(ctx context.Context, platformUserID, leaseID string) (int64, error) {
+func (c *gatewayCacheAdapterForTest) SealCanonicalWalletLease(ctx context.Context, platformUserID, leaseID string) (int64, int64, error) {
 	if strings.TrimSpace(platformUserID) == "" || strings.TrimSpace(leaseID) == "" {
-		return 0, errors.New("canonical wallet seal requires a platform user id and a lease id")
+		return 0, 0, errors.New("canonical wallet seal requires a platform user id and a lease id")
 	}
 	result, err := testSealCanonicalWalletLeaseScript.Run(ctx, c.rdb,
 		[]string{testCanonicalWalletLeaseKey(platformUserID, leaseID), testCanonicalWalletCurrentKey(platformUserID)},
 		leaseID,
 	).Slice()
 	if err != nil {
+		return 0, 0, err
+	}
+	if len(result) == 0 {
+		return 0, 0, errors.New("canonical wallet seal returned no result")
+	}
+	code, err := testRedisResultInt64(result[0])
+	if err != nil {
+		return 0, 0, err
+	}
+	if code == 1 {
+		return 0, 0, ErrCanonicalWalletLeaseMissing
+	}
+	if len(result) != 3 {
+		return 0, 0, errors.New("canonical wallet seal returned an invalid result")
+	}
+	pre, err := testRedisResultInt64(result[1])
+	if err != nil {
+		return 0, 0, err
+	}
+	released, err := testRedisResultInt64(result[2])
+	if err != nil {
+		return 0, 0, err
+	}
+	return pre, released, nil
+}
+
+func (c *gatewayCacheAdapterForTest) ArmCanonicalWalletHold(ctx context.Context, platformUserID, leaseID, currency, authorizationID string, units int64, graceMS int64, now time.Time) (string, int64, bool, error) {
+	if strings.TrimSpace(platformUserID) == "" || strings.TrimSpace(leaseID) == "" || strings.TrimSpace(authorizationID) == "" || units <= 0 || graceMS < 0 {
+		return "", 0, false, errors.New("canonical wallet hold arm requires a platform user id, a lease id, an authorization id and positive units")
+	}
+	if err := ensureTestRedisLuaSafeInt64(units); err != nil {
+		return "", 0, false, err
+	}
+	strictCurrency, err := RequireCNYBillingCurrency(currency)
+	if err != nil {
+		return "", 0, false, err
+	}
+	result, err := testArmCanonicalWalletHoldScript.Run(ctx, c.rdb,
+		[]string{testCanonicalWalletLeaseKey(platformUserID, leaseID), testCanonicalWalletHoldKey(platformUserID, authorizationID), testCanonicalWalletHoldSetKey(platformUserID)},
+		strictCurrency, units, now.UnixMilli(), authorizationID, graceMS,
+	).Slice()
+	if err != nil {
+		return "", 0, false, err
+	}
+	if len(result) == 0 {
+		return "", 0, false, errors.New("canonical wallet hold arm returned no result")
+	}
+	code, err := testRedisResultInt64(result[0])
+	if err != nil {
+		return "", 0, false, err
+	}
+	switch code {
+	case 1:
+		return "", 0, false, ErrCanonicalWalletLeaseMissing
+	case 2:
+		return "", 0, false, ErrCanonicalWalletLeaseCurrencyMismatch
+	case 3:
+		return "", 0, false, ErrCanonicalWalletLeaseExpired
+	case 4:
+		return "", 0, false, ErrCanonicalWalletLeaseExhausted
+	case 5:
+		if len(result) != 3 {
+			return "", 0, false, errors.New("canonical wallet hold arm returned an invalid duplicate reply")
+		}
+		held, err := testRedisResultInt64(result[2])
+		if err != nil {
+			return "", 0, false, err
+		}
+		return fmt.Sprint(result[1]), held, true, nil
+	case 0:
+		if len(result) != 3 {
+			return "", 0, false, errors.New("canonical wallet hold arm returned an invalid reply")
+		}
+		held, err := testRedisResultInt64(result[2])
+		if err != nil {
+			return "", 0, false, err
+		}
+		if err := c.rdb.SAdd(ctx, testCanonicalWalletHoldUsersKey, strings.TrimSpace(platformUserID)).Err(); err != nil {
+			return "", 0, false, err
+		}
+		return fmt.Sprint(result[1]), held, false, nil
+	default:
+		return "", 0, false, fmt.Errorf("unknown canonical wallet hold arm code %d", code)
+	}
+}
+
+func (c *gatewayCacheAdapterForTest) ReleaseCanonicalWalletHold(ctx context.Context, platformUserID, authorizationID, stateAfter, classAfter string) (int64, error) {
+	if strings.TrimSpace(platformUserID) == "" || strings.TrimSpace(authorizationID) == "" {
+		return 0, errors.New("canonical wallet hold release requires a platform user id and an authorization id")
+	}
+	if stateAfter != "released" && stateAfter != "abandoned" {
+		return 0, errors.New("canonical wallet hold release state_after must be released or abandoned")
+	}
+	leaseID, err := c.rdb.HGet(ctx, testCanonicalWalletHoldKey(platformUserID, authorizationID), "lease_id").Result()
+	if err == redis.Nil {
+		return 0, ErrCanonicalWalletHoldMissing
+	}
+	if err != nil {
+		return 0, err
+	}
+	result, err := testReleaseCanonicalWalletHoldScript.Run(ctx, c.rdb,
+		[]string{testCanonicalWalletHoldKey(platformUserID, authorizationID), testCanonicalWalletHoldSetKey(platformUserID), testCanonicalWalletLeaseKey(platformUserID, leaseID)},
+		authorizationID, stateAfter, classAfter,
+	).Slice()
+	if err != nil {
 		return 0, err
 	}
 	if len(result) == 0 {
-		return 0, errors.New("canonical wallet seal returned no result")
+		return 0, errors.New("canonical wallet hold release returned no result")
 	}
 	code, err := testRedisResultInt64(result[0])
 	if err != nil {
 		return 0, err
 	}
-	if code == 1 {
-		return 0, ErrCanonicalWalletLeaseMissing
+	switch code {
+	case 1:
+		return 0, ErrCanonicalWalletHoldMissing
+	case 7:
+		state := fmt.Sprint(result[1])
+		eventID := ""
+		if len(result) > 2 {
+			eventID = fmt.Sprint(result[2])
+		}
+		return 0, &CanonicalWalletHoldNotArmedError{State: state, EventID: eventID}
+	case 0:
+		if len(result) != 2 {
+			return 0, errors.New("canonical wallet hold release returned an invalid reply")
+		}
+		return testRedisResultInt64(result[1])
+	default:
+		return 0, fmt.Errorf("unknown canonical wallet hold release code %d", code)
 	}
-	if len(result) != 2 {
-		return 0, errors.New("canonical wallet seal returned an invalid result")
+}
+
+func (c *gatewayCacheAdapterForTest) ConvertCanonicalWalletHold(ctx context.Context, platformUserID, authorizationID, eventID string, actualUnits int64, now time.Time) (CanonicalWalletHoldConversion, error) {
+	if strings.TrimSpace(platformUserID) == "" || strings.TrimSpace(authorizationID) == "" || strings.TrimSpace(eventID) == "" || actualUnits < 0 {
+		return CanonicalWalletHoldConversion{}, errors.New("canonical wallet hold convert requires a platform user id, an authorization id, an event id and non-negative units")
 	}
-	return testRedisResultInt64(result[1])
+	if err := ensureTestRedisLuaSafeInt64(actualUnits); err != nil {
+		return CanonicalWalletHoldConversion{}, err
+	}
+	leaseID, err := c.rdb.HGet(ctx, testCanonicalWalletHoldKey(platformUserID, authorizationID), "lease_id").Result()
+	if err == redis.Nil {
+		return CanonicalWalletHoldConversion{Code: 1}, nil
+	}
+	if err != nil {
+		return CanonicalWalletHoldConversion{}, err
+	}
+	result, err := testConvertCanonicalWalletHoldScript.Run(ctx, c.rdb,
+		[]string{
+			testCanonicalWalletHoldKey(platformUserID, authorizationID), testCanonicalWalletHoldSetKey(platformUserID),
+			testCanonicalWalletLeaseKey(platformUserID, leaseID), testCanonicalWalletReservationKey(platformUserID, eventID),
+		},
+		authorizationID, eventID, actualUnits, now.UnixMilli(),
+	).Slice()
+	if err != nil {
+		return CanonicalWalletHoldConversion{}, err
+	}
+	if len(result) == 0 {
+		return CanonicalWalletHoldConversion{}, errors.New("canonical wallet hold convert returned no result")
+	}
+	code, err := testRedisResultInt64(result[0])
+	if err != nil {
+		return CanonicalWalletHoldConversion{}, err
+	}
+	conv := CanonicalWalletHoldConversion{Code: int(code)}
+	switch code {
+	case 0:
+		if len(result) != 2 {
+			return CanonicalWalletHoldConversion{}, errors.New("canonical wallet hold convert returned an invalid reply")
+		}
+		conv.LeaseID = fmt.Sprint(result[1])
+	case 7:
+		if len(result) != 3 {
+			return CanonicalWalletHoldConversion{}, errors.New("canonical wallet hold convert returned an invalid not-armed reply")
+		}
+		conv.State = fmt.Sprint(result[1])
+		conv.EventID = fmt.Sprint(result[2])
+	}
+	return conv, nil
+}
+
+func (c *gatewayCacheAdapterForTest) GetCanonicalWalletHold(ctx context.Context, platformUserID, authorizationID string) (*CanonicalWalletHold, error) {
+	values, err := c.rdb.HGetAll(ctx, testCanonicalWalletHoldKey(platformUserID, authorizationID)).Result()
+	if err != nil {
+		return nil, err
+	}
+	if len(values) == 0 {
+		return nil, ErrCanonicalWalletHoldMissing
+	}
+	held, err := strconv.ParseInt(values["held_units"], 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("parse canonical wallet hold units: %w", err)
+	}
+	armedAtMS, err := strconv.ParseInt(values["armed_at_ms"], 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("parse canonical wallet hold armed_at: %w", err)
+	}
+	return &CanonicalWalletHold{
+		AuthorizationID: authorizationID, LeaseID: values["lease_id"], HeldUnits: held,
+		ArmedAt: time.UnixMilli(armedAtMS).UTC(), Class: values["class"], State: values["state"], EventID: values["event_id"],
+	}, nil
+}
+
+func (c *gatewayCacheAdapterForTest) ListCanonicalWalletHolds(ctx context.Context, platformUserID string, limit int) ([]string, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	members, err := c.rdb.SMembers(ctx, testCanonicalWalletHoldSetKey(platformUserID)).Result()
+	if err != nil {
+		return nil, err
+	}
+	if len(members) > limit {
+		members = members[:limit]
+	}
+	return members, nil
+}
+
+func (c *gatewayCacheAdapterForTest) ListCanonicalWalletHoldUsers(ctx context.Context, cursor uint64, count int64) ([]string, uint64, error) {
+	if count <= 0 {
+		count = 100
+	}
+	return c.rdb.SScan(ctx, testCanonicalWalletHoldUsersKey, cursor, "", count).Result()
+}
+
+func (c *gatewayCacheAdapterForTest) PruneCanonicalWalletHoldUser(ctx context.Context, platformUserID string) error {
+	return c.rdb.SRem(ctx, testCanonicalWalletHoldUsersKey, strings.TrimSpace(platformUserID)).Err()
+}
+
+func (c *gatewayCacheAdapterForTest) TryCanonicalWalletReaperLease(ctx context.Context, ttl time.Duration) (bool, error) {
+	return c.rdb.SetNX(ctx, testCanonicalWalletReaperTickKey, "1", ttl).Result()
+}
+
+func (c *gatewayCacheAdapterForTest) ForgetCanonicalWalletHold(ctx context.Context, platformUserID, authorizationID string) error {
+	return c.rdb.SRem(ctx, testCanonicalWalletHoldSetKey(platformUserID), authorizationID).Err()
+}
+
+func (c *gatewayCacheAdapterForTest) MarkCanonicalWalletHoldUserEmpty(ctx context.Context, platformUserID string, ttl time.Duration) (bool, error) {
+	ok, err := c.rdb.SetNX(ctx, testCanonicalWalletHoldUserEmptyKey(platformUserID), "1", ttl).Result()
+	if err != nil {
+		return false, err
+	}
+	return !ok, nil
+}
+
+func (c *gatewayCacheAdapterForTest) ClearCanonicalWalletHoldUserEmpty(ctx context.Context, platformUserID string) error {
+	return c.rdb.Del(ctx, testCanonicalWalletHoldUserEmptyKey(platformUserID)).Err()
+}
+
+func (c *gatewayCacheAdapterForTest) MarkCanonicalWalletHoldClass(ctx context.Context, platformUserID, authorizationID, class string) (*CanonicalWalletHold, error) {
+	if strings.TrimSpace(platformUserID) == "" || strings.TrimSpace(authorizationID) == "" || strings.TrimSpace(class) == "" {
+		return nil, errors.New("canonical wallet hold mark-class requires a platform user id, an authorization id and a class")
+	}
+	result, err := testMarkCanonicalWalletHoldClassScript.Run(ctx, c.rdb,
+		[]string{testCanonicalWalletHoldKey(platformUserID, authorizationID)},
+		class,
+	).Slice()
+	if err != nil {
+		return nil, err
+	}
+	if len(result) == 0 {
+		return nil, errors.New("canonical wallet hold mark-class returned no result")
+	}
+	code, err := testRedisResultInt64(result[0])
+	if err != nil {
+		return nil, err
+	}
+	switch code {
+	case 1:
+		return nil, ErrCanonicalWalletHoldMissing
+	case 7:
+		state := fmt.Sprint(result[1])
+		eventID := ""
+		if len(result) > 2 {
+			eventID = fmt.Sprint(result[2])
+		}
+		return nil, &CanonicalWalletHoldNotArmedError{State: state, EventID: eventID}
+	case 0:
+		return c.GetCanonicalWalletHold(ctx, platformUserID, authorizationID)
+	default:
+		return nil, fmt.Errorf("unknown canonical wallet hold mark-class code %d", code)
+	}
 }
 
 var _ CanonicalWalletLeaseStore = (*gatewayCacheAdapterForTest)(nil)

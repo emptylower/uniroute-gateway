@@ -5,6 +5,7 @@ package service
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -207,13 +208,52 @@ func (s *LiveRestartLeaseStoreStub) ReserveCanonicalWalletLease(_ context.Contex
 	}
 	return &CanonicalWalletReservation{Lease: *s.Lease}, nil
 }
-func (s *LiveRestartLeaseStoreStub) SealCanonicalWalletLease(_ context.Context, _, _ string) (int64, error) {
+func (s *LiveRestartLeaseStoreStub) SealCanonicalWalletLease(_ context.Context, _, _ string) (int64, int64, error) {
 	if s.Lease == nil {
-		return 0, ErrCanonicalWalletLeaseMissing
+		return 0, 0, ErrCanonicalWalletLeaseMissing
 	}
 	pre := s.Lease.ConsumedUnits
 	s.Lease.ConsumedUnits = s.Lease.BudgetUnits
-	return pre, nil
+	return pre, 0, nil
+}
+
+// Phase 3.4b (Task 2): the hold surface on this stub is not driven by any
+// test — not-implemented stubs keep the interface satisfied loudly.
+func (s *LiveRestartLeaseStoreStub) ArmCanonicalWalletHold(context.Context, string, string, string, string, int64, int64, time.Time) (string, int64, bool, error) {
+	return "", 0, false, errors.New("not implemented in this stub")
+}
+func (s *LiveRestartLeaseStoreStub) ReleaseCanonicalWalletHold(context.Context, string, string, string, string) (int64, error) {
+	return 0, errors.New("not implemented in this stub")
+}
+func (s *LiveRestartLeaseStoreStub) ConvertCanonicalWalletHold(context.Context, string, string, string, int64, time.Time) (CanonicalWalletHoldConversion, error) {
+	return CanonicalWalletHoldConversion{}, errors.New("not implemented in this stub")
+}
+func (s *LiveRestartLeaseStoreStub) GetCanonicalWalletHold(context.Context, string, string) (*CanonicalWalletHold, error) {
+	return nil, errors.New("not implemented in this stub")
+}
+func (s *LiveRestartLeaseStoreStub) ListCanonicalWalletHolds(context.Context, string, int) ([]string, error) {
+	return nil, errors.New("not implemented in this stub")
+}
+func (s *LiveRestartLeaseStoreStub) ListCanonicalWalletHoldUsers(context.Context, uint64, int64) ([]string, uint64, error) {
+	return nil, 0, errors.New("not implemented in this stub")
+}
+func (s *LiveRestartLeaseStoreStub) PruneCanonicalWalletHoldUser(context.Context, string) error {
+	return errors.New("not implemented in this stub")
+}
+func (s *LiveRestartLeaseStoreStub) TryCanonicalWalletReaperLease(context.Context, time.Duration) (bool, error) {
+	return false, errors.New("not implemented in this stub")
+}
+func (s *LiveRestartLeaseStoreStub) ForgetCanonicalWalletHold(context.Context, string, string) error {
+	return errors.New("not implemented in this stub")
+}
+func (s *LiveRestartLeaseStoreStub) MarkCanonicalWalletHoldUserEmpty(context.Context, string, time.Duration) (bool, error) {
+	return false, errors.New("not implemented in this stub")
+}
+func (s *LiveRestartLeaseStoreStub) ClearCanonicalWalletHoldUserEmpty(context.Context, string) error {
+	return errors.New("not implemented in this stub")
+}
+func (s *LiveRestartLeaseStoreStub) MarkCanonicalWalletHoldClass(context.Context, string, string, string) (*CanonicalWalletHold, error) {
+	return nil, errors.New("not implemented in this stub")
 }
 
 type LiveRestartControlStub struct {

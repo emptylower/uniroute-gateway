@@ -49,9 +49,10 @@ func TestPhase34Proto15aSealRefusesNewReservationsButHonoursMarkers(t *testing.T
 	_, err := store.ReserveCanonicalWalletLease(ctx, user, "lease-seal", "CNY", "evt-before", 30_000_000, time.Now().UTC())
 	require.NoError(t, err)
 
-	pre, err := store.SealCanonicalWalletLease(ctx, user, "lease-seal")
+	pre, releasedUnits, err := store.SealCanonicalWalletLease(ctx, user, "lease-seal")
 	require.NoError(t, err)
 	require.Equal(t, int64(30_000_000), pre, "the seal returns the PRE-seal consumed")
+	require.Equal(t, int64(0), releasedUnits, "no releases in this fixture — the third value is zero")
 
 	sealed, err := store.GetCanonicalWalletLeaseByID(ctx, user, "lease-seal")
 	require.NoError(t, err)
@@ -66,11 +67,11 @@ func TestPhase34Proto15aSealRefusesNewReservationsButHonoursMarkers(t *testing.T
 	require.NoError(t, err)
 	require.True(t, dup.Duplicate, "a retry carrying its marker still succeeds on the sealed lease")
 
-	again, err := store.SealCanonicalWalletLease(ctx, user, "lease-seal")
+	again, _, err := store.SealCanonicalWalletLease(ctx, user, "lease-seal")
 	require.NoError(t, err)
 	require.Equal(t, sealed.BudgetUnits, again, "a second seal is idempotent and returns the already-sealed consumed (== budget)")
 
-	_, err = store.SealCanonicalWalletLease(ctx, user, "lease-absent")
+	_, _, err = store.SealCanonicalWalletLease(ctx, user, "lease-absent")
 	require.ErrorIs(t, err, ErrCanonicalWalletLeaseMissing)
 }
 

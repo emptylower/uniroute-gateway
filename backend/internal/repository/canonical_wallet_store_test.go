@@ -399,3 +399,314 @@ func TestCanonicalWalletReservationMarkerCannotOutliveItsLease(t *testing.T) {
 	require.Equal(t, int64(0), leaseExists, "the lease must be gone once its deadline passes")
 	require.Equal(t, int64(0), markerExists, "a dead lease must imply a dead marker — this is the invariant resolveOutboxEventLease relies on when it releases a stale binding")
 }
+
+// TestCanonicalWalletReserveGuardSubtractsReleased (Phase 3.4b, §10.2): the
+// reserve guard is consumed − released + amount > budget — freed budget is
+// reusable on the gateway — and the seal reports the released figure as its
+// third value.
+func TestCanonicalWalletReserveGuardSubtractsReleased(t *testing.T) {
+	mr := miniredis.RunT(t); rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()}); c := &gatewayCache{rdb: rdb}
+	ctx := context.Background(); now := time.Now().UTC().Truncate(time.Millisecond); exp := now.Add(time.Minute)
+	require.NoError(t, c.InstallCanonicalWalletLease(ctx, service.CanonicalWalletLease{LeaseID: "L", PlatformUserID: "u", Currency: "CNY", BudgetUnits: 100, ExpiresAt: exp}))
+	_, err := c.ReserveCanonicalWalletLease(ctx, "u", "L", "CNY", "e1", 100, now); require.NoError(t, err)
+	_, err = c.ReserveCanonicalWalletLease(ctx, "u", "L", "CNY", "e2", 1, now); require.ErrorIs(t, err, service.ErrCanonicalWalletLeaseExhausted) // the existing {4} sentinel (canonical_wallet_bridge.go:31)
+	require.NoError(t, rdb.HIncrBy(ctx, canonicalWalletLeaseKey("u", "L"), "released_units", 40).Err())
+	res, err := c.ReserveCanonicalWalletLease(ctx, "u", "L", "CNY", "e3", 40, now); require.NoError(t, err)
+	require.Equal(t, int64(140), res.Lease.ConsumedUnits, "consumed is monotone; the guard subtracted released")
+	consumed, released, err := c.SealCanonicalWalletLease(ctx, "u", "L"); require.NoError(t, err)
+	require.Equal(t, int64(140), consumed); require.Equal(t, int64(40), released)
+}
+
+// mustHoldState reads one hold hash field via HGETALL for assertions.
+func mustHoldState(t *testing.T, ctx context.Context, c *gatewayCache, user, authID string) map[string]string {
+	t.Helper()
+	vals, err := c.rdb.HGetAll(ctx, canonicalWalletHoldKey(user, authID)).Result()
+	require.NoError(t, err)
+	return vals
+}
+
+// TestCanonicalWalletHoldArmReleaseConvert (Phase 3.4b, §10.3/§10.5) — every
+// branch of the three hold scripts:
+//
+//	arm: consumed += E, hash written, set membership; re-arm {5}; {4} when the
+//	guard refuses; {1} missing lease; {2} currency; {3} expired
+//	release(not_written): released += E iff state=armed; second release {7}
+//	convert A<E: released += E−A, marker, settled, event_id; re-convert {7,settled,event}
+//	convert A>E within budget: consumed += excess; beyond budget: released += E, {4}, state=released
+//	convert on a released hold: {7, released, ""}
+//	hold missing: {1}
+//	convert A<=E with the lease hash gone: {3} — nothing to release or mark
+//	release on an expired lease hash: no-op on the lease, hash still transitions
+//	mark-class: HSET class iff state = armed
+func TestCanonicalWalletHoldArmReleaseConvert(t *testing.T) {
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+	c := &gatewayCache{rdb: rdb}
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	mr.SetTime(now)
+	exp := now.Add(10 * time.Minute)
+	const user = "hold-user-1"
+	const graceMS = int64(30_000)
+	require.NoError(t, c.InstallCanonicalWalletLease(ctx, service.CanonicalWalletLease{LeaseID: "L2", PlatformUserID: user, Currency: "CNY", BudgetUnits: 1000, ExpiresAt: exp}))
+
+	// arm a1 E=300: consumed 0−0+300 ≤ 1000 → hash, set membership, hold_users.
+	leaseID, held, dup, err := c.ArmCanonicalWalletHold(ctx, user, "L2", "CNY", "a1", 300, graceMS, now)
+	require.NoError(t, err)
+	require.Equal(t, "L2", leaseID)
+	require.Equal(t, int64(300), held)
+	require.False(t, dup)
+	fields := mustHoldState(t, ctx, c, user, "a1")
+	require.Equal(t, map[string]string{
+		"lease_id": "L2", "held_units": "300", "armed_at_ms": strconv.FormatInt(now.UnixMilli(), 10),
+		"class": "", "state": "armed", "event_id": "",
+	}, fields)
+	consumed, err := rdb.HGet(ctx, canonicalWalletLeaseKey(user, "L2"), "consumed_units").Result()
+	require.NoError(t, err)
+	require.Equal(t, "300", consumed, "the arm raised consumed by E")
+	members, err := rdb.SMembers(ctx, canonicalWalletHoldSetKey(user)).Result()
+	require.NoError(t, err)
+	require.Equal(t, []string{"a1"}, members)
+	users, next, err := c.ListCanonicalWalletHoldUsers(ctx, 0, 100)
+	require.NoError(t, err)
+	require.Equal(t, uint64(0), next)
+	require.Equal(t, []string{user}, users, "hold_users stores the platform user id itself, not its hash")
+	// the hold's PEXPIREAT = the lease's expires_at_ms + grace (§10.3)
+	pttl, err := rdb.PTTL(ctx, canonicalWalletHoldKey(user, "a1")).Result()
+	require.NoError(t, err)
+	require.InDelta(t, (10*time.Minute + time.Duration(graceMS)*time.Millisecond).Milliseconds(), pttl.Milliseconds(), 50, "the hold outlives its lease by one grace")
+
+	// re-arm the same authorization id: {5} idempotent, consumed unchanged.
+	leaseID, held, dup, err = c.ArmCanonicalWalletHold(ctx, user, "L2", "CNY", "a1", 300, graceMS, now)
+	require.NoError(t, err)
+	require.True(t, dup)
+	require.Equal(t, "L2", leaseID)
+	require.Equal(t, int64(300), held)
+	consumed, err = rdb.HGet(ctx, canonicalWalletLeaseKey(user, "L2"), "consumed_units").Result()
+	require.NoError(t, err)
+	require.Equal(t, "300", consumed)
+
+	// arm beyond budget: {4} the guard refuses (300 + 800 > 1000).
+	_, _, _, err = c.ArmCanonicalWalletHold(ctx, user, "L2", "CNY", "a2", 800, graceMS, now)
+	require.ErrorIs(t, err, service.ErrCanonicalWalletLeaseExhausted)
+
+	// arm on a missing lease: {1}.
+	_, _, _, err = c.ArmCanonicalWalletHold(ctx, user, "L-missing", "CNY", "a3", 1, graceMS, now)
+	require.ErrorIs(t, err, service.ErrCanonicalWalletLeaseMissing)
+	// wrong currency: rejected outright by RequireCNYBillingCurrency in Go —
+	// the reserve method's own convention (its test at :47 asserts Error, not
+	// ErrorIs, for the same reason: the script's {2} is unreachable through
+	// the validated entry point).
+	_, _, _, err = c.ArmCanonicalWalletHold(ctx, user, "L2", "USD", "a3", 1, graceMS, now)
+	require.Error(t, err, "a non-CNY currency must be rejected outright, not coerced")
+	// an expired lease hash (the FIELD, so miniredis keeps the key alive): {3}.
+	require.NoError(t, c.InstallCanonicalWalletLease(ctx, service.CanonicalWalletLease{LeaseID: "L-exp", PlatformUserID: user, Currency: "CNY", BudgetUnits: 100, ExpiresAt: exp}))
+	require.NoError(t, rdb.HSet(ctx, canonicalWalletLeaseKey(user, "L-exp"), "expires_at_ms", now.Add(-time.Second).UnixMilli()).Err())
+	_, _, _, err = c.ArmCanonicalWalletHold(ctx, user, "L-exp", "CNY", "a3", 1, graceMS, now)
+	require.ErrorIs(t, err, service.ErrCanonicalWalletLeaseExpired)
+	_, err = rdb.Del(ctx, canonicalWalletLeaseKey(user, "L-exp")).Result()
+	require.NoError(t, err)
+
+	// release(not_written) on a1: released += E, state/class written, set SREM'd.
+	released, err := c.ReleaseCanonicalWalletHold(ctx, user, "a1", "released", "not_written")
+	require.NoError(t, err)
+	require.Equal(t, int64(300), released)
+	rel, err := rdb.HGet(ctx, canonicalWalletLeaseKey(user, "L2"), "released_units").Result()
+	require.NoError(t, err)
+	require.Equal(t, "300", rel)
+	fields = mustHoldState(t, ctx, c, user, "a1")
+	require.Equal(t, "released", fields["state"])
+	require.Equal(t, "not_written", fields["class"])
+	require.Equal(t, "300", fields["held_units"], "the hash keeps its fields for observability (§10.5)")
+	members, err = rdb.SMembers(ctx, canonicalWalletHoldSetKey(user)).Result()
+	require.NoError(t, err)
+	require.Empty(t, members)
+
+	// second release: {7} no-op, released_units unchanged.
+	released, err = c.ReleaseCanonicalWalletHold(ctx, user, "a1", "released", "not_written")
+	var notArmed *service.CanonicalWalletHoldNotArmedError
+	require.ErrorAs(t, err, &notArmed)
+	require.Equal(t, "released", notArmed.State)
+	require.Equal(t, "", notArmed.EventID)
+	require.Equal(t, int64(0), released)
+	rel, err = rdb.HGet(ctx, canonicalWalletLeaseKey(user, "L2"), "released_units").Result()
+	require.NoError(t, err)
+	require.Equal(t, "300", rel)
+
+	// release on a missing hold: {1}.
+	_, err = c.ReleaseCanonicalWalletHold(ctx, user, "a-missing", "released", "")
+	require.ErrorIs(t, err, service.ErrCanonicalWalletHoldMissing)
+
+	// convert A<E: released += E−A, marker == lease id, settled, event_id.
+	_, _, _, err = c.ArmCanonicalWalletHold(ctx, user, "L2", "CNY", "b3", 200, graceMS, now)
+	require.NoError(t, err) // consumed 300−300+200 ≤ 1000 (the guard subtracts released)
+	conv, err := c.ConvertCanonicalWalletHold(ctx, user, "b3", "ev-b3", 50, now)
+	require.NoError(t, err)
+	require.Equal(t, 0, conv.Code)
+	require.Equal(t, "L2", conv.LeaseID)
+	rel, err = rdb.HGet(ctx, canonicalWalletLeaseKey(user, "L2"), "released_units").Result()
+	require.NoError(t, err)
+	require.Equal(t, "450", rel, "released += E−A: 300 + 150")
+	marker, err := rdb.Get(ctx, canonicalWalletReservationKey(user, "ev-b3")).Result()
+	require.NoError(t, err)
+	require.Equal(t, "L2", marker)
+	markerPTTL, err := rdb.PTTL(ctx, canonicalWalletReservationKey(user, "ev-b3")).Result()
+	require.NoError(t, err)
+	require.InDelta(t, 10*time.Minute.Milliseconds(), markerPTTL.Milliseconds(), 50, "the marker carries the lease's expires_at")
+	fields = mustHoldState(t, ctx, c, user, "b3")
+	require.Equal(t, "settled", fields["state"])
+	require.Equal(t, "ev-b3", fields["event_id"])
+	// consumed is unchanged by an A<E conversion; only releases raise released.
+	consumed, err = rdb.HGet(ctx, canonicalWalletLeaseKey(user, "L2"), "consumed_units").Result()
+	require.NoError(t, err)
+	require.Equal(t, "500", consumed, "the arm of b3 raised consumed to 500; the conversion adds nothing")
+
+	// re-convert the same event: {7, settled, ev-b3}.
+	conv, err = c.ConvertCanonicalWalletHold(ctx, user, "b3", "ev-b3", 50, now)
+	require.NoError(t, err)
+	require.Equal(t, 7, conv.Code)
+	require.Equal(t, "settled", conv.State)
+	require.Equal(t, "ev-b3", conv.EventID)
+	rel, err = rdb.HGet(ctx, canonicalWalletLeaseKey(user, "L2"), "released_units").Result()
+	require.NoError(t, err)
+	require.Equal(t, "450", rel, "a re-convert releases nothing")
+
+	// convert A>E within budget: consumed += excess.
+	_, _, _, err = c.ArmCanonicalWalletHold(ctx, user, "L2", "CNY", "b4", 100, graceMS, now)
+	require.NoError(t, err) // 500−450+100 ≤ 1000
+	conv, err = c.ConvertCanonicalWalletHold(ctx, user, "b4", "ev-b4", 150, now)
+	require.NoError(t, err)
+	require.Equal(t, 0, conv.Code)
+	require.Equal(t, "L2", conv.LeaseID)
+	consumed, err = rdb.HGet(ctx, canonicalWalletLeaseKey(user, "L2"), "consumed_units").Result()
+	require.NoError(t, err)
+	require.Equal(t, "650", consumed, "consumed += excess: 600 → 650")
+	fields = mustHoldState(t, ctx, c, user, "b4")
+	require.Equal(t, "settled", fields["state"])
+	require.Equal(t, "ev-b4", fields["event_id"])
+
+	// convert A>E beyond budget on a tight lease: {4}, released += E, state=released.
+	require.NoError(t, c.InstallCanonicalWalletLease(ctx, service.CanonicalWalletLease{LeaseID: "L4", PlatformUserID: user, Currency: "CNY", BudgetUnits: 100, ExpiresAt: exp}))
+	_, _, _, err = c.ArmCanonicalWalletHold(ctx, user, "L4", "CNY", "b5", 100, graceMS, now)
+	require.NoError(t, err)
+	conv, err = c.ConvertCanonicalWalletHold(ctx, user, "b5", "ev-b5", 150, now)
+	require.NoError(t, err)
+	require.Equal(t, 4, conv.Code)
+	rel, err = rdb.HGet(ctx, canonicalWalletLeaseKey(user, "L4"), "released_units").Result()
+	require.NoError(t, err)
+	require.Equal(t, "100", rel)
+	fields = mustHoldState(t, ctx, c, user, "b5")
+	require.Equal(t, "released", fields["state"])
+	require.Equal(t, "", fields["event_id"], "a {4} hold is never bound to an event")
+	members, err = rdb.SMembers(ctx, canonicalWalletHoldSetKey(user)).Result()
+	require.NoError(t, err)
+	require.NotContains(t, members, "b5")
+
+	// convert on a released hold: {7, released, ""}.
+	conv, err = c.ConvertCanonicalWalletHold(ctx, user, "b5", "ev-b5", 150, now)
+	require.NoError(t, err)
+	require.Equal(t, 7, conv.Code)
+	require.Equal(t, "released", conv.State)
+	require.Equal(t, "", conv.EventID)
+
+	// hold missing: {1}.
+	conv, err = c.ConvertCanonicalWalletHold(ctx, user, "b-missing", "ev-x", 1, now)
+	require.NoError(t, err)
+	require.Equal(t, 1, conv.Code)
+
+	// convert A<=E with the lease hash gone: {3} — the event proceeds unbound.
+	_, _, _, err = c.ArmCanonicalWalletHold(ctx, user, "L2", "CNY", "c1", 100, graceMS, now)
+	require.NoError(t, err)
+	require.NoError(t, rdb.Del(ctx, canonicalWalletLeaseKey(user, "L2")).Err())
+	conv, err = c.ConvertCanonicalWalletHold(ctx, user, "c1", "ev-c1", 50, now)
+	require.NoError(t, err)
+	require.Equal(t, 3, conv.Code, "the fifth branch: the lease hash was already gone — nothing to release or mark")
+	fields = mustHoldState(t, ctx, c, user, "c1")
+	require.Equal(t, "settled", fields["state"])
+	require.Equal(t, "ev-c1", fields["event_id"])
+
+	// release on an expired lease hash: a no-op on the lease, the hash still
+	// transitions (the reaper's abandoned path, §10.7).
+	require.NoError(t, c.InstallCanonicalWalletLease(ctx, service.CanonicalWalletLease{LeaseID: "L6", PlatformUserID: user, Currency: "CNY", BudgetUnits: 100, ExpiresAt: exp}))
+	_, _, _, err = c.ArmCanonicalWalletHold(ctx, user, "L6", "CNY", "d1", 100, graceMS, now)
+	require.NoError(t, err)
+	require.NoError(t, rdb.Del(ctx, canonicalWalletLeaseKey(user, "L6")).Err())
+	released, err = c.ReleaseCanonicalWalletHold(ctx, user, "d1", "abandoned", "")
+	require.NoError(t, err)
+	require.Equal(t, int64(100), released, "the hold's units are reported released even though the lease hash is gone")
+	fields = mustHoldState(t, ctx, c, user, "d1")
+	require.Equal(t, "abandoned", fields["state"])
+
+	// mark-class: HSET class iff state = armed. (L6's hash was deleted above;
+	// a fresh install re-arms cleanly.)
+	require.NoError(t, c.InstallCanonicalWalletLease(ctx, service.CanonicalWalletLease{LeaseID: "L6", PlatformUserID: user, Currency: "CNY", BudgetUnits: 100, ExpiresAt: exp}))
+	_, _, _, err = c.ArmCanonicalWalletHold(ctx, user, "L6", "CNY", "e1", 10, graceMS, now)
+	require.NoError(t, err)
+	hold, err := c.MarkCanonicalWalletHoldClass(ctx, user, "e1", "indeterminate")
+	require.NoError(t, err)
+	require.Equal(t, "indeterminate", hold.Class)
+	require.Equal(t, "armed", hold.State)
+	fields = mustHoldState(t, ctx, c, user, "e1")
+	require.Equal(t, "indeterminate", fields["class"])
+	// on a settled hold: {7}, the class is untouched.
+	_, err = c.MarkCanonicalWalletHoldClass(ctx, user, "b4", "indeterminate")
+	require.ErrorAs(t, err, &notArmed)
+	fields = mustHoldState(t, ctx, c, user, "b4")
+	require.Equal(t, "", fields["class"])
+
+	// GetCanonicalWalletHold round-trips the armed_at timestamp.
+	got, err := c.GetCanonicalWalletHold(ctx, user, "e1")
+	require.NoError(t, err)
+	require.Equal(t, service.CanonicalWalletHold{
+		AuthorizationID: "e1", LeaseID: "L6", HeldUnits: 10, ArmedAt: now, Class: "indeterminate", State: "armed", EventID: "",
+	}, *got)
+	_, err = c.GetCanonicalWalletHold(ctx, user, "nope")
+	require.ErrorIs(t, err, service.ErrCanonicalWalletHoldMissing)
+
+	// List/Forget/Prune: the reaper's enumeration surface. Every hold above
+	// except the armed e1 reached a terminal state and was SREM'd by its
+	// script; the set carries armed holds only.
+	ids, err := c.ListCanonicalWalletHolds(ctx, user, 100)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{"e1"}, ids)
+	require.NoError(t, c.ForgetCanonicalWalletHold(ctx, user, "a1"))
+	ids, err = c.ListCanonicalWalletHolds(ctx, user, 100)
+	require.NoError(t, err)
+	require.NotContains(t, ids, "a1")
+	require.NoError(t, c.PruneCanonicalWalletHoldUser(ctx, user))
+	users, _, err = c.ListCanonicalWalletHoldUsers(ctx, 0, 100)
+	require.NoError(t, err)
+	require.Empty(t, users)
+}
+
+// TestCanonicalWalletReaperLease (§10.7): the deployment-wide tick leader.
+func TestCanonicalWalletReaperLease(t *testing.T) {
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+	c := &gatewayCache{rdb: rdb}
+	ctx := context.Background()
+	interval := time.Second
+	first, err := c.TryCanonicalWalletReaperLease(ctx, 2*interval)
+	require.NoError(t, err)
+	require.True(t, first, "the first taker leads the tick")
+	second, err := c.TryCanonicalWalletReaperLease(ctx, 2*interval)
+	require.NoError(t, err)
+	require.False(t, second, "a second bridge in the same tick skips it")
+	// the two-consecutive-empty-ticks marker, in Redis (§10.3/§10.7).
+	seen, err := c.MarkCanonicalWalletHoldUserEmpty(ctx, "u-empty", 2*interval)
+	require.NoError(t, err)
+	require.False(t, seen, "the first observation writes the marker")
+	seen, err = c.MarkCanonicalWalletHoldUserEmpty(ctx, "u-empty", 2*interval)
+	require.NoError(t, err)
+	require.True(t, seen, "the second observation within the window sees it")
+	require.NoError(t, c.ClearCanonicalWalletHoldUserEmpty(ctx, "u-empty"))
+	seen, err = c.MarkCanonicalWalletHoldUserEmpty(ctx, "u-empty", 2*interval)
+	require.NoError(t, err)
+	require.False(t, seen, "a cleared marker is written fresh again")
+	mr.FastForward(2 * interval)
+	again, err := c.TryCanonicalWalletReaperLease(ctx, 2*interval)
+	require.NoError(t, err)
+	require.True(t, again, "after the leader key expires a new tick can be led")
+}

@@ -53,7 +53,33 @@ var (
 	// rollout ordering was violated. Transient at runtime: the outbox retries
 	// on the backoff and, if it exhausts, dead-letters with attempts_exhausted.
 	ErrCanonicalWalletControlPlaneIncompatible = errors.New("canonical wallet control plane has no ensure route (deploy ShipAny 3.4a-S first)")
+	// Phase 3.4b (§10.3): the hold store's two state errors. Missing is a
+	// vanished/expired hold hash (idempotent for every caller); NotArmed is
+	// the scripts' {7} — the hold exists but its money state is terminal.
+	ErrCanonicalWalletHoldMissing = errors.New("canonical wallet hold is missing")
+	// ErrCanonicalWalletHoldNotArmed is the sentinel CanonicalWalletHoldNotArmedError wraps.
+	ErrCanonicalWalletHoldNotArmed = errors.New("canonical wallet hold is not armed")
 )
+
+// CanonicalWalletHoldNotArmedError carries the stored state and event id so
+// the caller can branch on the EVENT ID, never on the code alone (§10.5):
+// non-empty (settled) is a retried submission; empty (released/abandoned)
+// means the money was already given back and the event proceeds unbound.
+type CanonicalWalletHoldNotArmedError struct {
+	State   string
+	EventID string
+}
+
+func (e *CanonicalWalletHoldNotArmedError) Error() string {
+	return fmt.Sprintf("canonical wallet hold is not armed (state %q, event_id %q)", e.State, e.EventID)
+}
+
+func (e *CanonicalWalletHoldNotArmedError) Unwrap() error { return ErrCanonicalWalletHoldNotArmed }
+
+func isHoldNotArmed(err error) bool {
+	var notArmed *CanonicalWalletHoldNotArmedError
+	return errors.As(err, &notArmed)
+}
 
 const (
 	canonicalWalletLeaseScope = "wallet:lease"
@@ -99,6 +125,26 @@ type CanonicalWalletReservation struct {
 	Duplicate bool
 }
 
+// CanonicalWalletHold (Phase 3.4b, §10.3) is one authorization's hold hash.
+type CanonicalWalletHold struct {
+	AuthorizationID string
+	LeaseID         string
+	HeldUnits       int64
+	ArmedAt         time.Time
+	Class           string // "" | not_written | indeterminate (no "result" — §10.5)
+	State           string // armed | settled | released | abandoned — the money state
+	EventID         string // set at conversion
+}
+
+// CanonicalWalletHoldConversion is ConvertCanonicalWalletHold's result. The
+// caller branches on Code and (for {7}) on EventID, never on an error class.
+type CanonicalWalletHoldConversion struct {
+	Code    int // 0 converted; 1 missing; 3 lease gone; 4 overrun released; 7 not armed
+	LeaseID string
+	State   string
+	EventID string
+}
+
 // CanonicalWalletLeaseStore is implemented by the Redis-backed gateway cache.
 // Reserve must be atomic and idempotent for the supplied event ID.
 type CanonicalWalletLeaseStore interface {
@@ -117,9 +163,48 @@ type CanonicalWalletLeaseStore interface {
 	// is current now".
 	ReserveCanonicalWalletLease(ctx context.Context, platformUserID, leaseID, currency, eventID string, amountUnits int64, now time.Time) (*CanonicalWalletReservation, error)
 	// SealCanonicalWalletLease (Phase 3.4, redesign §3.3) closes the lease to new
-	// reservations ahead of a drain and returns the pre-seal consumed units.
-	// Returns ErrCanonicalWalletLeaseMissing when the lease hash is absent.
-	SealCanonicalWalletLease(ctx context.Context, platformUserID, leaseID string) (int64, error)
+	// reservations ahead of a drain and returns the pre-seal consumed units and
+	// (3.4b, §10.2) the released units. Returns ErrCanonicalWalletLeaseMissing
+	// when the lease hash is absent.
+	SealCanonicalWalletLease(ctx context.Context, platformUserID, leaseID string) (preSealConsumed, released int64, err error)
+	// ArmCanonicalWalletHold (3.4b, §10.4) raises consumed by units and writes
+	// the hold hash {state=armed, class=""} with PEXPIREAT = the lease's
+	// expires_at + grace; duplicate=true is the {5} idempotent re-arm. The
+	// {1}/{2}/{3} lease checks are the reserve script's own sentinels; {4} is
+	// ErrCanonicalWalletLeaseExhausted.
+	ArmCanonicalWalletHold(ctx context.Context, platformUserID, leaseID, currency, authorizationID string, units int64, graceMS int64, now time.Time) (leaseIDOut string, held int64, duplicate bool, err error)
+	// ReleaseCanonicalWalletHold (§10.5/§10.7) moves an armed hold to
+	// stateAfter ('released' | 'abandoned'), HINCRBYs the lease's
+	// released_units by the held figure iff the lease hash still exists,
+	// SREMs the per-user set and returns the released amount. {7} is a
+	// CanonicalWalletHoldNotArmedError; {1} ErrCanonicalWalletHoldMissing.
+	ReleaseCanonicalWalletHold(ctx context.Context, platformUserID, authorizationID, stateAfter, classAfter string) (released int64, err error)
+	// ConvertCanonicalWalletHold (§10.5) settles the hold against actualUnits;
+	// every outcome is a CanonicalWalletHoldConversion, never an error for a
+	// well-formed reply ({7} carries the stored State/EventID).
+	ConvertCanonicalWalletHold(ctx context.Context, platformUserID, authorizationID, eventID string, actualUnits int64, now time.Time) (CanonicalWalletHoldConversion, error)
+	GetCanonicalWalletHold(ctx context.Context, platformUserID, authorizationID string) (*CanonicalWalletHold, error)
+	// ListCanonicalWalletHolds returns the user's set members, capped.
+	ListCanonicalWalletHolds(ctx context.Context, platformUserID string, limit int) ([]string, error)
+	// ListCanonicalWalletHoldUsers SSCANs hold_users (platform user IDS, not
+	// hashes — §10.3's cluster note), cursor-based.
+	ListCanonicalWalletHoldUsers(ctx context.Context, cursor uint64, count int64) ([]string, uint64, error)
+	PruneCanonicalWalletHoldUser(ctx context.Context, platformUserID string) error
+	// TryCanonicalWalletReaperLease is the deployment-wide tick leader
+	// (SET canonical_wallet:reaper:tick NX PX ttl).
+	TryCanonicalWalletReaperLease(ctx context.Context, ttl time.Duration) (bool, error)
+	// ForgetCanonicalWalletHold SREMs the per-user set ONLY — the reaper's
+	// absent/not-armed branches; the hash keeps its TTL'd observability copy.
+	ForgetCanonicalWalletHold(ctx context.Context, platformUserID, authorizationID string) error
+	// MarkCanonicalWalletHoldUserEmpty is §10.3's two-consecutive-empty-ticks
+	// state, in Redis so it survives leader rotation: SET holds_empty:{user}
+	// 1 NX PX ttl; alreadySeen=true means some reaper observed this user
+	// empty within the window.
+	MarkCanonicalWalletHoldUserEmpty(ctx context.Context, platformUserID string, ttl time.Duration) (alreadySeen bool, err error)
+	ClearCanonicalWalletHoldUserEmpty(ctx context.Context, platformUserID string) error
+	// MarkCanonicalWalletHoldClass sets class iff state = armed (a script);
+	// {7} is a CanonicalWalletHoldNotArmedError, {1} ErrCanonicalWalletHoldMissing.
+	MarkCanonicalWalletHoldClass(ctx context.Context, platformUserID, authorizationID, class string) (*CanonicalWalletHold, error)
 }
 
 type CanonicalWalletSettlementEvent struct {
@@ -1146,7 +1231,7 @@ func (b *CanonicalWalletBridge) ensureLease(ctx context.Context, platformUserID,
 		PreferLeaseID: preferLeaseID, CallerSlotTTLSeconds: b.callerSlotTTLSeconds,
 	}
 	if cached != nil {
-		preSealConsumed, sealErr := b.store.SealCanonicalWalletLease(ctx, platformUserID, cached.LeaseID)
+		preSealConsumed, _, sealErr := b.store.SealCanonicalWalletLease(ctx, platformUserID, cached.LeaseID) // the released figure joins the drain entry in Task 3 (§10.2)
 		if sealErr != nil && !errors.Is(sealErr, ErrCanonicalWalletLeaseMissing) {
 			return nil, sealErr
 		}
