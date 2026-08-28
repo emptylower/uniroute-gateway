@@ -60,6 +60,17 @@ type fakeEnsureControlPlane struct {
 	// below min_headroom — the non-conformant server the local under-grant
 	// guard exists for — once, then behaves again.
 	grantBelowMinOnce bool
+	// grantBudgetOnce (Phase 3.5, §11.3): when > 0, the NEXT issue grants
+	// EXACTLY this budget (below min_headroom — the parameterised
+	// non-conformant server) and resets to 0. The settle-purpose under-grant
+	// legs (test 35) drive the proactive split through it.
+	grantBudgetOnce int64
+	// alwaysRefuseHeadroom (Phase 3.5, §11.3, test 35's chain): when > 0,
+	// EVERY settlement of more than this many units on an active lease is
+	// refused lease_over_capture with data.headroom = this value — the
+	// pathological server that peels exactly one unit per split and drives
+	// the chain to split_exhausted.
+	alwaysRefuseHeadroom int64
 	// withoutEnsureRoute (§9.6 item 6): every method on the ensure path
 	// answers 404 — the pre-3.4a-S control plane.
 	withoutEnsureRoute bool
@@ -387,6 +398,12 @@ func (f *fakeEnsureControlPlane) handle(w http.ResponseWriter, r *http.Request) 
 				f.grantBelowMinOnce = false
 				budget = minHeadroom - 1
 			}
+			if f.grantBudgetOnce > 0 {
+				// §11.3's non-conformant grant, parameterised: the next issue
+				// lands at exactly this budget regardless of min_headroom.
+				budget = f.grantBudgetOnce
+				f.grantBudgetOnce = 0
+			}
 			f.seq++
 			f.issuances++
 			f.balance[user] -= budget
@@ -452,6 +469,11 @@ func (f *fakeEnsureControlPlane) handle(w http.ResponseWriter, r *http.Request) 
 		}
 		if l.Status != "active" {
 			f.refuse(w, "lease_not_capturable")
+			return
+		}
+		if f.alwaysRefuseHeadroom > 0 && units > f.alwaysRefuseHeadroom {
+			w.WriteHeader(http.StatusConflict)
+			_ = json.NewEncoder(w).Encode(map[string]any{"code": -1, "message": "lease_over_capture", "data": map[string]any{"reason": "lease_over_capture", "headroom": fakeAmountObject(f.alwaysRefuseHeadroom)}})
 			return
 		}
 		if units > l.headroom() {

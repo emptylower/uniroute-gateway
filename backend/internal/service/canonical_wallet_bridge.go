@@ -771,6 +771,11 @@ type canonicalWalletMetrics struct {
 	// Phase 3.5 (§11.5): the terminal classification counters.
 	deadLetterContractViolation atomic.Int64
 	deadLetterPayloadConflict   atomic.Int64
+	// Phase 3.5 (§11.3): the split counters.
+	settlementSplit          atomic.Int64
+	settlementSplitFull      atomic.Int64
+	settlementSplitExhausted atomic.Int64
+	pendingReleaseReplayed   atomic.Int64
 	// §9.6 item 6's rollout-guard counters (global, like every counter here).
 	controlPlaneIncompatible atomic.Int64
 	controlPlaneProbeFailed  atomic.Int64
@@ -810,6 +815,10 @@ func CanonicalWalletBridgeStats() map[string]int64 {
 		"balance_behind_local":           m.balanceBehindLocal.Load(),
 		"dead_letter_contract_violation": m.deadLetterContractViolation.Load(),
 		"dead_letter_payload_conflict":   m.deadLetterPayloadConflict.Load(),
+		"settlement_split":               m.settlementSplit.Load(),
+		"settlement_split_full":          m.settlementSplitFull.Load(),
+		"settlement_split_exhausted":     m.settlementSplitExhausted.Load(),
+		"pending_release_replayed":       m.pendingReleaseReplayed.Load(),
 		"control_plane_incompatible":     m.controlPlaneIncompatible.Load(),
 		"control_plane_probe_failed":     m.controlPlaneProbeFailed.Load(),
 		"hold_released_not_written":      m.holdReleasedNotWritten.Load(),
@@ -1460,6 +1469,27 @@ func (b *CanonicalWalletBridge) deliverOutboxEvent(ctx context.Context, e Canoni
 		LeaseID: e.LeaseID, Currency: e.Currency, AmountUnits: e.AmountUnits,
 		LocalBalanceAfterUnits: e.LocalBalanceAfterUnits, OccurredAt: e.OccurredAt,
 	}
+	// (0) §11.3: a pending release is owed to the bound lease — pay it
+	// BEFORE anything else reserves again. The partial form is gated on its
+	// own release marker, so a replay answers {7} (counted) and writes
+	// nothing; only a transport/store ERROR defers the whole delivery
+	// (never reserve with a release owed).
+	if e.PendingReleaseUnits != nil {
+		released, rerr := b.store.ReleaseCanonicalWalletReservation(ctx, e.PlatformUserID, e.LeaseID, e.EventID, *e.PendingReleaseUnits, false)
+		if rerr != nil {
+			slog.Warn("canonical wallet pending release failed", "event_id", e.EventID, "lease_id", e.LeaseID, "error", rerr)
+			_ = b.outbox.MarkOutboxEventFailed(ctx, e.ID, b.workerID, b.clock())
+			return
+		}
+		if !released {
+			canonicalWalletBridgeMetrics.pendingReleaseReplayed.Add(1)
+		}
+		if err := b.outbox.ClearPendingRelease(ctx, e.ID); err != nil {
+			slog.Warn("canonical wallet pending release clear failed", "event_id", e.EventID, "error", err)
+			_ = b.outbox.MarkOutboxEventFailed(ctx, e.ID, b.workerID, b.clock())
+			return
+		}
+	}
 	lease, err := b.resolveOutboxEventLease(ctx, e)
 	if err != nil {
 		canonicalWalletBridgeMetrics.leaseAcquireError.Add(1)
@@ -1486,6 +1516,16 @@ func (b *CanonicalWalletBridge) deliverOutboxEvent(ctx context.Context, e Canoni
 		// reach here (the dispatcher ensures with purpose = settle); if it
 		// ever did, it would retry as today.
 		_ = b.outbox.MarkOutboxEventFailed(ctx, e.ID, b.workerID, b.clock())
+		return
+	}
+	// (2) §11.3 proactive split: a FRESH settle-purpose lease (unbound row)
+	// granted below the amount — the settle purpose installs it (above) —
+	// splits before reserving: H = the lease's remaining, the remainder row
+	// carries A − H. A bound retry is NOT split here: its reservation
+	// already exists and ShipAny decides; a refusal over-capture is handled
+	// reactively below.
+	if e.LeaseID == "" && lease.RemainingUnits() > 0 && lease.RemainingUnits() < e.AmountUnits {
+		b.splitOutboxEvent(ctx, e, lease, lease.RemainingUnits(), false /* reserved: nothing reserved yet */)
 		return
 	}
 	// Bind BEFORE reserving, never after. Binding afterwards leaves a crash
@@ -1528,11 +1568,23 @@ func (b *CanonicalWalletBridge) deliverOutboxEvent(ctx context.Context, e Canoni
 	result, err := b.control.SubmitSettlement(ctx, event)
 	if err != nil {
 		canonicalWalletBridgeMetrics.settlementError.Add(1)
+		// §11.3 reactive split: the bound lease's headroom is below the
+		// amount — the refusal carries the headroom (absent → H = 0). The
+		// split happens BEFORE the generic classification: over-capture is a
+		// mechanism, not a dead-letter.
+		var se *canonicalWalletStatusError
+		if errors.As(err, &se) && se.Reason == "lease_over_capture" {
+			headroomUnits := int64(0)
+			if se.HeadroomUnits != nil {
+				headroomUnits = *se.HeadroomUnits
+			}
+			b.splitOutboxEvent(ctx, e, lease, headroomUnits, true /* reserved: A is on the lease */)
+			return
+		}
 		// §11.5 classification on the settlements branch too: a terminal
-		// answer dead-letters with its named reason (lease_over_capture and
-		// lease_not_capturable are handled by their own mechanisms in Tasks
-		// 5/6 and never reach this classifier); 401/5xx/transport stay on
-		// the backoff.
+		// answer dead-letters with its named reason (lease_not_capturable is
+		// handled by its own mechanism in Task 6 and never reaches this
+		// classifier); 401/5xx/transport stay on the backoff.
 		if reason, terminal := classifyControlPlaneError(err); terminal {
 			b.markTerminalClassification(ctx, e.ID, reason)
 			return
@@ -1593,6 +1645,50 @@ func (b *CanonicalWalletBridge) markTerminalClassification(ctx context.Context, 
 		canonicalWalletBridgeMetrics.deadLetterPayloadConflict.Add(1)
 	default:
 		canonicalWalletBridgeMetrics.deadLetterContractViolation.Add(1)
+	}
+}
+
+// splitOutboxEvent (§11.3) durably splits row e at headroomUnits: the
+// remainder (amount − headroom) becomes its own pending row; the parent's
+// amount becomes headroomUnits and returns to pending (delivered on
+// split_full when headroomUnits = 0). reserved records whether the gateway
+// already reserved the full amount on the lease — then the remainder is
+// OWED back and the partial release runs immediately (the marker survives
+// for the parent's {5} redelivery); a failed release leaves
+// pending_release_units set and the next delivery pays it first. Depth is
+// bounded at 8: a ninth split dead-letters split_exhausted.
+func (b *CanonicalWalletBridge) splitOutboxEvent(ctx context.Context, e CanonicalWalletOutboxEvent, lease *CanonicalWalletLease, headroomUnits int64, reserved bool) {
+	if e.SplitDepth >= 8 {
+		canonicalWalletBridgeMetrics.settlementSplitExhausted.Add(1)
+		_ = b.outbox.MarkOutboxEventDeadLetter(ctx, e.ID, b.workerID, "split_exhausted")
+		return
+	}
+	remainderID := e.EventID + ":r" + strconv.Itoa(e.SplitDepth+1)
+	remainderUnits, err := b.outbox.SplitOutboxEvent(ctx, e.ID, b.workerID, headroomUnits, remainderID, reserved)
+	if err != nil {
+		slog.Warn("canonical wallet outbox split failed", "event_id", e.EventID, "error", err)
+		_ = b.outbox.MarkOutboxEventFailed(ctx, e.ID, b.workerID, b.clock())
+		return
+	}
+	if reserved {
+		// The partial form: the parent's marker must survive (its redelivery
+		// answers {5} and captures H), so only the remainder goes back. A
+		// failure leaves the debt recorded on the row — §11.3's repair.
+		if _, rerr := b.store.ReleaseCanonicalWalletReservation(ctx, e.PlatformUserID, lease.LeaseID, e.EventID, remainderUnits, false); rerr != nil {
+			slog.Warn("canonical wallet split release failed — the next delivery pays it first", "event_id", e.EventID, "lease_id", lease.LeaseID, "error", rerr)
+			return
+		}
+		if cerr := b.outbox.ClearPendingRelease(ctx, e.ID); cerr != nil {
+			slog.Warn("canonical wallet split release clear failed — the next delivery replays it through the release marker", "event_id", e.EventID, "error", cerr)
+			return
+		}
+	}
+	if headroomUnits == 0 {
+		canonicalWalletBridgeMetrics.settlementSplitFull.Add(1)
+		slog.Info("canonical wallet settlement split_full", "event_id", e.EventID, "remainder_event_id", remainderID, "remainder_units", remainderUnits)
+	} else {
+		canonicalWalletBridgeMetrics.settlementSplit.Add(1)
+		slog.Info("canonical wallet settlement split", "event_id", e.EventID, "headroom_units", headroomUnits, "remainder_event_id", remainderID, "remainder_units", remainderUnits)
 	}
 }
 
@@ -1728,7 +1824,14 @@ func (b *CanonicalWalletBridge) ensureLease(ctx context.Context, platformUserID,
 		canonicalWalletBridgeMetrics.leaseGrantExpired.Add(1)
 		return nil, fmt.Errorf("%w: lease %s expired at %s", ErrCanonicalWalletLeaseExpired, lease.LeaseID, lease.ExpiresAt.UTC().Format(time.RFC3339Nano))
 	}
-	if lease.RemainingUnits() < amountUnits {
+	// §11.3 (MAJOR-2 of the §11 review): the under-grant guard is
+	// AUTHORIZE-ONLY. On the settle purpose the under-granted lease is
+	// installed and returned like any other — the dispatcher, holding the
+	// lease and its RemainingUnits, splits before reserving, which is what
+	// makes the chain terminate; refusing here would dead-letter a real
+	// settlement larger than one lease's maximum budget (§9.3's transient
+	// sentinel retried to attempts_exhausted — real usage lost).
+	if purpose == canonicalWalletLeasePurposeAuthorize && lease.RemainingUnits() < amountUnits {
 		// §9.3: this local guard is TRANSIENT and carries its own sentinel,
 		// distinct from the server's terminal insufficient_balance refusal.
 		// Unreachable against a §3-conformant server (ensure never answers

@@ -144,19 +144,21 @@ func TestPhase34Proto19DispatcherUnderCapShortfallAndContention(t *testing.T) {
 	require.Equal(t, 1, racyAttempts, "lease_contention is transient: one failed attempt, then delivered on the backoff")
 	require.Equal(t, int64(1), canonicalWalletBridgeMetrics.deadLetterBalanceShortfall.Load()-base, "contention never dead-letters")
 
-	// §9.3's under-grant leg: the fake answers headroom < min once (a
-	// non-conformant server's grant) → the local guard's transient sentinel →
-	// RETRIED on the 2 s backoff, never dead-lettered.
+	// §9.3's under-grant leg (retargeted by §11.3, Task 5): the fake answers
+	// headroom < min once (a non-conformant server's grant) → the settle
+	// purpose now INSTALLS the under-granted lease and the dispatcher SPLITS
+	// before reserving (H = the grant, remainder 1 unit) → both halves
+	// deliver, no failed attempt, never dead-lettered.
 	under := "shipany-user-" + uuid.NewString()
 	fake.fund(under, 10_000_000_000)
 	fake.mu.Lock()
 	fake.grantBelowMinOnce = true // no other row is claimable: only the under user's first ensure sees it
 	fake.mu.Unlock()
 	b.ObserveSettlement(CanonicalWalletSettlementEvent{GatewayRequestID: "req-under", PlatformUserID: under, Currency: "CNY", AmountUnits: 10_000_000})
-	p34WaitOutboxStatus(t, ctx, db, "req-under", "delivered") // first attempt: under-grant → MarkOutboxEventFailed; second: a conformant issue → delivered
+	p34WaitOutboxStatus(t, ctx, db, "req-under", "delivered") // the under-grant splits (H = 9,999,999, remainder 1) and both halves deliver
 	var underAttempts int
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT attempt_count FROM wallet_settlement_outbox WHERE gateway_request_id = 'req-under'`).Scan(&underAttempts))
-	require.Equal(t, 1, underAttempts, "the under-grant is transient: one failed attempt, then delivered on the backoff")
+	require.Equal(t, 0, underAttempts, "§11.3: the under-grant's split consumes no attempt — the grant is not a failure")
 	var underReason sql.NullString
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT dead_letter_reason FROM wallet_settlement_outbox WHERE gateway_request_id = 'req-under'`).Scan(&underReason))
 	require.False(t, underReason.Valid, "an under-grant never dead-letters, so no reason is persisted")

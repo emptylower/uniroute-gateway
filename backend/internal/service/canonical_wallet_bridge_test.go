@@ -402,12 +402,30 @@ func TestEnsureLeaseRejectsGrantBelowAmount(t *testing.T) {
 	// TRANSIENT and carries its own sentinel — unreachable against a
 	// §3-conformant server, retried on the outbox backoff; the server's
 	// insufficient_balance refusal keeps ErrCanonicalWalletBalanceShortfall.
+	// §11.3 (MAJOR-2 of the §11 review): the guard is AUTHORIZE-ONLY — the
+	// settle purpose installs the under-granted lease so the dispatcher can
+	// split before reserving (its sibling below).
 	b, store, control := newBridgeForEnsureLeaseTest(t)
 	control.lease = CanonicalWalletLease{LeaseID: "lease-1", Currency: "CNY", BudgetUnits: 100_000_000, ConsumedUnits: 0, ExpiresAt: time.Now().Add(5 * time.Minute)}
 	_, err := b.ensureLease(context.Background(), "user-1", "CNY", 200_000_000, canonicalWalletLeasePurposeAuthorize, "")
 	require.ErrorIs(t, err, ErrCanonicalWalletLeaseGrantBelowAmount)
 	require.NotErrorIs(t, err, ErrCanonicalWalletBalanceShortfall)
 	require.Equal(t, 0, store.installCalls, "a rejected grant is never installed")
+}
+
+// TestEnsureLeaseSettlePurposeInstallsTheUnderGrant (Phase 3.5, §11.3): on
+// the settle purpose the under-granted lease is INSTALLED and returned —
+// what makes the dispatcher's proactive split terminate. The authorize
+// purpose keeps refusing (its sibling above).
+func TestEnsureLeaseSettlePurposeInstallsTheUnderGrant(t *testing.T) {
+	b, store, control := newBridgeForEnsureLeaseTest(t)
+	control.lease = CanonicalWalletLease{LeaseID: "lease-1", Currency: "CNY", BudgetUnits: 100_000_000, ConsumedUnits: 0, ExpiresAt: time.Now().Add(5 * time.Minute)}
+	lease, err := b.ensureLease(context.Background(), "user-1", "CNY", 200_000_000, canonicalWalletLeasePurposeSettle, "")
+	require.NoError(t, err, "the settle purpose never refuses an under-grant")
+	require.Equal(t, 1, store.installCalls, "§11.3: the under-granted lease is installed")
+	require.NotNil(t, store.lease, "its hash exists")
+	require.Equal(t, int64(100_000_000), lease.RemainingUnits(), "the returned lease's remaining is the granted budget B")
+	require.Equal(t, "lease-1", lease.LeaseID)
 }
 
 func TestEnsureLeaseRejectsExpiredGrant(t *testing.T) {

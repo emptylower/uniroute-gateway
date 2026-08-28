@@ -124,18 +124,27 @@ func TestDeliverOutboxEventRealFailurePaths(t *testing.T) {
 		// is TRANSIENT (its own sentinel), so the row is retried on the backoff,
 		// never dead-lettered. Only the server's insufficient_balance refusal is
 		// terminal (balance_shortfall).
-		require.Equal(t, "pending", status, "an under-grant is transient (§9.3): retried on the backoff, never dead-lettered")
+		require.Equal(t, "pending", status, "an under-grant delivery that does not resolve in one attempt is transient (§9.3/§11.3): retried on the backoff, never dead-lettered")
 		var attempts int
 		require.NoError(t, db.QueryRowContext(ctx, `SELECT attempt_count FROM wallet_settlement_outbox WHERE id = $1`, e.ID).Scan(&attempts))
-		require.Equal(t, 1, attempts, "one failed attempt, then the backoff — not a dead-letter")
+		require.Equal(t, 0, attempts, "§11.3: the split consumes no attempt on either row — the refusal that triggered it is not MarkOutboxEventFailed")
 		var reason sql.NullString
 		require.NoError(t, db.QueryRowContext(ctx, `SELECT dead_letter_reason FROM wallet_settlement_outbox WHERE id = $1`, e.ID).Scan(&reason))
 		require.False(t, reason.Valid, "a retried row carries no dead-letter reason")
-		// Phase 3.3a (spec §2.0.1 step (3)): a granted lease whose remaining
-		// budget is below the amount is rejected client-side and NEVER
-		// installed — so the tiny lease does not exist in the store.
+		// Phase 3.5 (§11.3, retargeted from 3.3a's never-installed rule): the
+		// settle purpose INSTALLS the under-granted lease and the dispatcher
+		// splits before reserving — the tiny lease exists, the row was split
+		// (parent 100 units, a remainder carrying the rest), and the parent
+		// is pending because this control plane has no settlements route at
+		// all (a 404 — transient) rather than because of the under-grant.
 		_, err = store.GetCanonicalWalletLeaseByID(ctx, platformUserID, "lease-tiny")
-		require.ErrorIs(t, err, ErrCanonicalWalletLeaseMissing, "a grant below the amount is rejected client-side and never installed")
+		require.NoError(t, err, "§11.3: the under-granted settle lease is installed")
+		var parentAmount int64
+		var remainderRows int
+		require.NoError(t, db.QueryRowContext(ctx, `SELECT amount_units FROM wallet_settlement_outbox WHERE id = $1`, e.ID).Scan(&parentAmount))
+		require.Equal(t, int64(100), parentAmount, "the row was split to the lease's budget")
+		require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM wallet_settlement_outbox WHERE parent_event_id = $1`, e.EventID).Scan(&remainderRows))
+		require.Equal(t, 1, remainderRows, "the remainder row exists")
 	})
 
 	t.Run("settlement refused by control plane", func(t *testing.T) {
