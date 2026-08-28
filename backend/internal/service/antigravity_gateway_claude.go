@@ -117,6 +117,11 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 		sessionHash:     "",              // Forward 方法没有 sessionHash，由上层处理粘性会话清除
 	})
 	if err != nil {
+		// Phase 3.3a: a refusal is terminal — never converted into a generic
+		// retry-exhausted error.
+		if refused, refusedOK := AsAuthorizationRefused(err); refusedOK {
+			return nil, refused
+		}
 		// 检查是否是账号切换信号，转换为 UpstreamFailoverError 让 Handler 切换账号
 		if switchErr, ok := IsAntigravityAccountSwitchError(err); ok {
 			return nil, &UpstreamFailoverError{

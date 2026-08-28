@@ -75,6 +75,13 @@ func (s *OpenAIGatewayService) ForwardAlphaSearch(ctx context.Context, c *gin.Co
 	upstreamStart := time.Now()
 	resp, err := s.httpUpstream.Do(req, proxyURL, account.ID, account.Concurrency)
 	SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
+	// Phase 3.3a: a refusal is terminal — ahead of the transport-error handler.
+	if refused, refusedOK := AsAuthorizationRefused(err); refusedOK {
+		if resp != nil && resp.Body != nil {
+			_ = resp.Body.Close()
+		}
+		return nil, refused
+	}
 	if err != nil {
 		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, true)
 	}
@@ -155,6 +162,13 @@ func (s *OpenAIGatewayService) forwardAlphaSearchViaResponsesWebSearch(
 	upstreamStart := time.Now()
 	resp, err := s.httpUpstream.Do(req, proxyURL, account.ID, account.Concurrency)
 	SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
+	// Phase 3.3a: a refusal is terminal — ahead of the transport-error handler.
+	if refused, refusedOK := AsAuthorizationRefused(err); refusedOK {
+		if resp != nil && resp.Body != nil {
+			_ = resp.Body.Close()
+		}
+		return nil, refused
+	}
 	if err != nil {
 		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, true)
 	}

@@ -230,6 +230,15 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 
 	turnStart := time.Now()
 	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+	// Phase 3.3a: a refusal is terminal — BEFORE the turn == 1 branch, so the
+	// relay loop sees the named error and reports the turn non-retryable (the
+	// WS-port authorization itself is 3.3b).
+	if refused, refusedOK := AsAuthorizationRefused(err); refusedOK {
+		if resp != nil && resp.Body != nil {
+			_ = resp.Body.Close()
+		}
+		return nil, refused
+	}
 	if err != nil {
 		if turn == 1 {
 			return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, true)

@@ -369,6 +369,13 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 
 		// 发送请求
 		resp, err = s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, tlsProfile)
+		// Phase 3.3a: a refusal is terminal — first statement of the error branch.
+		if refused, refusedOK := AsAuthorizationRefused(err); refusedOK {
+			if resp != nil && resp.Body != nil {
+				_ = resp.Body.Close()
+			}
+			return nil, refused
+		}
 		if err != nil {
 			if resp != nil && resp.Body != nil {
 				_ = resp.Body.Close()
@@ -451,6 +458,13 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 					releaseRetryCtx()
 					if buildErr == nil {
 						retryResp, retryErr := s.httpUpstream.DoWithTLS(retryReq, proxyURL, account.ID, account.Concurrency, tlsProfile)
+						// Phase 3.3a: a refusal is terminal — out of the retry untouched.
+						if refused, refusedOK := AsAuthorizationRefused(retryErr); refusedOK {
+							if retryResp != nil && retryResp.Body != nil {
+								_ = retryResp.Body.Close()
+							}
+							return nil, refused
+						}
 						if retryErr == nil {
 							if retryResp.StatusCode < 400 {
 								// 重试请求被上游接受后同步 ParsedRequest，保证 usage/日志看到真实请求体。
@@ -492,6 +506,13 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 									releaseRetryCtx2()
 									if buildErr2 == nil {
 										retryResp2, retryErr2 := s.httpUpstream.DoWithTLS(retryReq2, proxyURL, account.ID, account.Concurrency, tlsProfile)
+										// Phase 3.3a: a refusal is terminal — out of the retry untouched.
+										if refused, refusedOK := AsAuthorizationRefused(retryErr2); refusedOK {
+											if retryResp2 != nil && retryResp2.Body != nil {
+												_ = retryResp2.Body.Close()
+											}
+											return nil, refused
+										}
 										if retryErr2 == nil {
 											if retryResp2.StatusCode < 400 {
 												// 二阶段工具块降级成功时也必须更新当前 body。
@@ -571,6 +592,13 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 						releaseBudgetRetryCtx()
 						if buildErr == nil {
 							budgetRetryResp, retryErr := s.httpUpstream.DoWithTLS(budgetRetryReq, proxyURL, account.ID, account.Concurrency, tlsProfile)
+							// Phase 3.3a: a refusal is terminal — out of the retry untouched.
+							if refused, refusedOK := AsAuthorizationRefused(retryErr); refusedOK {
+								if budgetRetryResp != nil && budgetRetryResp.Body != nil {
+									_ = budgetRetryResp.Body.Close()
+								}
+								return nil, refused
+							}
 							if retryErr == nil {
 								if budgetRetryResp.StatusCode < 400 {
 									// budget 修正请求成功后，ParsedRequest 也要描述被接受的修正版。

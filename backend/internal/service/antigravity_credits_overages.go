@@ -166,6 +166,7 @@ func shouldMarkCreditsExhausted(resp *http.Response, respBody []byte, reqErr err
 type creditsOveragesRetryResult struct {
 	handled bool
 	resp    *http.Response
+	err     error // Phase 3.3a: a terminal authorization refusal, propagated as is
 }
 
 // attemptCreditsOveragesRetry 在确认免费配额耗尽后，尝试注入 AI Credits 继续请求。
@@ -193,6 +194,11 @@ func (s *AntigravityGatewayService) attemptCreditsOveragesRetry(
 	}
 
 	creditsResp, err := p.httpUpstream.Do(creditsReq, p.proxyURL, p.account.ID, p.account.Concurrency)
+	// Phase 3.3a: a refusal is terminal — the credits overage call must not
+	// proceed, and the refusal flows back as the named error.
+	if refused, refusedOK := AsAuthorizationRefused(err); refusedOK {
+		return &creditsOveragesRetryResult{err: refused}
+	}
 	if err == nil && creditsResp != nil && creditsResp.StatusCode < 400 {
 		s.clearCreditsExhausted(p.ctx, p.account)
 		logger.LegacyPrintf("service.antigravity_gateway", "%s status=%d credit_overages_success model=%s account=%d",

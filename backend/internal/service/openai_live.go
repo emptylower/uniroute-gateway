@@ -403,6 +403,14 @@ func (s *OpenAIGatewayService) createUpstreamLiveCall(
 	}
 
 	resp, err := s.httpUpstream.Do(upstreamReq, resolveAccountProxyURL(account), account.ID, account.Concurrency)
+	// Phase 3.3a: a refusal is terminal (Live is authorized at 3.3c — the
+	// short-circuit still goes in now so a refused write is never wrapped).
+	if refused, refusedOK := AsAuthorizationRefused(err); refusedOK {
+		if resp != nil && resp.Body != nil {
+			_ = resp.Body.Close()
+		}
+		return nil, refused
+	}
 	if err != nil {
 		logLiveCreateStageFailure(ctx, account.ID, "upstream_transport", err)
 		return nil, err

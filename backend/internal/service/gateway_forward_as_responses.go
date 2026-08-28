@@ -132,6 +132,13 @@ func (s *GatewayService) ForwardAsResponses(
 
 	// 11. Send request
 	resp, err := s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
+	// Phase 3.3a: a refusal is terminal — first statement of the error branch.
+	if refused, refusedOK := AsAuthorizationRefused(err); refusedOK {
+		if resp != nil && resp.Body != nil {
+			_ = resp.Body.Close()
+		}
+		return nil, refused
+	}
 	if err != nil {
 		if resp != nil && resp.Body != nil {
 			_ = resp.Body.Close()

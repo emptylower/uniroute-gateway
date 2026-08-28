@@ -287,6 +287,11 @@ func antigravityCompatProxyURL(account *Account) string {
 }
 
 func (s *AntigravityGatewayService) handleAntigravityCompatTransportError(c *gin.Context, err error) error {
+	// Phase 3.3a: a refusal is terminal — never converted into a generic
+	// retry-exhausted error.
+	if refused, refusedOK := AsAuthorizationRefused(err); refusedOK {
+		return refused
+	}
 	if switchErr, ok := IsAntigravityAccountSwitchError(err); ok {
 		return &UpstreamFailoverError{
 			StatusCode:        http.StatusServiceUnavailable,

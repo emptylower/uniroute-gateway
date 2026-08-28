@@ -1713,6 +1713,13 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 	upstreamStart := time.Now()
 	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
 	SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
+	// Phase 3.3a: a refusal is terminal — first statement of the error branch.
+	if refused, refusedOK := AsAuthorizationRefused(err); refusedOK {
+		if resp != nil && resp.Body != nil {
+			_ = resp.Body.Close()
+		}
+		return nil, refused
+	}
 	if err != nil {
 		safeErr := sanitizeUpstreamErrorMessage(err.Error())
 		setOpsUpstreamError(c, 0, safeErr, "")

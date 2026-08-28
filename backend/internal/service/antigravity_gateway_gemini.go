@@ -160,6 +160,11 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 		sessionHash:     forwardOpts.sessionHash,
 	})
 	if err != nil {
+		// Phase 3.3a: a refusal is terminal — never converted into a generic
+		// retry-exhausted error.
+		if refused, refusedOK := AsAuthorizationRefused(err); refusedOK {
+			return nil, refused
+		}
 		// 检查是否是账号切换信号，转换为 UpstreamFailoverError 让 Handler 切换账号
 		if switchErr, ok := IsAntigravityAccountSwitchError(err); ok {
 			return nil, &UpstreamFailoverError{
@@ -200,6 +205,15 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 					fallbackReq, err := antigravity.NewAPIRequest(ctx, upstreamAction, accessToken, fallbackWrapped)
 					if err == nil {
 						fallbackResp, err := s.httpUpstream.Do(fallbackReq, proxyURL, account.ID, account.Concurrency)
+						// Phase 3.3a: a refusal is terminal — never consumed by the
+						// fallback branch.
+						if refused, refusedOK := AsAuthorizationRefused(err); refusedOK {
+							if fallbackResp != nil && fallbackResp.Body != nil {
+								_ = fallbackResp.Body.Close()
+							}
+							_ = resp.Body.Close()
+							return nil, refused
+						}
 						if err == nil && fallbackResp.StatusCode < 400 {
 							_ = resp.Body.Close()
 							resp = fallbackResp

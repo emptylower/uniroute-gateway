@@ -124,6 +124,13 @@ func (s *GeminiMessagesCompatService) forwardClaudeBodyAsChatCompletions(
 		requestIDHeader = idHeader
 
 		resp, err = s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+		// Phase 3.3a: a refusal is terminal — never retried, never rewritten.
+		// The client-visible body is written here, but the RETURNED error stays
+		// the refusal itself (writeChatCompletionsError's fmt.Errorf would erase it).
+		if refused, refusedOK := AsAuthorizationRefused(err); refusedOK {
+			_ = s.writeChatCompletionsError(c, AuthorizationRefusedHTTPStatus, AuthorizationRefusedErrorType, refused.Error())
+			return nil, refused
+		}
 		if err != nil {
 			safeErr := sanitizeUpstreamErrorMessage(err.Error())
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{

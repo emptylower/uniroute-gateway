@@ -196,6 +196,13 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		upstreamStart := time.Now()
 		resp, err = s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
 		SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
+		// Phase 3.3a: a refusal is terminal — ahead of the transport-error handler.
+		if refused, refusedOK := AsAuthorizationRefused(err); refusedOK {
+			if resp != nil && resp.Body != nil {
+				_ = resp.Body.Close()
+			}
+			return nil, refused
+		}
 		if err != nil {
 			// Transport-level failure (proxy/DNS/TCP/TLS — no HTTP response). Convert to
 			// a failover so the handler switches to a healthy account.

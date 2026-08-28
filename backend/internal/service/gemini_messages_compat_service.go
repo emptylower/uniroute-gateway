@@ -774,6 +774,13 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 		requestIDHeader = idHeader
 
 		resp, err = s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+		// Phase 3.3a: a refusal is terminal — never retried, never rewritten.
+		// The client-visible body is written here, but the RETURNED error stays
+		// the refusal itself (writeClaudeError's fmt.Errorf would erase it).
+		if refused, refusedOK := AsAuthorizationRefused(err); refusedOK {
+			_ = s.writeClaudeError(c, AuthorizationRefusedHTTPStatus, AuthorizationRefusedErrorType, refused.Error())
+			return nil, refused
+		}
 		if err != nil {
 			safeErr := sanitizeUpstreamErrorMessage(err.Error())
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
@@ -1304,6 +1311,13 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 		requestIDHeader = idHeader
 
 		resp, err = s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+		// Phase 3.3a: a refusal is terminal — never retried, never rewritten.
+		// The client-visible body is written here, but the RETURNED error stays
+		// the refusal itself (writeGoogleError's fmt.Errorf would erase it).
+		if refused, refusedOK := AsAuthorizationRefused(err); refusedOK {
+			_ = s.writeGoogleError(c, AuthorizationRefusedHTTPStatus, refused.Error())
+			return nil, refused
+		}
 		if err != nil {
 			safeErr := sanitizeUpstreamErrorMessage(err.Error())
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
@@ -2723,6 +2737,10 @@ func (s *GeminiMessagesCompatService) ForwardAIStudioGET(ctx context.Context, ac
 	}
 
 	resp, err := s.httpUpstream.Do(req, proxyURL, account.ID, account.Concurrency)
+	// Phase 3.3a: a refusal is terminal — the raw fetch must not wrap it.
+	if refused, refusedOK := AsAuthorizationRefused(err); refusedOK {
+		return nil, refused
+	}
 	if err != nil {
 		return nil, err
 	}
