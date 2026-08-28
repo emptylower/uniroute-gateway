@@ -56,7 +56,12 @@ var (
 )
 
 const (
-	canonicalWalletLeaseScope      = "wallet:lease"
+	canonicalWalletLeaseScope = "wallet:lease"
+	// canonicalWalletEnsurePath must be identical at the POST, the 404/405
+	// classification and the probe: the classification is a string
+	// comparison against the caller's path, so a diverging literal would
+	// silently stop matching.
+	canonicalWalletEnsurePath      = "/api/internal/v2/wallet/leases/ensure"
 	canonicalWalletSettlementScope = "wallet:settlement"
 )
 
@@ -228,7 +233,7 @@ type canonicalWalletEnsureRequest struct {
 	RequestedBudget      canonicalWalletAmountObject `json:"requested_budget"`
 	RequestedTTLSeconds  int                         `json:"requested_ttl_seconds"`
 	PreferLeaseID        string                      `json:"prefer_lease_id,omitempty"`
-	Drained              []canonicalWalletDrainEntry `json:"drained,omitempty"` // nil marshals to null; ShipAny accepts null as absent
+	Drained              []canonicalWalletDrainEntry `json:"drained,omitempty"` // omitempty: a nil slice is OMITTED (not null); ShipAny accepts absent, null and [] alike
 	CallerSlotTTLSeconds int                         `json:"caller_slot_ttl_seconds"`
 	GatewayAttemptID     string                      `json:"gateway_attempt_id,omitempty"`
 }
@@ -315,7 +320,7 @@ func (c *canonicalWalletHTTPClient) EnsureLease(ctx context.Context, request can
 		return nil, fmt.Errorf("requested an unsupported currency: %w", err)
 	}
 	var wire canonicalWalletEnsureWireResponse
-	if err := c.doJSON(ctx, http.MethodPost, "/api/internal/v2/wallet/leases/ensure", canonicalWalletLeaseScope, "", request, &wire); err != nil {
+	if err := c.doJSON(ctx, http.MethodPost, canonicalWalletEnsurePath, canonicalWalletLeaseScope, "", request, &wire); err != nil {
 		var refusal *canonicalWalletRefusalError
 		if errors.As(err, &refusal) {
 			switch refusal.Reason {
@@ -480,7 +485,7 @@ func (c *canonicalWalletHTTPClient) doJSON(ctx context.Context, method, path, sc
 		// retries on the backoff; attempts_exhausted if it runs out). Keyed
 		// on the PATH — doJSON is shared with the settlements route, whose
 		// statuses are its own.
-		if path == "/api/internal/v2/wallet/leases/ensure" && (resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed) {
+		if path == canonicalWalletEnsurePath && (resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed) {
 			return fmt.Errorf("%w: ensure route answered status %d", ErrCanonicalWalletControlPlaneIncompatible, resp.StatusCode)
 		}
 		return fmt.Errorf("canonical wallet control plane returned status %d", resp.StatusCode)
@@ -505,7 +510,7 @@ func (c *canonicalWalletHTTPClient) doJSON(ctx context.Context, method, path, sc
 // route; the caller keys on the returned status alone (405 = the route exists,
 // POST-only; 404 = the control plane predates 3.4a-S).
 func (c *canonicalWalletHTTPClient) probeEnsureRoute(ctx context.Context) (int, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.cfg.ControlPlaneURL+"/api/internal/v2/wallet/leases/ensure", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.cfg.ControlPlaneURL+canonicalWalletEnsurePath, nil)
 	if err != nil {
 		return 0, fmt.Errorf("build canonical wallet probe request: %w", err)
 	}
