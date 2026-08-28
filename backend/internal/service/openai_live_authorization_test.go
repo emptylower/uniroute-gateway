@@ -359,7 +359,8 @@ func TestPhase34bLiveArmsOneHoldAtTheSessionEstimate(t *testing.T) {
 	require.Nil(t, f.bridge.liveProvisional, "the unit fixture has no Live store on the bridge")
 }
 
-func TestCreateLiveCallWritesTheProvisionalRowBeforeThePost(t *testing.T) {	f := newLiveAuthTestFixture(t, config.CanonicalWalletModeShadow)
+func TestCreateLiveCallWritesTheProvisionalRowBeforeThePost(t *testing.T) {
+	f := newLiveAuthTestFixture(t, config.CanonicalWalletModeShadow)
 
 	postHappened := false
 	var handleInPost *AuthorizationHandle
