@@ -31,7 +31,7 @@ func TestGatewayHandlerSubmitUsageRecordTask_WithPool(t *testing.T) {
 	done := make(chan struct{})
 	h.submitUsageRecordTask(context.Background(), func(ctx context.Context) {
 		close(done)
-	})
+	}, nil)
 
 	select {
 	case <-done:
@@ -49,7 +49,7 @@ func TestGatewayHandlerSubmitUsageRecordTask_WithoutPoolSyncFallback(t *testing.
 			t.Fatal("expected deadline in fallback context")
 		}
 		called.Store(true)
-	})
+	}, nil)
 
 	require.True(t, called.Load())
 }
@@ -57,7 +57,7 @@ func TestGatewayHandlerSubmitUsageRecordTask_WithoutPoolSyncFallback(t *testing.
 func TestGatewayHandlerSubmitUsageRecordTask_NilTask(t *testing.T) {
 	h := &GatewayHandler{}
 	require.NotPanics(t, func() {
-		h.submitUsageRecordTask(context.Background(), nil)
+		h.submitUsageRecordTask(context.Background(), nil, nil)
 	})
 }
 
@@ -68,12 +68,12 @@ func TestGatewayHandlerSubmitUsageRecordTask_WithoutPool_TaskPanicRecovered(t *t
 	require.NotPanics(t, func() {
 		h.submitUsageRecordTask(context.Background(), func(ctx context.Context) {
 			panic("usage task panic")
-		})
+		}, nil)
 	})
 
 	h.submitUsageRecordTask(context.Background(), func(ctx context.Context) {
 		called.Store(true)
-	})
+	}, nil)
 	require.True(t, called.Load(), "panic 后后续任务应仍可执行")
 }
 
@@ -84,7 +84,7 @@ func TestOpenAIGatewayHandlerSubmitUsageRecordTask_WithPool(t *testing.T) {
 	done := make(chan struct{})
 	h.submitUsageRecordTask(context.Background(), func(ctx context.Context) {
 		close(done)
-	})
+	}, nil)
 
 	select {
 	case <-done:
@@ -102,7 +102,7 @@ func TestOpenAIGatewayHandlerSubmitUsageRecordTask_WithoutPoolSyncFallback(t *te
 			t.Fatal("expected deadline in fallback context")
 		}
 		called.Store(true)
-	})
+	}, nil)
 
 	require.True(t, called.Load())
 }
@@ -110,7 +110,7 @@ func TestOpenAIGatewayHandlerSubmitUsageRecordTask_WithoutPoolSyncFallback(t *te
 func TestOpenAIGatewayHandlerSubmitUsageRecordTask_NilTask(t *testing.T) {
 	h := &OpenAIGatewayHandler{}
 	require.NotPanics(t, func() {
-		h.submitUsageRecordTask(context.Background(), nil)
+		h.submitUsageRecordTask(context.Background(), nil, nil)
 	})
 }
 
@@ -121,12 +121,12 @@ func TestOpenAIGatewayHandlerSubmitUsageRecordTask_WithoutPool_TaskPanicRecovere
 	require.NotPanics(t, func() {
 		h.submitUsageRecordTask(context.Background(), func(ctx context.Context) {
 			panic("usage task panic")
-		})
+		}, nil)
 	})
 
 	h.submitUsageRecordTask(context.Background(), func(ctx context.Context) {
 		called.Store(true)
-	})
+	}, nil)
 	require.True(t, called.Load(), "panic 后后续任务应仍可执行")
 }
 
@@ -154,7 +154,7 @@ func TestOpenAIGatewayHandlerSubmitMandatoryUsageRecordTask_DroppedTaskSyncFallb
 	var called atomic.Bool
 	h.submitMandatoryUsageRecordTask(context.Background(), func(ctx context.Context) {
 		called.Store(true)
-	})
+	}, nil)
 	close(release)
 
 	require.True(t, called.Load(), "mandatory usage task must run synchronously when async submit is dropped")
@@ -184,7 +184,7 @@ func TestOpenAIGatewayHandlerSubmitOpenAIUsageRecordTask_ImageResultUsesMandator
 	var called atomic.Bool
 	h.submitOpenAIUsageRecordTask(context.Background(), &service.OpenAIForwardResult{ImageCount: 1}, func(ctx context.Context) {
 		called.Store(true)
-	})
+	}, nil)
 	close(release)
 
 	require.True(t, called.Load(), "image usage task must be mandatory when async submit is dropped")

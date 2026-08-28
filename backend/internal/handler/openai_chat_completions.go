@@ -264,6 +264,21 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 			if channelMapping.Mapped {
 				forwardBody = h.gatewayService.ReplaceModelInBody(candidateBody, channelMapping.MappedModel)
 			}
+			// Phase 3.3a authorization point (row 5): after the freeze and after
+			// the body exists, before the Forward. A refusal is terminal —
+			// release the slot, answer 402, never fail over.
+			authHandle, authErr := h.gatewayService.AuthorizeBillableAttempt(c.Request.Context(), billingSnapshot, routedKey, service.EstimateInputFromRequestBody(forwardBody, service.EstimateInputOptions{}))
+			if authErr != nil {
+				if accountReleaseFunc != nil {
+					accountReleaseFunc()
+				}
+				if selection.ReleaseFunc != nil {
+					selection.ReleaseFunc()
+				}
+				h.handleStreamingAwareError(c, service.AuthorizationRefusedHTTPStatus, service.AuthorizationRefusedErrorType, service.AuthorizationRefusedMessage, false)
+				return
+			}
+			c.Request = c.Request.WithContext(service.WithAuthorizationHandle(c.Request.Context(), authHandle))
 			writerSizeBeforeForward := c.Writer.Size()
 			result, err := func() (*service.OpenAIForwardResult, error) {
 				defer func() {
@@ -364,7 +379,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 					if !upstreamErrorAlreadyCommunicated {
 						wroteFallback = h.ensureOpenAIStreamReadErrorResponse(c, err, streamStarted)
 						if !wroteFallback {
-							wroteFallback = h.ensureForwardErrorResponse(c, streamStarted)
+							wroteFallback = h.ensureForwardErrorResponseFor(c, err, streamStarted)
 						}
 					}
 					reqLog.Warn("openai_chat_completions.forward_failed",
@@ -407,6 +422,8 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 					ChannelUsageFields: routedChannelUsageFields(c, channelMapping, reqModel, result.UpstreamModel, candidate.ChannelID),
 					CyberBlocked:       cyberBlocked,
 					BillingSnapshot:    billingSnapshot,
+					AuthorizationToken: service.AuthorizationTokenOf(authHandle),
+					AuthorizationID:    service.AuthorizationIDOf(authHandle),
 				}); err != nil {
 					logger.L().With(
 						zap.String("component", "handler.openai_gateway.chat_completions"),
@@ -417,7 +434,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 						zap.Int64("account_id", account.ID),
 					).Error("openai_chat_completions.record_usage_failed", zap.Error(err))
 				}
-			})
+			}, authHandle)
 			reqLog.Debug("openai_chat_completions.request_completed",
 				zap.Int64("account_id", account.ID),
 				zap.Int("switch_count", switchCount),

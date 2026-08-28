@@ -125,6 +125,12 @@ func wrapOpenAIWSIngressTurnError(stage string, cause error, wroteDownstream boo
 }
 
 func isOpenAIWSIngressTurnRetryable(err error) bool {
+	// Phase 3.3a: a wallet authorization refusal is TERMINAL — no relay loop
+	// retries it (spec §2.0). The HTTP bridge's Do error can be wrapped into a
+	// turn error by the ingress loop; 3.3b adds the WS-port branch/close status.
+	if errors.Is(err, ErrAuthorizationRefused) {
+		return false
+	}
 	var turnErr *openAIWSIngressTurnError
 	if !errors.As(err, &turnErr) || turnErr == nil {
 		return false

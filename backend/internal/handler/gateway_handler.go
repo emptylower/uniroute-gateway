@@ -523,6 +523,19 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			// 账号槽位/等待计数需要在超时或断开时安全回收
 			accountReleaseFunc = wrapReleaseOnDone(c.Request.Context(), accountReleaseFunc)
 
+			// Phase 3.3a authorization point (row 10a): after the freeze, before
+			// the first upstream write. A refusal is terminal — release the slot,
+			// answer 402, never fail over.
+			authHandle, authErr := h.gatewayService.AuthorizeBillableAttempt(c.Request.Context(), billingSnapshot, apiKey, service.EstimateInputFromRequestBody(body, service.EstimateInputOptions{}))
+			if authErr != nil {
+				if accountReleaseFunc != nil {
+					accountReleaseFunc()
+				}
+				h.handleStreamingAwareError(c, service.AuthorizationRefusedHTTPStatus, service.AuthorizationRefusedErrorType, service.AuthorizationRefusedMessage, false)
+				return
+			}
+			c.Request = c.Request.WithContext(service.WithAuthorizationHandle(c.Request.Context(), authHandle))
+
 			// 转发请求 - 根据账号平台分流
 			var result *service.ForwardResult
 			requestCtx := c.Request.Context()
@@ -572,7 +585,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				upstreamErrorAlreadyCommunicated := gatewayForwardErrorAlreadyCommunicated(c, writerSizeBeforeForward, err)
 				wroteFallback := false
 				if !upstreamErrorAlreadyCommunicated {
-					wroteFallback = h.ensureForwardErrorResponse(c, streamStarted)
+					wroteFallback = h.ensureForwardErrorResponseFor(c, err, streamStarted)
 				}
 				forwardFailedFields := []zap.Field{
 					zap.Int64("account_id", account.ID),
@@ -649,6 +662,8 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					APIKeyService:      h.apiKeyService,
 					ChannelUsageFields: clientRequestedUsageFields(c, channelMapping, reqModel, result.UpstreamModel),
 					BillingSnapshot:    billingSnapshot,
+					AuthorizationToken: service.AuthorizationTokenOf(authHandle),
+					AuthorizationID:    service.AuthorizationIDOf(authHandle),
 				}); err != nil {
 					logger.L().With(
 						zap.String("component", "handler.gateway.messages"),
@@ -659,7 +674,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 						zap.Int64("account_id", account.ID),
 					).Error("gateway.record_usage_failed", zap.Error(err))
 				}
-			})
+			}, authHandle)
 			return
 		}
 	}
@@ -905,6 +920,22 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			}
 			attemptBody := attemptParsedReq.Body.Bytes()
 
+			// Phase 3.3a authorization point (row 10b): after the freeze and after
+			// the attempt body exists, before the first upstream write. A refusal
+			// is terminal — release slot and queue, answer 402, never fail over.
+			authHandle, authErr := h.gatewayService.AuthorizeBillableAttempt(c.Request.Context(), billingSnapshot, currentAPIKey, service.EstimateInputFromRequestBody(attemptBody, service.EstimateInputOptions{}))
+			if authErr != nil {
+				if queueRelease != nil {
+					queueRelease()
+				}
+				if accountReleaseFunc != nil {
+					accountReleaseFunc()
+				}
+				h.handleStreamingAwareError(c, service.AuthorizationRefusedHTTPStatus, service.AuthorizationRefusedErrorType, service.AuthorizationRefusedMessage, false)
+				return
+			}
+			c.Request = c.Request.WithContext(service.WithAuthorizationHandle(c.Request.Context(), authHandle))
+
 			// 转发请求 - 根据账号平台分流
 			c.Set("parsed_request", attemptParsedReq)
 			var result *service.ForwardResult
@@ -1010,7 +1041,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				upstreamErrorAlreadyCommunicated := gatewayForwardErrorAlreadyCommunicated(c, writerSizeBeforeForward, err)
 				wroteFallback := false
 				if !upstreamErrorAlreadyCommunicated {
-					wroteFallback = h.ensureForwardErrorResponse(c, streamStarted)
+					wroteFallback = h.ensureForwardErrorResponseFor(c, err, streamStarted)
 				}
 				forwardFailedFields := []zap.Field{
 					zap.Int64("account_id", account.ID),
@@ -1097,6 +1128,8 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					APIKeyService:      h.apiKeyService,
 					ChannelUsageFields: clientRequestedUsageFields(c, channelMapping, reqModel, result.UpstreamModel),
 					BillingSnapshot:    billingSnapshot,
+					AuthorizationToken: service.AuthorizationTokenOf(authHandle),
+					AuthorizationID:    service.AuthorizationIDOf(authHandle),
 				}); err != nil {
 					logger.L().With(
 						zap.String("component", "handler.gateway.messages"),
@@ -1107,7 +1140,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 						zap.Int64("account_id", account.ID),
 					).Error("gateway.record_usage_failed", zap.Error(err))
 				}
-			})
+			}, authHandle)
 			return
 		}
 		if !retryWithFallback {
@@ -2486,13 +2519,18 @@ func (h *GatewayHandler) maybeLogCompatibilityFallbackMetrics(reqLog *zap.Logger
 	)
 }
 
-func (h *GatewayHandler) submitUsageRecordTask(parent context.Context, task service.UsageRecordTask) {
+func (h *GatewayHandler) submitUsageRecordTask(parent context.Context, task service.UsageRecordTask, handle *service.AuthorizationHandle) {
 	if task == nil {
 		return
 	}
 	task = wrapUsageRecordTaskContext(parent, task)
 	if h.usageRecordWorkerPool != nil {
-		h.usageRecordWorkerPool.Submit(task)
+		if mode := h.usageRecordWorkerPool.Submit(task); mode == service.UsageRecordSubmitModeDropped {
+			// Phase 3.3a (spec §4): a dropped submission means ownership of the
+			// result never transferred — "we submitted it" is not a transfer.
+			// 3.4b turns this into an abort of the hold; 3.3 makes it observable.
+			handle.MarkAbandoned("worker_pool_dropped")
+		}
 		return
 	}
 	// 回退路径：worker 池未注入时同步执行，避免退回到无界 goroutine 模式。

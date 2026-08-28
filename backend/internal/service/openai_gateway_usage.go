@@ -39,6 +39,10 @@ type OpenAIRecordUsageInput struct {
 	// BillingSnapshot (Phase 3.2) is the frozen pricing basis for this attempt;
 	// nil = no snapshot (Count Tokens, off mode, pre-3.2 callers).
 	BillingSnapshot *BillingSnapshot
+	// AuthorizationToken / AuthorizationID (Phase 3.3): explicit fields — never in
+	// context.Context (spec §3.5, §4). Empty = no authorization.
+	AuthorizationToken string
+	AuthorizationID    string
 	ChannelUsageFields
 }
 
@@ -64,6 +68,10 @@ type CyberPolicyUsageInput struct {
 	RequestPayloadHash       string
 	APIKeyService            APIKeyQuotaUpdater
 	GovernanceTargetPlatform string
+	// Phase 3.3a: explicit authorization fields (spec §3.5, §4) — captured by
+	// the handler BEFORE the goroutine so no gin.Context access happens there.
+	AuthorizationToken string
+	AuthorizationID    string
 	ChannelUsageFields
 }
 
@@ -102,6 +110,8 @@ func (s *OpenAIGatewayService) RecordCyberPolicyUsageLog(ctx context.Context, in
 		GovernanceTargetPlatform: in.GovernanceTargetPlatform,
 		ChannelUsageFields:       in.ChannelUsageFields,
 		CyberBlocked:             true,
+		AuthorizationToken:       in.AuthorizationToken,
+		AuthorizationID:          in.AuthorizationID,
 	}); err != nil {
 		logger.LegacyPrintf("service.openai_gateway", "cyber usage record failed: request_id=%s err=%v", in.RequestID, err)
 	}
@@ -386,7 +396,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	if billingErr != nil {
 		return billingErr
 	}
-	observeCanonicalWalletSettlement(s.canonicalWallet, requestID, user, cost, isSubscriptionBilling, billingApplied, billingResult)
+	observeCanonicalWalletSettlement(s.canonicalWallet, requestID, user, cost, isSubscriptionBilling, billingApplied, billingResult, input.AuthorizationToken, input.AuthorizationID)
 	writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.openai_gateway")
 	persistBillingSnapshotBestEffort(ctx, s.snapshots, input.BillingSnapshot)
 

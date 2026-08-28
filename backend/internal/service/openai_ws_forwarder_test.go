@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -205,4 +206,20 @@ func TestIsOpenAIWSTokenEvent_DisjointWithTerminal(t *testing.T) {
 			require.False(t, isOpenAIWSTokenEvent(ev), "terminal event %q must NOT be classified as token event (issue #2651)", ev)
 		})
 	}
+}
+
+// Phase 3.3a (spec §2.0): the WS relay loop must report an authorization
+// refusal as non-retryable — the HTTP bridge's Do error is wrapped into a turn
+// error by the ingress loop; 3.3b adds the WS-port branch and close status.
+func TestAuthorizationRefusalIsNotRetryableOnWSTurn(t *testing.T) {
+	refusal := &AuthorizationRefusedError{Reason: AuthorizationRefusalBalanceShortfall, AuthorizationID: "auth_ws"}
+	turnErr := &openAIWSIngressTurnError{stage: "write_upstream", cause: refusal}
+	require.False(t, isOpenAIWSIngressTurnRetryable(turnErr), "a refusal must never be retried by the WS relay")
+
+	require.False(t, isOpenAIWSIngressTurnRetryable(error(refusal)))
+
+	// A plain transport error at the same stage stays retryable (guard against
+	// weakening the existing classification).
+	transportTurnErr := &openAIWSIngressTurnError{stage: "write_upstream", cause: errors.New("connection reset")}
+	require.True(t, isOpenAIWSIngressTurnRetryable(transportTurnErr))
 }

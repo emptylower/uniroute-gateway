@@ -234,6 +234,9 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 			}
 			if lastFailoverErr != nil {
 				h.handleFailoverExhausted(c, lastFailoverErr, false)
+			} else if refused, isRefused := service.AsAuthorizationRefused(err); isRefused {
+				// Phase 3.3a: a refusal is terminal and never "upstream request failed".
+				h.errorResponse(c, service.AuthorizationRefusedHTTPStatus, service.AuthorizationRefusedErrorType, service.AuthorizationRefusedMessage+": "+string(refused.Reason))
 			} else {
 				h.errorResponse(c, http.StatusBadGateway, "api_error", "Upstream request failed")
 			}
@@ -309,6 +312,30 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 
 		service.SetOpsLatencyMs(c, service.OpsRoutingLatencyMsKey, time.Since(routingStart).Milliseconds())
 		forwardStart := time.Now()
+		// Phase 3.3a authorization point (row 11c): after the freeze, before the
+		// first upstream write. The media terms mirror the settle input: image
+		// generation requests carry N/size; video requests carry count, duration
+		// and resolution with the GrokVideo verdict (this handler only routes
+		// Grok media/video endpoints). A refusal is terminal — release the slot,
+		// answer 402 via errorResponse, never fail over.
+		grokMediaOpts := service.EstimateInputOptions{}
+		if endpoint.IsVideoLookupRequest() || strings.HasPrefix(string(endpoint), "videos_") {
+			grokMediaOpts = service.EstimateInputOptions{VideoCount: requestInfo.N, VideoDurationSeconds: requestInfo.DurationSeconds, VideoResolution: requestInfo.Resolution, GrokVideo: true}
+		} else {
+			grokMediaOpts = service.EstimateInputOptions{ImageCount: requestInfo.N, ImageSize: requestInfo.Size}
+		}
+		authHandle, authErr := h.gatewayService.AuthorizeBillableAttempt(c.Request.Context(), billingSnapshot, apiKey, service.EstimateInputFromRequestBody(body, grokMediaOpts))
+		if authErr != nil {
+			if accountReleaseFunc != nil {
+				accountReleaseFunc()
+			}
+			if selection.ReleaseFunc != nil {
+				selection.ReleaseFunc()
+			}
+			h.errorResponse(c, service.AuthorizationRefusedHTTPStatus, service.AuthorizationRefusedErrorType, service.AuthorizationRefusedMessage)
+			return
+		}
+		c.Request = c.Request.WithContext(service.WithAuthorizationHandle(c.Request.Context(), authHandle))
 		writerSizeBeforeForward := c.Writer.Size()
 		result, err := func() (*service.OpenAIForwardResult, error) {
 			defer func() {
@@ -392,7 +419,12 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 			}
 			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, grokMediaScheduleModel(account, routingModel, nil), false, nil)
 			if !service.IsResponseCommitted(c) && c.Writer.Size() == writerSizeBeforeForward {
-				h.errorResponse(c, http.StatusBadGateway, "upstream_error", "Upstream request failed")
+				if refused, isRefused := service.AsAuthorizationRefused(err); isRefused {
+					// Phase 3.3a: a refusal is terminal and never "upstream request failed".
+					h.errorResponse(c, service.AuthorizationRefusedHTTPStatus, service.AuthorizationRefusedErrorType, service.AuthorizationRefusedMessage+": "+string(refused.Reason))
+				} else {
+					h.errorResponse(c, http.StatusBadGateway, "upstream_error", "Upstream request failed")
+				}
 			}
 			reqLog.Warn("grok_media.forward_failed",
 				zap.Int64("account_id", account.ID),
@@ -414,7 +446,7 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 			}
 		}
 		if shouldRecordGrokMediaUsage(endpoint, requestModel) {
-			recordGrokMediaUsage(c, h, reqLog, apiKey, subject, subscription, account, result, requestModel, body, requestID, billingSnapshot)
+			recordGrokMediaUsage(c, h, reqLog, apiKey, subject, subscription, account, result, requestModel, body, requestID, billingSnapshot, authHandle)
 		}
 		reqLog.Debug("grok_media.request_completed",
 			zap.Int64("account_id", account.ID),
@@ -472,6 +504,7 @@ func recordGrokMediaUsage(
 	body []byte,
 	requestID string,
 	billingSnapshot *service.BillingSnapshot,
+	authHandle *service.AuthorizationHandle,
 ) {
 	userAgent := c.GetHeader("User-Agent")
 	clientIP := ip.GetClientIP(c)
@@ -507,6 +540,8 @@ func recordGrokMediaUsage(
 			SessionID:          sessionID,
 			ChannelUsageFields: channelUsageFields,
 			BillingSnapshot:    billingSnapshot,
+			AuthorizationToken: service.AuthorizationTokenOf(authHandle),
+			AuthorizationID:    service.AuthorizationIDOf(authHandle),
 		}); err != nil {
 			logger.L().With(
 				zap.String("component", "handler.openai_gateway.grok_media"),
@@ -518,5 +553,5 @@ func recordGrokMediaUsage(
 			).Error("grok_media.record_usage_failed", zap.Error(err))
 			reqLog.Debug("grok_media.record_usage_failed", zap.Error(err))
 		}
-	})
+	}, authHandle)
 }

@@ -18,7 +18,7 @@ func TestSubmitUsageRecordTaskCopiesRequestContext(t *testing.T) {
 	h.submitUsageRecordTask(parent, func(ctx context.Context) {
 		gotClientRequestID, _ = ctx.Value(ctxkey.ClientRequestID).(string)
 		gotRequestID, _ = ctx.Value(ctxkey.RequestID).(string)
-	})
+	}, nil)
 
 	require.Equal(t, "client-request-123", gotClientRequestID)
 	require.Equal(t, "request-456", gotRequestID)
@@ -34,7 +34,7 @@ func TestOpenAISubmitUsageRecordTaskCopiesRequestContext(t *testing.T) {
 	h.submitUsageRecordTask(parent, func(ctx context.Context) {
 		gotClientRequestID, _ = ctx.Value(ctxkey.ClientRequestID).(string)
 		gotRequestID, _ = ctx.Value(ctxkey.RequestID).(string)
-	})
+	}, nil)
 
 	require.Equal(t, "openai-client-request-123", gotClientRequestID)
 	require.Equal(t, "openai-request-456", gotRequestID)

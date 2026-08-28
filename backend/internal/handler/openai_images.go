@@ -242,6 +242,21 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 			jsonKeepaliveStarted = true
 		}
 		forwardStart := time.Now()
+		// Phase 3.3a authorization point (row 11a): after the freeze, before the
+		// first upstream write. A refusal is terminal — release the slot, answer
+		// 402 via errorResponse, never fail over.
+		authHandle, authErr := h.gatewayService.AuthorizeBillableAttempt(c.Request.Context(), billingSnapshot, apiKey, service.EstimateInputFromRequestBody(body, service.EstimateInputOptions{ImageCount: parsed.N, ImageSize: parsed.Size}))
+		if authErr != nil {
+			if accountReleaseFunc != nil {
+				accountReleaseFunc()
+			}
+			if selection.ReleaseFunc != nil {
+				selection.ReleaseFunc()
+			}
+			h.errorResponse(c, service.AuthorizationRefusedHTTPStatus, service.AuthorizationRefusedErrorType, service.AuthorizationRefusedMessage)
+			return
+		}
+		c.Request = c.Request.WithContext(service.WithAuthorizationHandle(c.Request.Context(), authHandle))
 		writerSizeBeforeForward := service.OpenAIImagesJSONKeepaliveAdjustedWrittenSize(c)
 		result, err := func() (*service.OpenAIForwardResult, error) {
 			defer func() {
@@ -346,7 +361,7 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 				upstreamErrorAlreadyCommunicated := openAIForwardErrorAlreadyCommunicated(c, writerSizeBeforeForward, err)
 				wroteFallback := false
 				if !upstreamErrorAlreadyCommunicated {
-					wroteFallback = h.ensureForwardErrorResponse(c, streamStarted)
+					wroteFallback = h.ensureForwardErrorResponseFor(c, err, streamStarted)
 				}
 				fields := []zap.Field{
 					zap.Int64("account_id", account.ID),
@@ -404,6 +419,8 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 				SessionID:          sessionID,
 				ChannelUsageFields: clientRequestedUsageFields(c, channelMapping, requestModel, upstreamModel),
 				BillingSnapshot:    billingSnapshot,
+				AuthorizationToken: service.AuthorizationTokenOf(authHandle),
+				AuthorizationID:    service.AuthorizationIDOf(authHandle),
 			}); err != nil {
 				logger.L().With(
 					zap.String("component", "handler.openai_gateway.images"),
@@ -414,7 +431,7 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 					zap.Int64("account_id", account.ID),
 				).Error("openai.images.record_usage_failed", zap.Error(err))
 			}
-		})
+		}, authHandle)
 
 		reqLog.Debug("openai.images.request_completed",
 			zap.Int64("account_id", account.ID),

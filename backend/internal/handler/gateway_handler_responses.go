@@ -255,6 +255,18 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 			if channelMapping.Mapped {
 				forwardBody = h.gatewayService.ReplaceModelInBody(body, channelMapping.MappedModel)
 			}
+			// Phase 3.3a authorization point (row 6): after the freeze and after
+			// the body exists, before the Forward. A refusal is terminal —
+			// release the slot, answer 402, never fail over.
+			authHandle, authErr := h.gatewayService.AuthorizeBillableAttempt(requestCtx, billingSnapshot, routedKey, service.EstimateInputFromRequestBody(forwardBody, service.EstimateInputOptions{}))
+			if authErr != nil {
+				if accountReleaseFunc != nil {
+					accountReleaseFunc()
+				}
+				h.handleStreamingAwareError(c, service.AuthorizationRefusedHTTPStatus, service.AuthorizationRefusedErrorType, service.AuthorizationRefusedMessage, false)
+				return
+			}
+			c.Request = c.Request.WithContext(service.WithAuthorizationHandle(c.Request.Context(), authHandle))
 			var result *service.ForwardResult
 			setActualUpstreamEndpoint(c, "")
 			if shouldUseAntigravityCompat(account) {
@@ -298,7 +310,7 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 				upstreamErrorAlreadyCommunicated := gatewayForwardErrorAlreadyCommunicated(c, writerSizeBeforeForward, err)
 				wroteFallback := false
 				if !upstreamErrorAlreadyCommunicated {
-					wroteFallback = h.ensureForwardErrorResponse(c, streamStarted)
+					wroteFallback = h.ensureForwardErrorResponseFor(c, err, streamStarted)
 				}
 				reqLog.Error("gateway.responses.forward_failed",
 					zap.Int64("account_id", account.ID),
@@ -324,10 +336,12 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 					RequestPayloadHash: requestPayloadHash, APIKeyService: h.apiKeyService, SessionID: sessionID,
 					ChannelUsageFields: routedChannelUsageFields(c, channelMapping, reqModel, result.UpstreamModel, candidate.ChannelID),
 					BillingSnapshot:    billingSnapshot,
+					AuthorizationToken: service.AuthorizationTokenOf(authHandle),
+					AuthorizationID:    service.AuthorizationIDOf(authHandle),
 				}); err != nil {
 					reqLog.Error("gateway.responses.record_usage_failed", zap.Int64("account_id", account.ID), zap.Error(err))
 				}
-			})
+			}, authHandle)
 			reqLog.Info("gateway.responses.channel_succeeded",
 				zap.Int64("channel_id", candidate.ChannelID), zap.Int64("group_id", candidate.Group.ID),
 				zap.Int64("account_id", account.ID), zap.Int64("duration_ms", time.Since(candidateStartedAt).Milliseconds()),

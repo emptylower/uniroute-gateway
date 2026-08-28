@@ -245,18 +245,18 @@ func TestObserveCanonicalWalletSettlementGuardsAndConversion(t *testing.T) {
 	// the full durable happy path is proven by
 	// TestCanonicalWalletOutboxDispatcherDeliversEndToEnd.
 	require.NotPanics(t, func() {
-		observeCanonicalWalletSettlement(bridge, "req-obs-1", user, cost, false, true, &UsageBillingApplyResult{NewBalance: &newBilling})
+		observeCanonicalWalletSettlement(bridge, "req-obs-1", user, cost, false, true, &UsageBillingApplyResult{NewBalance: &newBilling}, "", "")
 	})
 
 	// Guards: each of these must return before any side effect.
 	require.NotPanics(t, func() {
-		observeCanonicalWalletSettlement(nil, "r", user, cost, false, true, nil)                              // nil bridge
-		observeCanonicalWalletSettlement(bridge, "r", nil, cost, false, true, nil)                            // nil user
-		observeCanonicalWalletSettlement(bridge, "r", user, nil, false, true, nil)                            // nil cost
-		observeCanonicalWalletSettlement(bridge, "r", user, cost, true, true, nil)                            // subscription billing
-		observeCanonicalWalletSettlement(bridge, "r", user, cost, false, false, nil)                          // billing not applied
-		observeCanonicalWalletSettlement(bridge, "r", user, &CostBreakdown{ActualCost: 0}, false, true, nil)  // zero cost
-		observeCanonicalWalletSettlement(bridge, "r", user, &CostBreakdown{ActualCost: -5}, false, true, nil) // negative cost
+		observeCanonicalWalletSettlement(nil, "r", user, cost, false, true, nil, "", "")                              // nil bridge
+		observeCanonicalWalletSettlement(bridge, "r", nil, cost, false, true, nil, "", "")                            // nil user
+		observeCanonicalWalletSettlement(bridge, "r", user, nil, false, true, nil, "", "")                            // nil cost
+		observeCanonicalWalletSettlement(bridge, "r", user, cost, true, true, nil, "", "")                            // subscription billing
+		observeCanonicalWalletSettlement(bridge, "r", user, cost, false, false, nil, "", "")                          // billing not applied
+		observeCanonicalWalletSettlement(bridge, "r", user, &CostBreakdown{ActualCost: 0}, false, true, nil, "", "")  // zero cost
+		observeCanonicalWalletSettlement(bridge, "r", user, &CostBreakdown{ActualCost: -5}, false, true, nil, "", "") // negative cost
 	})
 }
 

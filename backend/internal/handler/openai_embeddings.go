@@ -157,6 +157,9 @@ func (h *OpenAIGatewayHandler) Embeddings(c *gin.Context) {
 			}
 			if lastFailoverErr != nil {
 				h.handleFailoverExhausted(c, lastFailoverErr, false)
+			} else if refused, isRefused := service.AsAuthorizationRefused(err); isRefused {
+				// Phase 3.3a: a refusal is terminal and never "upstream request failed".
+				h.errorResponse(c, service.AuthorizationRefusedHTTPStatus, service.AuthorizationRefusedErrorType, service.AuthorizationRefusedMessage+": "+string(refused.Reason))
 			} else {
 				h.errorResponse(c, http.StatusBadGateway, "api_error", "Upstream request failed")
 			}
@@ -196,6 +199,21 @@ func (h *OpenAIGatewayHandler) Embeddings(c *gin.Context) {
 		if channelMapping.Mapped {
 			forwardBody = h.gatewayService.ReplaceModelInBody(body, channelMapping.MappedModel)
 		}
+		// Phase 3.3a authorization point (row 8): after the freeze and after the
+		// body exists, before the Forward. A refusal is terminal — release the
+		// slot, answer 402, never fail over.
+		authHandle, authErr := h.gatewayService.AuthorizeBillableAttempt(c.Request.Context(), billingSnapshot, apiKey, service.EstimateInputFromRequestBody(forwardBody, service.EstimateInputOptions{}))
+		if authErr != nil {
+			if accountReleaseFunc != nil {
+				accountReleaseFunc()
+			}
+			if selection.ReleaseFunc != nil {
+				selection.ReleaseFunc()
+			}
+			h.errorResponse(c, service.AuthorizationRefusedHTTPStatus, service.AuthorizationRefusedErrorType, service.AuthorizationRefusedMessage)
+			return
+		}
+		c.Request = c.Request.WithContext(service.WithAuthorizationHandle(c.Request.Context(), authHandle))
 		writerSizeBeforeForward := c.Writer.Size()
 		result, err := func() (*service.OpenAIForwardResult, error) {
 			defer func() {
@@ -247,7 +265,12 @@ func (h *OpenAIGatewayHandler) Embeddings(c *gin.Context) {
 			}
 			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, account.GetMappedModel(reqModel), false, nil)
 			if c.Writer.Size() == writerSizeBeforeForward {
-				h.errorResponse(c, http.StatusBadGateway, "upstream_error", "Upstream request failed")
+				if refused, isRefused := service.AsAuthorizationRefused(err); isRefused {
+					// Phase 3.3a: a refusal is terminal and never "upstream request failed".
+					h.errorResponse(c, service.AuthorizationRefusedHTTPStatus, service.AuthorizationRefusedErrorType, service.AuthorizationRefusedMessage+": "+string(refused.Reason))
+				} else {
+					h.errorResponse(c, http.StatusBadGateway, "upstream_error", "Upstream request failed")
+				}
 			}
 			reqLog.Warn("openai_embeddings.forward_failed",
 				zap.Int64("account_id", account.ID),
@@ -280,6 +303,8 @@ func (h *OpenAIGatewayHandler) Embeddings(c *gin.Context) {
 				SessionID:          sessionID,
 				ChannelUsageFields: clientRequestedUsageFields(c, channelMapping, reqModel, result.UpstreamModel),
 				BillingSnapshot:    billingSnapshot,
+				AuthorizationToken: service.AuthorizationTokenOf(authHandle),
+				AuthorizationID:    service.AuthorizationIDOf(authHandle),
 			}); err != nil {
 				logger.L().With(
 					zap.String("component", "handler.openai_gateway.embeddings"),
@@ -290,7 +315,7 @@ func (h *OpenAIGatewayHandler) Embeddings(c *gin.Context) {
 					zap.Int64("account_id", account.ID),
 				).Error("openai_embeddings.record_usage_failed", zap.Error(err))
 			}
-		})
+		}, authHandle)
 		reqLog.Debug("openai_embeddings.request_completed",
 			zap.Int64("account_id", account.ID),
 			zap.Int("switch_count", switchCount),

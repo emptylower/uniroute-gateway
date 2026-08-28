@@ -484,6 +484,20 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 			continue
 		}
 
+		// Phase 3.3a authorization point (row 9): after the freeze, before the
+		// Forward. A refusal is terminal — release the slot, answer 402 via
+		// googleError (the reason rides in error.message; googleError has no
+		// type slot), never fail over.
+		authHandle, authErr := h.gatewayService.AuthorizeBillableAttempt(c.Request.Context(), billingSnapshot, apiKey, service.EstimateInputFromRequestBody(body, service.EstimateInputOptions{}))
+		if authErr != nil {
+			if accountReleaseFunc != nil {
+				accountReleaseFunc()
+			}
+			googleError(c, service.AuthorizationRefusedHTTPStatus, service.AuthorizationRefusedMessage+": "+refusedReasonForLog(authErr))
+			return
+		}
+		c.Request = c.Request.WithContext(service.WithAuthorizationHandle(c.Request.Context(), authHandle))
+
 		// 5) forward (根据平台分流)
 		var result *service.ForwardResult
 		requestCtx := c.Request.Context()
@@ -574,6 +588,8 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 				ForceCacheBilling:     forceCacheBilling,
 				APIKeyService:         h.apiKeyService,
 				SessionID:             sessionID,
+				AuthorizationToken:    service.AuthorizationTokenOf(authHandle),
+				AuthorizationID:       service.AuthorizationIDOf(authHandle),
 				ChannelUsageFields:    clientRequestedUsageFields(c, channelMapping, reqModel, result.UpstreamModel),
 				BillingSnapshot:       billingSnapshot,
 			}); err != nil {
@@ -586,7 +602,7 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 					zap.Int64("account_id", account.ID),
 				).Error("gemini.record_usage_failed", zap.Error(err))
 			}
-		})
+		}, authHandle)
 		reqLog.Debug("gemini.request_completed",
 			zap.Int64("account_id", account.ID),
 			zap.Int("switch_count", fs.SwitchCount),

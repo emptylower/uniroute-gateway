@@ -596,6 +596,21 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			// 从不可变的 canonical forwardBody 派生本次尝试 body 并整块剔除上游私有的加密
 			// reasoning item（含耦合的 id/summary），避免非透传上游 400 拒绝 Kiro reasoning 形态。
 			attemptBody := h.deriveOpenAIForwardAttemptBody(reqLog, forwardBody, account, &passthroughFailoverState)
+			// Phase 3.3a authorization point (row 1): after the freeze and before
+			// the first upstream write. A refusal is terminal — release both the
+			// account slot and the selection, answer 402, never fail over.
+			authHandle, authErr := h.gatewayService.AuthorizeBillableAttempt(c.Request.Context(), billingSnapshot, routedKey, service.EstimateInputFromRequestBody(attemptBody, service.EstimateInputOptions{}))
+			if authErr != nil {
+				if accountReleaseFunc != nil {
+					accountReleaseFunc()
+				}
+				if selection.ReleaseFunc != nil {
+					selection.ReleaseFunc()
+				}
+				h.handleStreamingAwareError(c, service.AuthorizationRefusedHTTPStatus, service.AuthorizationRefusedErrorType, service.AuthorizationRefusedMessage, false)
+				return
+			}
+			c.Request = c.Request.WithContext(service.WithAuthorizationHandle(c.Request.Context(), authHandle))
 			result, err := func() (*service.OpenAIForwardResult, error) {
 				defer func() {
 					if accountReleaseFunc != nil {
@@ -711,7 +726,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 					upstreamErrorAlreadyCommunicated := openAIForwardErrorAlreadyCommunicated(c, writerSizeBeforeForward, err)
 					wroteFallback := false
 					if !upstreamErrorAlreadyCommunicated {
-						wroteFallback = h.ensureForwardErrorResponse(c, streamStarted)
+						wroteFallback = h.ensureForwardErrorResponseFor(c, err, streamStarted)
 					}
 					fields := []zap.Field{
 						zap.Int64("account_id", account.ID),
@@ -766,6 +781,8 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 					ChannelUsageFields: routedChannelUsageFields(c, channelMapping, reqModel, result.UpstreamModel, candidate.ChannelID),
 					CyberBlocked:       cyberBlocked,
 					BillingSnapshot:    billingSnapshot,
+					AuthorizationToken: service.AuthorizationTokenOf(authHandle),
+					AuthorizationID:    service.AuthorizationIDOf(authHandle),
 				}); err != nil {
 					logger.L().With(
 						zap.String("component", "handler.openai_gateway.responses"),
@@ -776,7 +793,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 						zap.Int64("account_id", account.ID),
 					).Error("openai.record_usage_failed", zap.Error(err))
 				}
-			})
+			}, authHandle)
 			reqLog.Debug("openai.request_completed",
 				zap.Int64("account_id", account.ID),
 				zap.Int("switch_count", switchCount),
@@ -1144,6 +1161,9 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 			} else {
 				if lastFailoverErr != nil {
 					h.handleAnthropicFailoverExhausted(c, lastFailoverErr, streamStarted)
+				} else if refused, isRefused := service.AsAuthorizationRefused(err); isRefused {
+					// Phase 3.3a: a refusal is terminal and never "upstream request failed".
+					h.anthropicStreamingAwareError(c, service.AuthorizationRefusedHTTPStatus, service.AuthorizationRefusedErrorType, service.AuthorizationRefusedMessage+": "+string(refused.Reason), streamStarted)
 				} else {
 					h.anthropicStreamingAwareError(c, http.StatusBadGateway, "api_error", "Upstream request failed", streamStarted)
 				}
@@ -1185,6 +1205,18 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		defaultMappedModel := strings.TrimSpace(effectiveMappedModel)
 		// 应用渠道模型映射到请求体
 		forwardBody := mappedBodyForMessages(channelMappingMsg.Mapped, channelMappingMsg.MappedModel)
+		// Phase 3.3a authorization point (row 2): after the freeze and after the
+		// converted body exists, before the Forward. A refusal is terminal —
+		// release the slot, answer 402.
+		authHandle, authErr := h.gatewayService.AuthorizeBillableAttempt(c.Request.Context(), billingSnapshot, apiKey, service.EstimateInputFromRequestBody(forwardBody, service.EstimateInputOptions{}))
+		if authErr != nil {
+			if accountReleaseFunc != nil {
+				accountReleaseFunc()
+			}
+			h.anthropicStreamingAwareError(c, service.AuthorizationRefusedHTTPStatus, service.AuthorizationRefusedErrorType, service.AuthorizationRefusedMessage, false)
+			return
+		}
+		c.Request = c.Request.WithContext(service.WithAuthorizationHandle(c.Request.Context(), authHandle))
 		writerSizeBeforeForward := c.Writer.Size()
 		result, err := func() (*service.OpenAIForwardResult, error) {
 			defer func() {
@@ -1284,7 +1316,13 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 					return
 				}
 				h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, account.GetMappedModel(currentRoutingModel), false, nil)
-				wroteFallback := h.ensureAnthropicErrorResponse(c, streamStarted)
+				wroteFallback := false
+				if _, isRefused := service.AsAuthorizationRefused(err); isRefused {
+					// Phase 3.3a: a refusal is terminal and never "upstream request failed".
+					wroteFallback = h.ensureForwardErrorResponseFor(c, err, streamStarted)
+				} else {
+					wroteFallback = h.ensureAnthropicErrorResponse(c, streamStarted)
+				}
 				reqLog.Warn("openai_messages.forward_failed",
 					zap.Int64("account_id", account.ID),
 					zap.Bool("fallback_error_response_written", wroteFallback),
@@ -1326,6 +1364,8 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 				ChannelUsageFields: clientRequestedUsageFields(c, channelMappingMsg, reqModel, result.UpstreamModel),
 				CyberBlocked:       cyberBlocked,
 				BillingSnapshot:    billingSnapshot,
+				AuthorizationToken: service.AuthorizationTokenOf(authHandle),
+				AuthorizationID:    service.AuthorizationIDOf(authHandle),
 			}); err != nil {
 				logger.L().With(
 					zap.String("component", "handler.openai_gateway.messages"),
@@ -1336,7 +1376,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 					zap.Int64("account_id", account.ID),
 				).Error("openai_messages.record_usage_failed", zap.Error(err))
 			}
-		})
+		}, authHandle)
 		reqLog.Debug("openai_messages.request_completed",
 			zap.Int64("account_id", account.ID),
 			zap.Int("switch_count", switchCount),
@@ -2062,6 +2102,9 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				}
 				var turnMapping service.ChannelMappingResult
 				var turnBillingSnapshot *service.BillingSnapshot
+				// Phase 3.3a: nil until 3.3b mints WS-port handles — the usage
+				// input's authorization fields stay empty meanwhile.
+				var turnAuthHandle *service.AuthorizationHandle
 				if snapshot := turnChannelMapping.Load(); snapshot != nil && snapshot.turn == turn {
 					turnMapping = snapshot.mapping
 					turnBillingSnapshot = snapshot.billingSnapshot
@@ -2133,6 +2176,10 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 					ChannelUsageFields: turnUsageFields,
 					CyberBlocked:       cyberBlocked,
 					BillingSnapshot:    turnBillingSnapshot,
+					// Phase 3.3a: the WS port mints no handle until 3.3b — the
+					// explicit fields read "" rather than hiding a nil deref.
+					AuthorizationToken: service.AuthorizationTokenOf(turnAuthHandle),
+					AuthorizationID:    service.AuthorizationIDOf(turnAuthHandle),
 				}); err != nil {
 					billingFailed.Store(true)
 					closeOpenAIClientWS(wsConn, coderws.StatusInternalError, "billing settlement failed")
@@ -2233,6 +2280,8 @@ func (h *OpenAIGatewayHandler) recoverResponsesPanic(c *gin.Context, streamStart
 	if streamStarted != nil {
 		started = *streamStarted
 	}
+	// A panic recovery has no Forward error in scope — no refusal can flow
+	// through here; delegate straight to the generic fallback.
 	wroteFallback := h.ensureForwardErrorResponse(c, started)
 	requestLogger(c, "handler.openai_gateway.responses").Error(
 		"openai.responses_panic_recovered",
@@ -2326,13 +2375,18 @@ func getContextInt64(c *gin.Context, key string) (int64, bool) {
 	}
 }
 
-func (h *OpenAIGatewayHandler) submitUsageRecordTask(parent context.Context, task service.UsageRecordTask) {
+func (h *OpenAIGatewayHandler) submitUsageRecordTask(parent context.Context, task service.UsageRecordTask, handle *service.AuthorizationHandle) {
 	if task == nil {
 		return
 	}
 	task = wrapUsageRecordTaskContext(parent, task)
 	if h.usageRecordWorkerPool != nil {
-		h.usageRecordWorkerPool.Submit(task)
+		if mode := h.usageRecordWorkerPool.Submit(task); mode == service.UsageRecordSubmitModeDropped {
+			// Phase 3.3a (spec §4): a dropped submission means ownership of the
+			// result never transferred — "we submitted it" is not a transfer.
+			// 3.4b turns this into an abort of the hold; 3.3 makes it observable.
+			handle.MarkAbandoned("worker_pool_dropped")
+		}
 		return
 	}
 	// 回退路径：worker 池未注入时同步执行，避免退回到无界 goroutine 模式。
@@ -2349,15 +2403,15 @@ func (h *OpenAIGatewayHandler) submitUsageRecordTask(parent context.Context, tas
 	task(ctx)
 }
 
-func (h *OpenAIGatewayHandler) submitOpenAIUsageRecordTask(parent context.Context, result *service.OpenAIForwardResult, task service.UsageRecordTask) {
+func (h *OpenAIGatewayHandler) submitOpenAIUsageRecordTask(parent context.Context, result *service.OpenAIForwardResult, task service.UsageRecordTask, handle *service.AuthorizationHandle) {
 	if result != nil && result.ImageCount > 0 {
-		h.submitMandatoryUsageRecordTask(parent, task)
+		h.submitMandatoryUsageRecordTask(parent, task, handle)
 		return
 	}
-	h.submitUsageRecordTask(parent, task)
+	h.submitUsageRecordTask(parent, task, handle)
 }
 
-func (h *OpenAIGatewayHandler) submitMandatoryUsageRecordTask(parent context.Context, task service.UsageRecordTask) {
+func (h *OpenAIGatewayHandler) submitMandatoryUsageRecordTask(parent context.Context, task service.UsageRecordTask, handle *service.AuthorizationHandle) {
 	if task == nil {
 		return
 	}
@@ -2366,6 +2420,8 @@ func (h *OpenAIGatewayHandler) submitMandatoryUsageRecordTask(parent context.Con
 		if mode := h.usageRecordWorkerPool.Submit(task); mode != service.UsageRecordSubmitModeDropped {
 			return
 		}
+		// Dropped: the task runs synchronously below — ownership IS transferred
+		// here, so this path must NOT mark the handle abandoned (round-1 finding).
 		logger.L().With(
 			zap.String("component", "handler.openai_gateway.usage"),
 		).Warn("openai.usage_record_task_mandatory_sync_fallback")
@@ -3146,6 +3202,15 @@ func (h *OpenAIGatewayHandler) recordCyberPolicyIfMarked(c *gin.Context, apiKey 
 	if apiKey != nil {
 		apiKeyPrefix = keyPrefix(apiKey.Key, 8)
 	}
+	// Phase 3.3a: the authorization token/id are captured here, BEFORE the
+	// goroutine, alongside the other scalars — the settling goroutine never
+	// touches gin.Context (spec §3.5, §4).
+	var cyberAuthHandle *service.AuthorizationHandle
+	if c.Request != nil {
+		cyberAuthHandle = service.AuthorizationHandleFromContext(c.Request.Context())
+	}
+	cyberAuthorizationToken := service.AuthorizationTokenOf(cyberAuthHandle)
+	cyberAuthorizationID := service.AuthorizationIDOf(cyberAuthHandle)
 	opsMeta := cyberPolicyOpsErrorMeta{
 		RequestID:       requestID,
 		ClientRequestID: clientRequestID,
@@ -3203,6 +3268,8 @@ func (h *OpenAIGatewayHandler) recordCyberPolicyIfMarked(c *gin.Context, apiKey 
 				APIKeyService:            apiKeySvc,
 				GovernanceTargetPlatform: governanceTargetPlatform,
 				ChannelUsageFields:       channelFields,
+				AuthorizationToken:       cyberAuthorizationToken,
+				AuthorizationID:          cyberAuthorizationID,
 			})
 		}
 		if gwSvc != nil && cyberBlockKey != "" {

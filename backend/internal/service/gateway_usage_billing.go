@@ -56,6 +56,13 @@ type RecordUsageInput struct {
 	// nil = no snapshot (Count Tokens, off mode, pre-3.2 callers).
 	BillingSnapshot *BillingSnapshot
 
+	// AuthorizationToken / AuthorizationID (Phase 3.3): the token of the write this
+	// settlement is about and the attempt's authorization id, carried as explicit
+	// fields — never in context.Context (spec §3.5, §4). Empty = no authorization
+	// (Count Tokens, disabled mode, pre-3.3 callers, WebSocket until 3.3b).
+	AuthorizationToken string
+	AuthorizationID    string
+
 	ChannelUsageFields // 渠道映射信息（由 handler 在 Forward 前解析）
 }
 
@@ -647,6 +654,8 @@ func (s *GatewayService) RecordUsage(ctx context.Context, input *RecordUsageInpu
 		APIKeyService:      input.APIKeyService,
 		QuotaPlatform:      input.QuotaPlatform,
 		BillingSnapshot:    input.BillingSnapshot,
+		AuthorizationToken: input.AuthorizationToken,
+		AuthorizationID:    input.AuthorizationID,
 		ChannelUsageFields: input.ChannelUsageFields,
 	}, &recordUsageOpts{})
 }
@@ -670,6 +679,8 @@ type RecordUsageLongContextInput struct {
 	APIKeyService         APIKeyQuotaUpdater // API Key 配额服务（可选）
 	QuotaPlatform         string             // user×platform 配额计量平台：handler 在请求 ctx 内经 QuotaPlatform() 算定后传入（后扣运行在 worker 池 background ctx 上，取不到 ForcePlatform）
 	BillingSnapshot       *BillingSnapshot   // Phase 3.2 frozen pricing basis (nil = none)
+	AuthorizationToken    string             // Phase 3.3: explicit fields — never in context.Context (spec §3.5, §4)
+	AuthorizationID       string
 
 	ChannelUsageFields // 渠道映射信息（由 handler 在 Forward 前解析）
 }
@@ -692,6 +703,8 @@ func (s *GatewayService) RecordUsageWithLongContext(ctx context.Context, input *
 		APIKeyService:      input.APIKeyService,
 		QuotaPlatform:      input.QuotaPlatform,
 		BillingSnapshot:    input.BillingSnapshot,
+		AuthorizationToken: input.AuthorizationToken,
+		AuthorizationID:    input.AuthorizationID,
 		ChannelUsageFields: input.ChannelUsageFields,
 	}, &recordUsageOpts{
 		LongContextThreshold:  input.LongContextThreshold,
@@ -716,6 +729,8 @@ type recordUsageCoreInput struct {
 	APIKeyService      APIKeyQuotaUpdater
 	QuotaPlatform      string
 	BillingSnapshot    *BillingSnapshot
+	AuthorizationToken string
+	AuthorizationID    string
 	ChannelUsageFields
 }
 
@@ -869,7 +884,7 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	if billingErr != nil {
 		return billingErr
 	}
-	observeCanonicalWalletSettlement(s.canonicalWallet, requestID, user, cost, isSubscriptionBilling, billingApplied, billingResult)
+	observeCanonicalWalletSettlement(s.canonicalWallet, requestID, user, cost, isSubscriptionBilling, billingApplied, billingResult, input.AuthorizationToken, input.AuthorizationID)
 	writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.gateway")
 	persistBillingSnapshotBestEffort(ctx, s.snapshots, input.BillingSnapshot)
 

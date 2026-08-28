@@ -143,6 +143,9 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 			}
 			if lastFailoverErr != nil {
 				h.handleFailoverExhausted(c, lastFailoverErr, false)
+			} else if refused, isRefused := service.AsAuthorizationRefused(err); isRefused {
+				// Phase 3.3a: a refusal is terminal and never "upstream request failed".
+				h.errorResponse(c, service.AuthorizationRefusedHTTPStatus, service.AuthorizationRefusedErrorType, service.AuthorizationRefusedMessage+": "+string(refused.Reason))
 			} else {
 				h.errorResponse(c, http.StatusBadGateway, "upstream_error", "Upstream request failed")
 			}
@@ -168,6 +171,21 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 		service.SetOpsLatencyMs(c, service.OpsRoutingLatencyMsKey, time.Since(routingStart).Milliseconds())
 		writerSizeBeforeForward := c.Writer.Size()
 		forwardStart := time.Now()
+		// Phase 3.3a authorization point (row 11b): after the freeze, before the
+		// first upstream write. A refusal is terminal — release the slot, answer
+		// 402 via errorResponse, never fail over.
+		authHandle, authErr := h.gatewayService.AuthorizeBillableAttempt(c.Request.Context(), billingSnapshot, apiKey, service.EstimateInputFromRequestBody(forwardBody, service.EstimateInputOptions{WebSearchCalls: 1}))
+		if authErr != nil {
+			if accountRelease != nil {
+				accountRelease()
+			}
+			if selection.ReleaseFunc != nil {
+				selection.ReleaseFunc()
+			}
+			h.errorResponse(c, service.AuthorizationRefusedHTTPStatus, service.AuthorizationRefusedErrorType, service.AuthorizationRefusedMessage)
+			return
+		}
+		c.Request = c.Request.WithContext(service.WithAuthorizationHandle(c.Request.Context(), authHandle))
 		var result *service.OpenAIForwardResult
 		result, err = func() (*service.OpenAIForwardResult, error) {
 			if accountRelease != nil {
@@ -180,7 +198,7 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 		if err == nil {
 			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, account.GetMappedModel(requestedModel), true, nil)
 			if result != nil {
-				h.recordAlphaSearchUsage(c, apiKey, account, subscription, channelMapping, requestedModel, body, result, subject.UserID, billingSnapshot)
+				h.recordAlphaSearchUsage(c, apiKey, account, subscription, channelMapping, requestedModel, body, result, subject.UserID, billingSnapshot, authHandle)
 			}
 			return
 		}
@@ -189,7 +207,12 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 		if !errors.As(err, &failoverErr) {
 			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, account.GetMappedModel(requestedModel), false, nil)
 			if c.Writer.Size() == writerSizeBeforeForward {
-				h.errorResponse(c, http.StatusBadGateway, "upstream_error", "Upstream request failed")
+				if refused, isRefused := service.AsAuthorizationRefused(err); isRefused {
+					// Phase 3.3a: a refusal is terminal and never "upstream request failed".
+					h.errorResponse(c, service.AuthorizationRefusedHTTPStatus, service.AuthorizationRefusedErrorType, service.AuthorizationRefusedMessage+": "+string(refused.Reason))
+				} else {
+					h.errorResponse(c, http.StatusBadGateway, "upstream_error", "Upstream request failed")
+				}
 			}
 			reqLog.Warn("openai_alpha_search.forward_failed", zap.Int64("account_id", account.ID), zap.Error(err))
 			return
@@ -241,6 +264,7 @@ func (h *OpenAIGatewayHandler) recordAlphaSearchUsage(
 	result *service.OpenAIForwardResult,
 	userID int64,
 	billingSnapshot *service.BillingSnapshot,
+	authHandle *service.AuthorizationHandle,
 ) {
 	userAgent := c.GetHeader("User-Agent")
 	clientIP := ip.GetClientIP(c)
@@ -267,6 +291,8 @@ func (h *OpenAIGatewayHandler) recordAlphaSearchUsage(
 			SessionID:          sessionID,
 			ChannelUsageFields: channelMapping.ToUsageFields(requestedModel, result.UpstreamModel),
 			BillingSnapshot:    billingSnapshot,
+			AuthorizationToken: service.AuthorizationTokenOf(authHandle),
+			AuthorizationID:    service.AuthorizationIDOf(authHandle),
 		}); err != nil {
 			logger.L().With(
 				zap.String("component", "handler.openai_gateway.alpha_search"),
@@ -277,5 +303,5 @@ func (h *OpenAIGatewayHandler) recordAlphaSearchUsage(
 				zap.Int64("account_id", account.ID),
 			).Error("openai_alpha_search.record_usage_failed", zap.Error(err))
 		}
-	})
+	}, authHandle)
 }

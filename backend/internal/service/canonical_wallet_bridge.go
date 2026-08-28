@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 )
@@ -92,6 +93,11 @@ type CanonicalWalletSettlementEvent struct {
 	AmountUnits            int64     `json:"amount_units"`
 	LocalBalanceAfterUnits *int64    `json:"local_balance_after_units,omitempty"`
 	OccurredAt             time.Time `json:"occurred_at"`
+	// AuthorizationToken / AuthorizationID (Phase 3.3): json:"-" — the outbox row
+	// payload is unchanged in 3.3 (3.5 adds the column and the wire field; changing
+	// the payload now would make a redelivered pre-3.3 row a payload conflict).
+	AuthorizationToken string `json:"-"`
+	AuthorizationID    string `json:"-"`
 }
 
 type CanonicalWalletSettlementResult struct {
@@ -406,6 +412,9 @@ type CanonicalWalletBridge struct {
 	outboxDB *sql.DB
 	outbox   CanonicalWalletOutboxStore
 	workerID string
+	// observedForTest (Phase 3.3a): test-only hook invoked at the top of
+	// ObserveSettlement so the token's arrival can be asserted in-process.
+	observedForTest func(CanonicalWalletSettlementEvent)
 }
 
 func NewCanonicalWalletBridge(cfg *config.Config, store CanonicalWalletLeaseStore, outboxDB *sql.DB, outbox CanonicalWalletOutboxStore) *CanonicalWalletBridge {
@@ -447,6 +456,9 @@ func (b *CanonicalWalletBridge) ObserveSettlement(event CanonicalWalletSettlemen
 	if b == nil || b.cfg.Mode == config.CanonicalWalletModeDisabled || event.AmountUnits <= 0 {
 		return
 	}
+	if b.observedForTest != nil {
+		b.observedForTest(event)
+	}
 	if b.outbox == nil || b.outboxDB == nil {
 		// Several of this file's own tests construct a bridge with a nil
 		// outbox because they don't exercise ObserveSettlement — guard BOTH
@@ -469,6 +481,12 @@ func (b *CanonicalWalletBridge) ObserveSettlement(event CanonicalWalletSettlemen
 	}
 	if event.EventID == "" {
 		event.EventID = CanonicalWalletSettlementEventID(event.GatewayRequestID, event.PlatformUserID, event.Currency)
+	}
+	// Phase 3.3a: in shadow mode the bridge logs the token with the event id
+	// when the settlement is enqueued — the durable join between a wallet
+	// event and the write that produced it (debug-level, token non-empty only).
+	if event.AuthorizationToken != "" {
+		logger.LegacyPrintf("service.authorization", "shadow: settlement %s carries authorization token %s (authorization %s)", event.EventID, event.AuthorizationToken, event.AuthorizationID)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(b.cfg.RequestTimeoutMS)*time.Millisecond)
 	defer cancel()
@@ -870,7 +888,7 @@ func RequireCNYBillingCurrency(value string) (string, error) {
 	return normalized, nil
 }
 
-func observeCanonicalWalletSettlement(bridge *CanonicalWalletBridge, requestID string, user *User, cost *CostBreakdown, subscriptionBilling, billingApplied bool, billingResult *UsageBillingApplyResult) {
+func observeCanonicalWalletSettlement(bridge *CanonicalWalletBridge, requestID string, user *User, cost *CostBreakdown, subscriptionBilling, billingApplied bool, billingResult *UsageBillingApplyResult, authorizationToken, authorizationID string) {
 	if bridge == nil || user == nil || cost == nil || subscriptionBilling || !billingApplied || cost.ActualCost <= 0 {
 		return
 	}
@@ -894,5 +912,6 @@ func observeCanonicalWalletSettlement(bridge *CanonicalWalletBridge, requestID s
 	bridge.ObserveSettlement(CanonicalWalletSettlementEvent{
 		GatewayRequestID: requestID, PlatformUserID: user.PlatformUserID, Currency: user.BillingCurrency,
 		AmountUnits: amountUnits, LocalBalanceAfterUnits: localBalanceAfterPtr, OccurredAt: time.Now().UTC(),
+		AuthorizationToken: authorizationToken, AuthorizationID: authorizationID,
 	})
 }
