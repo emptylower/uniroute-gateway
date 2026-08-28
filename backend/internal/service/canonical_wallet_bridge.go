@@ -779,6 +779,9 @@ type canonicalWalletMetrics struct {
 	// Phase 3.5 (§11.4): the late capture and the receivable gauge.
 	lateCaptureRetargeted        atomic.Int64
 	settlementUncollectableUnits atomic.Int64
+	// Phase 3.5 (§11.7): the zero-cost abort points and the token-less alert.
+	holdReleasedZeroCost           atomic.Int64
+	settlementWithoutAuthorization atomic.Int64
 	// §9.6 item 6's rollout-guard counters (global, like every counter here).
 	controlPlaneIncompatible atomic.Int64
 	controlPlaneProbeFailed  atomic.Int64
@@ -812,33 +815,35 @@ func CanonicalWalletBridgeStats() map[string]int64 {
 		"reserve_ok":       m.reserveOK.Load(), "reserve_error": m.reserveError.Load(),
 		"settlement_ok": m.settlementOK.Load(), "settlement_error": m.settlementError.Load(),
 		"balance_mismatch": m.balanceMismatch.Load(), "missing_platform_user_id": m.missingPlatformID.Load(),
-		"unsupported_currency":           m.unsupportedCurrency.Load(),
-		"dead_letter_balance_shortfall":  m.deadLetterBalanceShortfall.Load(),
-		"named_lease_released":           m.namedLeaseReleased.Load(),
-		"balance_behind_local":           m.balanceBehindLocal.Load(),
-		"dead_letter_contract_violation": m.deadLetterContractViolation.Load(),
-		"dead_letter_payload_conflict":   m.deadLetterPayloadConflict.Load(),
-		"settlement_split":               m.settlementSplit.Load(),
-		"settlement_split_full":          m.settlementSplitFull.Load(),
-		"settlement_split_exhausted":     m.settlementSplitExhausted.Load(),
-		"pending_release_replayed":       m.pendingReleaseReplayed.Load(),
-		"late_capture_retargeted":        m.lateCaptureRetargeted.Load(),
-		"settlement_uncollectable_units": m.settlementUncollectableUnits.Load(),
-		"control_plane_incompatible":     m.controlPlaneIncompatible.Load(),
-		"control_plane_probe_failed":     m.controlPlaneProbeFailed.Load(),
-		"hold_released_not_written":      m.holdReleasedNotWritten.Load(),
-		"hold_release_error":             m.holdReleaseError.Load(),
-		"hold_converted":                 m.holdConverted.Load(),
-		"hold_convert_error":             m.holdConvertError.Load(),
-		"hold_convert_duplicate":         m.holdConvertDuplicate.Load(),
-		"hold_settlement_after_release":  m.holdSettlementAfterRelease.Load(),
-		"hold_convert_overrun_released":  m.holdConvertOverrunReleased.Load(),
-		"hold_missing_at_settlement":     m.holdMissingAtSettlement.Load(),
-		"hold_indeterminate_classified":  m.holdIndeterminateClassified.Load(),
-		"hold_indeterminate_row_failed":  m.holdIndeterminateRowFailed.Load(),
-		"reaper_error":                   m.reaperError.Load(),
-		"holds_abandoned":                m.holdsAbandoned.Load(),
-		"hold_outcomes_expired":          m.holdOutcomesExpired.Load(),
+		"unsupported_currency":             m.unsupportedCurrency.Load(),
+		"dead_letter_balance_shortfall":    m.deadLetterBalanceShortfall.Load(),
+		"named_lease_released":             m.namedLeaseReleased.Load(),
+		"balance_behind_local":             m.balanceBehindLocal.Load(),
+		"dead_letter_contract_violation":   m.deadLetterContractViolation.Load(),
+		"dead_letter_payload_conflict":     m.deadLetterPayloadConflict.Load(),
+		"settlement_split":                 m.settlementSplit.Load(),
+		"settlement_split_full":            m.settlementSplitFull.Load(),
+		"settlement_split_exhausted":       m.settlementSplitExhausted.Load(),
+		"pending_release_replayed":         m.pendingReleaseReplayed.Load(),
+		"late_capture_retargeted":          m.lateCaptureRetargeted.Load(),
+		"settlement_uncollectable_units":   m.settlementUncollectableUnits.Load(),
+		"hold_released_zero_cost":          m.holdReleasedZeroCost.Load(),
+		"settlement_without_authorization": m.settlementWithoutAuthorization.Load(),
+		"control_plane_incompatible":       m.controlPlaneIncompatible.Load(),
+		"control_plane_probe_failed":       m.controlPlaneProbeFailed.Load(),
+		"hold_released_not_written":        m.holdReleasedNotWritten.Load(),
+		"hold_release_error":               m.holdReleaseError.Load(),
+		"hold_converted":                   m.holdConverted.Load(),
+		"hold_convert_error":               m.holdConvertError.Load(),
+		"hold_convert_duplicate":           m.holdConvertDuplicate.Load(),
+		"hold_settlement_after_release":    m.holdSettlementAfterRelease.Load(),
+		"hold_convert_overrun_released":    m.holdConvertOverrunReleased.Load(),
+		"hold_missing_at_settlement":       m.holdMissingAtSettlement.Load(),
+		"hold_indeterminate_classified":    m.holdIndeterminateClassified.Load(),
+		"hold_indeterminate_row_failed":    m.holdIndeterminateRowFailed.Load(),
+		"reaper_error":                     m.reaperError.Load(),
+		"holds_abandoned":                  m.holdsAbandoned.Load(),
+		"hold_outcomes_expired":            m.holdOutcomesExpired.Load(),
 	}
 }
 
@@ -1102,7 +1107,15 @@ func newCanonicalWalletBridge(cfg config.CanonicalWalletConfig, store CanonicalW
 // channel had, now bounded to "Postgres itself is down or the write
 // genuinely failed" instead of "an ordinary burst filled a fixed buffer."
 func (b *CanonicalWalletBridge) ObserveSettlement(event CanonicalWalletSettlementEvent) bool {
-	if b == nil || b.cfg.Mode == config.CanonicalWalletModeDisabled || event.AmountUnits <= 0 {
+	if b == nil || b.cfg.Mode == config.CanonicalWalletModeDisabled {
+		return false
+	}
+	if event.AmountUnits <= 0 {
+		// §11.7: the zero-amount return is an abort point too — an armed
+		// hold whose settlement carried nothing must not wait for the reaper.
+		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(b.cfg.RequestTimeoutMS)*time.Millisecond)
+		b.releaseHoldZeroCost(ctx, event.PlatformUserID, event.AuthorizationID)
+		cancel()
 		return false
 	}
 	if b.observedForTest != nil {
@@ -1165,6 +1178,15 @@ func (b *CanonicalWalletBridge) ObserveSettlement(event CanonicalWalletSettlemen
 		default: // 1 missing, 3 lease gone: the event proceeds untouched — a caller-supplied LeaseID deliberately stays (3.4a's test 19b depends on it)
 			canonicalWalletBridgeMetrics.holdMissingAtSettlement.Add(1)
 		}
+	}
+	// §11.7's token-less alert: a settlement that reaches this point under
+	// holds carrying no authorization id — a path that minted no handle (a
+	// missed freeze point) or a pre-token row being redelivered. Counted and
+	// logged with the gateway request id for Phase 4's reconciliation; NO
+	// behaviour change — the row is inserted below either way.
+	if b.HoldsEnabled() && event.AuthorizationID == "" {
+		canonicalWalletBridgeMetrics.settlementWithoutAuthorization.Add(1)
+		slog.Warn("canonical wallet settlement without an authorization id (holds on)", "gateway_request_id", event.GatewayRequestID, "event_id", event.EventID)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(b.cfg.RequestTimeoutMS)*time.Millisecond)
 	defer cancel()
@@ -1955,13 +1977,45 @@ func RequireCNYBillingCurrency(value string) (string, error) {
 	return normalized, nil
 }
 
+// releaseHoldZeroCost (§11.7) releases an armed hold at a zero-cost abort
+// point — a no-op on anything already resolved ({7}) or never armed ({1}),
+// and on holds-off / token-less calls. Nil-safe: the observer's first guard
+// has no bridge or user to release with.
+func (b *CanonicalWalletBridge) releaseHoldZeroCost(ctx context.Context, platformUserID, authorizationID string) {
+	if b == nil || !b.HoldsEnabled() || platformUserID == "" || authorizationID == "" {
+		return
+	}
+	if _, err := b.store.ReleaseCanonicalWalletHold(ctx, platformUserID, authorizationID, "released", "zero_cost"); err != nil {
+		if !errors.Is(err, ErrCanonicalWalletHoldMissing) && !isHoldNotArmed(err) {
+			canonicalWalletBridgeMetrics.holdReleaseError.Add(1)
+			slog.Warn("canonical wallet zero-cost hold release failed", "authorization_id", authorizationID, "error", err)
+		}
+		return
+	}
+	canonicalWalletBridgeMetrics.holdReleasedZeroCost.Add(1)
+}
+
 func observeCanonicalWalletSettlement(bridge *CanonicalWalletBridge, requestID string, user *User, cost *CostBreakdown, subscriptionBilling, billingApplied bool, billingResult *UsageBillingApplyResult, authorizationToken, authorizationID string) bool {
-	if bridge == nil || user == nil || cost == nil || subscriptionBilling || !billingApplied || cost.ActualCost <= 0 {
+	if bridge == nil || user == nil || cost == nil {
 		return false
+	}
+	// §11.7's zero-cost abort points: every early return below is an abort
+	// point that RELEASES an armed hold (state = released, class =
+	// zero_cost) — the reaper was the backstop in 3.4b; now that the release
+	// primitive exists the hold does not outlive the request by one grace.
+	// Holds off writes nothing (3.4a byte-for-byte, §10.1).
+	releaseZeroCost := func() bool {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(bridge.cfg.RequestTimeoutMS)*time.Millisecond)
+		defer cancel()
+		bridge.releaseHoldZeroCost(ctx, user.PlatformUserID, authorizationID)
+		return false
+	}
+	if subscriptionBilling || !billingApplied || cost.ActualCost <= 0 {
+		return releaseZeroCost()
 	}
 	amountUnits, err := canonicalWalletUnitsFromCNY(cost.ActualCost)
 	if err != nil || amountUnits <= 0 {
-		return false
+		return releaseZeroCost()
 	}
 	localBalance := user.Balance - cost.ActualCost
 	if billingResult != nil && billingResult.NewBalance != nil {

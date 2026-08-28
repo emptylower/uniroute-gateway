@@ -59,16 +59,45 @@ func startCanonicalWalletTestPostgres(t *testing.T, ctx context.Context) *sql.DB
 type outboxStoreForTest struct{ db *sql.DB }
 
 func (o *outboxStoreForTest) InsertOutboxEventTx(ctx context.Context, tx *sql.Tx, event CanonicalWalletSettlementEvent) error {
+	// Mirrors repository.WalletOutboxStore's identity contract since Phase
+	// 3.5 (test 40): a retry of the identical event is a no-op; a repriced
+	// resubmission under the same event id is a payload conflict. The hash
+	// is the real algorithm (testWalletOutboxPayloadHash) so the split's
+	// remainder rows compare consistently.
+	hash := testWalletOutboxPayloadHash(event)
 	var authorizationID any
 	if event.AuthorizationID != "" {
 		authorizationID = event.AuthorizationID
 	}
-	_, err := tx.ExecContext(ctx, `
+	if _, err := tx.ExecContext(ctx, `SAVEPOINT wallet_outbox_insert`); err != nil {
+		return err
+	}
+	res, insertErr := tx.ExecContext(ctx, `
 		INSERT INTO wallet_settlement_outbox (event_id, platform_user_id, lease_id, gateway_request_id, currency, amount_units, local_balance_after_units, payload_hash, occurred_at, authorization_id)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT (event_id) DO NOTHING`,
-		event.EventID, event.PlatformUserID, event.LeaseID, event.GatewayRequestID, event.Currency, event.AmountUnits, event.LocalBalanceAfterUnits, "test-hash", event.OccurredAt, authorizationID)
-	return err
+		event.EventID, event.PlatformUserID, event.LeaseID, event.GatewayRequestID, event.Currency, event.AmountUnits, event.LocalBalanceAfterUnits, hash, event.OccurredAt, authorizationID)
+	if insertErr != nil {
+		return insertErr
+	}
+	if n, _ := res.RowsAffected(); n == 1 {
+		_, err := tx.ExecContext(ctx, `RELEASE SAVEPOINT wallet_outbox_insert`)
+		return err
+	}
+	// The event id exists — identical payload: no-op; different: conflict.
+	var existingHash string
+	if err := tx.QueryRowContext(ctx, `SELECT payload_hash FROM wallet_settlement_outbox WHERE event_id = $1`, event.EventID).Scan(&existingHash); err != nil {
+		return err
+	}
+	if existingHash != hash {
+		return ErrWalletOutboxPayloadConflictForTest
+	}
+	return nil
 }
+
+// ErrWalletOutboxPayloadConflictForTest is the service-package twin of
+// repository.ErrWalletOutboxPayloadConflict (no import across the cycle).
+var ErrWalletOutboxPayloadConflictForTest = errors.New("wallet outbox event id already used with a different payload")
+
 func (o *outboxStoreForTest) ClaimPendingOutboxEvents(ctx context.Context, workerID string, limit int) ([]CanonicalWalletOutboxEvent, error) {
 	// REAL atomic claim, mirroring repository.WalletOutboxStore: transition
 	// to in_flight under the caller's claim token IN THE SAME statement, so

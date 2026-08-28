@@ -6,9 +6,11 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
@@ -1113,4 +1115,165 @@ func TestPhase35FourTokenStatesToTheUnit(t *testing.T) {
 		require.Equal(t, A, capturedByUser(t, fake, user), "captured == settled, to the unit — on a settle lease")
 		require.Equal(t, int64(1), canonicalWalletBridgeMetrics.holdSettlementAfterRelease.Load()-afterReleaseBase)
 	})
+}
+
+// Test 39 — §11.7's zero-cost abort points and the token-less alert: each
+// early return of the observer releases an armed hold (state = released,
+// class = zero_cost) when holds are on and an authorization id is in hand;
+// holds off writes nothing; a settlement that reaches ObserveSettlement
+// carrying no authorization under holds is counted and logged — with the row
+// still inserted (no behaviour change).
+func TestPhase35ZeroCostAbortPointsReleaseTheHold(t *testing.T) {
+	ctx := context.Background()
+	rdb := startCanonicalWalletTestRedis(t, ctx)
+	store := &gatewayCacheAdapterForTest{rdb: rdb}
+	now := time.Now().UTC()
+
+	// newWorld: a fresh fake + a FRESH throwaway outbox per leg (every
+	// bridge's dispatcher ticker outlives its leg — a shared table would let
+	// a foreign bridge deliver a later leg's row against its own fake).
+	newWorld := func(t *testing.T, holds string) (*fakeEnsureControlPlane, *gatewayCacheAdapterForTest, *CanonicalWalletBridge, *sql.DB) {
+		t.Helper()
+		db := startCanonicalWalletTestPostgres(t, ctx)
+		fake := newFakeEnsureControlPlane(t, func() time.Time { return now })
+		cfg := p34bHoldsConfig(config.CanonicalWalletModeEnforce)
+		cfg.Holds = holds
+		cfg.ControlPlaneURL, cfg.Secret = fake.Server.URL, strings.Repeat("s", 32)
+		cfg.ExpirySkewMarginMS, cfg.RequestTimeoutMS = 50, 300
+		cfg.LeaseBudgetUnits = 500_000_000
+		client := newCanonicalWalletHTTPClient(cfg, fake.Server.Client())
+		client.now = func() time.Time { return now }
+		return fake, store, newCanonicalWalletBridge(cfg, store, client, db, &outboxStoreForTest{db: db}, 0, func() time.Time { return now }), db
+	}
+	arm := func(t *testing.T, user, authID string) {
+		t.Helper()
+		require.NoError(t, store.InstallCanonicalWalletLease(ctx, CanonicalWalletLease{
+			LeaseID: "srv-39-l", PlatformUserID: user, Currency: "CNY", BudgetUnits: 500_000_000, ExpiresAt: now.Add(30 * time.Minute),
+		}))
+		_, _, _, err := store.ArmCanonicalWalletHold(ctx, user, "srv-39-l", "CNY", authID, 10_000_000, 900_000, now)
+		require.NoError(t, err)
+	}
+
+	zeroCostBase := canonicalWalletBridgeMetrics.holdReleasedZeroCost.Load()
+	legs := []struct {
+		name string
+		cost *CostBreakdown
+		sub  bool
+		appl bool
+	}{
+		{"subscription-billed releases", &CostBreakdown{ActualCost: 1}, true, true},
+		{"billing not applied releases", &CostBreakdown{ActualCost: 1}, false, false},
+		{"zero cost releases", &CostBreakdown{ActualCost: 0}, false, true},
+		{"rounds to zero releases", &CostBreakdown{ActualCost: 0.000000004}, false, true},
+	}
+	for i, leg := range legs {
+		t.Run(leg.name, func(t *testing.T) {
+			_, _, b, _ := newWorld(t, "on")
+			user := &User{ID: int64(100 + i), PlatformUserID: "shipany-user-39-" + itoa(i), BillingCurrency: "CNY", Balance: 10}
+			authID := "auth-39-" + itoa(i)
+			arm(t, user.PlatformUserID, authID)
+			require.False(t, observeCanonicalWalletSettlement(b, "req-39-"+itoa(i), user, leg.cost, leg.sub, leg.appl, nil, "tok", authID))
+			hold, err := store.GetCanonicalWalletHold(ctx, user.PlatformUserID, authID)
+			require.NoError(t, err)
+			require.Equal(t, "released", hold.State)
+			require.Equal(t, "zero_cost", hold.Class)
+		})
+	}
+	require.Equal(t, int64(len(legs)), canonicalWalletBridgeMetrics.holdReleasedZeroCost.Load()-zeroCostBase, "each abort point released exactly one hold")
+
+	// holds OFF: nothing is written — the manually-armed hold stays armed.
+	t.Run("holds off writes nothing", func(t *testing.T) {
+		_, _, b, _ := newWorld(t, "off")
+		user := &User{ID: int64(200), PlatformUserID: "shipany-user-39-off", BillingCurrency: "CNY", Balance: 10}
+		authID := "auth-39-off"
+		arm(t, user.PlatformUserID, authID)
+		base := canonicalWalletBridgeMetrics.holdReleasedZeroCost.Load()
+		require.False(t, observeCanonicalWalletSettlement(b, "req-39-off", user, &CostBreakdown{ActualCost: 0}, false, true, nil, "tok", authID))
+		hold, err := store.GetCanonicalWalletHold(ctx, user.PlatformUserID, authID)
+		require.NoError(t, err)
+		require.Equal(t, "armed", hold.State, "holds off is 3.4a byte-for-byte — no abort-point release")
+		require.Equal(t, base, canonicalWalletBridgeMetrics.holdReleasedZeroCost.Load())
+	})
+
+	// The token-less alert: a settlement with AuthorizationID == "" under
+	// holds is counted (and logged with the gateway request id) while the row
+	// is still inserted — no behaviour change.
+	t.Run("a token-less settlement is counted and still enqueued", func(t *testing.T) {
+		fake, _, b, tlDB := newWorld(t, "on")
+		fake.fund("shipany-user-39-tl", 100_000_000_000)
+		user := "shipany-user-39-tl"
+		tokenlessBase := canonicalWalletBridgeStatsValue("settlement_without_authorization")
+		require.True(t, b.ObserveSettlement(CanonicalWalletSettlementEvent{
+			GatewayRequestID: "req-39-tl", PlatformUserID: user, Currency: "CNY", AmountUnits: 10_000_000, OccurredAt: now,
+		}))
+		require.Equal(t, tokenlessBase+1, canonicalWalletBridgeStatsValue("settlement_without_authorization"), "counted once")
+		var rows int
+		require.NoError(t, tlDB.QueryRowContext(ctx, `SELECT count(*) FROM wallet_settlement_outbox WHERE gateway_request_id = 'req-39-tl'`).Scan(&rows))
+		require.Equal(t, 1, rows, "no behaviour change — the row is inserted")
+		p34WaitOutboxStatus(t, ctx, tlDB, "req-39-tl", "delivered")
+	})
+}
+
+// Test 40 — §11.8's repricing, pinned not mechanised: the same
+// GatewayRequestID with a different amount either dedups (same hash) or is
+// rejected as a payload conflict (different hash — observed: the conflict)
+// with exactly one row and queueDropped counted; on the wire, a redelivery
+// of a captured event with a different amount is the fake's
+// settlement_payload_conflict → terminal payload_conflict (Task 4).
+func TestPhase35RepricingIsPinned(t *testing.T) {
+	ctx := context.Background()
+	db := startCanonicalWalletTestPostgres(t, ctx)
+	rdb := startCanonicalWalletTestRedis(t, ctx)
+	store := &gatewayCacheAdapterForTest{rdb: rdb}
+	outbox := &outboxStoreForTest{db: db}
+	now := time.Now().UTC()
+	fake := newFakeEnsureControlPlane(t, func() time.Time { return now })
+	user := "shipany-user-" + uuid.NewString()
+	fake.fund(user, 100_000_000_000)
+	b := p34DispatcherBridge(t, fake, store, db, outbox, now)
+
+	const A1 = int64(30_000_000)
+	const A2 = int64(31_000_000)
+	droppedBase := canonicalWalletBridgeStatsValue("queue_dropped")
+
+	// In-process: the first submission enqueues; the repriced resubmission
+	// under the same event id is a payload conflict — false, one row,
+	// queueDropped counted. (CanonicalWalletSettlementEventID excludes the
+	// amount, so both carry the SAME event id.)
+	require.True(t, b.ObserveSettlement(CanonicalWalletSettlementEvent{
+		GatewayRequestID: "req-35-40", PlatformUserID: user, Currency: "CNY", AmountUnits: A1, OccurredAt: now,
+	}))
+	require.False(t, b.ObserveSettlement(CanonicalWalletSettlementEvent{
+		GatewayRequestID: "req-35-40", PlatformUserID: user, Currency: "CNY", AmountUnits: A2, OccurredAt: now,
+	}), "the repriced resubmission is rejected by the payload-hash identity")
+	var rows int
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM wallet_settlement_outbox WHERE gateway_request_id = 'req-35-40'`).Scan(&rows))
+	require.Equal(t, 1, rows, "exactly one outbox row exists")
+	require.Equal(t, droppedBase+1, canonicalWalletBridgeStatsValue("queue_dropped"), "the rejected resubmission is counted queue_dropped")
+
+	// On the wire: the row delivers at A1; a redelivery of the captured
+	// event carrying A2 is the fake's settlement_payload_conflict → terminal
+	// payload_conflict.
+	p34WaitOutboxStatus(t, ctx, db, "req-35-40", "delivered")
+	eventID := CanonicalWalletSettlementEventID("req-35-40", user, "CNY")
+	var id int64
+	require.NoError(t, db.QueryRowContext(ctx,
+		`UPDATE wallet_settlement_outbox SET status = 'in_flight', claimed_by = $2, claimed_at = now(), amount_units = $3 WHERE event_id = $1 RETURNING id`,
+		eventID, b.workerID, A2).Scan(&id))
+	b.deliverOutboxEvent(ctx, CanonicalWalletOutboxEvent{
+		ID: id, EventID: eventID, GatewayRequestID: "req-35-40", PlatformUserID: user,
+		Currency: "CNY", AmountUnits: A2, OccurredAt: now,
+	})
+	var status string
+	var attempts int
+	var reason sql.NullString
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT status, attempt_count, dead_letter_reason FROM wallet_settlement_outbox WHERE id = $1`, id).Scan(&status, &attempts, &reason))
+	require.Equal(t, "dead_letter", status)
+	require.Equal(t, 1, attempts, "terminal on the first attempt")
+	require.True(t, reason.Valid)
+	require.Equal(t, "payload_conflict", reason.String)
+	fake.mu.Lock()
+	stored := fake.events[user][eventID]
+	require.Equal(t, A1, stored.Units, "the captured event keeps the FIRST amount (§10.5's accepted drift)")
+	fake.mu.Unlock()
 }

@@ -505,12 +505,17 @@ func TestPhase34bSettlementConvertsTheHold(t *testing.T) {
 	fake.mu.Unlock()
 
 	// a retried submission with the same event id: {7} with the event id, no
-	// second outbox row, holdConvertDuplicate +1
-	require.True(t, b.ObserveSettlement(CanonicalWalletSettlementEvent{GatewayRequestID: "req-24", PlatformUserID: user, Currency: "CNY", AmountUnits: A, OccurredAt: now, AuthorizationID: "auth-24"}))
+	// second outbox row, holdConvertDuplicate +1. §11.8 (retargeted by Task
+	// 7's payload-conflict awareness in the test outbox store): the retried
+	// submission is REJECTED as a payload conflict — the original row was
+	// born BOUND to the hold's lease by the conversion, while the retry (a
+	// {7}-settled conversion) carries no lease, so the payload hashes differ.
+	// The recorded outcome: false + queueDropped + exactly one row.
+	require.False(t, b.ObserveSettlement(CanonicalWalletSettlementEvent{GatewayRequestID: "req-24", PlatformUserID: user, Currency: "CNY", AmountUnits: A, OccurredAt: now, AuthorizationID: "auth-24"}))
 	require.Equal(t, int64(1), canonicalWalletBridgeMetrics.holdConvertDuplicate.Load()-dupBase)
 	var rows int
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM wallet_settlement_outbox WHERE gateway_request_id = 'req-24'`).Scan(&rows))
-	require.Equal(t, 1, rows, "the outbox's payload-hash idempotency dedups the retried submission")
+	require.Equal(t, 1, rows, "the outbox's payload-hash idempotency rejects the retried submission — no second row")
 
 	// {7}-empty leg (a): a not_written release, then a retried write that
 	// settles A → the event proceeds unbound on a settle-purpose lease, with
