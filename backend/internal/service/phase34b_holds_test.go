@@ -19,15 +19,235 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// p34bApplyHoldOutcomeMigration applies 213 to the dispatcher harness's
-// throwaway database (startCanonicalWalletTestPostgres creates only the
-// outbox table) — read directly, the constraint-6 pattern.
-func p34bApplyHoldOutcomeMigration(t *testing.T, ctx context.Context, db *sql.DB) {
+// p34bReaperBridge: a holds-on bridge over real Redis + Postgres whose reaper
+// is driven by reapOnce in the test (the ticker goroutine's first tick is one
+// configured interval away — 60 s at the test defaults — so it never races).
+func p34bReaperBridge(t *testing.T, store CanonicalWalletLeaseStore, db *sql.DB, now time.Time, batch int) *CanonicalWalletBridge {
 	t.Helper()
-	sqlContent, err := os.ReadFile(filepath.Join("..", "..", "migrations", "213_wallet_hold_outcome.sql"))
+	cfg := p34bHoldsConfig(config.CanonicalWalletModeEnforce)
+	cfg.ExpirySkewMarginMS = 50
+	cfg.LeaseBudgetUnits = 500_000_000
+	if batch > 0 {
+		cfg.OrphanSweepBatch = batch
+	}
+	return newCanonicalWalletBridge(cfg, store, &canonicalWalletControlStub{}, db, nil, 0, func() time.Time { return now })
+}
+
+// p34bArmOrphan installs a lease and arms a hold at armedAt, outside Authorize
+// (the reaper is store-driven; no control plane is involved).
+func p34bArmOrphan(t *testing.T, ctx context.Context, store CanonicalWalletLeaseStore, user, leaseID, authID string, units int64, armedAt, now time.Time) {
+	t.Helper()
+	require.NoError(t, store.InstallCanonicalWalletLease(ctx, CanonicalWalletLease{
+		LeaseID: leaseID, PlatformUserID: user, Currency: "CNY",
+		BudgetUnits: 500_000_000, ExpiresAt: now.Add(30 * time.Minute),
+	}))
+	_, _, _, err := store.ArmCanonicalWalletHold(ctx, user, leaseID, "CNY", authID, units, 900_000, armedAt)
+	require.NoError(t, err)
+}
+
+// p34bHoldState reads the hold hash's money state.
+func p34bHoldState(t *testing.T, ctx context.Context, store CanonicalWalletLeaseStore, user, authID string) string {
+	t.Helper()
+	hold, err := store.GetCanonicalWalletHold(ctx, user, authID)
+	require.NoError(t, err)
+	return hold.State
+}
+
+// p34bUserEnumerated: is the user still a member of hold_users?
+func p34bUserEnumerated(t *testing.T, ctx context.Context, store CanonicalWalletLeaseStore, user string) bool {
+	t.Helper()
+	users, _, err := store.ListCanonicalWalletHoldUsers(ctx, 0, 100)
+	require.NoError(t, err)
+	for _, u := range users {
+		if u == user {
+			return true
+		}
+	}
+	return false
+}
+
+// p34bTick DELs the reaper's leader key and runs one tick — every reapOnce
+// in a test needs this (the key's PX is 2×interval of REAL time and no time
+// passes in these tests); the rotation legs do the DEL explicitly instead.
+func p34bTick(t *testing.T, ctx context.Context, rdb *redis.Client, b *CanonicalWalletBridge, now time.Time) {
+	t.Helper()
+	require.NoError(t, rdb.Del(ctx, testCanonicalWalletReaperTickKey).Err())
+	b.reapOnce(ctx, now)
+}
+
+// Test 27 — the orphan reaper (§10.7): abandonment, the grace, indeterminate
+// immunity, Live liveness, the deployment-wide leader, the batch cap, leader
+// rotation, and the Postgres expired pass.
+func TestPhase34bReaper(t *testing.T) {
+	ctx := context.Background()
+	rdb := startCanonicalWalletTestRedis(t, ctx)
+	db := startCanonicalWalletTestPostgres(t, ctx)
+	p34bApplyHoldOutcomeMigration(t, ctx, db)
+	p34bApplyMigration(t, ctx, db, "211_wallet_live_provisional.sql")
+	store := &gatewayCacheAdapterForTest{rdb: rdb}
+	now := time.Now().UTC()
+	pastGrace := now.Add(20 * time.Minute) // armed_at 20m ago > the 900s grace
+	live := newLiveProvisionalStore(db)
+	outcomes := &walletHoldOutcomeStore{db: db}
+	b := p34bReaperBridge(t, store, db, now, 0)
+
+	// (i) an unclassified hold older than the grace is released with an
+	// abandoned row; the user stays in hold_users for one empty tick and is
+	// pruned on the second.
+	u1 := "shipany-user-" + uuid.NewString()
+	p34bArmOrphan(t, ctx, store, u1, "lease-r1", "auth-r1", 300_000_000, now.Add(-20*time.Minute), now)
+	b.reapOnce(ctx, pastGrace)
+	require.Equal(t, "abandoned", p34bHoldState(t, ctx, store, u1, "auth-r1"))
+	require.Equal(t, "300000000", p34bHashField(t, ctx, store, u1, "lease-r1", "released_units"), "released_units += E")
+	ids, err := store.ListCanonicalWalletHolds(ctx, u1, 100)
+	require.NoError(t, err)
+	require.Empty(t, ids, "the user's set is empty after the release")
+	require.True(t, p34bUserEnumerated(t, ctx, store, u1), "the user stays in hold_users after the release tick")
+	var resolution *string
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT resolution FROM wallet_hold_outcome WHERE authorization_id = 'auth-r1'`).Scan(&resolution))
+	require.NotNil(t, resolution)
+	require.Equal(t, "abandoned", *resolution)
+	// first empty observation: the marker is written, the user stays (the
+	// tick key is DEL'd between ticks — the deterministic equivalent of the
+	// leader key expiring, as leg (vii) does; real time never passes)
+	require.NoError(t, rdb.Del(ctx, testCanonicalWalletReaperTickKey).Err())
+	b.reapOnce(ctx, pastGrace)
+	require.True(t, p34bUserEnumerated(t, ctx, store, u1), "one empty tick is not enough to prune")
+	// second empty observation: the user is pruned
+	require.NoError(t, rdb.Del(ctx, testCanonicalWalletReaperTickKey).Err())
+	b.reapOnce(ctx, pastGrace)
+	require.False(t, p34bUserEnumerated(t, ctx, store, u1), "two consecutive empty ticks prune the user")
+
+	// (ii) a hold younger than the grace is untouched (young AT THE REAP
+	// TIME: armed one minute before pastGrace)
+	u2 := "shipany-user-" + uuid.NewString()
+	p34bArmOrphan(t, ctx, store, u2, "lease-r2", "auth-r2", 100_000_000, pastGrace.Add(-time.Minute), now)
+	p34bTick(t, ctx, rdb, b, pastGrace)
+	require.Equal(t, "armed", p34bHoldState(t, ctx, store, u2, "auth-r2"))
+	require.Equal(t, "0", p34bHashField(t, ctx, store, u2, "lease-r2", "released_units"))
+
+	// (iii) an indeterminate hold past the grace is untouched and its row
+	// stays open (the two commitments of §2.0.1). Armed 16m before the reap
+	// (past the 15m grace) but NOT older than the expired pass's cutoff —
+	// a real hold's hash is long gone by that age, so a fixture that old
+	// would conflate the two passes.
+	u3 := "shipany-user-" + uuid.NewString()
+	p34bArmOrphan(t, ctx, store, u3, "lease-r3", "auth-r3", 100_000_000, pastGrace.Add(-16*time.Minute), now)
+	marked, err := store.MarkCanonicalWalletHoldClass(ctx, u3, "auth-r3", "indeterminate")
+	require.NoError(t, err)
+	require.NoError(t, outcomes.InsertIndeterminate(ctx, *marked, u3, pastGrace.Add(-15*time.Minute)))
+	p34bTick(t, ctx, rdb, b, pastGrace)
+	require.Equal(t, "armed", p34bHoldState(t, ctx, store, u3, "auth-r3"), "an indeterminate hold is never released")
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT resolution FROM wallet_hold_outcome WHERE authorization_id = 'auth-r3'`).Scan(&resolution))
+	require.Nil(t, resolution, "its row stays open")
+
+	// (iv) a Live record: active is skipped; aborted is released
+	u4 := "shipany-user-" + uuid.NewString()
+	p34bArmOrphan(t, ctx, store, u4, "lease-r4", "auth-r4", 100_000_000, now.Add(-20*time.Minute), now)
+	require.NoError(t, live.Save(ctx, &LiveProvisionalRecord{
+		Token: "auth-r4", AuthorizationID: "auth-r4", PlatformUserID: u4, UserID: 1, APIKeyID: 1,
+		AccountID: 1, BillingCurrency: "CNY", BillingSnapshotID: "snap", EstimatedUnits: 100_000_000,
+		Status: LiveProvisionalStatusProvisional, CreatedAt: now.Add(-25 * time.Minute),
+	}))
+	require.NoError(t, live.Activate(ctx, "auth-r4", "call-hash-4", now.Add(-19*time.Minute)))
+	p34bTick(t, ctx, rdb, b, pastGrace)
+	require.Equal(t, "armed", p34bHoldState(t, ctx, store, u4, "auth-r4"), "an active Live record keeps its hold")
+	u5 := "shipany-user-" + uuid.NewString()
+	p34bArmOrphan(t, ctx, store, u5, "lease-r5", "auth-r5", 100_000_000, now.Add(-20*time.Minute), now)
+	require.NoError(t, live.Save(ctx, &LiveProvisionalRecord{
+		Token: "auth-r5", AuthorizationID: "auth-r5", PlatformUserID: u5, UserID: 2, APIKeyID: 2,
+		AccountID: 2, BillingCurrency: "CNY", BillingSnapshotID: "snap", EstimatedUnits: 100_000_000,
+		Status: LiveProvisionalStatusProvisional, CreatedAt: now.Add(-25 * time.Minute),
+	}))
+	require.NoError(t, live.Abort(ctx, "auth-r5", now.Add(-19*time.Minute)))
+	p34bTick(t, ctx, rdb, b, pastGrace)
+	require.Equal(t, "abandoned", p34bHoldState(t, ctx, store, u5, "auth-r5"), "an aborted Live record does not keep its hold")
+
+	// (v) two bridges on the same Redis: one sweep per tick (the SETNX leader)
+	u6 := "shipany-user-" + uuid.NewString()
+	p34bArmOrphan(t, ctx, store, u6, "lease-r6", "auth-r6", 100_000_000, now.Add(-20*time.Minute), now)
+	b2 := p34bReaperBridge(t, store, db, now, 0)
+	require.NoError(t, rdb.Del(ctx, testCanonicalWalletReaperTickKey).Err()) // a fresh tick
+	b.reapOnce(ctx, pastGrace)
+	b2.reapOnce(ctx, pastGrace) // the loser skips
+	require.Equal(t, "abandoned", p34bHoldState(t, ctx, store, u6, "auth-r6"))
+	require.Equal(t, "100000000", p34bHashField(t, ctx, store, u6, "lease-r6", "released_units"), "released exactly once")
+	var abandonedRows int
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM wallet_hold_outcome WHERE authorization_id = 'auth-r6'`).Scan(&abandonedRows))
+	require.Equal(t, 1, abandonedRows, "a single abandoned row")
+
+	// (vi) the batch cap: 3 holds, batch 2 → 2 released on the first tick,
+	// 1 on the next
+	u7 := "shipany-user-" + uuid.NewString()
+	for i := 0; i < 3; i++ {
+		p34bArmOrphan(t, ctx, store, u7, fmt.Sprintf("lease-r7-%d", i), fmt.Sprintf("auth-r7-%d", i), 100_000_000, now.Add(-20*time.Minute), now)
+	}
+	bb := p34bReaperBridge(t, store, db, now, 2)
+	require.NoError(t, rdb.Del(ctx, testCanonicalWalletReaperTickKey).Err())
+	p34bTick(t, ctx, rdb, bb, pastGrace)
+	abandonedAfterFirst := 0
+	armedAfterFirst := 0
+	for i := 0; i < 3; i++ {
+		switch p34bHoldState(t, ctx, store, u7, fmt.Sprintf("auth-r7-%d", i)) {
+		case "abandoned":
+			abandonedAfterFirst++
+		case "armed":
+			armedAfterFirst++
+		}
+	}
+	require.Equal(t, 2, abandonedAfterFirst, "the batch cap released exactly two")
+	require.Equal(t, 1, armedAfterFirst)
+	require.NoError(t, rdb.Del(ctx, testCanonicalWalletReaperTickKey).Err())
+	bb.reapOnce(ctx, pastGrace)
+	require.Equal(t, "abandoned", p34bHoldState(t, ctx, store, u7, "auth-r7-0"))
+	require.Equal(t, "abandoned", p34bHoldState(t, ctx, store, u7, "auth-r7-1"))
+	require.Equal(t, "abandoned", p34bHoldState(t, ctx, store, u7, "auth-r7-2"), "the remainder is released on the next tick")
+
+	// (vii) leader rotation: the two-tick prune state lives in Redis, so it
+	// survives a leader change (the deterministic equivalent of the leader
+	// key expiring — no sleeps, constraint 7).
+	u8 := "shipany-user-" + uuid.NewString()
+	p34bArmOrphan(t, ctx, store, u8, "lease-r8", "auth-r8", 100_000_000, now.Add(-20*time.Minute), now)
+	require.NoError(t, rdb.Del(ctx, testCanonicalWalletReaperTickKey).Err())
+	b.reapOnce(ctx, pastGrace) // bridge 1 releases
+	require.True(t, p34bUserEnumerated(t, ctx, store, u8))
+	require.NoError(t, rdb.Del(ctx, testCanonicalWalletReaperTickKey).Err())
+	b2.reapOnce(ctx, pastGrace) // bridge 2 observes empty #1
+	require.True(t, p34bUserEnumerated(t, ctx, store, u8), "still not pruned after one empty observation")
+	require.NoError(t, rdb.Del(ctx, testCanonicalWalletReaperTickKey).Err())
+	b2.reapOnce(ctx, pastGrace) // bridge 2 observes empty #2 → pruned
+	require.False(t, p34bUserEnumerated(t, ctx, store, u8), "the prune survives the leader rotation")
+
+	// (viii) the Postgres pass: an open row older than lease_ttl + grace with
+	// no hash at all → resolution='expired'
+	expiredHold := CanonicalWalletHold{
+		AuthorizationID: "auth-expired-row", LeaseID: "lease-gone", HeldUnits: 1,
+		ArmedAt: now.Add(-1300 * time.Second), Class: "indeterminate", State: "armed",
+	}
+	require.NoError(t, outcomes.InsertIndeterminate(ctx, expiredHold, "shipany-user-gone", now.Add(-1300*time.Second)))
+	require.NoError(t, rdb.Del(ctx, testCanonicalWalletReaperTickKey).Err())
+	p34bTick(t, ctx, rdb, b, pastGrace)
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT resolution FROM wallet_hold_outcome WHERE authorization_id = 'auth-expired-row'`).Scan(&resolution))
+	require.NotNil(t, resolution)
+	require.Equal(t, "expired", *resolution)
+}
+
+// p34bApplyMigration applies a named migration file to a throwaway test
+// database (constraint 6's direct-read pattern, shared by 211 and 213).
+func p34bApplyMigration(t *testing.T, ctx context.Context, db *sql.DB, name string) {
+	t.Helper()
+	sqlContent, err := os.ReadFile(filepath.Join("..", "..", "migrations", name))
 	require.NoError(t, err)
 	_, err = db.ExecContext(ctx, string(sqlContent))
 	require.NoError(t, err)
+}
+
+// p34bApplyHoldOutcomeMigration applies 213 to the dispatcher harness's
+// throwaway database (startCanonicalWalletTestPostgres creates only the
+// outbox table).
+func p34bApplyHoldOutcomeMigration(t *testing.T, ctx context.Context, db *sql.DB) {
+	t.Helper()
+	p34bApplyMigration(t, ctx, db, "213_wallet_hold_outcome.sql")
 }
 
 // Phase 3.4b (redesign §10.8, tests 22–29): holds armed at authorization,
@@ -193,7 +413,13 @@ func TestPhase34bNotWrittenReleases(t *testing.T) {
 
 	h := p34bAuthorize(t, ctx, config.CanonicalWalletModeEnforce, b, user, `{"max_tokens":64}`)
 	tok := h.MintWriteToken()
+	// §10.4's cost note: the not_written callback is the one synchronous Redis
+	// round trip holds add to the response path — measured here against real
+	// Redis and quoted in the completion record.
+	releaseStart := time.Now()
 	h.RecordOutcome(tok, AuthorizationOutcomeNotWritten, errors.New("dial tcp: connection refused"))
+	releaseLatency := time.Since(releaseStart)
+	t.Logf("not_written hold-release callback latency (real Redis): %s", releaseLatency)
 	hold, err := store.GetCanonicalWalletHold(ctx, user, h.ID)
 	require.NoError(t, err)
 	require.Equal(t, "released", hold.State)
@@ -238,12 +464,13 @@ func TestPhase34bSettlementConvertsTheHold(t *testing.T) {
 	rdb := startCanonicalWalletTestRedis(t, ctx)
 	db := startCanonicalWalletTestPostgres(t, ctx)
 	p34bApplyHoldOutcomeMigration(t, ctx, db)
+	p34bApplyMigration(t, ctx, db, "211_wallet_live_provisional.sql") // the reaper's Live liveness reads this table
 	store := &gatewayCacheAdapterForTest{rdb: rdb}
 	outbox := &outboxStoreForTest{db: db}
 	now := time.Now().UTC()
 	fake := newFakeEnsureControlPlane(t, func() time.Time { return now })
 	user := "shipany-user-" + uuid.NewString()
-	fake.fund(user, 10_000_000_000)
+	fake.fund(user, 100_000_000_000)
 	b := p34bDispatcherBridge(t, fake, store, db, outbox, now, 300)
 
 	dupBase := canonicalWalletBridgeMetrics.holdConvertDuplicate.Load()
@@ -311,6 +538,22 @@ func TestPhase34bSettlementConvertsTheHold(t *testing.T) {
 	}
 	fake.mu.Unlock()
 	require.NotEmpty(t, settleLease, "delivered on a settle-purpose lease")
+
+	// {7}-empty leg (b): an orphan RELEASED BY THE REAPER, then a settlement
+	// arrives → {7} with an empty event_id → unbound, delivered on a settle
+	// lease; the abandoned row stays (§10.5/§10.7).
+	_, _, _, err = store.ArmCanonicalWalletHold(ctx, user, l1.LeaseID, "CNY", "auth-24c", E, 900_000, now)
+	require.NoError(t, err)
+	b.reapOnce(ctx, now.Add(20*time.Minute)) // past the 900s grace; nothing else is reapable in this user's set
+	require.Equal(t, "abandoned", p34bHoldState(t, ctx, store, user, "auth-24c"))
+	consumedBeforeB := p34bHashField(t, ctx, store, user, l1.LeaseID, "consumed_units")
+	require.True(t, b.ObserveSettlement(CanonicalWalletSettlementEvent{GatewayRequestID: "req-24c", PlatformUserID: user, Currency: "CNY", AmountUnits: 20_000_000, OccurredAt: now, AuthorizationID: "auth-24c"}))
+	p34WaitOutboxStatus(t, ctx, db, "req-24c", "delivered")
+	require.Equal(t, consumedBeforeB, p34bHashField(t, ctx, store, user, l1.LeaseID, "consumed_units"), "lease 1 is untouched by the unbound delivery")
+	require.Equal(t, int64(2), canonicalWalletBridgeMetrics.holdSettlementAfterRelease.Load()-afterReleaseBase, "both {7}-empty legs counted")
+	var abandonedResolution string
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT resolution FROM wallet_hold_outcome WHERE authorization_id = 'auth-24c'`).Scan(&abandonedResolution))
+	require.Equal(t, "abandoned", abandonedResolution, "the abandoned row stays — MarkSettled never rewrites a resolved row")
 }
 
 // Test 25 — A > E within budget adds the excess; beyond budget releases the
@@ -526,6 +769,17 @@ func TestPhase34bIndeterminateKeptAndLateSettlementSettlesTheRow(t *testing.T) {
 	var resolution *string
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT resolution FROM wallet_hold_outcome WHERE authorization_id = $1`, h.ID).Scan(&resolution))
 	require.Nil(t, resolution, "the row is open")
+
+	// the reaper past the grace skips it (an indeterminate hold is never
+	// released — the two commitments of §2.0.1) and its row stays open. The
+	// reap is one second INSIDE lease_ttl+grace so the hold (armed at `now`,
+	// millisecond-truncated) never falls under the expired pass's cutoff.
+	b.reapOnce(ctx, now.Add(20*time.Minute-time.Second))
+	hold, err = store.GetCanonicalWalletHold(ctx, user, h.ID)
+	require.NoError(t, err)
+	require.Equal(t, "armed", hold.State, "the reaper skips an indeterminate hold past the grace")
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT resolution FROM wallet_hold_outcome WHERE authorization_id = $1`, h.ID).Scan(&resolution))
+	require.Nil(t, resolution, "the row stays open after the reap")
 
 	// a late settlement converts the held hold and settles the row
 	require.True(t, b.ObserveSettlement(CanonicalWalletSettlementEvent{

@@ -665,6 +665,10 @@ type canonicalWalletMetrics struct {
 	holdMissingAtSettlement     atomic.Int64
 	holdIndeterminateClassified atomic.Int64
 	holdIndeterminateRowFailed  atomic.Int64
+	// Phase 3.4b (§10.7): the reaper counters.
+	reaperError         atomic.Int64
+	holdsAbandoned      atomic.Int64
+	holdOutcomesExpired atomic.Int64
 }
 
 var canonicalWalletBridgeMetrics canonicalWalletMetrics
@@ -694,6 +698,9 @@ func CanonicalWalletBridgeStats() map[string]int64 {
 		"hold_missing_at_settlement":    m.holdMissingAtSettlement.Load(),
 		"hold_indeterminate_classified": m.holdIndeterminateClassified.Load(),
 		"hold_indeterminate_row_failed": m.holdIndeterminateRowFailed.Load(),
+		"reaper_error":                  m.reaperError.Load(),
+		"holds_abandoned":               m.holdsAbandoned.Load(),
+		"hold_outcomes_expired":         m.holdOutcomesExpired.Load(),
 	}
 }
 
@@ -718,6 +725,11 @@ type CanonicalWalletBridge struct {
 	// from the bridge's own outbox DB (never a new provider — constraint 2);
 	// the nil-safe no-op until Task 4 constructs the real store.
 	holdOutcomes walletHoldOutcomeSink
+	// liveProvisional (Phase 3.4b, §10.7): the reaper's ONLY liveness signal
+	// (§5's second signal is deliberately unimplemented — no general
+	// per-attempt durable record exists before 3.5's outbox authorization_id
+	// column). Built from the same outbox DB, the liveProvisionalStore pattern.
+	liveProvisional LiveProvisionalStore
 }
 
 // walletHoldOutcomeSink is the durable outcome row's write surface (§10.6).
@@ -921,8 +933,21 @@ func newCanonicalWalletBridge(cfg config.CanonicalWalletConfig, store CanonicalW
 		// Phase 3.4b (§10.6): the outcome-row store on the bridge's OWN db —
 		// never a new provider (constraint 2); nil (a no-op sink) without one.
 		holdOutcomes: newWalletHoldOutcomeStore(outboxDB),
+		liveProvisional: func() LiveProvisionalStore {
+			if outboxDB == nil {
+				return nil
+			}
+			return newLiveProvisionalStore(outboxDB)
+		}(),
 	}
 	go b.runOutboxDispatcher()
+	// §10.7: a reaper goroutine per bridge, started with the dispatcher —
+	// only when holds are on AND the outcome row's DB exists (the reaper's
+	// abandoned/expired passes have nowhere to write without it). Each tick
+	// is idempotent and the SETNX leader serialises sweeps deployment-wide.
+	if b.HoldsEnabled() && b.outboxDB != nil {
+		go b.runHoldReaper()
+	}
 	return b
 }
 
@@ -1142,6 +1167,114 @@ func (b *CanonicalWalletBridge) HasCanonicalWalletHeadroom(ctx context.Context, 
 		return false, nil
 	}
 	return lease.RemainingUnits() > 0, nil
+}
+
+// runHoldReaper (§10.7) is the per-bridge tick loop. Every decision reads
+// b.clock() through reapOnce; tests never sleep — they drive reapOnce with
+// the injected clock directly.
+func (b *CanonicalWalletBridge) runHoldReaper() {
+	interval := time.Duration(b.cfg.OrphanSweepIntervalSeconds) * time.Second
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for range ticker.C {
+		ctx, cancel := context.WithTimeout(context.Background(), interval/2)
+		b.reapOnce(ctx, b.clock())
+		cancel()
+	}
+}
+
+// reapOnce is one tick (§10.7). Exported to tests through the package;
+// production only calls it from runHoldReaper. The deployment-wide SETNX
+// leader serialises sweeps; the two-consecutive-empty-ticks prune state
+// lives in REDIS (not per-bridge memory) so it survives leader rotation.
+func (b *CanonicalWalletBridge) reapOnce(ctx context.Context, now time.Time) {
+	if b == nil || b.store == nil {
+		return
+	}
+	leader, err := b.store.TryCanonicalWalletReaperLease(ctx, 2*time.Duration(b.cfg.OrphanSweepIntervalSeconds)*time.Second)
+	if err != nil || !leader {
+		return
+	}
+	grace := time.Duration(b.cfg.OrphanGraceSeconds) * time.Second
+	var cursor uint64
+	for {
+		users, next, err := b.store.ListCanonicalWalletHoldUsers(ctx, cursor, 100)
+		if err != nil {
+			canonicalWalletBridgeMetrics.reaperError.Add(1)
+			return
+		}
+		for _, user := range users {
+			ids, err := b.store.ListCanonicalWalletHolds(ctx, user, b.cfg.OrphanSweepBatch)
+			if err != nil {
+				continue
+			}
+			if len(ids) == 0 {
+				// §10.3's two-consecutive-empty-ticks prune, with the state in
+				// REDIS so it survives leader rotation (the SETNX leader is
+				// deployment-wide; per-bridge memory never sees two ticks).
+				if alreadySeen, err := b.store.MarkCanonicalWalletHoldUserEmpty(ctx, user, 2*time.Duration(b.cfg.OrphanSweepIntervalSeconds)*time.Second); err == nil && alreadySeen {
+					_ = b.store.PruneCanonicalWalletHoldUser(ctx, user)
+					_ = b.store.ClearCanonicalWalletHoldUserEmpty(ctx, user)
+				}
+				continue
+			}
+			_ = b.store.ClearCanonicalWalletHoldUserEmpty(ctx, user)
+			for _, id := range ids {
+				h, err := b.store.GetCanonicalWalletHold(ctx, user, id)
+				if errors.Is(err, ErrCanonicalWalletHoldMissing) || (err == nil && h.State != "armed") {
+					_ = b.store.ForgetCanonicalWalletHold(ctx, user, id) // SREM only
+					continue
+				}
+				if err != nil || h.Class == "indeterminate" || now.Sub(h.ArmedAt) < grace {
+					continue
+				}
+				if b.liveProvisionalActive(ctx, id) {
+					continue
+				}
+				if _, err := b.store.ReleaseCanonicalWalletHold(ctx, user, id, "abandoned", ""); err == nil {
+					canonicalWalletBridgeMetrics.holdsAbandoned.Add(1)
+					if b.holdOutcomes != nil {
+						_ = b.holdOutcomes.InsertAbandoned(ctx, *h, user, now)
+					}
+				}
+			}
+		}
+		if next == 0 {
+			break
+		}
+		cursor = next
+	}
+	// §10.6's expired pass: rows still open whose armed_at is older than
+	// lease_ttl + grace — the hold hash is gone by then; Phase 4 reconciles
+	// these against wallet_lease_close. §10.6 says lease_ttl + the SETTLE-side
+	// grace (ShipAny's number, unknown on this side of the wire); orphan_grace
+	// is the only figure available here — recorded as deviation 1.
+	if b.holdOutcomes != nil {
+		cutoff := now.Add(-(time.Duration(b.cfg.LeaseTTLSeconds)*time.Second + grace))
+		if n, err := b.holdOutcomes.MarkExpiredOlderThan(ctx, cutoff, now); err == nil && n > 0 {
+			canonicalWalletBridgeMetrics.holdOutcomesExpired.Add(n)
+		}
+	}
+}
+
+// liveProvisionalActive is §10.7's liveness signal: an active Live record for
+// the authorization id (Live's token is its authorization id, openai_live.go)
+// keeps the hold. Not-found → false; ANY OTHER ERROR → true (fail safe: never
+// reap on a DB error).
+func (b *CanonicalWalletBridge) liveProvisionalActive(ctx context.Context, authorizationID string) bool {
+	if b.liveProvisional == nil {
+		return false
+	}
+	rec, err := b.liveProvisional.Get(ctx, authorizationID)
+	if err != nil {
+		return !errors.Is(err, ErrLiveProvisionalNotFound)
+	}
+	switch rec.Status {
+	case LiveProvisionalStatusProvisional, LiveProvisionalStatusActive, LiveProvisionalStatusFinalizing:
+		return true
+	default:
+		return false
+	}
 }
 
 // runOutboxDispatcher polls for durably-persisted pending events instead of
