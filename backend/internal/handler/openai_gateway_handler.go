@@ -49,6 +49,7 @@ type openAIWSTurnChannelMappingSnapshot struct {
 	turn            int
 	mapping         service.ChannelMappingResult
 	billingSnapshot *service.BillingSnapshot
+	authHandle      *service.AuthorizationHandle
 }
 
 var errOpenAIWSUnsupportedModelSwitch = errors.New("selected account does not support websocket model switch")
@@ -59,7 +60,9 @@ func newOpenAIWSUnsupportedModelSwitchError(model string) error {
 }
 
 func shouldReportOpenAIWSProxyAccountFailure(err error) bool {
-	return err != nil && !errors.Is(err, errOpenAIWSUnsupportedModelSwitch)
+	return err != nil &&
+		!errors.Is(err, errOpenAIWSUnsupportedModelSwitch) &&
+		!errors.Is(err, service.ErrAuthorizationRefused)
 }
 
 func openAIWSTurnBillingModel(result *service.OpenAIForwardResult, mapping service.ChannelMappingResult, requestedModel, upstreamModel string) string {
@@ -2000,6 +2003,32 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			InitialRequestModel:     reqModel,
 			MaxReasoningEffort:      maxReasoningEffort,
 			ReasoningEffortMappings: reasoningEffortMappings,
+			AuthorizeTurn: func(turn int, estimate service.EstimateInput) (*service.AuthorizationHandle, error) {
+				snapshot := turnChannelMapping.Load()
+				var turnSnap *service.BillingSnapshot
+				if snapshot != nil && snapshot.turn == turn {
+					turnSnap = snapshot.billingSnapshot
+				}
+				// Fail closed on a holder mismatch or a nil snapshot: 3.2 froze nothing for
+				// this turn (the initial Store at :1958 carries billingSnapshot nil; a turn
+				// whose MapRequestModel errored has none). AuthorizeBillableAttempt refuses a
+				// nil snapshot with AuthorizationRefusalSnapshotMissing in enforce and admits
+				// (counting) in shadow — the same contract as the HTTP rows. The test below
+				// pins that the holder's turn equals this argument on both ingress modes.
+				handle, err := h.gatewayService.AuthorizeBillableAttempt(ctx, turnSnap, apiKey, estimate)
+				if snapshot != nil && snapshot.turn == turn {
+					turnChannelMapping.Store(&openAIWSTurnChannelMappingSnapshot{turn: turn, mapping: snapshot.mapping, billingSnapshot: snapshot.billingSnapshot, authHandle: handle})
+				}
+				if err != nil {
+					refused, _ := service.AsAuthorizationRefused(err)
+					reason := service.AuthorizationRefusedWSCloseReason
+					if refused != nil {
+						reason += ": " + string(refused.Reason)
+					}
+					return handle, service.NewOpenAIWSClientCloseError(coderws.StatusCode(service.AuthorizationRefusedWSCloseStatus), reason, err)
+				}
+				return handle, nil
+			},
 			BeforeRequest: func(turn int, payload []byte, originalModel string) error {
 				if turn == 1 {
 					return nil
@@ -2102,12 +2131,11 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				}
 				var turnMapping service.ChannelMappingResult
 				var turnBillingSnapshot *service.BillingSnapshot
-				// Phase 3.3a: nil until 3.3b mints WS-port handles — the usage
-				// input's authorization fields stay empty meanwhile.
 				var turnAuthHandle *service.AuthorizationHandle
 				if snapshot := turnChannelMapping.Load(); snapshot != nil && snapshot.turn == turn {
 					turnMapping = snapshot.mapping
 					turnBillingSnapshot = snapshot.billingSnapshot
+					turnAuthHandle = snapshot.authHandle
 				} else {
 					turnMapping, _ = h.gatewayService.ResolveChannelMappingAndRestrict(ctx, apiKey.GroupID, turnRequestedModel)
 				}

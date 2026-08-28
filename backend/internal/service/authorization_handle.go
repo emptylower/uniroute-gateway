@@ -280,9 +280,13 @@ func AuthorizationMetricsSnapshot() AuthorizationMetrics {
 	}
 }
 
-func resetAuthorizationMetricsForTest() {
+func ResetAuthorizationMetricsForTest() {
 	m := &authorizationMetrics
 	for _, c := range []*atomic.Int64{&m.minted, &m.refused, &m.writesAuthorized, &m.writesNonBillable, &m.writesUnmarked, &m.writesRefused, &m.misplacedMarks, &m.outcomeResult, &m.outcomeNotWritten, &m.outcomeIndeterminate, &m.snapshotMissing, &m.estimateFailed, &m.identityMissing, &m.currencyUnsupported, &m.leaseUnavailable, &m.balanceShortfall, &m.abandoned} {
 		c.Store(0)
 	}
+}
+
+func resetAuthorizationMetricsForTest() {
+	ResetAuthorizationMetricsForTest()
 }
