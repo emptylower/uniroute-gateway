@@ -474,6 +474,15 @@ func (c *canonicalWalletHTTPClient) doJSON(ctx context.Context, method, path, sc
 		if resp.StatusCode == http.StatusConflict && json.Unmarshal(body, &refusal) == nil && refusal.Data.Reason != "" {
 			return &canonicalWalletRefusalError{Reason: refusal.Data.Reason, Status: resp.StatusCode}
 		}
+		// §9.6 item 6: a 404/405 from the ensure route at runtime means the
+		// control plane predates 3.4a-S — classified
+		// ErrCanonicalWalletControlPlaneIncompatible (transient: the outbox
+		// retries on the backoff; attempts_exhausted if it runs out). Keyed
+		// on the PATH — doJSON is shared with the settlements route, whose
+		// statuses are its own.
+		if path == "/api/internal/v2/wallet/leases/ensure" && (resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed) {
+			return fmt.Errorf("%w: ensure route answered status %d", ErrCanonicalWalletControlPlaneIncompatible, resp.StatusCode)
+		}
 		return fmt.Errorf("canonical wallet control plane returned status %d", resp.StatusCode)
 	}
 	if len(body) == 0 || responseBody == nil {
@@ -489,6 +498,29 @@ func (c *canonicalWalletHTTPClient) doJSON(ctx context.Context, method, path, sc
 		return fmt.Errorf("decode canonical wallet response: %w", err)
 	}
 	return nil
+}
+
+// probeEnsureRoute (§9.6 item 6) is on the HTTP CLIENT only — never on
+// canonicalWalletControlPlane — so the stubs need no change. GET the ensure
+// route; the caller keys on the returned status alone (405 = the route exists,
+// POST-only; 404 = the control plane predates 3.4a-S).
+func (c *canonicalWalletHTTPClient) probeEnsureRoute(ctx context.Context) (int, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.cfg.ControlPlaneURL+"/api/internal/v2/wallet/leases/ensure", nil)
+	if err != nil {
+		return 0, fmt.Errorf("build canonical wallet probe request: %w", err)
+	}
+	assertion, err := c.serviceAssertion(canonicalWalletLeaseScope)
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Authorization", "Bearer "+assertion)
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("probe canonical wallet control plane: %w", err)
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+	return resp.StatusCode, nil
 }
 
 func (c *canonicalWalletHTTPClient) serviceAssertion(scope string) (string, error) {
@@ -529,6 +561,9 @@ type canonicalWalletMetrics struct {
 	missingPlatformID          atomic.Int64
 	unsupportedCurrency        atomic.Int64
 	deadLetterBalanceShortfall atomic.Int64
+	// §9.6 item 6's rollout-guard counters (global, like every counter here).
+	controlPlaneIncompatible atomic.Int64
+	controlPlaneProbeFailed  atomic.Int64
 }
 
 var canonicalWalletBridgeMetrics canonicalWalletMetrics
@@ -546,6 +581,8 @@ func CanonicalWalletBridgeStats() map[string]int64 {
 		"balance_mismatch": m.balanceMismatch.Load(), "missing_platform_user_id": m.missingPlatformID.Load(),
 		"unsupported_currency":          m.unsupportedCurrency.Load(),
 		"dead_letter_balance_shortfall": m.deadLetterBalanceShortfall.Load(),
+		"control_plane_incompatible":    m.controlPlaneIncompatible.Load(),
+		"control_plane_probe_failed":    m.controlPlaneProbeFailed.Load(),
 	}
 }
 
@@ -592,9 +629,60 @@ func NewCanonicalWalletBridge(cfg *config.Config, store CanonicalWalletLeaseStor
 	if cfg.Gateway.ConcurrencySlotTTLMinutes > 0 {
 		slot = cfg.Gateway.ConcurrencySlotTTLMinutes * 60
 	}
+	// probeCanonicalWalletEnsureRoute (§9.6 item 6): the rollout guard. Hoisted
+	// here — the client is built once, probed BEFORE the bridge (and its
+	// dispatcher goroutine) starts. ShipAny 3.4a-S deploys first; this half
+	// refuses to enforce against a control plane with no /ensure route.
+	client := newCanonicalWalletHTTPClient(cfg.CanonicalWallet, nil)
+	probeCanonicalWalletEnsureRoute(cfg, client)
 	// §9.5: production keeps UTC wall time — the injection exists for the
 	// skew-margin and expiry tests.
-	return newCanonicalWalletBridge(cfg.CanonicalWallet, store, newCanonicalWalletHTTPClient(cfg.CanonicalWallet, nil), outboxDB, outbox, slot, nil)
+	return newCanonicalWalletBridge(cfg.CanonicalWallet, store, client, outboxDB, outbox, slot, nil)
+}
+
+// probeCanonicalWalletEnsureRoute GETs the ensure route once per bridge
+// construction (the process builds three bridges — Known limits): a body-less
+// 405 means the route exists (vinext answers a resolved route with no GET
+// export with 405 — the probe keys on the status alone); an exact 404 means
+// the control plane predates 3.4a-S — enforce refuses to start, shadow counts
+// control_plane_incompatible and continues. Any other status or a transport
+// error is control_plane_probe_failed and continues: a WAF, a misrouted URL
+// or a transient must never crash-loop a healthy deployment. The panic is
+// deviation 1: this codebase's fatal startup path is log.Fatalf in
+// cmd/server/main.go, but constraint 2 forbids changing the provider
+// signatures that would have to carry an error; a production enforce
+// deployment recovers by setting canonical_wallet.mode to shadow/disabled
+// and restarting.
+func probeCanonicalWalletEnsureRoute(cfg *config.Config, client *canonicalWalletHTTPClient) {
+	mode := cfg.CanonicalWallet.Mode
+	if mode != config.CanonicalWalletModeShadow && mode != config.CanonicalWalletModeEnforce {
+		return // disabled never probes
+	}
+	timeout := time.Duration(cfg.CanonicalWallet.RequestTimeoutMS) * time.Millisecond
+	if timeout <= 0 {
+		timeout = 300 * time.Millisecond
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	status, err := client.probeEnsureRoute(ctx)
+	if err != nil {
+		canonicalWalletBridgeMetrics.controlPlaneProbeFailed.Add(1)
+		slog.Warn("canonical wallet control plane probe failed", "error", err)
+		return
+	}
+	switch status {
+	case http.StatusMethodNotAllowed:
+		// The route exists (POST-only) — ok.
+	case http.StatusNotFound:
+		if mode == config.CanonicalWalletModeEnforce {
+			panic("canonical_wallet: control plane has no ensure route — deploy ShipAny 3.4a-S first (redesign §9.6 item 6)")
+		}
+		canonicalWalletBridgeMetrics.controlPlaneIncompatible.Add(1)
+		slog.Error("canonical wallet: control plane has no ensure route — shadow continues; deploy ShipAny 3.4a-S before enforcing (redesign §9.6 item 6)")
+	default:
+		canonicalWalletBridgeMetrics.controlPlaneProbeFailed.Add(1)
+		slog.Warn("canonical wallet control plane probe returned an unexpected status", "status", status)
+	}
 }
 
 // newCanonicalWalletBridge takes the injectable clock as its LAST parameter

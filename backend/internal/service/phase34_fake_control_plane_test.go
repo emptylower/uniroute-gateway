@@ -60,6 +60,11 @@ type fakeEnsureControlPlane struct {
 	// below min_headroom — the non-conformant server the local under-grant
 	// guard exists for — once, then behaves again.
 	grantBelowMinOnce bool
+	// withoutEnsureRoute (§9.6 item 6): every method on the ensure path
+	// answers 404 — the pre-3.4a-S control plane.
+	withoutEnsureRoute bool
+	// probeCalls counts GET requests on the ensure path (§9.6 item 6's probe).
+	probeCalls int
 	Server            *httptest.Server
 }
 
@@ -110,6 +115,13 @@ func (f *fakeEnsureControlPlane) drainedAt(user, id string) *time.Time {
 	return f.lease(user, id).DrainedAt
 }
 
+// probeCallsLocked reads the probe counter under the mutex.
+func (f *fakeEnsureControlPlane) probeCallsLocked() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.probeCalls
+}
+
 func (f *fakeEnsureControlPlane) purpose(user, id string) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -152,6 +164,21 @@ func (f *fakeEnsureControlPlane) handle(w http.ResponseWriter, r *http.Request) 
 	defer f.mu.Unlock()
 	switch r.URL.Path {
 	case "/api/internal/v2/wallet/leases/ensure":
+		if r.Method == http.MethodGet {
+			// §9.6 item 6's probe: body-less 405 = the route exists (POST-only);
+			// 404 = the control plane predates 3.4a-S.
+			f.probeCalls++
+			if f.withoutEnsureRoute {
+				w.WriteHeader(http.StatusNotFound)
+			} else {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+			}
+			return
+		}
+		if f.withoutEnsureRoute {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		var req canonicalWalletEnsureRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
