@@ -334,6 +334,22 @@ func p35WaitForRemainder(t *testing.T, ctx context.Context, db *sql.DB, eventID 
 	t.Fatalf("remainder row %s never appeared", eventID)
 }
 
+// p35WaitPendingReleaseCleared polls until the row's pending_release_units
+// is NULL — the normal split delivery's own end state (release + clear in
+// the same delivery).
+func p35WaitPendingReleaseCleared(t *testing.T, ctx context.Context, db *sql.DB, eventID string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		var pending sql.NullInt64
+		if err := db.QueryRowContext(ctx, `SELECT pending_release_units FROM wallet_settlement_outbox WHERE event_id = $1`, eventID).Scan(&pending); err == nil && !pending.Valid {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("row %s: pending_release_units was never cleared", eventID)
+}
+
 func p35WaitRemainderDelivered(t *testing.T, ctx context.Context, db *sql.DB, eventID string) {
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
@@ -413,8 +429,12 @@ func TestPhase35OverCaptureSplits(t *testing.T) {
 		hashBefore := p35ReadRow(t, ctx, db, eventID).PayloadHash
 
 		// First tick: the fake refuses over-capture with headroom H → the
-		// split. Poll for the remainder row, then assert the parent.
+		// split, then the partial release and its clear IN THE SAME delivery.
+		// The remainder row becomes visible at the split's commit; the
+		// release+clear follow — poll for the cleared column (the normal
+		// path's own end state) rather than racing the read.
 		p35WaitForRemainder(t, ctx, db, eventID+":r1")
+		p35WaitPendingReleaseCleared(t, ctx, db, eventID)
 		parent := p35ReadRow(t, ctx, db, eventID)
 		require.Equal(t, int64(H), parent.AmountUnits, "the parent carries H")
 		require.False(t, parent.PendingRelease.Valid, "the release ran in the same delivery — the column is cleared")
