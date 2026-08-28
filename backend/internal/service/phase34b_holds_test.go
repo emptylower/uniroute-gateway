@@ -793,3 +793,64 @@ func TestPhase34bIndeterminateKeptAndLateSettlementSettlesTheRow(t *testing.T) {
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT resolution FROM wallet_hold_outcome WHERE authorization_id = $1`, h.ID).Scan(&settled))
 	require.Equal(t, "settled", settled, "the late conversion settles the open row")
 }
+
+// Task 6 (§10.9): Live's CONVERSION and REAPING halves, asserted separately
+// by construction (the unit Live fixture's bridge has a nil outbox, so its
+// ObserveSettlement returns before any conversion): a real bridge converts a
+// Live-armed hold at finalization through observeCanonicalWalletSettlement —
+// the same arguments openai_live.go:1048 passes — and an aborted Live record
+// (outside §10.7's live set) leaves its hold reapable.
+func TestPhase34bLiveConvertsAndAbortedLiveIsReapable(t *testing.T) {
+	ctx := context.Background()
+	rdb := startCanonicalWalletTestRedis(t, ctx)
+	db := startCanonicalWalletTestPostgres(t, ctx)
+	p34bApplyHoldOutcomeMigration(t, ctx, db)
+	p34bApplyMigration(t, ctx, db, "211_wallet_live_provisional.sql")
+	store := &gatewayCacheAdapterForTest{rdb: rdb}
+	outbox := &outboxStoreForTest{db: db}
+	now := time.Now().UTC()
+	fake := newFakeEnsureControlPlane(t, func() time.Time { return now })
+	platformUserID := "shipany-user-" + uuid.NewString()
+	fake.fund(platformUserID, 10_000_000_000)
+	b := p34bDispatcherBridge(t, fake, store, db, outbox, now, 300)
+
+	live := newLiveProvisionalStore(db)
+	require.NoError(t, live.Save(ctx, &LiveProvisionalRecord{
+		Token: "auth-live-1", AuthorizationID: "auth-live-1", PlatformUserID: platformUserID,
+		UserID: 7, APIKeyID: 70, AccountID: 700, BillingCurrency: "CNY", BillingSnapshotID: "snap",
+		EstimatedUnits: 50_000_000, Status: LiveProvisionalStatusProvisional, CreatedAt: now,
+	}))
+	require.NoError(t, live.Activate(ctx, "auth-live-1", "call-live-hash", now))
+	// the lease exists on BOTH sides: Redis for the gateway's hold, the fake
+	// for the settlement's server-side capture (seedLease, the p34Fill pattern)
+	fake.seedLease(platformUserID, "lease-live", "authorize", 500_000_000, 0, now.Add(30*time.Minute))
+	require.NoError(t, store.InstallCanonicalWalletLease(ctx, CanonicalWalletLease{
+		LeaseID: "lease-live", PlatformUserID: platformUserID, Currency: "CNY",
+		BudgetUnits: 500_000_000, ExpiresAt: now.Add(30 * time.Minute),
+	}))
+	const E = int64(50_000_000)
+	_, _, _, err := store.ArmCanonicalWalletHold(ctx, platformUserID, "lease-live", "CNY", "auth-live-1", E, 900_000, now)
+	require.NoError(t, err)
+
+	// finalization: the same arguments openai_live.go:1048 passes
+	cost := &CostBreakdown{ActualCost: 0.3, BillingMode: string(BillingModeToken)}
+	billingUser := &User{ID: 7, PlatformUserID: platformUserID, BillingCurrency: "CNY", Balance: 1.0}
+	require.True(t, observeCanonicalWalletSettlement(b, "call-live-hash", billingUser, cost, false, true, nil, "auth-live-1.1", "auth-live-1"))
+	hold, err := store.GetCanonicalWalletHold(ctx, platformUserID, "auth-live-1")
+	require.NoError(t, err)
+	require.Equal(t, "settled", hold.State, "the Live hold converts at finalization")
+	require.Equal(t, "20000000", p34bHashField(t, ctx, store, platformUserID, "lease-live", "released_units"), "released += E−A (50M − 30M)")
+	p34WaitOutboxStatus(t, ctx, db, "call-live-hash", "delivered")
+
+	// an aborted Live record is outside §10.7's live set: its hold is reapable
+	require.NoError(t, live.Save(ctx, &LiveProvisionalRecord{
+		Token: "auth-live-2", AuthorizationID: "auth-live-2", PlatformUserID: platformUserID,
+		UserID: 7, APIKeyID: 70, AccountID: 700, BillingCurrency: "CNY", BillingSnapshotID: "snap",
+		EstimatedUnits: 30_000_000, Status: LiveProvisionalStatusProvisional, CreatedAt: now,
+	}))
+	require.NoError(t, live.Abort(ctx, "auth-live-2", now))
+	_, _, _, err = store.ArmCanonicalWalletHold(ctx, platformUserID, "lease-live", "CNY", "auth-live-2", 30_000_000, 900_000, now)
+	require.NoError(t, err)
+	b.reapOnce(ctx, now.Add(20*time.Minute))
+	require.Equal(t, "abandoned", p34bHoldState(t, ctx, store, platformUserID, "auth-live-2"), "an aborted Live hold is released by the reaper")
+}

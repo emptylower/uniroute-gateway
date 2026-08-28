@@ -320,8 +320,46 @@ func defaultLiveCallIdentity(f *liveAuthTestFixture) LiveCallIdentity {
 	}
 }
 
-func TestCreateLiveCallWritesTheProvisionalRowBeforeThePost(t *testing.T) {
+// Phase 3.4b (Task 6, §10.9): Live under holds — the ARMING half, asserted
+// here by construction: this fixture builds its bridge with nil outboxDB and
+// nil outbox (newCanonicalWalletBridge(cfg.CanonicalWallet, leaseStore,
+// control, nil, nil, 0, nil)), so ObserveSettlement returns at its nil-outbox
+// guard and no holdOutcomes, no liveProvisional store and no reaper exist —
+// the conversion and reaping halves are asserted separately, in
+// phase34b_holds_test.go (TestPhase34bLiveConvertsAndAbortedLiveIsReapable).
+// openai_live.go:1048 itself is therefore not driven end to end here; the
+// completion record states what remains unproven for 3.7.
+func TestPhase34bLiveArmsOneHoldAtTheSessionEstimate(t *testing.T) {
 	f := newLiveAuthTestFixture(t, config.CanonicalWalletModeShadow)
+	f.bridge.cfg.Holds = "on"
+	f.bridge.cfg.OrphanGraceSeconds = 900
+
+	var handleInPost *AuthorizationHandle
+	f.svc.httpUpstream = &hookedHTTPUpstream{
+		doFn: func(req *http.Request) (*http.Response, error) {
+			handleInPost = AuthorizationHandleFromContext(req.Context())
+			require.NotNil(t, handleInPost)
+			return (&liveHTTPUpstreamStub{}).Do(req, "", 1, 1)
+		},
+	}
+
+	created, err := f.svc.CreateLiveCall(context.Background(), defaultLiveCallRequest(), defaultLiveCallIdentity(f), 5)
+	require.NoError(t, err)
+	require.NotNil(t, created)
+
+	require.True(t, handleInPost.HoldArmed, "the Live session armed its hold")
+	require.Equal(t, handleInPost.EstimatedUnits, handleInPost.HeldUnits)
+	holds := f.leaseStore.holdMap()
+	require.Len(t, holds, 1, "exactly one hold per Live session")
+	hold, ok := holds[handleInPost.ID]
+	require.True(t, ok, "the hold is keyed by the auth handle's id")
+	require.Equal(t, "armed", hold.State)
+	require.Equal(t, handleInPost.EstimatedUnits, hold.HeldUnits, "armed at the session estimate")
+	require.Nil(t, f.bridge.holdOutcomes, "the unit fixture has no outcome row (nil outbox)")
+	require.Nil(t, f.bridge.liveProvisional, "the unit fixture has no Live store on the bridge")
+}
+
+func TestCreateLiveCallWritesTheProvisionalRowBeforeThePost(t *testing.T) {	f := newLiveAuthTestFixture(t, config.CanonicalWalletModeShadow)
 
 	postHappened := false
 	var handleInPost *AuthorizationHandle
