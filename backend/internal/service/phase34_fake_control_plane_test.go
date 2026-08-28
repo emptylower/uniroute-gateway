@@ -35,6 +35,11 @@ type fakeLease struct {
 	Released  int64
 	ExpiresAt time.Time
 	Status    string // active | closed
+	// DrainedAt (redesign §9.1): set when a gateway drain of this lease did
+	// NOT verify — the lease is never covering again (it stays slot-holding
+	// until captures resolve it or the grace closes it). The server's own
+	// row, never a gateway reservation figure.
+	DrainedAt *time.Time
 }
 
 type fakeEnsureControlPlane struct {
@@ -92,6 +97,13 @@ func (f *fakeEnsureControlPlane) status(user, id string) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.lease(user, id).Status
+}
+
+// drainedAt (§9.1) reads the mark under the mutex; nil = never marked.
+func (f *fakeEnsureControlPlane) drainedAt(user, id string) *time.Time {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lease(user, id).DrainedAt
 }
 
 func (f *fakeEnsureControlPlane) purpose(user, id string) string {
@@ -152,22 +164,41 @@ func (f *fakeEnsureControlPlane) handle(w http.ResponseWriter, r *http.Request) 
 		now := f.now()
 		user := strings.TrimSpace(req.PlatformUserID)
 		minHeadroom := mustUnits(req.MinHeadroom)
-		// drain: close the named lease iff the gateway's consumed equals our captured (§3.3)
+		// (1) drain (§3.3, §9.1): a VERIFIED drain closes the lease as today;
+		// an unverified drain MARKS it — the server's own row, idempotent.
 		for _, d := range req.Drained {
-			if l := f.lease(user, d.LeaseID); l != nil && l.Status == "active" && mustUnits(d.GatewayConsumed) == l.Captured {
+			l := f.lease(user, d.LeaseID)
+			if l == nil || l.Status != "active" {
+				continue
+			}
+			if mustUnits(d.GatewayConsumed) == l.Captured {
 				l.Status = "closed"
 				l.Released = l.Budget - l.Captured
 				f.balance[user] += l.Released
+			} else if l.DrainedAt == nil {
+				t := now
+				l.DrainedAt = &t
 			}
 		}
-		// step 1: partition
+		// (2) §9.1 early close: a marked lease whose captures consumed its whole
+		// budget is closed now (released = budget − captured = 0 — nothing left),
+		// so a resolved slot is not held for the rest of the grace.
+		for _, l := range f.leases[user] {
+			if l.Status == "active" && l.DrainedAt != nil && l.Captured+l.Released == l.Budget {
+				l.Status = "closed"
+				l.Released = 0
+			}
+		}
+		// (3) step 1: partition — covering excludes every marked lease (§9.1);
+		// slot-holding unchanged (a marked lease holds its slot until resolution
+		// or the grace).
 		var covering []*fakeLease
 		slotHolding := 0
 		for _, l := range f.leases[user] {
 			if l.Status != "active" {
 				continue
 			}
-			if l.ExpiresAt.After(now) && l.headroom() >= minHeadroom {
+			if l.DrainedAt == nil && l.ExpiresAt.After(now) && l.headroom() >= minHeadroom {
 				covering = append(covering, l)
 			}
 			if l.Purpose == "authorize" && (l.ExpiresAt.After(now) || (l.headroom() > 0 && l.ExpiresAt.After(now.Add(-f.grace)))) {

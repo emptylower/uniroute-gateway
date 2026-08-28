@@ -271,9 +271,12 @@ func TestPhase34Proto15DrainOpensTheSlotWhenCapturedEqualsConsumed(t *testing.T)
 }
 
 // Test 15a (drain half): a drain WITHOUT a seal against a lease that took a
-// concurrent smaller reservation is not closed by the server (captured below
-// the reported consumed). The "money returns through the grace sweep" clause
-// is the ShipAny half's test 11; here the server keeps the lease active.
+// concurrent smaller reservation is not CLOSED by the server (captured below
+// the reported consumed). Phase 3.4a (§9.1) retarget: the unverified drain now
+// MARKS the lease — never covering again — so the answer is a fresh issuance,
+// while the lease itself stays active (slot-holding until resolution or the
+// grace). The "money returns through the grace sweep" clause is the ShipAny
+// half's test 11.
 func TestPhase34Proto15aDrainWithoutSealDoesNotClose(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC()
@@ -290,9 +293,10 @@ func TestPhase34Proto15aDrainWithoutSealDoesNotClose(t *testing.T) {
 		Drained: []canonicalWalletDrainEntry{{LeaseID: "srv-a", GatewayConsumed: newCanonicalWalletAmountObject(0)}}, CallerSlotTTLSeconds: 1800,
 	})
 	require.NoError(t, err)
-	require.Equal(t, "active", fake.status(user, "srv-a"), "captured (100,000,000) is not the reported consumed (0): ignored")
-	require.Equal(t, "srv-a", res.Lease.LeaseID, "and it is still covering, so it is reused")
-	require.Equal(t, "reused", res.Outcome)
+	require.Equal(t, "active", fake.status(user, "srv-a"), "captured (100,000,000) is not the reported consumed (0): marked, never closed")
+	require.NotNil(t, fake.drainedAt(user, "srv-a"), "§9.1: the unverified drain marks its lease")
+	require.NotEqual(t, "srv-a", res.Lease.LeaseID, "a marked lease is never covering again: a fresh lease issues")
+	require.Equal(t, "issued", res.Outcome)
 }
 
 // Test 17 — the frozen design's dense rising fixture: every event gets a lease
@@ -362,4 +366,49 @@ func TestPhase34Proto20ExplicitIDBranchRecoversThroughPreferLeaseID(t *testing.T
 	re, err := store.GetCanonicalWalletLeaseByID(ctx, user, cur.LeaseID)
 	require.NoError(t, err)
 	require.Equal(t, int64(100_000_000), re.ConsumedUnits, "the retry's reservation landed on the recovered lease")
+}
+
+// Test 21 (§9.1) — a gateway-exhausted lease is never reused again: the next ensure
+// issues; max_active_leases such exhaustions → lease_cap_reached with every one
+// slot-holding; a full server-side capture of one → its early close frees a slot.
+func TestPhase34Proto21UnverifiedDrainMarksTheLeaseAndTheCapIsHonest(t *testing.T) {
+	ctx := context.Background()
+	rdb := startCanonicalWalletTestRedis(t, ctx)
+	store := &gatewayCacheAdapterForTest{rdb: rdb}
+	now := time.Now().UTC()
+	fake := newFakeEnsureControlPlane(t, func() time.Time { return now })
+	user := "shipany-user-" + uuid.NewString()
+	fake.fund(user, 100_000_000_000)
+	b := p34HTTPBridge(t, ctx, fake, store, now)
+	exhaust := func(l *CanonicalWalletLease, tag string) { // gateway-only exhaustion: reserve the whole budget, capture nothing on the server
+		_, err := store.ReserveCanonicalWalletLease(ctx, user, l.LeaseID, "CNY", "evt-"+tag, l.BudgetUnits, now)
+		require.NoError(t, err)
+	}
+	l1, err := b.ensureLease(ctx, user, "CNY", 100_000_000, canonicalWalletLeasePurposeAuthorize, "")
+	require.NoError(t, err)
+	exhaust(l1, "1")
+	l2, err := b.ensureLease(ctx, user, "CNY", 100_000_000, canonicalWalletLeasePurposeAuthorize, "")
+	require.NoError(t, err)
+	require.NotEqual(t, l1.LeaseID, l2.LeaseID, "§4's livelock: the drained lease is marked, never reused")
+	require.NotNil(t, fake.drainedAt(user, l1.LeaseID))
+	require.Equal(t, 2, fake.issuances)
+	exhaust(l2, "2")
+	l3, err := b.ensureLease(ctx, user, "CNY", 100_000_000, canonicalWalletLeasePurposeAuthorize, "")
+	require.NoError(t, err)
+	require.NotEqual(t, l1.LeaseID, l3.LeaseID, "the round-1 alternation: L1 must not come back")
+	require.NotEqual(t, l2.LeaseID, l3.LeaseID)
+	exhaust(l3, "3")
+	_, err = b.ensureLease(ctx, user, "CNY", 100_000_000, canonicalWalletLeasePurposeAuthorize, "")
+	require.ErrorIs(t, err, ErrCanonicalWalletLeaseCapReached, "three marked, slot-holding leases → the cap, honestly")
+	require.Equal(t, 3, fake.issuances)
+	// Resolution: the server captures L1's whole budget. The previous refusal already
+	// sealed L3 and deleted the current pointer, so this call sends NO drain at all;
+	// L1's early close (captured == budget) is what frees the slot.
+	fake.setCaptured(user, l1.LeaseID, l1.BudgetUnits)
+	l4, err := b.ensureLease(ctx, user, "CNY", 100_000_000, canonicalWalletLeasePurposeAuthorize, "")
+	require.NoError(t, err)
+	require.Equal(t, "closed", fake.status(user, l1.LeaseID))
+	require.Equal(t, 4, fake.issuances)
+	require.Empty(t, fake.requests[len(fake.requests)-1].Drained)
+	_ = l4
 }

@@ -144,3 +144,31 @@ func TestPhase34Proto19DispatcherUnderCapShortfallAndContention(t *testing.T) {
 	require.Equal(t, 1, racyAttempts, "lease_contention is transient: one failed attempt, then delivered on the backoff")
 	require.Equal(t, int64(1), canonicalWalletBridgeMetrics.deadLetterBalanceShortfall.Load()-base, "contention never dead-letters")
 }
+
+// Test 19b — the dispatcher's missing-bound-lease path puts prefer_lease_id on the wire
+// (test 20's dispatcher twin; resolveOutboxEventLease's Missing branch).
+func TestPhase34Proto19bDispatcherRecoversABoundLeaseThroughPreferLeaseID(t *testing.T) {
+	ctx := context.Background()
+	db := startCanonicalWalletTestPostgres(t, ctx)
+	rdb := startCanonicalWalletTestRedis(t, ctx)
+	store := &gatewayCacheAdapterForTest{rdb: rdb}
+	outbox := &outboxStoreForTest{db: db}
+	now := time.Now().UTC()
+	fake := newFakeEnsureControlPlane(t, func() time.Time { return now })
+	user := "shipany-user-" + uuid.NewString()
+	fake.fund(user, 10_000_000_000)
+	const X = "srv-bound-x"
+	// X exists on the server, covering and unexpired; it is NOT installed in Redis (the loss).
+	fake.seedLease(user, X, "authorize", 500_000_000, 0, now.Add(5*time.Minute))
+	b := p34DispatcherBridge(t, fake, store, db, outbox, now)
+	// The row is born bound: ObserveSettlement with LeaseID set (BindOutboxEventLease is
+	// claim-guarded and cannot be called by a test that does not own the row).
+	b.ObserveSettlement(CanonicalWalletSettlementEvent{GatewayRequestID: "req-19b", PlatformUserID: user, Currency: "CNY", AmountUnits: 10_000_000, LeaseID: X})
+	p34WaitOutboxStatus(t, ctx, db, "req-19b", "delivered")
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	last := fake.requests[len(fake.requests)-1]
+	require.Equal(t, X, last.PreferLeaseID, "the missing bound lease is recovered through prefer_lease_id")
+	require.Empty(t, last.Drained)
+	require.Equal(t, 0, fake.issuances, "reused, never issued")
+}
