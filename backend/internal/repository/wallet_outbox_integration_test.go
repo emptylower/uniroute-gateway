@@ -498,5 +498,3 @@ func TestWalletOutboxBindEventLease(t *testing.T) {
 	err = dead.BindOutboxEventLease(ctx, claimed[0].ID, testWalletOutboxWorkerID, "lease-new")
 	require.Error(t, err)
 }
-
-
