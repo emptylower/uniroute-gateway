@@ -306,10 +306,10 @@ func (s *AccountTestService) PersistUpstreamModelDiscovery(ctx context.Context, 
 	}
 
 	discovery := map[string]any{
-		"source":    "upstream",
-		"models":    models,
+		"source":             "upstream",
+		"models":             models,
 		"schedulable_models": schedulable,
-		"synced_at": syncedAt.Format(time.RFC3339),
+		"synced_at":          syncedAt.Format(time.RFC3339),
 	}
 	return s.modelDiscoveryStore.UpdateModelDiscovery(ctx, account.ID, mapping, discovery)
 }

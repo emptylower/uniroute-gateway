@@ -112,8 +112,14 @@ func TestAuthorizeEnforceRefusesWithTheNamedReason(t *testing.T) {
 	}{
 		{"missing snapshot", func(in *AuthorizeInput, _ *canonicalWalletControlStub) { in.Snapshot = nil }, AuthorizationRefusalSnapshotMissing},
 		{"missing identity", func(in *AuthorizeInput, _ *canonicalWalletControlStub) { in.User = &User{} }, AuthorizationRefusalIdentityMissing},
-		{"non-CNY", func(in *AuthorizeInput, _ *canonicalWalletControlStub) { u := *in.User; u.BillingCurrency = "USD"; in.User = &u }, AuthorizationRefusalCurrency},
-		{"balance shortfall", func(_ *AuthorizeInput, c *canonicalWalletControlStub) { c.lease = CanonicalWalletLease{LeaseID: "l", Currency: "CNY", BudgetUnits: 1, ExpiresAt: time.Now().Add(time.Minute)} }, AuthorizationRefusalBalanceShortfall},
+		{"non-CNY", func(in *AuthorizeInput, _ *canonicalWalletControlStub) {
+			u := *in.User
+			u.BillingCurrency = "USD"
+			in.User = &u
+		}, AuthorizationRefusalCurrency},
+		{"balance shortfall", func(_ *AuthorizeInput, c *canonicalWalletControlStub) {
+			c.lease = CanonicalWalletLease{LeaseID: "l", Currency: "CNY", BudgetUnits: 1, ExpiresAt: time.Now().Add(time.Minute)}
+		}, AuthorizationRefusalBalanceShortfall},
 		{"control plane down", func(_ *AuthorizeInput, c *canonicalWalletControlStub) { c.leaseErr = errors.New("503") }, AuthorizationRefusalLeaseUnavailable},
 	}
 	for _, tc := range cases {

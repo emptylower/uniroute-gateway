@@ -42,11 +42,11 @@ func TestCountTokensWritesSucceedInEnforceMode(t *testing.T) {
 	dec := newAuthorizingHTTPUpstreamWithMode(retryStub, modeFn(config.CanonicalWalletModeEnforce))
 	cfg := &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}
 	gw := &GatewayService{
-		cfg:              cfg,
+		cfg:                  cfg,
 		responseHeaderFilter: compileResponseHeaderFilter(cfg),
-		httpUpstream:     dec,
-		rateLimitService: &RateLimitService{},
-		settingService:   NewSettingService(&adminComplianceRepoStub{}, cfg),
+		httpUpstream:         dec,
+		rateLimitService:     &RateLimitService{},
+		settingService:       NewSettingService(&adminComplianceRepoStub{}, cfg),
 	}
 	account := &Account{
 		ID:          301,
@@ -101,7 +101,7 @@ func TestCountTokensWritesSucceedInEnforceMode(t *testing.T) {
 	openaiStub := &httpUpstreamRecorder{resp: newNonBillableJSONResponse(http.StatusOK, `{"object":"response.input_tokens","input_tokens":42}`)}
 	decOpenAI := newAuthorizingHTTPUpstreamWithMode(openaiStub, modeFn(config.CanonicalWalletModeEnforce))
 	openaiSvc := &OpenAIGatewayService{
-		cfg: &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false, AllowInsecureHTTP: true}}},
+		cfg:          &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false, AllowInsecureHTTP: true}}},
 		httpUpstream: decOpenAI,
 	}
 	openaiAccount := &Account{
