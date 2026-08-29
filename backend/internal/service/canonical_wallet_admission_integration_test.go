@@ -1040,6 +1040,12 @@ func TestProvideBillingCacheServiceDerivesCanonicalWalletBridge(t *testing.T) {
 	}{&fixedBalanceCache{balance: 5}, leaseStore}
 	svc := ProvideBillingCacheService(dual, nil, nil, nil, nil, nil, cfg, nil, nil, nil)
 	require.NotNil(t, svc)
+	// Tasks 0–2 review MINOR-2: this was the only constructed bridge in the
+	// suite without t.Cleanup(Close). Harmless today (db and outbox are nil,
+	// so no dispatcher/reaper starts) but the 3.7c inventory demands it.
+	if bridge := svc.canonicalWallet; bridge != nil {
+		t.Cleanup(func() { bridge.Close() })
+	}
 	platformUserID := "shipany-user-" + uuid.NewString()
 	require.NoError(t, leaseStore.InstallCanonicalWalletLease(ctx, CanonicalWalletLease{
 		LeaseID: "lease-" + uuid.NewString(), PlatformUserID: platformUserID, Currency: "CNY",
