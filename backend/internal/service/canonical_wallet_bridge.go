@@ -1314,41 +1314,6 @@ func (b *CanonicalWalletBridge) CheckAndReserve(ctx context.Context, event Canon
 	return true, nil
 }
 
-// EnsureCanonicalWalletHeadroom atomically extends an already-admitted
-// request's reservation by additionalUnits — used when a streaming
-// response's actual cost is running ahead of the original pre-authorized
-// estimate. Returns false (never an error for the ordinary insufficient-
-// budget case) when the lease cannot cover the extension, so the caller's
-// only correct response is to stop generation, not retry.
-//
-// Each distinct top-up attempt gets its own identity via the caller-supplied
-// incrementing topUpSequence (a FIXED per-request event id would make a
-// second, larger top-up a silent duplicate of the first); a genuine retry
-// (same sequence, same amount) still hits the duplicate path. The caller
-// must pass the explicit leaseID it received from its own CheckAndReserve
-// call — resolving "whatever is current" would anchor the extension to the
-// wrong lease after a renewal. No production caller yet (Phase 3's in-stream
-// overrun work).
-func (b *CanonicalWalletBridge) EnsureCanonicalWalletHeadroom(ctx context.Context, gatewayRequestID, platformUserID, leaseID, currency string, topUpSequence int, additionalUnits int64) (bool, error) {
-	if b == nil || b.cfg.Mode == config.CanonicalWalletModeDisabled {
-		return true, nil
-	}
-	topUpEventID := CanonicalWalletSettlementEventID(
-		fmt.Sprintf("%s:topup:%d", gatewayRequestID, topUpSequence), platformUserID, currency,
-	)
-	_, err := b.store.ReserveCanonicalWalletLease(ctx, platformUserID, leaseID, currency, topUpEventID, additionalUnits, b.clock())
-	if b.cfg.Mode == config.CanonicalWalletModeShadow {
-		return true, nil
-	}
-	if errors.Is(err, ErrCanonicalWalletLeaseExhausted) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
 // Mode reports the bridge's configured mode — exported so callers outside
 // this package's own methods (billing_cache_service.go, same `service`
 // package but a different file) have a stable accessor rather than reaching

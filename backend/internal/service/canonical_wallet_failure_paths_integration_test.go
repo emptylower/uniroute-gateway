@@ -189,34 +189,6 @@ func TestDeliverOutboxEventRealFailurePaths(t *testing.T) {
 	})
 }
 
-func TestEnsureCanonicalWalletHeadroomGuardsAndErrors(t *testing.T) {
-	ctx := context.Background()
-
-	// Nil receiver and disabled mode always allow — no panic, no reserve.
-	var nilBridge *CanonicalWalletBridge
-	ok, err := nilBridge.EnsureCanonicalWalletHeadroom(ctx, "r", "u", "l", "CNY", 1, 1)
-	require.NoError(t, err)
-	require.True(t, ok)
-
-	disabled := &CanonicalWalletBridge{cfg: canonicalWalletTestConfig(config.CanonicalWalletModeDisabled)}
-	ok, err = disabled.EnsureCanonicalWalletHeadroom(ctx, "r", "u", "l", "CNY", 1, 1)
-	require.NoError(t, err)
-	require.True(t, ok)
-	ok, err = disabled.HasCanonicalWalletHeadroom(ctx, "u", "CNY")
-	require.NoError(t, err)
-	require.True(t, ok)
-
-	// Enforce mode against a MISSING lease: a genuine store error (not the
-	// ordinary exhaustion denial) propagates.
-	rdb := startCanonicalWalletTestRedis(t, ctx)
-	store := &gatewayCacheAdapterForTest{rdb: rdb}
-	enforce := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeEnforce), store, &canonicalWalletControlStub{}, nil, nil, 0, nil)
-	t.Cleanup(enforce.Close)
-	ok, err = enforce.EnsureCanonicalWalletHeadroom(ctx, "req-g", "shipany-user-"+uuid.NewString(), "lease-missing", "CNY", 1, 100)
-	require.ErrorIs(t, err, ErrCanonicalWalletLeaseMissing)
-	require.False(t, ok)
-}
-
 func TestEnsureLeaseAndDoJSONRemainingRealPaths(t *testing.T) {
 	ctx := context.Background()
 

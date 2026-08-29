@@ -103,41 +103,6 @@ func TestCanonicalWalletCheckAndReserveHonorsExplicitLeaseIDOnRetry(t *testing.T
 	require.True(t, allowed)
 }
 
-func TestCanonicalWalletMidStreamOverrunToppedUpAtomicallyBeforeExceeding(t *testing.T) {
-	ctx := context.Background()
-	rdb := startCanonicalWalletTestRedis(t, ctx)
-	store := &gatewayCacheAdapterForTest{rdb: rdb}
-	platformUserID := "shipany-user-" + uuid.NewString()
-	leaseID := "lease-" + uuid.NewString()
-
-	control := &canonicalWalletControlStub{lease: CanonicalWalletLease{
-		LeaseID: leaseID, PlatformUserID: platformUserID, Currency: "CNY",
-		BudgetUnits: 100_000000, ExpiresAt: time.Now().UTC().Add(time.Minute),
-	}}
-	bridge := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeEnforce), store, control, nil, nil, 0, nil) // outboxDB/outbox nil — this test doesn't call ObserveSettlement
-	t.Cleanup(bridge.Close)
-
-	initial := CanonicalWalletSettlementEvent{GatewayRequestID: "req-stream-1", PlatformUserID: platformUserID, Currency: "CNY", AmountUnits: 40_000000}
-	allowed, err := bridge.CheckAndReserve(ctx, initial)
-	require.NoError(t, err)
-	require.True(t, allowed)
-
-	topUpOK, err := bridge.EnsureCanonicalWalletHeadroom(ctx, initial.GatewayRequestID, platformUserID, leaseID, "CNY", 1, 30_000000)
-	require.NoError(t, err)
-	require.True(t, topUpOK, "40+30=70 of a 100 budget must succeed")
-
-	tooMuch, err := bridge.EnsureCanonicalWalletHeadroom(ctx, initial.GatewayRequestID, platformUserID, leaseID, "CNY", 2, 40_000000)
-	require.NoError(t, err)
-	require.False(t, tooMuch, "40+30+40=110 exceeds the 100 budget — generation must stop, not overspend")
-
-	// A genuine retry of the SAME numbered top-up (network retry of the
-	// exact same call) must be recognized as a duplicate, not attempted
-	// twice.
-	retrySame, err := bridge.EnsureCanonicalWalletHeadroom(ctx, initial.GatewayRequestID, platformUserID, leaseID, "CNY", 1, 30_000000)
-	require.NoError(t, err)
-	require.True(t, retrySame, "retrying the same numbered top-up must still succeed (duplicate), not fail")
-}
-
 func TestBillingCacheServiceChecksBalanceEligibilityAgainstCanonicalWalletInEnforceMode(t *testing.T) {
 	// This test goes through the REAL public entry point
 	// (CheckBillingEligibility), not just the bridge directly.
@@ -903,7 +868,6 @@ func TestCanonicalWalletShadowModeAllowsEverythingAndReservesNothing(t *testing.
 	rdb := startCanonicalWalletTestRedis(t, ctx)
 	store := &gatewayCacheAdapterForTest{rdb: rdb}
 	platformUserID := "shipany-user-" + uuid.NewString()
-	leaseID := "lease-" + uuid.NewString()
 
 	bridge := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeShadow), store, &canonicalWalletControlStub{}, nil, nil, 0, nil)
 	t.Cleanup(bridge.Close)
@@ -913,10 +877,6 @@ func TestCanonicalWalletShadowModeAllowsEverythingAndReservesNothing(t *testing.
 	})
 	require.NoError(t, err)
 	require.True(t, allowed, "shadow mode observes but always allows")
-
-	topUpOK, err := bridge.EnsureCanonicalWalletHeadroom(ctx, "req-shadow", platformUserID, leaseID, "CNY", 1, 500_000000)
-	require.NoError(t, err)
-	require.True(t, topUpOK, "shadow mode never blocks a mid-stream top-up")
 
 	headroom, err := bridge.HasCanonicalWalletHeadroom(ctx, platformUserID, "CNY")
 	require.NoError(t, err)

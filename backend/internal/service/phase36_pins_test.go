@@ -260,7 +260,9 @@ func TestPhase36FailClosedArmsUnpinned(t *testing.T) {
 		require.ErrorIs(t, err, reserveFailure, "the reserve-error arm the existing test does not pin")
 	})
 
-	t.Run("(d) disabled: every entry point returns its disabled value with the store untouched", func(t *testing.T) {
+	// The narrowing from five entry points to four is deliberate
+	// (§13.1): EnsureCanonicalWalletHeadroom was deleted by 3.7a.
+	t.Run("(d) disabled: every entry point returns its disabled value with the store untouched (four — EnsureCanonicalWalletHeadroom was deleted by 3.7a, §13.1)", func(t *testing.T) {
 		ctx := context.Background()
 		store := &canonicalWalletStoreStub{
 			getErr:     errors.New("redis down"),
@@ -280,10 +282,6 @@ func TestPhase36FailClosedArmsUnpinned(t *testing.T) {
 
 		allowed, err := b.CheckAndReserve(ctx, CanonicalWalletSettlementEvent{GatewayRequestID: "req-45d", PlatformUserID: user, Currency: "CNY", AmountUnits: 100})
 		require.True(t, allowed)
-		require.NoError(t, err)
-
-		topped, err := b.EnsureCanonicalWalletHeadroom(ctx, "req-45d", user, "lease-45d", "CNY", 1, 100)
-		require.True(t, topped)
 		require.NoError(t, err)
 
 		require.False(t, b.ObserveSettlement(CanonicalWalletSettlementEvent{GatewayRequestID: "req-45d-obs", PlatformUserID: user, Currency: "CNY", AmountUnits: 100}), "disabled mode observes nothing")
