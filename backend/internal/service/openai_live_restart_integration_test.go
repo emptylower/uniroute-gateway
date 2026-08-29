@@ -21,28 +21,14 @@ import (
 	_ "github.com/lib/pq"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
-	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
 )
 
 func startLiveRestartPostgres(t *testing.T, ctx context.Context) *sql.DB {
 	t.Helper()
-	container, err := tcpostgres.Run(ctx, "postgres:18.1-alpine3.23",
-		tcpostgres.WithDatabase("live_restart_test"),
-		tcpostgres.WithUsername("postgres"),
-		tcpostgres.WithPassword("postgres"),
-		tcpostgres.BasicWaitStrategies(),
-	)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = container.Terminate(ctx) })
-
-	connStr, err := container.ConnectionString(ctx, "sslmode=disable")
-	require.NoError(t, err)
-
-	db, err := sql.Open("postgres", connStr)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-	require.NoError(t, db.PingContext(ctx))
+	// Phase 3.7c: a database on the one shared container per run; the four
+	// migrations below are unchanged.
+	db := service.SharedTestPostgresDBForTest(t)
 
 	outboxSQL, err := os.ReadFile(filepath.Join("..", "..", "migrations", "208_wallet_settlement_outbox.sql"))
 	require.NoError(t, err)
