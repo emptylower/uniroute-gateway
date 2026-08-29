@@ -92,15 +92,21 @@ func (s *WalletOutboxStore) InsertOutboxEventTx(ctx context.Context, tx *sql.Tx,
 	}
 	// authorization_id (Phase 3.5, §11.9) is the token's durable join; NULL
 	// when the event carries none (pre-3.3 rows and token-less paths).
-	var authorizationID any
+	// billing_snapshot_id (Phase 4.2-G) is the frozen pricing basis of the
+	// settlement's usage — the event's own field, its own column, never in
+	// the hash (constraint 3). NULL when the caller held no snapshot.
+	var authorizationID, billingSnapshotID any
 	if event.AuthorizationID != "" {
 		authorizationID = event.AuthorizationID
 	}
+	if event.BillingSnapshotID != "" {
+		billingSnapshotID = event.BillingSnapshotID
+	}
 	_, insertErr := tx.ExecContext(ctx, `
 		INSERT INTO wallet_settlement_outbox
-			(event_id, platform_user_id, lease_id, gateway_request_id, currency, amount_units, local_balance_after_units, payload_hash, occurred_at, authorization_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-		event.EventID, event.PlatformUserID, event.LeaseID, event.GatewayRequestID, event.Currency, event.AmountUnits, event.LocalBalanceAfterUnits, hash, event.OccurredAt, authorizationID,
+			(event_id, platform_user_id, lease_id, gateway_request_id, currency, amount_units, local_balance_after_units, payload_hash, occurred_at, authorization_id, billing_snapshot_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+		event.EventID, event.PlatformUserID, event.LeaseID, event.GatewayRequestID, event.Currency, event.AmountUnits, event.LocalBalanceAfterUnits, hash, event.OccurredAt, authorizationID, billingSnapshotID,
 	)
 	if insertErr == nil {
 		_, err := tx.ExecContext(ctx, `RELEASE SAVEPOINT wallet_outbox_insert`)
@@ -306,14 +312,15 @@ func (s *WalletOutboxStore) SplitOutboxEvent(ctx context.Context, id int64, work
 		localBalance                                        sql.NullInt64
 		occurredAt                                          time.Time
 		splitDepth                                          int
+		billingSnapshotID                                   sql.NullString
 		authorizationID                                     sql.NullString
 	)
 	err = tx.QueryRowContext(ctx, `
-		SELECT event_id, platform_user_id, gateway_request_id, currency, amount_units, local_balance_after_units, occurred_at, split_depth, authorization_id
+		SELECT event_id, platform_user_id, gateway_request_id, currency, amount_units, local_balance_after_units, occurred_at, split_depth, billing_snapshot_id, authorization_id
 		FROM wallet_settlement_outbox
 		WHERE id = $1 AND claimed_by = $2 AND status = 'in_flight'
 		FOR UPDATE`, id, workerID,
-	).Scan(&eventID, &platformUserID, &gatewayRequestID, &currency, &amountUnits, &localBalance, &occurredAt, &splitDepth, &authorizationID)
+	).Scan(&eventID, &platformUserID, &gatewayRequestID, &currency, &amountUnits, &localBalance, &occurredAt, &splitDepth, &billingSnapshotID, &authorizationID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, service.ErrCanonicalWalletOutboxClaimLost
 	}
@@ -336,17 +343,28 @@ func (s *WalletOutboxStore) SplitOutboxEvent(ctx context.Context, id int64, work
 	if authorizationID.Valid {
 		remainderEvent.AuthorizationID = authorizationID.String
 	}
+	// Phase 4.2-G: the remainder derives from the SAME usage as its parent —
+	// it inherits the parent's billing snapshot so leg 4's fx covers split
+	// children without the backfill join. The hash is untouched (the event's
+	// BillingSnapshotID never enters walletOutboxHashPayload — test 76).
+	if billingSnapshotID.Valid {
+		remainderEvent.BillingSnapshotID = billingSnapshotID.String
+	}
 	var authorizationArg any
 	if remainderEvent.AuthorizationID != "" {
 		authorizationArg = remainderEvent.AuthorizationID
 	}
+	var billingSnapshotArg any
+	if remainderEvent.BillingSnapshotID != "" {
+		billingSnapshotArg = remainderEvent.BillingSnapshotID
+	}
 	inserted, err := tx.ExecContext(ctx, `
 		INSERT INTO wallet_settlement_outbox
-			(event_id, platform_user_id, lease_id, gateway_request_id, currency, amount_units, local_balance_after_units, payload_hash, status, attempt_count, occurred_at, authorization_id, parent_event_id, split_depth)
-		VALUES ($1, $2, NULL, $3, $4, $5, $6, $7, 'pending', 0, $8, $9, $10, $11)
+			(event_id, platform_user_id, lease_id, gateway_request_id, currency, amount_units, local_balance_after_units, payload_hash, status, attempt_count, occurred_at, authorization_id, parent_event_id, split_depth, billing_snapshot_id)
+		VALUES ($1, $2, NULL, $3, $4, $5, $6, $7, 'pending', 0, $8, $9, $10, $11, $12)
 		ON CONFLICT (event_id) DO NOTHING`,
 		remainderEventID, platformUserID, gatewayRequestID, currency, remainderUnits, remainderEvent.LocalBalanceAfterUnits,
-		walletOutboxPayloadHash(remainderEvent), occurredAt, authorizationArg, eventID, splitDepth+1,
+		walletOutboxPayloadHash(remainderEvent), occurredAt, authorizationArg, eventID, splitDepth+1, billingSnapshotArg,
 	)
 	if err != nil {
 		return 0, err
@@ -426,17 +444,24 @@ func (s *WalletOutboxStore) OutboxEventStatus(ctx context.Context, id int64) (st
 // rows sharing an occurred_at across a page boundary, the leg that breaks
 // a time cursor. Runs on 215's (platform_user_id, occurred_at, id) index,
 // which keeps the predicate AND the ordering index-resident. Read-only.
+//
+// Phase 4.2-G (4.1-G's hand-on): the SAME LEFT JOIN the Live rows use folds
+// the billing snapshot's fx in — b.payload->'fx'->>'rate', NULL when the
+// row's billing_snapshot_id is empty or the snapshot row is absent (the
+// leg-4 unverified tail; a missing snapshot never drops the record).
 func (s *WalletOutboxStore) ListOutboxEventsByUser(ctx context.Context, platformUserID string, since, until time.Time, afterID int64, limit int) ([]service.CanonicalWalletOutboxEvent, bool, error) {
 	if limit < 1 {
 		limit = 1
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, event_id, platform_user_id, lease_id, gateway_request_id, currency, amount_units,
-			local_balance_after_units, occurred_at, attempt_count, status, dead_letter_reason, delivered_at,
-			parent_event_id, split_depth, pending_release_units, authorization_id
-		FROM wallet_settlement_outbox
-		WHERE platform_user_id = $1 AND occurred_at >= $2 AND occurred_at < $3 AND id > $4
-		ORDER BY id
+		SELECT o.id, o.event_id, o.platform_user_id, o.lease_id, o.gateway_request_id, o.currency, o.amount_units,
+			o.local_balance_after_units, o.occurred_at, o.attempt_count, o.status, o.dead_letter_reason, o.delivered_at,
+			o.parent_event_id, o.split_depth, o.pending_release_units, o.authorization_id, o.redrive_count,
+			o.billing_snapshot_id, b.payload->'fx'->>'rate'
+		FROM wallet_settlement_outbox o
+		LEFT JOIN wallet_billing_snapshot b ON b.id = o.billing_snapshot_id
+		WHERE o.platform_user_id = $1 AND o.occurred_at >= $2 AND o.occurred_at < $3 AND o.id > $4
+		ORDER BY o.id
 		LIMIT $5`, platformUserID, since, until, afterID, limit+1)
 	if err != nil {
 		return nil, false, err
@@ -449,15 +474,22 @@ func (s *WalletOutboxStore) ListOutboxEventsByUser(ctx context.Context, platform
 		var parentEventID, authorizationID, deadLetterReason sql.NullString
 		var pendingRelease sql.NullInt64
 		var deliveredAt sql.NullTime
+		var billingSnapshotID, billingFX sql.NullString
 		if err := rows.Scan(&e.ID, &e.EventID, &e.PlatformUserID, &leaseID, &e.GatewayRequestID, &e.Currency, &e.AmountUnits,
 			&e.LocalBalanceAfterUnits, &e.OccurredAt, &e.AttemptCount, &e.Status, &deadLetterReason, &deliveredAt,
-			&parentEventID, &e.SplitDepth, &pendingRelease, &authorizationID); err != nil {
+			&parentEventID, &e.SplitDepth, &pendingRelease, &authorizationID, &e.RedriveCount,
+			&billingSnapshotID, &billingFX); err != nil {
 			return nil, false, err
 		}
 		e.LeaseID = leaseID.String
 		e.ParentEventID = parentEventID.String
 		e.AuthorizationID = authorizationID.String
 		e.DeadLetterReason = deadLetterReason.String
+		e.BillingSnapshotID = billingSnapshotID.String
+		if billingFX.Valid {
+			v := billingFX.String
+			e.BillingFX = &v
+		}
 		if pendingRelease.Valid {
 			v := pendingRelease.Int64
 			e.PendingReleaseUnits = &v

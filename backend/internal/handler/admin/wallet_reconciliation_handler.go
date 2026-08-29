@@ -77,8 +77,18 @@ type walletReconciliationOutboxRowDTO struct {
 	SplitDepth          int     `json:"split_depth"`
 	PendingReleaseUnits *string `json:"pending_release_units"`
 	AuthorizationID     string  `json:"authorization_id"`
-	OccurredAt          string  `json:"occurred_at"`
-	DeliveredAt         *string `json:"delivered_at"`
+	// Phase 4.2-G (4.1-G's hand-on): the row's own billing snapshot and
+	// its fx rate — billing_fx closes 4.1-S's provider_fx_unverified
+	// (null is the unverified tail: pre-4.2 rows awaiting the backfill,
+	// token-less paths).
+	BillingSnapshotID string  `json:"billing_snapshot_id"`
+	BillingFX         *string `json:"billing_fx"`
+	OccurredAt        string  `json:"occurred_at"`
+	DeliveredAt       *string `json:"delivered_at"`
+	// RedriveCount (Task 2): the receivable collector's re-drive bound —
+	// a window is not final while any row is dead_letter
+	// balance_shortfall or pending with redrive_count > 0.
+	RedriveCount int `json:"redrive_count"`
 }
 
 type walletReconciliationReceivableDTO struct {
@@ -254,6 +264,7 @@ func (h *WalletReconciliationHandler) Summary(c *gin.Context) {
 			AmountUnits: walletReconciliationUnits(e.AmountUnits), Status: e.Status, AttemptCount: e.AttemptCount,
 			DeadLetterReason: e.DeadLetterReason, ParentEventID: e.ParentEventID, SplitDepth: e.SplitDepth,
 			PendingReleaseUnits: walletReconciliationUnitsPtr(e.PendingReleaseUnits), AuthorizationID: e.AuthorizationID,
+			BillingSnapshotID: e.BillingSnapshotID, BillingFX: e.BillingFX, RedriveCount: e.RedriveCount,
 			OccurredAt: walletReconciliationTime(e.OccurredAt), DeliveredAt: walletReconciliationTimePtr(e.DeliveredAt),
 		})
 	}

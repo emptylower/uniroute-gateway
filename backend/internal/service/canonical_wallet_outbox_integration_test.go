@@ -34,8 +34,9 @@ func startCanonicalWalletTestPostgres(t *testing.T, ctx context.Context) *sql.DB
 			amount_units BIGINT NOT NULL, local_balance_after_units BIGINT, payload_hash TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
 			attempt_count INT NOT NULL DEFAULT 0, next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(), claimed_at TIMESTAMPTZ, claimed_by TEXT,
 			occurred_at TIMESTAMPTZ NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), delivered_at TIMESTAMPTZ, dead_letter_reason TEXT,
-			authorization_id TEXT, parent_event_id TEXT, split_depth INTEGER NOT NULL DEFAULT 0, pending_release_units BIGINT
-		)`) // same columns as Task 4 Step 2's real migration (+ 212's dead_letter_reason + 214's split/authorization columns) — kept in sync by hand since this test owns its own throwaway database, same convention as this task's other real-Redis tests owning their own throwaway keyspace
+			authorization_id TEXT, parent_event_id TEXT, split_depth INTEGER NOT NULL DEFAULT 0, pending_release_units BIGINT,
+			billing_snapshot_id TEXT, redrive_count INT NOT NULL DEFAULT 0
+		)`) // same columns as Task 4 Step 2's real migration (+ 212's dead_letter_reason + 214's split/authorization columns + 216's billing_snapshot_id/redrive_count — lockstep by hand, the 215 rule) — kept in sync by hand since this test owns its own throwaway database, same convention as this task's other real-Redis tests owning their own throwaway keyspace
 	require.NoError(t, err)
 	_, err = db.ExecContext(ctx, `CREATE INDEX idx_wallet_settlement_outbox_parent ON wallet_settlement_outbox (parent_event_id)`)
 	require.NoError(t, err)
@@ -72,13 +73,17 @@ func (o *outboxStoreForTest) InsertOutboxEventTx(ctx context.Context, tx *sql.Tx
 	if event.AuthorizationID != "" {
 		authorizationID = event.AuthorizationID
 	}
+	var billingSnapshotID any
+	if event.BillingSnapshotID != "" {
+		billingSnapshotID = event.BillingSnapshotID
+	}
 	if _, err := tx.ExecContext(ctx, `SAVEPOINT wallet_outbox_insert`); err != nil {
 		return err
 	}
 	res, insertErr := tx.ExecContext(ctx, `
-		INSERT INTO wallet_settlement_outbox (event_id, platform_user_id, lease_id, gateway_request_id, currency, amount_units, local_balance_after_units, payload_hash, occurred_at, authorization_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT (event_id) DO NOTHING`,
-		event.EventID, event.PlatformUserID, event.LeaseID, event.GatewayRequestID, event.Currency, event.AmountUnits, event.LocalBalanceAfterUnits, hash, event.OccurredAt, authorizationID)
+		INSERT INTO wallet_settlement_outbox (event_id, platform_user_id, lease_id, gateway_request_id, currency, amount_units, local_balance_after_units, payload_hash, occurred_at, authorization_id, billing_snapshot_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) ON CONFLICT (event_id) DO NOTHING`,
+		event.EventID, event.PlatformUserID, event.LeaseID, event.GatewayRequestID, event.Currency, event.AmountUnits, event.LocalBalanceAfterUnits, hash, event.OccurredAt, authorizationID, billingSnapshotID)
 	if insertErr != nil {
 		return insertErr
 	}
@@ -260,14 +265,15 @@ func (o *outboxStoreForTest) SplitOutboxEvent(ctx context.Context, id int64, wor
 		localBalance                                        sql.NullInt64
 		occurredAt                                          time.Time
 		splitDepth                                          int
+		billingSnapshotID                                   sql.NullString
 		authorizationID                                     sql.NullString
 	)
 	err = tx.QueryRowContext(ctx, `
-		SELECT event_id, platform_user_id, gateway_request_id, currency, amount_units, local_balance_after_units, occurred_at, split_depth, authorization_id
+		SELECT event_id, platform_user_id, gateway_request_id, currency, amount_units, local_balance_after_units, occurred_at, split_depth, billing_snapshot_id, authorization_id
 		FROM wallet_settlement_outbox
 		WHERE id = $1 AND claimed_by = $2 AND status = 'in_flight'
 		FOR UPDATE`, id, workerID,
-	).Scan(&eventID, &platformUserID, &gatewayRequestID, &currency, &amountUnits, &localBalance, &occurredAt, &splitDepth, &authorizationID)
+	).Scan(&eventID, &platformUserID, &gatewayRequestID, &currency, &amountUnits, &localBalance, &occurredAt, &splitDepth, &billingSnapshotID, &authorizationID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, ErrCanonicalWalletOutboxClaimLost
 	}
@@ -290,17 +296,24 @@ func (o *outboxStoreForTest) SplitOutboxEvent(ctx context.Context, id int64, wor
 	if authorizationID.Valid {
 		remainderEvent.AuthorizationID = authorizationID.String
 	}
+	if billingSnapshotID.Valid {
+		remainderEvent.BillingSnapshotID = billingSnapshotID.String
+	}
 	var authorizationArg any
 	if remainderEvent.AuthorizationID != "" {
 		authorizationArg = remainderEvent.AuthorizationID
 	}
+	var billingSnapshotArg any
+	if remainderEvent.BillingSnapshotID != "" {
+		billingSnapshotArg = remainderEvent.BillingSnapshotID
+	}
 	inserted, err := tx.ExecContext(ctx, `
 		INSERT INTO wallet_settlement_outbox
-			(event_id, platform_user_id, lease_id, gateway_request_id, currency, amount_units, local_balance_after_units, payload_hash, status, attempt_count, occurred_at, authorization_id, parent_event_id, split_depth)
-		VALUES ($1, $2, NULL, $3, $4, $5, $6, $7, 'pending', 0, $8, $9, $10, $11)
+			(event_id, platform_user_id, lease_id, gateway_request_id, currency, amount_units, local_balance_after_units, payload_hash, status, attempt_count, occurred_at, authorization_id, parent_event_id, split_depth, billing_snapshot_id)
+		VALUES ($1, $2, NULL, $3, $4, $5, $6, $7, 'pending', 0, $8, $9, $10, $11, $12)
 		ON CONFLICT (event_id) DO NOTHING`,
 		remainderEventID, platformUserID, gatewayRequestID, currency, remainderUnits, remainderEvent.LocalBalanceAfterUnits,
-		testWalletOutboxPayloadHash(remainderEvent), occurredAt, authorizationArg, eventID, splitDepth+1,
+		testWalletOutboxPayloadHash(remainderEvent), occurredAt, authorizationArg, eventID, splitDepth+1, billingSnapshotArg,
 	)
 	if err != nil {
 		return 0, err
@@ -358,17 +371,20 @@ func (o *outboxStoreForTest) SumDeadLetterUnits(ctx context.Context, reason stri
 // this mirror — a service-package test cannot import repository, which
 // imports service; the repository's own read/cursor proof is Task 1a's
 // repository test, and test 69's handler file exercises the REAL store).
+// The 4.2-G columns ride along: the fx LEFT JOIN and redrive_count.
 func (o *outboxStoreForTest) ListOutboxEventsByUser(ctx context.Context, platformUserID string, since, until time.Time, afterID int64, limit int) ([]CanonicalWalletOutboxEvent, bool, error) {
 	if limit < 1 {
 		limit = 1
 	}
 	rows, err := o.db.QueryContext(ctx, `
-		SELECT id, event_id, platform_user_id, lease_id, gateway_request_id, currency, amount_units,
-			local_balance_after_units, occurred_at, attempt_count, status, dead_letter_reason, delivered_at,
-			parent_event_id, split_depth, pending_release_units, authorization_id
-		FROM wallet_settlement_outbox
-		WHERE platform_user_id = $1 AND occurred_at >= $2 AND occurred_at < $3 AND id > $4
-		ORDER BY id
+		SELECT o.id, o.event_id, o.platform_user_id, o.lease_id, o.gateway_request_id, o.currency, o.amount_units,
+			o.local_balance_after_units, o.occurred_at, o.attempt_count, o.status, o.dead_letter_reason, o.delivered_at,
+			o.parent_event_id, o.split_depth, o.pending_release_units, o.authorization_id, o.redrive_count,
+			o.billing_snapshot_id, b.payload->'fx'->>'rate'
+		FROM wallet_settlement_outbox o
+		LEFT JOIN wallet_billing_snapshot b ON b.id = o.billing_snapshot_id
+		WHERE o.platform_user_id = $1 AND o.occurred_at >= $2 AND o.occurred_at < $3 AND o.id > $4
+		ORDER BY o.id
 		LIMIT $5`, platformUserID, since, until, afterID, limit+1)
 	if err != nil {
 		return nil, false, err
@@ -381,15 +397,22 @@ func (o *outboxStoreForTest) ListOutboxEventsByUser(ctx context.Context, platfor
 		var parentEventID, authorizationID, deadLetterReason sql.NullString
 		var pendingRelease sql.NullInt64
 		var deliveredAt sql.NullTime
+		var billingSnapshotID, billingFX sql.NullString
 		if err := rows.Scan(&e.ID, &e.EventID, &e.PlatformUserID, &leaseID, &e.GatewayRequestID, &e.Currency, &e.AmountUnits,
 			&e.LocalBalanceAfterUnits, &e.OccurredAt, &e.AttemptCount, &e.Status, &deadLetterReason, &deliveredAt,
-			&parentEventID, &e.SplitDepth, &pendingRelease, &authorizationID); err != nil {
+			&parentEventID, &e.SplitDepth, &pendingRelease, &authorizationID, &e.RedriveCount,
+			&billingSnapshotID, &billingFX); err != nil {
 			return nil, false, err
 		}
 		e.LeaseID = leaseID.String
 		e.ParentEventID = parentEventID.String
 		e.AuthorizationID = authorizationID.String
 		e.DeadLetterReason = deadLetterReason.String
+		e.BillingSnapshotID = billingSnapshotID.String
+		if billingFX.Valid {
+			v := billingFX.String
+			e.BillingFX = &v
+		}
 		if pendingRelease.Valid {
 			v := pendingRelease.Int64
 			e.PendingReleaseUnits = &v

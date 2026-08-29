@@ -234,6 +234,15 @@ type CanonicalWalletSettlementEvent struct {
 	// the payload now would make a redelivered pre-3.3 row a payload conflict).
 	AuthorizationToken string `json:"-"`
 	AuthorizationID    string `json:"-"`
+	// BillingSnapshotID (Phase 4.2-G, 4.1-G's hand-on): the frozen pricing
+	// basis of the settlement's usage (wallet_billing_snapshot.id), written
+	// to the outbox row's OWN column so leg 4's outbox portion becomes
+	// fx-verified. Hash-NEUTRAL by construction: walletOutboxHashPayload's
+	// seven fields do not include it (constraint 3, the 3.5 AuthorizationID
+	// precedent — test 76 pins it). json:"-" is harmless bookkeeping; the
+	// mechanism is the hash struct's fixed shape. Empty = no snapshot
+	// (pre-3.2 callers, Count Tokens, off mode) — the column stays NULL.
+	BillingSnapshotID string `json:"-"`
 }
 
 type CanonicalWalletSettlementResult struct {
@@ -279,6 +288,17 @@ type CanonicalWalletOutboxEvent struct {
 	Status           string
 	DeadLetterReason string
 	DeliveredAt      *time.Time
+	// Phase 4.2-G (4.1-G's hand-on): the billing snapshot's own column
+	// (NULL = pre-4.2/token-less — leg 4's unverified tail, the operator
+	// backfill's set) and the receivable collector's own bound — how many
+	// times a balance_shortfall dead-letter has been re-driven (Task 2).
+	// attempt_count stays the dispatcher's TRANSPORT budget; redrive_count
+	// is the re-drive bound and the two are disjoint by construction.
+	// BillingFX is the LEFT JOIN fold of wallet_billing_snapshot's
+	// payload->fx->rate — nil when the snapshot is absent.
+	BillingSnapshotID string
+	RedriveCount      int
+	BillingFX         *string
 }
 
 // CanonicalWalletOutboxStore is implemented by repository.WalletOutboxStore.
@@ -2052,7 +2072,11 @@ func (b *CanonicalWalletBridge) releaseHoldZeroCost(ctx context.Context, platfor
 	canonicalWalletBridgeMetrics.holdReleasedZeroCost.Add(1)
 }
 
-func observeCanonicalWalletSettlement(bridge *CanonicalWalletBridge, requestID string, user *User, cost *CostBreakdown, subscriptionBilling, billingApplied bool, billingResult *UsageBillingApplyResult, authorizationToken, authorizationID string) bool {
+// observeCanonicalWalletSettlement is the shared write path of the HTTP/WS
+// settlement callers (openai_gateway_usage.go / gateway_usage_billing.go).
+// billingSnapshotID (Phase 4.2-G) is the frozen snapshot those callers hold
+// (input.BillingSnapshot.ID — Task 0's scope finding); "" writes NULL.
+func observeCanonicalWalletSettlement(bridge *CanonicalWalletBridge, requestID string, user *User, cost *CostBreakdown, subscriptionBilling, billingApplied bool, billingResult *UsageBillingApplyResult, authorizationToken, authorizationID, billingSnapshotID string) bool {
 	if bridge == nil || user == nil || cost == nil {
 		return false
 	}
@@ -2091,5 +2115,6 @@ func observeCanonicalWalletSettlement(bridge *CanonicalWalletBridge, requestID s
 		GatewayRequestID: requestID, PlatformUserID: user.PlatformUserID, Currency: user.BillingCurrency,
 		AmountUnits: amountUnits, LocalBalanceAfterUnits: localBalanceAfterPtr, OccurredAt: time.Now().UTC(),
 		AuthorizationToken: authorizationToken, AuthorizationID: authorizationID,
+		BillingSnapshotID: strings.TrimSpace(billingSnapshotID),
 	})
 }

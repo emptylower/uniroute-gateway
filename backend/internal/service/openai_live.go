@@ -1232,6 +1232,7 @@ func (s *OpenAIGatewayService) maybeCloseLiveWindow(ctx context.Context, record 
 			OccurredAt:         st.openedAt,
 			AuthorizationID:    st.token,
 			AuthorizationToken: st.token,
+			BillingSnapshotID:  fresh.BillingSnapshotID,
 		})
 		if !ok {
 			liveWindowMetrics.settleRetry.Add(1)
@@ -1607,6 +1608,7 @@ func (s *OpenAIGatewayService) tryFinalizeLiveCall(record *LiveCallRecord) bool 
 						OccurredAt:         time.Now().UTC(),
 						AuthorizationToken: eventAuthorizationToken,
 						AuthorizationID:    eventAuthorizationID,
+						BillingSnapshotID:  record.BillingSnapshotID,
 					})
 				} else {
 					relCtx, relCancel := context.WithTimeout(context.Background(), liveRedisOperationTimeout)

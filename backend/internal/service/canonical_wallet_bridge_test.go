@@ -557,22 +557,22 @@ func TestObserveCanonicalWalletSettlementReturnBool(t *testing.T) {
 	cost := &CostBreakdown{ActualCost: 1.0}
 
 	// nil bridge -> false
-	require.False(t, observeCanonicalWalletSettlement(nil, "req-1", user, cost, false, true, nil, "tok", "auth"))
+	require.False(t, observeCanonicalWalletSettlement(nil, "req-1", user, cost, false, true, nil, "tok", "auth", ""))
 
 	// subscriptionBilling -> false
-	require.False(t, observeCanonicalWalletSettlement(shadow, "req-1", user, cost, true, true, nil, "tok", "auth"))
+	require.False(t, observeCanonicalWalletSettlement(shadow, "req-1", user, cost, true, true, nil, "tok", "auth", ""))
 
 	// billingApplied == false -> false
-	require.False(t, observeCanonicalWalletSettlement(shadow, "req-1", user, cost, false, false, nil, "tok", "auth"))
+	require.False(t, observeCanonicalWalletSettlement(shadow, "req-1", user, cost, false, false, nil, "tok", "auth", ""))
 
 	// zero cost -> false
-	require.False(t, observeCanonicalWalletSettlement(shadow, "req-1", user, &CostBreakdown{ActualCost: 0}, false, true, nil, "tok", "auth"))
+	require.False(t, observeCanonicalWalletSettlement(shadow, "req-1", user, &CostBreakdown{ActualCost: 0}, false, true, nil, "tok", "auth", ""))
 
 	// nil user -> false
-	require.False(t, observeCanonicalWalletSettlement(shadow, "req-1", nil, cost, false, true, nil, "tok", "auth"))
+	require.False(t, observeCanonicalWalletSettlement(shadow, "req-1", nil, cost, false, true, nil, "tok", "auth", ""))
 
 	// nil cost -> false
-	require.False(t, observeCanonicalWalletSettlement(shadow, "req-1", user, nil, false, true, nil, "tok", "auth"))
+	require.False(t, observeCanonicalWalletSettlement(shadow, "req-1", user, nil, false, true, nil, "tok", "auth", ""))
 }
 
 // Phase 3.4a (§9.5): the bridge's clock goes through the CONSTRUCTOR, and

@@ -72,6 +72,7 @@ func TestWalletReconciliationWireThroughGin(t *testing.T) {
 		"213_wallet_hold_outcome.sql",
 		"214_wallet_outbox_split_and_authorization.sql",
 		"215_wallet_reconciliation_indexes.sql",
+		"216_wallet_outbox_billing_snapshot.sql",
 	} {
 		raw, err := os.ReadFile(filepath.Join("..", "..", "..", "migrations", migration))
 		require.NoError(t, err)
@@ -288,5 +289,134 @@ func seedOutboxRow(t *testing.T, db *sql.DB, user, eventID, leaseID, status, rea
 			(event_id, platform_user_id, lease_id, gateway_request_id, currency, amount_units, payload_hash, status, occurred_at, delivered_at, dead_letter_reason)
 		VALUES ($1, $2, $3, $4, 'CNY', $5, 'hash-69w', $6, $7, $8, $9)`,
 		eventID, user, leaseID, "req-"+eventID, amount, status, now.Add(-30*time.Minute), deliveredAt, deadReason)
+	require.NoError(t, err)
+}
+
+// TestWalletReconciliationSummaryOutboxFX (Phase 4.2-G Task 1d): the wire's
+// outbox rows carry their billing snapshot's fx — `outbox[].billing_snapshot_id`
+// and `outbox[].billing_fx` after `authorization_id` (4.1-G's hand-on
+// closing). A delivered row whose snapshot resolves reports the snapshot's
+// rate through the same LEFT JOIN the Live rows use; a row without a
+// snapshot reports the id as "" and fx as null — never a dropped record.
+func TestWalletReconciliationSummaryOutboxFX(t *testing.T) {
+	ctx := context.Background()
+	pgContainer, err := tcpostgres.Run(ctx, "postgres:18.1-alpine3.23",
+		tcpostgres.WithDatabase("recon_fx_test"),
+		tcpostgres.WithUsername("postgres"),
+		tcpostgres.WithPassword("postgres"),
+		tcpostgres.BasicWaitStrategies(),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = pgContainer.Terminate(ctx) })
+	dsn, err := pgContainer.ConnectionString(ctx, "sslmode=disable", "TimeZone=UTC")
+	require.NoError(t, err)
+	db, err := sql.Open("postgres", dsn)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	require.NoError(t, db.PingContext(ctx))
+
+	for _, migration := range []string{
+		"208_wallet_settlement_outbox.sql",
+		"209_wallet_billing_snapshot.sql",
+		"211_wallet_live_provisional.sql",
+		"212_wallet_outbox_dead_letter_reason.sql",
+		"213_wallet_hold_outcome.sql",
+		"214_wallet_outbox_split_and_authorization.sql",
+		"215_wallet_reconciliation_indexes.sql",
+		"216_wallet_outbox_billing_snapshot.sql",
+	} {
+		raw, err := os.ReadFile(filepath.Join("..", "..", "..", "migrations", migration))
+		require.NoError(t, err)
+		_, err = db.ExecContext(ctx, string(raw))
+		require.NoError(t, err)
+	}
+
+	redisContainer, err := tcredis.Run(ctx, "redis:8.4-alpine")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = redisContainer.Terminate(ctx) })
+	redisHost, err := redisContainer.Host(ctx)
+	require.NoError(t, err)
+	redisPort, err := redisContainer.MappedPort(ctx, "6379/tcp")
+	require.NoError(t, err)
+	rdb := redis.NewClient(&redis.Options{Addr: fmt.Sprintf("%s:%d", redisHost, redisPort.Int())})
+	t.Cleanup(func() { _ = rdb.Close() })
+	require.NoError(t, rdb.Ping(ctx).Err())
+
+	const token = "test-76e-fx-token-0123456789abcdef"
+	cfg := &config.Config{}
+	cfg.CanonicalWallet.ReconciliationReadToken = token
+	outboxStore := repository.NewWalletOutboxStore(db)
+	gatewayCache := repository.NewGatewayCache(rdb)
+	readService, err := service.NewWalletReconciliationReadService(cfg, db, gatewayCache, outboxStore)
+	require.NoError(t, err)
+	handler := NewWalletReconciliationHandler(readService, cfg)
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	recon := router.Group("/api/v1/admin/wallet/reconciliation")
+	recon.Use(middleware.NewWalletReconciliationTokenAuth(token))
+	recon.GET("/summary", handler.Summary)
+
+	user := "shipany-user-recon76e"
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	since, until := now.Add(-time.Hour), now.Add(time.Hour)
+
+	// The snapshot: payload->fx->rate is the figure the LEFT JOIN reads.
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO wallet_billing_snapshot
+			(id, version, user_id, api_key_id, account_id, billing_model, pricing_mode, payload)
+		VALUES ('wbs_76e', 1, 42, 7, 9, 'claude-sonnet-4', 'token', $1)`,
+		`{"id":"wbs_76e","version":1,"fx":{"rate":"7.2451","source":"bootstrap","at":"2026-08-30T00:00:00Z"},"pricing":{}}`)
+	require.NoError(t, err)
+
+	// Two delivered rows for the user: one bound to the snapshot, one
+	// without (pre-4.2 or token-less — the NULL-rate leg).
+	seedOutboxRow76e(t, db, user, "gwusg_76e_fx", "lease-76e-a", "wbs_76e", 1_000000, now)
+	seedOutboxRow76e(t, db, user, "gwusg_76e_plain", "lease-76e-b", "", 2_000000, now)
+
+	url := fmt.Sprintf("/api/v1/admin/wallet/reconciliation/summary?platform_user_id=%s&since=%s&until=%s",
+		user, since.UTC().Format(time.RFC3339), until.UTC().Format(time.RFC3339))
+	req := httptest.NewRequest(http.MethodGet, url, nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	require.Equal(t, 200, rec.Code)
+
+	var body struct {
+		Schema int `json:"schema"`
+		Outbox []struct {
+			EventID           string  `json:"event_id"`
+			AuthorizationID   string  `json:"authorization_id"`
+			BillingSnapshotID string  `json:"billing_snapshot_id"`
+			BillingFX         *string `json:"billing_fx"`
+		} `json:"outbox"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.Equal(t, 1, body.Schema)
+	require.Len(t, body.Outbox, 2, "both rows return — a missing snapshot never drops the record")
+	byEvent := map[string]int{}
+	for i, row := range body.Outbox {
+		byEvent[row.EventID] = i
+	}
+	require.Contains(t, byEvent, "gwusg_76e_fx")
+	require.Contains(t, byEvent, "gwusg_76e_plain")
+
+	fxRow := body.Outbox[byEvent["gwusg_76e_fx"]]
+	require.Equal(t, "wbs_76e", fxRow.BillingSnapshotID)
+	require.NotNil(t, fxRow.BillingFX, "a resolving snapshot reports its fx rate")
+	require.Equal(t, "7.2451", *fxRow.BillingFX)
+
+	plainRow := body.Outbox[byEvent["gwusg_76e_plain"]]
+	require.Equal(t, "", plainRow.BillingSnapshotID)
+	require.Nil(t, plainRow.BillingFX, "a row without a snapshot reports null fx")
+}
+
+func seedOutboxRow76e(t *testing.T, db *sql.DB, user, eventID, leaseID, snapshotID string, amount int64, now time.Time) {
+	t.Helper()
+	_, err := db.ExecContext(context.Background(), `
+		INSERT INTO wallet_settlement_outbox
+			(event_id, platform_user_id, lease_id, gateway_request_id, currency, amount_units, payload_hash, status, occurred_at, delivered_at, billing_snapshot_id)
+		VALUES ($1, $2, $3, $4, 'CNY', $5, 'hash-76e', 'delivered', $6, $7, NULLIF($8, ''))`,
+		eventID, user, leaseID, "req-"+eventID, amount, now.Add(-30*time.Minute), now.Add(-time.Minute), snapshotID)
 	require.NoError(t, err)
 }

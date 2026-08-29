@@ -88,6 +88,16 @@ type WalletReconciliationOutboxRow struct {
 	AuthorizationID     string
 	OccurredAt          time.Time
 	DeliveredAt         *time.Time
+	// Phase 4.2-G (4.1-G's hand-on): the row's own billing snapshot and
+	// its fx rate (the Live rows' LEFT JOIN, applied to the outbox) —
+	// BillingSnapshotID "" and BillingFX nil are the leg-4 unverified
+	// tail (pre-4.2, token-less, off-mode), never a dropped record.
+	BillingSnapshotID string
+	BillingFX         *string
+	// RedriveCount is the receivable collector's re-drive bound (Task 2)
+	// — 4.1-S's rule: a window is not final while any of its rows is
+	// dead_letter balance_shortfall or pending with redrive_count > 0.
+	RedriveCount int
 }
 
 // WalletReconciliationReceivable is the receivable figure derived from a
@@ -239,6 +249,7 @@ func (s *WalletReconciliationReadService) Summary(ctx context.Context, platformU
 			AmountUnits: e.AmountUnits, Status: e.Status, AttemptCount: e.AttemptCount, DeadLetterReason: e.DeadLetterReason,
 			ParentEventID: e.ParentEventID, SplitDepth: e.SplitDepth, PendingReleaseUnits: e.PendingReleaseUnits,
 			AuthorizationID: e.AuthorizationID, OccurredAt: e.OccurredAt, DeliveredAt: e.DeliveredAt,
+			BillingSnapshotID: e.BillingSnapshotID, BillingFX: e.BillingFX, RedriveCount: e.RedriveCount,
 		})
 		if e.Status == "dead_letter" {
 			switch e.DeadLetterReason {

@@ -884,7 +884,7 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	if billingErr != nil {
 		return billingErr
 	}
-	observeCanonicalWalletSettlement(s.canonicalWallet, requestID, user, cost, isSubscriptionBilling, billingApplied, billingResult, input.AuthorizationToken, input.AuthorizationID)
+	observeCanonicalWalletSettlement(s.canonicalWallet, requestID, user, cost, isSubscriptionBilling, billingApplied, billingResult, input.AuthorizationToken, input.AuthorizationID, snapshotIDOf(input.BillingSnapshot))
 	writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.gateway")
 	persistBillingSnapshotBestEffort(ctx, s.snapshots, input.BillingSnapshot)
 

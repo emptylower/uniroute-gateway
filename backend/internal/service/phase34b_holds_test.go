@@ -855,7 +855,7 @@ func TestPhase34bLiveConvertsAndAbortedLiveIsReapable(t *testing.T) {
 	// finalization: the same arguments openai_live.go:1048 passes
 	cost := &CostBreakdown{ActualCost: 0.3, BillingMode: string(BillingModeToken)}
 	billingUser := &User{ID: 7, PlatformUserID: platformUserID, BillingCurrency: "CNY", Balance: 1.0}
-	require.True(t, observeCanonicalWalletSettlement(b, "call-live-hash", billingUser, cost, false, true, nil, "auth-live-1.1", "auth-live-1"))
+	require.True(t, observeCanonicalWalletSettlement(b, "call-live-hash", billingUser, cost, false, true, nil, "auth-live-1.1", "auth-live-1", ""))
 	hold, err := store.GetCanonicalWalletHold(ctx, platformUserID, "auth-live-1")
 	require.NoError(t, err)
 	require.Equal(t, "settled", hold.State, "the Live hold converts at finalization")

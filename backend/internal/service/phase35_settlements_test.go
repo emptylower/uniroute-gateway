@@ -1281,7 +1281,7 @@ func TestPhase35ZeroCostAbortPointsReleaseTheHold(t *testing.T) {
 			user := &User{ID: int64(100 + i), PlatformUserID: "shipany-user-39-" + itoa(i), BillingCurrency: "CNY", Balance: 10}
 			authID := "auth-39-" + itoa(i)
 			arm(t, user.PlatformUserID, authID)
-			require.False(t, observeCanonicalWalletSettlement(b, "req-39-"+itoa(i), user, leg.cost, leg.sub, leg.appl, nil, "tok", authID))
+			require.False(t, observeCanonicalWalletSettlement(b, "req-39-"+itoa(i), user, leg.cost, leg.sub, leg.appl, nil, "tok", authID, ""))
 			hold, err := store.GetCanonicalWalletHold(ctx, user.PlatformUserID, authID)
 			require.NoError(t, err)
 			require.Equal(t, "released", hold.State)
@@ -1297,7 +1297,7 @@ func TestPhase35ZeroCostAbortPointsReleaseTheHold(t *testing.T) {
 		authID := "auth-39-off"
 		arm(t, user.PlatformUserID, authID)
 		base := canonicalWalletBridgeMetrics.holdReleasedZeroCost.Load()
-		require.False(t, observeCanonicalWalletSettlement(b, "req-39-off", user, &CostBreakdown{ActualCost: 0}, false, true, nil, "tok", authID))
+		require.False(t, observeCanonicalWalletSettlement(b, "req-39-off", user, &CostBreakdown{ActualCost: 0}, false, true, nil, "tok", authID, ""))
 		hold, err := store.GetCanonicalWalletHold(ctx, user.PlatformUserID, authID)
 		require.NoError(t, err)
 		require.Equal(t, "armed", hold.State, "holds off is 3.4a byte-for-byte — no abort-point release")

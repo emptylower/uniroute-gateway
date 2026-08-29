@@ -399,7 +399,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	if billingErr != nil {
 		return billingErr
 	}
-	observeCanonicalWalletSettlement(s.canonicalWallet, requestID, user, cost, isSubscriptionBilling, billingApplied, billingResult, input.AuthorizationToken, input.AuthorizationID)
+	observeCanonicalWalletSettlement(s.canonicalWallet, requestID, user, cost, isSubscriptionBilling, billingApplied, billingResult, input.AuthorizationToken, input.AuthorizationID, snapshotIDOf(input.BillingSnapshot))
 	writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.openai_gateway")
 	persistBillingSnapshotBestEffort(ctx, s.snapshots, input.BillingSnapshot)
 
