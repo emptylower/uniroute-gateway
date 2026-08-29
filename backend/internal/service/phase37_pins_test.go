@@ -255,3 +255,102 @@ func p37SettledUnits(t *testing.T, svc *BillingSnapshotService, snap *BillingSna
 	require.NoError(t, err)
 	return units
 }
+
+// Test 48 (G7, redesign §13.3) — two dispatchers against one outbox deliver
+// a shared work set exactly once: every row delivered, no dead-letter, and
+// the fake captured each event id exactly once with per-user captured sums
+// equal to the issued amounts. The TOTAL settlement-request count is an
+// OBSERVATION, not an assertion: if a stale reclaim ever raced a redelivery
+// the fake's per-event identity answers duplicate and the exactly-once
+// property (on captures) still holds — a count above N is recorded, never a
+// failure.
+func TestPhase37TwoDispatchersDeliverExactlyOnce(t *testing.T) {
+	ctx := context.Background()
+	rdb := startCanonicalWalletTestRedis(t, ctx)
+	db := startCanonicalWalletTestPostgres(t, ctx)
+	store := &gatewayCacheAdapterForTest{rdb: rdb}
+	outbox := &outboxStoreForTest{db: db}
+	now := time.Now().UTC()
+	fake := newFakeEnsureControlPlane(t, func() time.Time { return now })
+
+	cfg := canonicalWalletTestConfig(config.CanonicalWalletModeEnforce) // holds off — the dispatcher's own claim race
+	cfg.ControlPlaneURL, cfg.Secret = fake.Server.URL, strings.Repeat("s", 32)
+	cfg.ExpirySkewMarginMS, cfg.RequestTimeoutMS = 50, 100 // a 100 ms tick
+	cfg.LeaseBudgetUnits = 500_000_000
+	client := newCanonicalWalletHTTPClient(cfg, fake.Server.Client())
+	client.now = func() time.Time { return now }
+	clock := func() time.Time { return now }
+	a := newCanonicalWalletBridge(cfg, store, client, db, outbox, 0, clock)
+	t.Cleanup(a.Close)
+	b := newCanonicalWalletBridge(cfg, store, client, db, outbox, 0, clock)
+	t.Cleanup(b.Close)
+	require.NotEqual(t, a.workerID, b.workerID, "distinct worker ids by construction")
+
+	const n = 40
+	users := make([]string, n/4) // leases are shared across each user's events
+	want := make(map[string]int64)
+	for i := range users {
+		users[i] = "shipany-user-" + uuid.NewString()
+		fake.fund(users[i], 10_000_000_000)
+	}
+	for i := 0; i < n; i++ {
+		u := users[i%(n/4)]
+		amt := int64(1_000_000) * int64(i+1)
+		want[u] += amt
+		bridge := a
+		if i%2 == 1 {
+			bridge = b // 20 on A, 20 on B
+		}
+		require.True(t, bridge.ObserveSettlement(CanonicalWalletSettlementEvent{
+			GatewayRequestID: "req-48-" + itoa(i), PlatformUserID: u, Currency: "CNY", AmountUnits: amt, OccurredAt: now,
+		}))
+	}
+
+	// Poll (the file's idiom) until every row is delivered.
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		var delivered int
+		if err := db.QueryRowContext(ctx, `SELECT count(*) FROM wallet_settlement_outbox WHERE status = 'delivered'`).Scan(&delivered); err == nil && delivered == n {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	var delivered int
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM wallet_settlement_outbox WHERE status = 'delivered'`).Scan(&delivered))
+	require.Equal(t, n, delivered, "every row delivered")
+
+	var dead, inFlight, pending int
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM wallet_settlement_outbox WHERE status = 'dead_letter'`).Scan(&dead))
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM wallet_settlement_outbox WHERE status = 'in_flight'`).Scan(&inFlight))
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM wallet_settlement_outbox WHERE status = 'pending'`).Scan(&pending))
+	require.Equal(t, 0, dead, "no dead_letter")
+	require.Equal(t, 0, inFlight, "no in_flight")
+	require.Equal(t, 0, pending, "no pending")
+
+	// Each event id captured exactly once; per-user captured sums exact.
+	fake.mu.Lock()
+	distinct := 0
+	for _, byEvent := range fake.events {
+		distinct += len(byEvent)
+	}
+	for i := 0; i < n; i++ {
+		u := users[i%(n/4)]
+		eventID := CanonicalWalletSettlementEventID("req-48-"+itoa(i), u, "CNY")
+		ev, ok := fake.events[u][eventID]
+		require.True(t, ok, "event %s captured", eventID)
+		require.Equal(t, int64(1_000_000)*int64(i+1), ev.Units, "event %s captured at its exact amount", eventID)
+	}
+	capturedByUser := make(map[string]int64)
+	for u, leases := range fake.leases {
+		for _, l := range leases {
+			capturedByUser[u] += l.Captured
+		}
+	}
+	totalReqs := len(fake.settlementReqs)
+	fake.mu.Unlock()
+	require.Equal(t, n, distinct, "exactly N distinct event ids captured")
+	for u, sum := range want {
+		require.Equal(t, sum, capturedByUser[u], "user %s: the fake's captured sum equals its Σ amounts", u)
+	}
+	t.Logf("test 48: total settlement requests received == %d (N == %d; an observation — exactly-once is on captures)", totalReqs, n)
+}
