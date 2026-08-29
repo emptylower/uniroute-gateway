@@ -193,7 +193,7 @@ func TestWalletOutboxRejectsConflictingPayloadUnderSameEventID(t *testing.T) {
 	tx3, err := integrationDB.BeginTx(ctx, nil)
 	require.NoError(t, err)
 	err = store.InsertOutboxEventTx(ctx, tx3, reprice)
-	require.ErrorIs(t, err, ErrWalletOutboxPayloadConflict)
+	require.ErrorIs(t, err, service.ErrCanonicalWalletOutboxPayloadConflict)
 	_ = tx3.Rollback()
 }
 
@@ -456,7 +456,7 @@ func TestWalletOutboxInsertPropagatesNonUniqueFailures(t *testing.T) {
 
 	err = store.InsertOutboxEventTx(ctx, tx, event)
 	require.Error(t, err, "a non-unique insert failure must propagate")
-	require.NotErrorIs(t, err, ErrWalletOutboxPayloadConflict, "a genuine insert failure must not be reported as a repricing conflict")
+	require.NotErrorIs(t, err, service.ErrCanonicalWalletOutboxPayloadConflict, "a genuine insert failure must not be reported as a repricing conflict")
 	require.ErrorContains(t, err, "wallet_settlement_outbox")
 }
 

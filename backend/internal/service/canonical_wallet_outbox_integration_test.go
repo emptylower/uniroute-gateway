@@ -89,14 +89,10 @@ func (o *outboxStoreForTest) InsertOutboxEventTx(ctx context.Context, tx *sql.Tx
 		return err
 	}
 	if existingHash != hash {
-		return ErrWalletOutboxPayloadConflictForTest
+		return ErrCanonicalWalletOutboxPayloadConflict
 	}
 	return nil
 }
-
-// ErrWalletOutboxPayloadConflictForTest is the service-package twin of
-// repository.ErrWalletOutboxPayloadConflict (no import across the cycle).
-var ErrWalletOutboxPayloadConflictForTest = errors.New("wallet outbox event id already used with a different payload")
 
 func (o *outboxStoreForTest) ClaimPendingOutboxEvents(ctx context.Context, workerID string, limit int) ([]CanonicalWalletOutboxEvent, error) {
 	// REAL atomic claim, mirroring repository.WalletOutboxStore: transition

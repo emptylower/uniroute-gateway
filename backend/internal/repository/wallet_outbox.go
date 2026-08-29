@@ -16,8 +16,6 @@ import (
 
 const walletOutboxMaxAttempts = 8
 
-var ErrWalletOutboxPayloadConflict = errors.New("wallet outbox event id already used with a different payload")
-
 type WalletOutboxStore struct {
 	db *sql.DB
 }
@@ -119,7 +117,7 @@ func (s *WalletOutboxStore) InsertOutboxEventTx(ctx context.Context, tx *sql.Tx,
 		return err
 	}
 	if existingHash != hash {
-		return ErrWalletOutboxPayloadConflict
+		return service.ErrCanonicalWalletOutboxPayloadConflict
 	}
 	return nil // identical retry, no-op
 }

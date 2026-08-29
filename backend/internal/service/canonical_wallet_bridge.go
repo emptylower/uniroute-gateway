@@ -32,6 +32,7 @@ var (
 	ErrCanonicalWalletLeaseCurrencyMismatch = errors.New("canonical wallet lease currency mismatch")
 	ErrCanonicalWalletReservationConflict   = errors.New("canonical wallet event was reserved against a different lease")
 	ErrCanonicalWalletOutboxClaimLost       = errors.New("canonical wallet outbox row is no longer claimed by this dispatcher")
+	ErrCanonicalWalletOutboxPayloadConflict = errors.New("wallet outbox event id already used with a different payload")
 	// ErrCanonicalWalletBalanceShortfall (§9.3): the server's
 	// insufficient_balance refusal — TERMINAL. The dispatcher dead-letters
 	// with reason balance_shortfall; Authorize refuses balance_shortfall.
@@ -1096,14 +1097,6 @@ func newCanonicalWalletBridge(cfg config.CanonicalWalletConfig, store CanonicalW
 	return b
 }
 
-// walletOutboxPayloadConflictMessage is repository.ErrWalletOutboxPayloadConflict's
-// message. The sentinel itself cannot be named here — repository imports
-// service, so naming it back would be the import cycle the service-package
-// test twin (ErrWalletOutboxPayloadConflictForTest) exists to dodge — and
-// the store returns the sentinel bare, never wrapped, so the exact message
-// is the cross-package contract both sentinels carry verbatim.
-const walletOutboxPayloadConflictMessage = "wallet outbox event id already used with a different payload"
-
 // ObserveSettlement durably records the settlement event in the Postgres
 // outbox (its own transaction, committed synchronously before returning) —
 // replacing the previous in-memory bounded channel, which silently dropped
@@ -1216,7 +1209,7 @@ func (b *CanonicalWalletBridge) ObserveSettlement(event CanonicalWalletSettlemen
 		// dedup — the stored row stands and will deliver — not a durability
 		// drop, so it gets its own counter and an info line; queueDropped
 		// stays reserved for real write failures.
-		if err.Error() == walletOutboxPayloadConflictMessage {
+		if errors.Is(err, ErrCanonicalWalletOutboxPayloadConflict) {
 			canonicalWalletBridgeMetrics.outboxPayloadConflict.Add(1)
 			slog.Info("canonical wallet outbox insert rejected a repriced resubmission (payload conflict)", "event_id", event.EventID, "error", err)
 			return false
