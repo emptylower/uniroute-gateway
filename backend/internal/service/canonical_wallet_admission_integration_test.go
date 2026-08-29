@@ -17,25 +17,15 @@ import (
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
-	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
 )
 
-// startCanonicalWalletTestRedis follows the per-test container pattern
-// already used by internal/server/routes/auth_rate_limit_integration_test.go
-// (this package does not have a package-level TestMain harness).
+// startCanonicalWalletTestRedis returns a client on the ONE shared Redis
+// container per integration run, with an empty keyspace (Phase 3.7c:
+// SharedTestRedisClientForTest flushes per call; the contract — a fresh
+// *redis.Client on an empty keyspace, closed at t.Cleanup — is unchanged).
 func startCanonicalWalletTestRedis(t *testing.T, ctx context.Context) *redis.Client {
 	t.Helper()
-	container, err := tcredis.Run(ctx, "redis:8.4-alpine")
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = container.Terminate(ctx) })
-	host, err := container.Host(ctx)
-	require.NoError(t, err)
-	port, err := container.MappedPort(ctx, "6379/tcp")
-	require.NoError(t, err)
-	client := redis.NewClient(&redis.Options{Addr: fmt.Sprintf("%s:%d", host, port.Int())})
-	t.Cleanup(func() { _ = client.Close() })
-	require.NoError(t, client.Ping(ctx).Err())
-	return client
+	return SharedTestRedisClientForTest(t)
 }
 
 func TestCanonicalWalletCheckAndReserveEnforcesRealHardCap(t *testing.T) {

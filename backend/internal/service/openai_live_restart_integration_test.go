@@ -6,7 +6,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -21,7 +20,6 @@ import (
 	_ "github.com/lib/pq"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
-	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
 )
 
 func startLiveRestartPostgres(t *testing.T, ctx context.Context) *sql.DB {
@@ -56,19 +54,10 @@ func startLiveRestartPostgres(t *testing.T, ctx context.Context) *sql.DB {
 
 func startLiveRestartRedis(t *testing.T, ctx context.Context) *redis.Client {
 	t.Helper()
-	container, err := tcredis.Run(ctx, "redis:8.4-alpine")
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = container.Terminate(ctx) })
-
-	host, err := container.Host(ctx)
-	require.NoError(t, err)
-	port, err := container.MappedPort(ctx, "6379/tcp")
-	require.NoError(t, err)
-
-	client := redis.NewClient(&redis.Options{Addr: fmt.Sprintf("%s:%d", host, port.Int())})
-	t.Cleanup(func() { _ = client.Close() })
-	require.NoError(t, client.Ping(ctx).Err())
-	return client
+	// Phase 3.7c: the ONE shared Redis container per run (empty keyspace
+	// per call); the inline container start, its Host/MappedPort reads and
+	// its Terminate cleanup are gone.
+	return service.SharedTestRedisClientForTest(t)
 }
 
 func TestOpenAILiveRestartSurvivalAndRedisLossIntegration(t *testing.T) {
