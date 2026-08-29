@@ -385,6 +385,15 @@ var defaultOpenAICodexSnapshotPersistThrottle = newAccountWriteThrottle(openAICo
 // support but no compatible account is available.
 var ErrNoAvailableCompactAccounts = errors.New("no available accounts support /responses/compact")
 
+// liveClock provides time for Live window arithmetic (Phase 4.4-G Task 3, 4.3-G2).
+type liveClock interface {
+	Now() time.Time
+}
+
+type realLiveClock struct{}
+
+func (realLiveClock) Now() time.Time { return time.Now() }
+
 // OpenAIGatewayService handles OpenAI API gateway operations
 type OpenAIGatewayService struct {
 	accountRepo           AccountRepository
@@ -418,6 +427,7 @@ type OpenAIGatewayService struct {
 	liveProvisional       LiveProvisionalStore
 	liveAttestation       liveattestation.Provider
 	liveAttestationCipher SecretEncryptor
+	liveClock             liveClock
 
 	openaiWSPoolOnce              sync.Once
 	openaiWSStateStoreOnce        sync.Once
@@ -530,6 +540,7 @@ func NewOpenAIGatewayService(
 		responseHeaderFilter:  compileResponseHeaderFilter(cfg),
 		codexSnapshotThrottle: newAccountWriteThrottle(openAICodexSnapshotPersistMinInterval),
 		openaiModelTransient:  newOpenAIAccountModelTransientState(openAIModelTransientDefaultMax),
+		liveClock:             realLiveClock{},
 	}
 	if walletStore, ok := requireCanonicalWalletStore(cfg, cache, "NewOpenAIGatewayService"); ok {
 		svc.canonicalWallet = NewCanonicalWalletBridge(cfg, walletStore, db, outbox)
@@ -545,6 +556,19 @@ func NewOpenAIGatewayService(
 	go svc.runLiveFinalizationRecovery()
 	svc.logOpenAIWSModeBootstrap()
 	return svc
+}
+
+func (s *OpenAIGatewayService) liveNow() time.Time {
+	if s != nil && s.liveClock != nil {
+		return s.liveClock.Now()
+	}
+	return time.Now()
+}
+
+func (s *OpenAIGatewayService) SetLiveClockForTest(c liveClock) {
+	if s != nil {
+		s.liveClock = c
+	}
 }
 
 func (s *OpenAIGatewayService) SetRecordUsageHookForTest(hook func(input *OpenAIRecordUsageInput)) {

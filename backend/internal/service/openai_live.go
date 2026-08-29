@@ -386,7 +386,7 @@ func (s *OpenAIGatewayService) CreateLiveCall(
 			UserID: identity.UserID, APIKeyID: identity.APIKeyID, AccountID: account.ID,
 			BillingCurrency: identity.BillingCurrency, BillingSnapshotID: snapshotIDOf(snap),
 			EstimatedUnits: authHandle.EstimatedUnits, Status: LiveProvisionalStatusProvisional,
-			Windows:   []LiveWindow{{WindowSeq: 1, LeaseID: "", Token: authHandle.ID, OpenedAtMS: time.Now().UnixMilli()}},
+			Windows:   []LiveWindow{{WindowSeq: 1, LeaseID: "", Token: authHandle.ID, OpenedAtMS: s.liveNow().UnixMilli()}},
 			CreatedAt: time.Now().UTC(),
 		}
 		rowWritten, rowErr := s.saveLiveProvisional(ctx, provisional, authHandle)
@@ -411,7 +411,7 @@ func (s *OpenAIGatewayService) CreateLiveCall(
 			continue
 		}
 
-		now := time.Now()
+		now := s.liveNow()
 		model := strings.TrimSpace(gjson.GetBytes(request.Session, "model").String())
 		if model == "" {
 			model = "gpt-live"
@@ -823,7 +823,7 @@ func (s *OpenAIGatewayService) ProxyLiveSideband(
 	runErr := s.runLiveController(proxyCtx, record, upstream, errCh)
 	cancel()
 	_, _ = store.ReleaseLiveController(context.Background(), record.CallHash, owner)
-	if liveSessionEnded(runErr) || !time.Now().Before(record.ExpiresAt) {
+	if liveSessionEnded(runErr) || !s.liveNow().Before(record.ExpiresAt) {
 		s.finalizeLiveCall(record)
 		return runErr
 	}
@@ -918,7 +918,7 @@ func (s *OpenAIGatewayService) observeLiveCall(ctx context.Context, callHash str
 			if getErr != nil || record.Controller == LiveControllerClosed {
 				return
 			}
-			if !time.Now().Before(record.ExpiresAt) {
+			if !s.liveNow().Before(record.ExpiresAt) {
 				return
 			}
 			taken, takeErr := store.TakeOverLiveObserver(ctx, callHash, owner, time.Now().Add(-takeover))
@@ -940,7 +940,7 @@ func (s *OpenAIGatewayService) observeLiveCall(ctx context.Context, callHash str
 		if getErr != nil || record.Controller != LiveControllerObserver {
 			return
 		}
-		if !time.Now().Before(record.ExpiresAt) {
+		if !s.liveNow().Before(record.ExpiresAt) {
 			s.finalizeLiveCall(record)
 			return
 		}
@@ -1185,7 +1185,7 @@ func (s *OpenAIGatewayService) maybeCloseLiveWindow(ctx context.Context, record 
 	if A < 0 {
 		A = 0
 	}
-	now := time.Now().UTC()
+	now := s.liveNow().UTC()
 	horizon := st.openedAt.Add(s.liveLeaseTTL() - s.liveExpirySkew())
 	closeByClock := !now.Before(horizon)
 	closeByUsage := !now.Before(st.openedAt.Add(s.liveWindowFloor())) && st.estimate > 0 && A >= st.estimate

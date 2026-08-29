@@ -79,6 +79,7 @@ func TestObserveSettlementCarriesSnapshotLive(t *testing.T) {
 	E := prov.EstimatedUnits
 	tokens := int(math.Ceil(2 * float64(E) / f.unitsPerOutputToken(t, callHash)))
 	f.pumpUsage("resp-76d-1", 0, tokens)
+	f.clock.Advance(6 * time.Second)
 	prov = f.pollWindowsLen(t, callHash, 2, 8*time.Second)
 
 	id1 := CanonicalWalletSettlementEventID(callHash, f.user.PlatformUserID, "CNY")
@@ -93,6 +94,7 @@ func TestObserveSettlementCarriesSnapshotLive(t *testing.T) {
 	// session.closed — the last window's settlement (:window:3) is built at
 	// openai_live.go:1602 with record.BillingSnapshotID in scope.
 	f.pumpUsage("resp-76d-2", 0, tokens)
+	f.clock.Advance(6 * time.Second)
 	prov = f.pollWindowsLen(t, callHash, 3, 8*time.Second)
 	tailTokens := 1000
 	f.pumpUsage("resp-76d-tail", 0, tailTokens)

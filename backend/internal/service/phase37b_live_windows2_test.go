@@ -106,6 +106,22 @@ func newLiveWindowShared(t *testing.T) *liveWindowShared {
 // one sideband conn) on the shared stores.
 // ---------------------------------------------------------------------------
 
+type liveTestClock struct {
+	offset atomic.Int64
+}
+
+func newLiveTestClock() *liveTestClock {
+	return &liveTestClock{}
+}
+
+func (c *liveTestClock) Now() time.Time {
+	return time.Now().UTC().Add(time.Duration(c.offset.Load()))
+}
+
+func (c *liveTestClock) Advance(d time.Duration) {
+	c.offset.Add(int64(d))
+}
+
 type liveWindowFixture struct {
 	t           *testing.T
 	sh          *liveWindowShared
@@ -126,6 +142,7 @@ type liveWindowFixture struct {
 	conn        *liveTestFrameConn
 	dialer      *liveTestDialer
 	cfg         *config.Config
+	clock       *liveTestClock
 	callSeq     atomic.Int64
 }
 
@@ -192,11 +209,12 @@ func (sh *liveWindowShared) newFixtureCfg(t *testing.T, mode string, mutate func
 	provStore := LiveProvisionalStore(newLiveProvisionalStore(sh.db))
 	conn := newLiveTestFrameConn()
 	dialer := &liveTestDialer{conn: conn}
+	clock := newLiveTestClock()
 	f := &liveWindowFixture{
 		t: t, sh: sh, mode: mode, ctx: ctx, cancel: cancel,
 		svc: nil, bridge: bridge, store: store, liveStore: liveStore, provisional: provStore,
 		db: sh.db, rdb: sh.rdb, fake: sh.fake, user: &userCopy, apiKey: &apiKeyCopy, account: sh.account,
-		conn: conn, dialer: dialer, cfg: cfg,
+		conn: conn, dialer: dialer, cfg: cfg, clock: clock,
 	}
 	f.svc = &OpenAIGatewayService{
 		cfg:                       cfg,
@@ -218,6 +236,7 @@ func (sh *liveWindowShared) newFixtureCfg(t *testing.T, mode string, mutate func
 		deferredService:           NewDeferredService(nil, nil, time.Second),
 		usageBillingRepo:          &openAIRecordUsageBillingRepoStub{},
 		usageLogRepo:              &liveTestUsageRepo{},
+		liveClock:                 clock,
 	}
 
 	// Every observer this fixture starts runs under f.ctx: CreateLiveCall's
@@ -512,12 +531,11 @@ func TestPhase37bWindowsCloseSettleAndReauthorize(t *testing.T) {
 		// The floor: no close before 5 s after opened_at_ms.
 		openedAt := time.UnixMilli(prov.Windows[0].OpenedAtMS)
 		require.False(t, openedAt.IsZero(), "window 1 carries opened_at_ms")
-		negativeEnd := openedAt.Add(4900 * time.Millisecond)
-		for time.Now().Before(negativeEnd) {
-			rec := f.provRecord(t, callHash)
-			require.Len(t, rec.Windows, 1, "the window must not close before live_window_min_seconds")
-			time.Sleep(50 * time.Millisecond)
-		}
+		rec := f.provRecord(t, callHash)
+		require.Len(t, rec.Windows, 1, "the window must not close before live_window_min_seconds")
+
+		// Advance fake clock past the 5s floor
+		f.clock.Advance(6 * time.Second)
 
 		// Closes past the floor: len == 2, window 1 settled to its exact usage.
 		prov = f.pollWindowsLen(t, callHash, 2, 8*time.Second)
@@ -557,7 +575,8 @@ func TestPhase37bWindowsCloseSettleAndReauthorize(t *testing.T) {
 		conflictsBefore := canonicalWalletBridgeMetrics.outboxPayloadConflict.Load()
 
 		// Pump nothing; the window closes at opened_at + lease_ttl − skew.
-		prov = f.pollWindowsLen(t, callHash, 2, 35*time.Second)
+		f.clock.Advance(31 * time.Second)
+		prov = f.pollWindowsLen(t, callHash, 2, 8*time.Second)
 		require.Equal(t, int64(0), prov.Windows[0].SettledUnits, "an idle window settles nothing")
 		require.Equal(t, int64(0), prov.Windows[0].PendingUnits)
 
@@ -615,10 +634,13 @@ func TestPhase37bWindowsCloseSettleAndReauthorize(t *testing.T) {
 		// Pump one E-crossing frame per window; windows close past their
 		// floors (~5 s each) until three are settled.
 		f.pumpUsage("resp-49c-1", 0, tokens)
+		f.clock.Advance(6 * time.Second)
 		f.pollWindowsLen(t, callHash, 2, 8*time.Second)
 		f.pumpUsage("resp-49c-2", 0, tokens)
+		f.clock.Advance(6 * time.Second)
 		f.pollWindowsLen(t, callHash, 3, 8*time.Second)
 		f.pumpUsage("resp-49c-3", 0, tokens)
+		f.clock.Advance(6 * time.Second)
 		prov = f.pollWindowsLen(t, callHash, 4, 8*time.Second)
 
 		require.Equal(t, int64(0), canonicalWalletBridgeMetrics.outboxPayloadConflict.Load()-conflictsBefore)
@@ -661,8 +683,10 @@ func TestPhase37bLastWindowSettlesAtFinalization(t *testing.T) {
 	tokens := int(math.Ceil(2 * float64(E) / f.unitsPerOutputToken(t, callHash)))
 
 	f.pumpUsage("resp-49d-1", 0, tokens)
+	f.clock.Advance(6 * time.Second)
 	prov = f.pollWindowsLen(t, callHash, 2, 8*time.Second)
 	f.pumpUsage("resp-49d-2", 0, tokens)
+	f.clock.Advance(6 * time.Second)
 	prov = f.pollWindowsLen(t, callHash, 3, 8*time.Second)
 	T3 := prov.Windows[2].Token
 
@@ -740,6 +764,7 @@ func TestPhase37bCrashBetweenPendingAndAdvanceReissuesSameAmount(t *testing.T) {
 	conflictsBefore := canonicalWalletBridgeMetrics.outboxPayloadConflict.Load()
 
 	f.pumpUsage("resp-50", 0, tokens)
+	f.clock.Advance(6 * time.Second)
 
 	// The crash point: pending persisted, advance failed — the window stays
 	// pending with the persisted amount (poll; the transient lasts a tick).
@@ -805,7 +830,7 @@ func TestPhase37bDisabledModeAdvancesOnTheHorizon(t *testing.T) {
 	// turned down to disabled (3.8's rollback shape), the only shape in which
 	// this branch runs. Window 1's token IS the row's token (§13.2.6).
 	rec := f.recordByHash(t, callHash)
-	now := time.Now().UTC()
+	now := f.clock.Now().UTC()
 	rowToken := "p37b-disabled-row"
 	seed := &LiveProvisionalRecord{
 		Token:             rowToken,
@@ -828,7 +853,10 @@ func TestPhase37bDisabledModeAdvancesOnTheHorizon(t *testing.T) {
 	reauthBefore := LiveWindowMetricsSnapshot().ReauthRetry
 
 	// Two lease horizons (30 s − 50 ms skew each): windows 2 AND 3 appear.
-	prov := f.pollWindowsLen(t, callHash, 3, 70*time.Second)
+	f.clock.Advance(31 * time.Second)
+	f.pollWindowsLen(t, callHash, 2, 5*time.Second)
+	f.clock.Advance(31 * time.Second)
+	prov := f.pollWindowsLen(t, callHash, 3, 5*time.Second)
 
 	var windowsLen int
 	require.NoError(t, f.db.QueryRowContext(f.ctx,
@@ -905,27 +933,30 @@ func TestPhase37bRefusedReauthorizations(t *testing.T) {
 	prov1 := f1.provRecord(t, callHash1)
 	E1 := prov1.EstimatedUnits
 	R1 := E1 / 45
-	pumpCtx1, pumpCancel1 := context.WithCancel(f1.ctx)
-	go f1.pumpAtRate(pumpCtx1, t, R1, callHash1)
-	defer pumpCancel1()
+	tokens1 := int(math.Round(float64(R1) / f1.unitsPerOutputToken(t, callHash1)))
+	f1.pumpUsage("resp-53a-1", 0, tokens1)
 
 	prov2 := f2.provRecord(t, callHash2)
 	E2 := prov2.EstimatedUnits
 	R2 := E2 / 45
-	pumpCtx2, pumpCancel2 := context.WithCancel(f2.ctx)
-	go f2.pumpAtRate(pumpCtx2, t, R2, callHash2)
-	defer pumpCancel2()
+	tokens2 := int(math.Round(float64(R2) / f2.unitsPerOutputToken(t, callHash2)))
+	f2.pumpUsage("resp-53b-1", 0, tokens2)
 
 	prov3 := f3.provRecord(t, callHash3)
 	E3 := prov3.EstimatedUnits
 	R3 := E3 / 45
-	pumpCtx3, pumpCancel3 := context.WithCancel(f3.ctx)
-	go f3.pumpAtRate(pumpCtx3, t, R3, callHash3)
-	defer pumpCancel3()
+	tokens3 := int(math.Round(float64(R3) / f3.unitsPerOutputToken(t, callHash3)))
+	f3.pumpUsage("resp-53c-1", 0, tokens3)
+
+	time.Sleep(300 * time.Millisecond)
+
+	f1.clock.Advance(31 * time.Second)
+	f2.clock.Advance(31 * time.Second)
+	f3.clock.Advance(31 * time.Second)
 
 	// ALL THREE sessions created BEFORE any wait so the horizons elapse concurrently.
 	// ONE bounded poll waiting for all three terminal states.
-	deadline := time.Now().Add(45 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		done1 := f1.recordByHash(t, callHash1).Controller == LiveControllerClosed && f1.provRecord(t, callHash1).Status == LiveProvisionalStatusFinalized
 		done2 := f2.recordByHash(t, callHash2).Controller == LiveControllerClosed && f2.provRecord(t, callHash2).Status == LiveProvisionalStatusFinalized
@@ -935,9 +966,6 @@ func TestPhase37bRefusedReauthorizations(t *testing.T) {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-
-	pumpCancel1()
-	pumpCancel2()
 
 	t.Run("BalanceShortfall", func(t *testing.T) {
 		controller := f1.recordByHash(t, callHash1).Controller
@@ -955,6 +983,8 @@ func TestPhase37bRefusedReauthorizations(t *testing.T) {
 
 		// The row finalizes; the last window settles the tail with no hold.
 		require.Equal(t, LiveProvisionalStatusFinalized, prov.Status)
+		eventID1 := CanonicalWalletSettlementEventID(callHash1, f1.user.PlatformUserID, "CNY")
+		f1.waitDeliveredThroughFake(t, eventID1, 5*time.Second)
 		require.Empty(t, f1.holdIDs(t), "no armed hold remains — the last window settled with no hold")
 
 		// The terms (§13.2.4): the floor term with the known rate —
@@ -1141,7 +1171,40 @@ func TestPhase37bDisconnectedSideband(t *testing.T) {
 	// passed, so the next close is normal — a row with the pumped amount.
 	tokens := int(math.Ceil(2 * float64(E) / f.unitsPerOutputToken(t, callHash)))
 	f.pumpUsage("resp-53", 0, tokens)
+	f.clock.Advance(6 * time.Second)
 	prov = f.pollWindowsLen(t, callHash, 2, 8*time.Second)
 	require.Equal(t, f.unitsForTokens(t, f.recordByHash(t, callHash), 0, tokens, 0), prov.Windows[0].SettledUnits)
 	require.Equal(t, int64(0), canonicalWalletBridgeMetrics.outboxPayloadConflict.Load()-conflictsBefore)
+}
+
+type staticLiveClock struct {
+	t time.Time
+}
+
+func (c staticLiveClock) Now() time.Time {
+	return c.t
+}
+
+func TestPhase37bLiveClockSeam(t *testing.T) {
+	t.Run("default is realLiveClock", func(t *testing.T) {
+		svc := &OpenAIGatewayService{liveClock: realLiveClock{}}
+		before := time.Now().UTC()
+		now := svc.liveNow()
+		after := time.Now().UTC()
+		require.False(t, now.Before(before))
+		require.False(t, now.After(after))
+	})
+
+	t.Run("nil receiver safe", func(t *testing.T) {
+		var svc *OpenAIGatewayService
+		now := svc.liveNow()
+		require.False(t, now.IsZero())
+	})
+
+	t.Run("injectable via SetLiveClockForTest", func(t *testing.T) {
+		svc := &OpenAIGatewayService{liveClock: realLiveClock{}}
+		pinned := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+		svc.SetLiveClockForTest(staticLiveClock{t: pinned})
+		require.Equal(t, pinned, svc.liveNow())
+	})
 }
