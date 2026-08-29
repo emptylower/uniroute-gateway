@@ -1647,6 +1647,12 @@ type CanonicalWalletConfig struct {
 	// 45). Pruners delete only rows strictly older than now − retention
 	// and NEVER a dead-letter (the receivable is money owed).
 	RetentionDays int `mapstructure:"retention_days"`
+	// RedisPolicyCheck (Phase 4.3-G Task 1, redesign §15.4 / §15 Q3):
+	// three-valued startup check ∈ {"enforce", "warn", "off"} (default "enforce").
+	// When "enforce", refuses to start under canonical_wallet.mode=enforce if
+	// maxmemory-policy is not noeviction AND maxmemory != 0. "warn" logs an alert
+	// and continues. "off" skips the check.
+	RedisPolicyCheck string `mapstructure:"redis_policy_check"`
 }
 
 // TotpConfig TOTP 双因素认证配置
@@ -2119,6 +2125,7 @@ func setDefaults() {
 	viper.SetDefault("canonical_wallet.orphan_sweep_batch", 200)
 	viper.SetDefault("canonical_wallet.live_window_min_seconds", 20)
 	viper.SetDefault("canonical_wallet.live_controller_takeover_seconds", 15)
+	viper.SetDefault("canonical_wallet.redis_policy_check", "enforce")
 
 	// Turnstile
 	viper.SetDefault("turnstile.required", false)
@@ -2680,6 +2687,17 @@ func validateBillingSnapshotMode(mode string) error {
 	}
 }
 
+// validateRedisPolicyCheck is checked for EVERY canonical_wallet.mode:
+// the startup check setting must be one of enforce|warn|off.
+func validateRedisPolicyCheck(check string) error {
+	switch strings.TrimSpace(check) {
+	case "", "enforce", "warn", "off":
+		return nil
+	default:
+		return fmt.Errorf("canonical_wallet.redis_policy_check must be one of enforce|warn|off, got %q", check)
+	}
+}
+
 func (c *Config) Validate() error {
 	forwardedClientIPHeaders, err := NormalizeForwardedClientIPHeaders(c.Security.ForwardedClientIPHeaders)
 	if err != nil {
@@ -2689,6 +2707,12 @@ func (c *Config) Validate() error {
 	c.SetForwardedClientIPSettings(c.Security.TrustForwardedIPForAPIKeyACL, forwardedClientIPHeaders)
 	if err := validateBillingSnapshotMode(c.CanonicalWallet.BillingSnapshotMode); err != nil {
 		return err
+	}
+	if err := validateRedisPolicyCheck(c.CanonicalWallet.RedisPolicyCheck); err != nil {
+		return err
+	}
+	if c.CanonicalWallet.RedisPolicyCheck == "" {
+		c.CanonicalWallet.RedisPolicyCheck = "enforce"
 	}
 	if c.Server.ReadHeaderTimeout < 1 || c.Server.ReadHeaderTimeout > 60 {
 		return fmt.Errorf("server.read_header_timeout must be between 1 and 60 seconds")

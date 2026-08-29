@@ -1060,6 +1060,11 @@ canonical_wallet:
   # receivable is money owed). Must cover the reconciliation wire's maximum
   # window (31 days) plus the soak's minimum (7 days) — hence ≥ 38.
   retention_days: 45
+  # Startup check for Redis maxmemory-policy (Phase 4.3-G Task 1):
+  # enforce = refuse at startup under canonical_wallet.mode=enforce if
+  # maxmemory-policy is not noeviction AND maxmemory != 0; warn = alert and
+  # continue; off = skip check.
+  redis_policy_check: "enforce"
 
 # =============================================================================
 # Model Governance Authorization (Phase 2, effective mode remains off)

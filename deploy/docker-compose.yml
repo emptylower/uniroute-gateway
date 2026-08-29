@@ -277,12 +277,15 @@ services:
     # the newlines inside the quoted string, so every line needs a trailing
     # `\` — without it, `redis-server` on the first line runs with no flags
     # at all, and the --save/--appendonly/--appendfsync lines are never read.
+    # The --maxmemory-policy noeviction pin is inert while maxmemory is 0;
+    # the startup check reads both.
     command: >
       sh -c '
         redis-server \
         --save 60 1 \
         --appendonly yes \
         --appendfsync everysec \
+        --maxmemory-policy noeviction \
         ${REDIS_PASSWORD:+--requirepass "$REDIS_PASSWORD"}'
     environment:
       - TZ=${TZ:-Asia/Shanghai}

@@ -238,5 +238,9 @@ func ProvideSQLDB(client *ent.Client) (*sql.DB, error) {
 // 依赖：config.Config
 // 提供：*redis.Client
 func ProvideRedis(cfg *config.Config) *redis.Client {
-	return InitRedis(cfg)
+	client := InitRedis(cfg)
+	if err := CheckCanonicalWalletRedisPolicy(context.Background(), client, cfg); err != nil {
+		panic(err.Error())
+	}
+	return client
 }
