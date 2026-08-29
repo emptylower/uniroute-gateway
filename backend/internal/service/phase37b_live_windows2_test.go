@@ -909,61 +909,75 @@ func runPhase37bRefusedLeg(t *testing.T, mode string, mutate func(*config.Canoni
 	_ = prepare
 }
 
-func TestPhase37bRefusedReauthorizationBalanceShortfall(t *testing.T) {
-	runPhase37bRefusedLeg(t, config.CanonicalWalletModeEnforce,
-		func(c *config.CanonicalWalletConfig) { c.LeaseBudgetUnits = 0 }, // the lease grants exactly min_headroom = E
-		nil) // balance 1 − E spent at issue → shortfall at the boundary
-}
+func TestPhase37bRefusedReauthorizations(t *testing.T) {
+	t.Run("BalanceShortfall", func(t *testing.T) {
+		runPhase37bRefusedLeg(t, config.CanonicalWalletModeEnforce,
+			func(c *config.CanonicalWalletConfig) {
+				c.LeaseBudgetUnits = 0
+				c.LeaseTTLSeconds = 8
+				c.LiveWindowMinSeconds = 3
+			},
+			nil) // balance 1 − E spent at issue → shortfall at the boundary
+	})
 
-func TestPhase37bRefusedReauthorizationLeaseCapReached(t *testing.T) {
-	runPhase37bRefusedLeg(t, config.CanonicalWalletModeEnforce,
-		func(c *config.CanonicalWalletConfig) { c.LeaseBudgetUnits = 0 },
-		func(f *liveWindowFixture, callHash string, E int64) {
-			// The user's ONE lease (the session's own window-1 lease, purpose
-			// authorize, active) does not cover the window (consumed = E,
-			// budget = E → headroom 0); the cap is 1, so the boundary's issue
-			// attempt is refused with lease_cap_reached.
-			f.fake.mu.Lock()
-			f.fake.cap = 1
-			f.fake.mu.Unlock()
+	t.Run("LeaseCapReached", func(t *testing.T) {
+		runPhase37bRefusedLeg(t, config.CanonicalWalletModeEnforce,
+			func(c *config.CanonicalWalletConfig) {
+				c.LeaseBudgetUnits = 0
+				c.LeaseTTLSeconds = 8
+				c.LiveWindowMinSeconds = 3
+			},
+			func(f *liveWindowFixture, callHash string, E int64) {
+				// The user's ONE lease (the session's own window-1 lease, purpose
+				// authorize, active) does not cover the window (consumed = E,
+				// budget = E → headroom 0); the cap is 1, so the boundary's issue
+				// attempt is refused with lease_cap_reached.
+				f.fake.mu.Lock()
+				f.fake.cap = 1
+				f.fake.mu.Unlock()
+			})
+	})
+
+	t.Run("ShadowAdmits", func(t *testing.T) {
+		sh := newLiveWindowShared(t)
+		f := sh.newFixtureCfg(t, config.CanonicalWalletModeShadow, func(c *config.CanonicalWalletConfig) {
+			c.LeaseBudgetUnits = 0
+			c.LeaseTTLSeconds = 8
+			c.LiveWindowMinSeconds = 3
 		})
-}
+		f.fund(0)
+		callHash, _ := f.createSessionFunded(t, 20_000_000_000)
+		f.fake.mu.Lock()
+		f.fake.balance[f.user.PlatformUserID] = 0
+		f.fake.mu.Unlock()
+		prov := f.provRecord(t, callHash)
+		E := prov.EstimatedUnits
+		R := E / 45
+		pumpCtx, pumpCancel := context.WithCancel(f.ctx)
+		go f.pumpAtRate(pumpCtx, t, R, callHash)
+		defer pumpCancel()
 
-func TestPhase37bRefusedReauthorizationShadowAdmits(t *testing.T) {
-	sh := newLiveWindowShared(t)
-	f := sh.newFixtureCfg(t, config.CanonicalWalletModeShadow, func(c *config.CanonicalWalletConfig) { c.LeaseBudgetUnits = 0 })
-	f.fund(0)
-	callHash, _ := f.createSessionFunded(t, 20_000_000_000)
-	f.fake.mu.Lock()
-	f.fake.balance[f.user.PlatformUserID] = 0
-	f.fake.mu.Unlock()
-	prov := f.provRecord(t, callHash)
-	E := prov.EstimatedUnits
-	R := E / 45
-	pumpCtx, pumpCancel := context.WithCancel(f.ctx)
-	go f.pumpAtRate(pumpCtx, t, R, callHash)
-	defer pumpCancel()
-
-	// The horizon close's re-authorization is refused — in shadow it is
-	// admitted: no session.close, the session continues, the next window
-	// opens with no hold.
-	deadline := time.Now().Add(40 * time.Second)
-	for time.Now().Before(deadline) {
-		if p := f.provRecord(t, callHash); len(p.Windows) >= 2 {
-			prov = p
-			break
+		// The horizon close's re-authorization is refused — in shadow it is
+		// admitted: no session.close, the session continues, the next window
+		// opens with no hold.
+		deadline := time.Now().Add(15 * time.Second)
+		for time.Now().Before(deadline) {
+			if p := f.provRecord(t, callHash); len(p.Windows) >= 2 {
+				prov = p
+				break
+			}
+			time.Sleep(50 * time.Millisecond)
 		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	require.GreaterOrEqual(t, len(prov.Windows), 2, "the refused window advanced in shadow")
-	require.Equal(t, int64(1), LiveWindowMetricsSnapshot().RefusedShadow)
-	require.NotEqual(t, LiveControllerClosed, f.recordByHash(t, callHash).Controller, "no hard stop in shadow")
-	require.Empty(t, f.holdIDs(t), "the next window opens with no hold")
-	select {
-	case <-f.conn.writes:
-		t.Fatal("shadow must not write session.close")
-	default:
-	}
+		require.GreaterOrEqual(t, len(prov.Windows), 2, "the refused window advanced in shadow")
+		require.Equal(t, int64(1), LiveWindowMetricsSnapshot().RefusedShadow)
+		require.NotEqual(t, LiveControllerClosed, f.recordByHash(t, callHash).Controller, "no hard stop in shadow")
+		require.Empty(t, f.holdIDs(t), "the next window opens with no hold")
+		select {
+		case <-f.conn.writes:
+			t.Fatal("shadow must not write session.close")
+		default:
+		}
+	})
 }
 
 // ---------------------------------------------------------------------------
