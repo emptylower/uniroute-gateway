@@ -328,10 +328,21 @@ func (s *stubWalletLeaseStore) ReserveCanonicalWalletLease(ctx context.Context, 
 	}, nil
 }
 
+// Phase 3.8-G execution review MAJOR-1: Seal completes this stub's
+// CanonicalWalletLeaseStore surface, so the two enforce-mode
+// NewOpenAIGatewayService constructions above pass requireCanonicalWalletStore
+// (the wallet path is genuinely wired) instead of panicking the gate. Seal
+// answers from the stub's lease, ErrCanonicalWalletLeaseMissing when absent —
+// the interface contract's shape.
+func (s *stubWalletLeaseStore) SealCanonicalWalletLease(ctx context.Context, platformUserID, leaseID string) (int64, int64, error) {
+	if s.lease == nil {
+		return 0, 0, service.ErrCanonicalWalletLeaseMissing
+	}
+	return s.lease.ConsumedUnits, 0, nil
+}
+
 // Phase 3.4b (Task 2): the hold surface is not driven by any handler test —
-// not-implemented stubs keep the (partial) lease-store surface loud. (This
-// stub never carried SealCanonicalWalletLease either; ProvideBillingCacheService's
-// type assertion therefore does not select it.)
+// not-implemented stubs keep the (partial) lease-store surface loud.
 func (s *stubWalletLeaseStore) ArmCanonicalWalletHold(context.Context, string, string, string, string, int64, int64, time.Time) (string, int64, bool, error) {
 	return "", 0, false, errors.New("not implemented in this stub")
 }
