@@ -1046,8 +1046,8 @@ func (s *OpenAIGatewayService) tryFinalizeLiveCall(record *LiveCallRecord) bool 
 			currency := NormalizeUserBillingCurrency(record.BillingCurrency)
 			eventID := CanonicalWalletSettlementEventID(record.CallHash, user.PlatformUserID, currency)
 			if record.AuthorizationToken != "" && observeCanonicalWalletSettlement(s.canonicalWallet, record.CallHash, user, cost, record.SubscriptionBilling, applied, billingResult, record.AuthorizationToken, record.AuthorizationID) {
-				settledUnits, _ := canonicalWalletUnitsFromCNY(cost.ActualCost) // the error is discarded only because a true return from the observer implies this same conversion already succeeded inside it — do not reorder
-				if err := s.completeLiveProvisionalFinalization(record.AuthorizationID, eventID, settledUnits); err != nil {
+				settledUnits, _ := canonicalWalletUnitsFromCNY(cost.ActualCost)                                                 // the error is discarded only because a true return from the observer implies this same conversion already succeeded inside it — do not reorder
+				if err := s.completeLiveProvisionalFinalization(record.AuthorizationID, eventID, settledUnits, 1); err != nil { // Phase 3.7b Task 2: seq-aware complete; 1 is today's single-window record (Task 5 computes the final seq)
 					logger.L().Error("openai.live_provisional_complete_failed", zap.String("call_hash", record.CallHash), zap.Error(err))
 					return false // the row stays finalizing: "settlement outcome unknown" to Phase 4 — the named residual
 				}
@@ -1349,13 +1349,13 @@ func (s *OpenAIGatewayService) claimLiveProvisionalFinalization(authorizationID 
 	return s.liveProvisional.ClaimFinalization(ctx, authorizationID, time.Now().UTC())
 }
 
-func (s *OpenAIGatewayService) completeLiveProvisionalFinalization(authorizationID, eventID string, settledUnits int64) error {
+func (s *OpenAIGatewayService) completeLiveProvisionalFinalization(authorizationID, eventID string, settledUnits int64, seq int) error {
 	if s.liveProvisional == nil || authorizationID == "" {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), liveRedisOperationTimeout)
 	defer cancel()
-	err := s.liveProvisional.CompleteFinalization(ctx, authorizationID, eventID, settledUnits, time.Now().UTC())
+	err := s.liveProvisional.CompleteFinalization(ctx, authorizationID, eventID, settledUnits, seq, time.Now().UTC())
 	if err == nil {
 		authorizationMetrics.liveProvisionalFinalized.Add(1)
 	}

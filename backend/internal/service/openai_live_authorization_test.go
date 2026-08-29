@@ -121,7 +121,7 @@ func (s *inMemoryLiveProvisionalStore) ClaimFinalization(ctx context.Context, to
 	return true, nil
 }
 
-func (s *inMemoryLiveProvisionalStore) CompleteFinalization(ctx context.Context, token, settlementEventID string, settledUnits int64, terminalAt time.Time) error {
+func (s *inMemoryLiveProvisionalStore) CompleteFinalization(ctx context.Context, token, settlementEventID string, settledUnits int64, seq int, terminalAt time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.totalCalls++
@@ -135,12 +135,45 @@ func (s *inMemoryLiveProvisionalStore) CompleteFinalization(ctx context.Context,
 	if !ok || rec.Status != LiveProvisionalStatusFinalizing {
 		return ErrLiveProvisionalNotFound
 	}
+	if seq < 1 || seq > len(rec.Windows) {
+		return ErrLiveWindowCASLost
+	}
 	rec.SettlementEventID = settlementEventID
 	rec.TerminalAt = &terminalAt
 	rec.Status = LiveProvisionalStatusFinalized
-	if len(rec.Windows) > 0 {
-		rec.Windows[0].SettledUnits = settledUnits
+	rec.Windows[seq-1].SettledUnits = settledUnits
+	return nil
+}
+
+// SetLiveWindowPending mirrors the store's single-statement CAS (§13.2.2):
+// active status, the window list exactly seq long, the last window's seq
+// equal to seq — otherwise ErrLiveWindowCASLost and nothing written.
+func (s *inMemoryLiveProvisionalStore) SetLiveWindowPending(ctx context.Context, token string, seq int, units int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.totalCalls++
+	rec, ok := s.records[token]
+	if !ok || rec.Status != LiveProvisionalStatusActive || len(rec.Windows) != seq || rec.Windows[seq-1].WindowSeq != seq {
+		return ErrLiveWindowCASLost
 	}
+	rec.Windows[seq-1].PendingUnits = units
+	return nil
+}
+
+// AdvanceLiveWindow mirrors the store's settle-and-append CAS (§13.2.2):
+// same guard; on success window seq is settled, pending cleared, and next
+// appended. A repeat loses (the list is now seq+1 long).
+func (s *inMemoryLiveProvisionalStore) AdvanceLiveWindow(ctx context.Context, token string, seq int, settledUnits int64, next LiveWindow) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.totalCalls++
+	rec, ok := s.records[token]
+	if !ok || rec.Status != LiveProvisionalStatusActive || len(rec.Windows) != seq || rec.Windows[seq-1].WindowSeq != seq {
+		return ErrLiveWindowCASLost
+	}
+	rec.Windows[seq-1].SettledUnits = settledUnits
+	rec.Windows[seq-1].PendingUnits = 0
+	rec.Windows = append(rec.Windows, next)
 	return nil
 }
 

@@ -148,20 +148,27 @@ func (s *liveProvisionalStore) ClaimFinalization(ctx context.Context, token stri
 	return rows == 1, nil
 }
 
-func (s *liveProvisionalStore) CompleteFinalization(ctx context.Context, token, settlementEventID string, settledUnits int64, at time.Time) error {
+func (s *liveProvisionalStore) CompleteFinalization(ctx context.Context, token, settlementEventID string, settledUnits int64, seq int, at time.Time) error {
 	if s == nil || s.db == nil {
 		return errors.New("live provisional store unavailable")
+	}
+	if seq < 1 {
+		return fmt.Errorf("complete finalization: invalid window seq %d", seq)
 	}
 	if at.IsZero() {
 		at = time.Now().UTC()
 	}
+	// Phase 3.7b (§13.2.2): the finalization writes the FINAL window
+	// (windows[seq-1]), not index 0. A pre-3.7 record (one window, seq 1)
+	// writes index 0 exactly as before — that generalisation is what makes
+	// the last-window rule backward compatible.
 	query := `
 		UPDATE wallet_live_provisional
-		SET status = 'finalized', settlement_event_id = $2, terminal_at = $4,
-		    windows = jsonb_set(windows, '{0,settled_units}', to_jsonb($3::bigint))
+		SET status = 'finalized', settlement_event_id = $2, terminal_at = $5,
+		    windows = jsonb_set(windows, ARRAY[($4-1)::text, 'settled_units'], to_jsonb($3::bigint))
 		WHERE token = $1 AND status = 'finalizing'
 	`
-	res, err := s.db.ExecContext(ctx, query, token, settlementEventID, settledUnits, at)
+	res, err := s.db.ExecContext(ctx, query, token, settlementEventID, settledUnits, seq, at)
 	if err != nil {
 		return fmt.Errorf("complete finalization: %w", err)
 	}
@@ -179,6 +186,78 @@ func (s *liveProvisionalStore) CompleteFinalization(ctx context.Context, token, 
 			return fmt.Errorf("%w: status is %s", ErrLiveProvisionalNotFound, currentStatus)
 		}
 		return ErrLiveProvisionalNotFound
+	}
+	return nil
+}
+
+// SetLiveWindowPending (§13.2.2, Phase 3.7b): persists the window's amount
+// FIRST, as pending_units, in one statement. The jsonb path is derived from
+// the seq parameter itself (nothing can drift), and the guard — status
+// 'active', the window list exactly seq long, and the last window's
+// window_seq equal to seq — makes this a true compare-and-set: 0 rows means
+// the CAS lost and the observer reloads and retries on its next tick.
+// The ::text cast is required: a mixed integer/text ARRAY[…] does not prepare.
+func (s *liveProvisionalStore) SetLiveWindowPending(ctx context.Context, token string, seq int, units int64) error {
+	if s == nil || s.db == nil {
+		return errors.New("live provisional store unavailable")
+	}
+	if seq < 1 {
+		return fmt.Errorf("set live window pending: invalid window seq %d", seq)
+	}
+	query := `
+		UPDATE wallet_live_provisional
+		SET windows = jsonb_set(windows, ARRAY[($2-1)::text, 'pending_units'], to_jsonb($3::bigint))
+		WHERE token = $1 AND status = 'active'
+		  AND jsonb_array_length(windows) = $2
+		  AND (windows->($2-1)->>'window_seq')::int = $2
+	`
+	return s.execWindowCAS(ctx, "set live window pending", query, token, seq, units)
+}
+
+// AdvanceLiveWindow (§13.2.2, Phase 3.7b): settles window seq (settled_units,
+// pending cleared) and appends the next window in ONE statement — a lost CAS
+// can never leave a partially-applied window. After an advance the list is
+// seq+1 long, so the length guard makes a repeat (or a second racing
+// observer) lose: two observers can never both advance.
+func (s *liveProvisionalStore) AdvanceLiveWindow(ctx context.Context, token string, seq int, settledUnits int64, next LiveWindow) error {
+	if s == nil || s.db == nil {
+		return errors.New("live provisional store unavailable")
+	}
+	if seq < 1 {
+		return fmt.Errorf("advance live window: invalid window seq %d", seq)
+	}
+	nextJSON, err := json.Marshal([]LiveWindow{next})
+	if err != nil {
+		return fmt.Errorf("advance live window: marshal next window: %w", err)
+	}
+	// $4 is the next window marshalled as a one-element JSON array: || on two
+	// jsonb arrays concatenates, so the result is […updated_window_seq, next].
+	query := `
+		UPDATE wallet_live_provisional
+		SET windows = jsonb_set(
+		      jsonb_set(windows, ARRAY[($2-1)::text, 'settled_units'], to_jsonb($3::bigint)),
+		      ARRAY[($2-1)::text, 'pending_units'], to_jsonb(0::bigint)
+		    ) || $4::jsonb
+		WHERE token = $1 AND status = 'active'
+		  AND jsonb_array_length(windows) = $2
+		  AND (windows->($2-1)->>'window_seq')::int = $2
+	`
+	return s.execWindowCAS(ctx, "advance live window", query, token, seq, settledUnits, string(nextJSON))
+}
+
+// execWindowCAS runs one of the two single-statement window CASes and maps
+// 0 affected rows to ErrLiveWindowCASLost (§13.2.2).
+func (s *liveProvisionalStore) execWindowCAS(ctx context.Context, op, query string, args ...any) error {
+	res, err := s.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("%s rows affected: %w", op, err)
+	}
+	if rows == 0 {
+		return ErrLiveWindowCASLost
 	}
 	return nil
 }

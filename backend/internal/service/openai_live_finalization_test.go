@@ -441,13 +441,13 @@ func TestLiveProvisionalStoreAndServiceHelpersCoverage(t *testing.T) {
 
 	// 6. completeLiveProvisionalFinalization edge cases
 	svc.liveProvisional = nil
-	require.NoError(t, svc.completeLiveProvisionalFinalization("", "", 0))
-	require.NoError(t, svc.completeLiveProvisionalFinalization("tok", "event", 100))
+	require.NoError(t, svc.completeLiveProvisionalFinalization("", "", 0, 1))
+	require.NoError(t, svc.completeLiveProvisionalFinalization("tok", "event", 100, 1))
 
 	svc.liveProvisional = provStore
-	require.NoError(t, svc.completeLiveProvisionalFinalization("", "", 0))
+	require.NoError(t, svc.completeLiveProvisionalFinalization("", "", 0, 1))
 	provStore.completeErr = errors.New("complete error")
-	require.Error(t, svc.completeLiveProvisionalFinalization("tok", "event", 100))
+	require.Error(t, svc.completeLiveProvisionalFinalization("tok", "event", 100, 1))
 
 	// 7. releaseLiveProvisionalFinalizationClaim edge cases
 	svc.liveProvisional = nil

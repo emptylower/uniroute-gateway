@@ -149,7 +149,7 @@ func TestLiveProvisionalStoreLifecycle(t *testing.T) {
 	// 8. CompleteFinalization writes the event id and windows[0].settled_units
 	eventID := "gwusg_" + uuid.NewString()
 	termTime := time.Now().UTC().Truncate(time.Microsecond)
-	require.NoError(t, store.CompleteFinalization(ctx, token, eventID, 42000, termTime))
+	require.NoError(t, store.CompleteFinalization(ctx, token, eventID, 42000, 1, termTime))
 
 	gotFinal, err := store.Get(ctx, token)
 	require.NoError(t, err)
@@ -166,6 +166,95 @@ func TestLiveProvisionalStoreLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, LiveProvisionalStatusAborted, gotAborted.Status)
 	require.NotNil(t, gotAborted.TerminalAt)
+}
+
+// TestLiveProvisionalWindowCAS (Phase 3.7b Task 2, redesign §13.2.2): the two
+// single-statement window CASes and the seq-aware CompleteFinalization.
+// SetLiveWindowPending writes pending_units only on the live window of an
+// active record; AdvanceLiveWindow settles window seq and appends the next
+// window in ONE statement, and its length guard makes a repeat (or two racing
+// observers) lose the CAS; CompleteFinalization writes windows[seq-1], and a
+// one-window record under seq 1 is byte-for-byte today's behaviour.
+func TestLiveProvisionalWindowCAS(t *testing.T) {
+	ctx := context.Background()
+	db := startLiveProvisionalTestPostgres(t, ctx)
+	store := newLiveProvisionalStore(db)
+	require.NotNil(t, store)
+
+	newRecord := func(status LiveProvisionalStatus, windows []LiveWindow) (*LiveProvisionalRecord, string) {
+		t.Helper()
+		token := "auth_" + uuid.NewString()
+		callHash := "call_hash_" + uuid.NewString()
+		rec := &LiveProvisionalRecord{
+			Token: token, AuthorizationID: token,
+			CallHash: callHash, PlatformUserID: "shipany-user-" + uuid.NewString(),
+			UserID: 101, APIKeyID: 202, AccountID: 303,
+			BillingCurrency: "CNY", BillingSnapshotID: "snap_cas",
+			EstimatedUnits: 50000, Status: status, Windows: windows,
+			CreatedAt: time.Now().UTC().Truncate(time.Microsecond),
+		}
+		require.NoError(t, store.Save(ctx, rec))
+		return rec, token
+	}
+
+	// (a) SetLiveWindowPending
+	recA, tokenA := newRecord(LiveProvisionalStatusProvisional, []LiveWindow{{WindowSeq: 1, Token: "T1"}})
+	require.NoError(t, store.Activate(ctx, tokenA, recA.CallHash, time.Now().UTC()))
+	require.NoError(t, store.SetLiveWindowPending(ctx, tokenA, 1, 700))
+	got, err := store.Get(ctx, tokenA)
+	require.NoError(t, err)
+	require.Equal(t, int64(700), got.Windows[0].PendingUnits)
+
+	// seq 2 on a one-window record: the length guard loses the CAS, nothing written
+	require.ErrorIs(t, store.SetLiveWindowPending(ctx, tokenA, 2, 700), ErrLiveWindowCASLost)
+	got, err = store.Get(ctx, tokenA)
+	require.NoError(t, err)
+	require.Len(t, got.Windows, 1)
+	require.Equal(t, int64(700), got.Windows[0].PendingUnits)
+
+	// a finalizing record loses the CAS (status guard)
+	recF, tokenF := newRecord(LiveProvisionalStatusProvisional, []LiveWindow{{WindowSeq: 1, Token: "TF"}})
+	require.NoError(t, store.Activate(ctx, tokenF, recF.CallHash, time.Now().UTC()))
+	claimed, err := store.ClaimFinalization(ctx, tokenF, time.Now().UTC())
+	require.NoError(t, err)
+	require.True(t, claimed)
+	require.ErrorIs(t, store.SetLiveWindowPending(ctx, tokenF, 1, 700), ErrLiveWindowCASLost)
+	gotF, err := store.Get(ctx, tokenF)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), gotF.Windows[0].PendingUnits)
+
+	// (b) AdvanceLiveWindow
+	now := time.Now().UTC()
+	next := LiveWindow{WindowSeq: 2, LeaseID: "L2", Token: "T2", OpenedAtMS: now.UnixMilli()}
+	require.NoError(t, store.AdvanceLiveWindow(ctx, tokenA, 1, 700, next))
+	got, err = store.Get(ctx, tokenA)
+	require.NoError(t, err)
+	require.Len(t, got.Windows, 2)
+	require.Equal(t, int64(700), got.Windows[0].SettledUnits)
+	require.Equal(t, int64(0), got.Windows[0].PendingUnits)
+	require.Equal(t, 2, got.Windows[1].WindowSeq)
+	require.Equal(t, "L2", got.Windows[1].LeaseID)
+	require.Equal(t, "T2", got.Windows[1].Token)
+	require.Equal(t, now.UnixMilli(), got.Windows[1].OpenedAtMS)
+
+	// the repeat loses: the length guard is jsonb_array_length(windows) = seq
+	require.ErrorIs(t, store.AdvanceLiveWindow(ctx, tokenA, 1, 700, next), ErrLiveWindowCASLost)
+	got, err = store.Get(ctx, tokenA)
+	require.NoError(t, err)
+	require.Len(t, got.Windows, 2, "a lost advance must append nothing")
+
+	// (c) CompleteFinalization writes windows[seq-1]
+	claimed, err = store.ClaimFinalization(ctx, tokenA, time.Now().UTC())
+	require.NoError(t, err)
+	require.True(t, claimed)
+	eventID := "gwusg_" + uuid.NewString()
+	require.NoError(t, store.CompleteFinalization(ctx, tokenA, eventID, 900, 2, time.Now().UTC()))
+	got, err = store.Get(ctx, tokenA)
+	require.NoError(t, err)
+	require.Equal(t, LiveProvisionalStatusFinalized, got.Status)
+	require.Equal(t, int64(900), got.Windows[1].SettledUnits)
+	require.Equal(t, int64(700), got.Windows[0].SettledUnits, "window 1 is untouched")
+	require.Equal(t, eventID, got.SettlementEventID)
 }
 
 // BenchmarkLiveProvisionalSaveActivate measures the disclosed synchronous
