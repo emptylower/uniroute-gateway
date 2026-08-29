@@ -451,10 +451,16 @@ func ProvideAuditLogService(repo AuditLogRepository, settingService *SettingServ
 // 停止逻辑挂在 cmd/server 的 provideCleanup。
 func ProvideWalletRetentionService(cfg *config.Config, db *sql.DB, outbox CanonicalWalletOutboxStore) *WalletRetentionService {
 	var cwCfg config.CanonicalWalletConfig
+	usageLogsDays := 90
 	if cfg != nil {
 		cwCfg = cfg.CanonicalWallet
+		if !cfg.DashboardAgg.Enabled {
+			usageLogsDays = 0
+		} else if cfg.DashboardAgg.Retention.UsageLogsDays > 0 {
+			usageLogsDays = cfg.DashboardAgg.Retention.UsageLogsDays
+		}
 	}
-	svc := NewWalletRetentionService(cwCfg, db, outbox)
+	svc := NewWalletRetentionService(cwCfg, db, outbox, usageLogsDays)
 	svc.Start()
 	return svc
 }

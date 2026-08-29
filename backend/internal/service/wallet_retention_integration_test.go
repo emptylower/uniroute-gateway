@@ -130,20 +130,72 @@ func TestWalletRetentionPruners(t *testing.T) {
 	insertOutboxRow("gwusg_71_rec_pending", "pending", "", delRec, nil)
 	insertOutboxRow("gwusg_71_rec_dead_letter", "dead_letter", "balance_shortfall", delRec, nil)
 
+	// 4. wallet_billing_snapshot & usage_logs (Phase 4.4-G Task 2)
+	_, err = db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS usage_logs (
+			id BIGSERIAL PRIMARY KEY,
+			billing_snapshot_id TEXT,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+		);
+		CREATE INDEX IF NOT EXISTS idx_usage_logs_billing_snapshot_id
+			ON usage_logs (billing_snapshot_id)
+			WHERE billing_snapshot_id IS NOT NULL;
+	`)
+	require.NoError(t, err)
+
+	insertSnapshot := func(id string, createdAt time.Time) {
+		t.Helper()
+		_, err := db.ExecContext(ctx, `
+			INSERT INTO wallet_billing_snapshot
+				(id, version, user_id, api_key_id, account_id, billing_model, pricing_mode, payload, created_at)
+			VALUES ($1, 1, 1, 1, 1, 'gpt-4o', 'standard', '{"mode":"standard"}'::jsonb, $2)`,
+			id, createdAt)
+		require.NoError(t, err)
+	}
+	insertUsageLog := func(snapshotID string, createdAt time.Time) {
+		t.Helper()
+		_, err := db.ExecContext(ctx, `
+			INSERT INTO usage_logs (billing_snapshot_id, created_at)
+			VALUES ($1, $2)`,
+			snapshotID, createdAt)
+		require.NoError(t, err)
+	}
+
+	snapOldUnref := "snap_71_old_unref"
+	snap60dUnref := "snap_71_60d_unref"
+	snapRecUnref := "snap_71_rec_unref"
+	snapLiveUsage := "snap_71_live_usage"
+	snapLiveOutbox := "snap_71_live_outbox"
+	snap120dLiveUsage := "snap_71_120d_live_usage"
+
+	insertSnapshot(snapOldUnref, now.Add(-100*24*time.Hour))
+	insertSnapshot(snap60dUnref, now.Add(-60*24*time.Hour))
+	insertSnapshot(snapRecUnref, now.Add(-10*24*time.Hour))
+	insertSnapshot(snapLiveUsage, now.Add(-50*24*time.Hour))
+	insertUsageLog(snapLiveUsage, now.Add(-50*24*time.Hour))
+	insertSnapshot(snapLiveOutbox, now.Add(-50*24*time.Hour))
+	_, err = db.ExecContext(ctx, `UPDATE wallet_settlement_outbox SET billing_snapshot_id = $1 WHERE event_id = 'gwusg_71_rec_delivered'`, snapLiveOutbox)
+	require.NoError(t, err)
+	insertSnapshot(snap120dLiveUsage, now.Add(-120*24*time.Hour))
+	insertUsageLog(snap120dLiveUsage, now.Add(-120*24*time.Hour))
+
 	// --- Execute first pruner pass ---
 	holdBase := WalletRetentionPrunedTotal("wallet_hold_outcome")
 	liveBase := WalletRetentionPrunedTotal("wallet_live_provisional")
 	outboxBase := WalletRetentionPrunedTotal("wallet_settlement_outbox")
+	snapshotBase := WalletRetentionPrunedTotal("wallet_billing_snapshot")
 
-	holdPruned, livePruned, outboxPruned, err := retentionSvc.PruneOnce(ctx)
+	holdPruned, livePruned, outboxPruned, snapshotPruned, err := retentionSvc.PruneOnce(ctx)
 	require.NoError(t, err)
 	require.Equal(t, int64(3), holdPruned, "exactly 3 old resolved hold outcomes pruned")
 	require.Equal(t, int64(2), livePruned, "exactly 2 old terminal live provisional records pruned")
 	require.Equal(t, int64(1), outboxPruned, "exactly 1 old delivered outbox row pruned")
+	require.Equal(t, int64(1), snapshotPruned, "exactly 1 old unreferenced snapshot pruned (older than 90d default cutoff)")
 
 	require.Equal(t, int64(3), WalletRetentionPrunedTotal("wallet_hold_outcome")-holdBase)
 	require.Equal(t, int64(2), WalletRetentionPrunedTotal("wallet_live_provisional")-liveBase)
 	require.Equal(t, int64(1), WalletRetentionPrunedTotal("wallet_settlement_outbox")-outboxBase)
+	require.Equal(t, int64(1), WalletRetentionPrunedTotal("wallet_billing_snapshot")-snapshotBase)
 
 	// Verify hold outcomes
 	checkHoldExists := func(authID string) bool {
@@ -187,12 +239,39 @@ func TestWalletRetentionPruners(t *testing.T) {
 	require.True(t, checkOutboxExists("gwusg_71_rec_pending"), "recent pending survives")
 	require.True(t, checkOutboxExists("gwusg_71_rec_dead_letter"), "recent dead-letter survives")
 
+	// Verify snapshots
+	checkSnapshotExists := func(id string) bool {
+		var exists bool
+		err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM wallet_billing_snapshot WHERE id = $1)`, id).Scan(&exists)
+		require.NoError(t, err)
+		return exists
+	}
+	require.False(t, checkSnapshotExists(snapOldUnref), "100d unreferenced snapshot pruned")
+	require.True(t, checkSnapshotExists(snap60dUnref), "60d unreferenced snapshot survives at 90d default cutoff (not 45d retention)")
+	require.True(t, checkSnapshotExists(snapRecUnref), "recent snapshot survives")
+	require.True(t, checkSnapshotExists(snapLiveUsage), "snapshot referenced by live usage_logs survives")
+	require.True(t, checkSnapshotExists(snapLiveOutbox), "snapshot referenced by delivered outbox row survives")
+	require.True(t, checkSnapshotExists(snap120dLiveUsage), "120d snapshot referenced by live usage_logs survives (pins 3-way NOT EXISTS safety property)")
+
 	// --- Second pruner pass deletes nothing ---
-	holdPruned2, livePruned2, outboxPruned2, err := retentionSvc.PruneOnce(ctx)
+	holdPruned2, livePruned2, outboxPruned2, snapshotPruned2, err := retentionSvc.PruneOnce(ctx)
 	require.NoError(t, err)
 	require.Equal(t, int64(0), holdPruned2)
 	require.Equal(t, int64(0), livePruned2)
 	require.Equal(t, int64(0), outboxPruned2)
+	require.Equal(t, int64(0), snapshotPruned2)
+
+	// --- Disabled leg: usage_logs_days == 0 deletes nothing ---
+	snapZero := "snap_71_zero_mode"
+	insertSnapshot(snapZero, now.Add(-100*24*time.Hour))
+	svcZero := NewWalletRetentionService(cfg, db, outbox, 0)
+	svcZero.clock = func() time.Time { return now }
+	t.Cleanup(svcZero.Close)
+
+	_, _, _, snapshotPrunedZero, err := svcZero.PruneOnce(ctx)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), snapshotPrunedZero, "pruner deletes nothing when usage_logs_days == 0 (disabled)")
+	require.True(t, checkSnapshotExists(snapZero), "100d unreferenced snapshot survives when snapshot pruner is disabled")
 
 	// --- Floor leg: retention_days = 38 ---
 	cfg38 := canonicalWalletTestConfig(config.CanonicalWalletModeEnforce)
@@ -207,7 +286,7 @@ func TestWalletRetentionPruners(t *testing.T) {
 	insertOutboxRow("gwusg_71_floor_31d", "delivered", "", del31, &del31)
 	insertOutboxRow("gwusg_71_floor_39d", "delivered", "", del39, &del39)
 
-	_, _, outboxPruned38, err := svc38.PruneOnce(ctx)
+	_, _, outboxPruned38, _, err := svc38.PruneOnce(ctx)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), outboxPruned38, "only the 39d-old row is pruned; the 31d-old row survives")
 	require.True(t, checkOutboxExists("gwusg_71_floor_31d"), "31-day-old delivered row survives the 38-day retention floor")
