@@ -158,6 +158,12 @@ type walletReconciliationSummaryDTO struct {
 	Redis          walletReconciliationRedisDTO       `json:"redis"`
 }
 
+type walletReconciliationFaultsDTO struct {
+	QueueDropped         int64  `json:"queue_dropped"`
+	Since                string `json:"since"`
+	ProcessUptimeSeconds int64  `json:"process_uptime_seconds"`
+}
+
 type walletReconciliationWatermarkDTO struct {
 	Schema         int                               `json:"schema"`
 	DeliveredAtMax *string                           `json:"delivered_at_max"`
@@ -166,6 +172,7 @@ type walletReconciliationWatermarkDTO struct {
 	InFlight       int64                             `json:"in_flight"`
 	DeadLetter     int64                             `json:"dead_letter"`
 	Receivable     walletReconciliationReceivableDTO `json:"receivable"`
+	Faults         walletReconciliationFaultsDTO     `json:"faults"`
 }
 
 func walletReconciliationUnits(v int64) string { return strconv.FormatInt(v, 10) }
@@ -326,6 +333,11 @@ func (h *WalletReconciliationHandler) Watermark(c *gin.Context) {
 		InFlight:       wm.InFlight,
 		DeadLetter:     wm.DeadLetter,
 		Receivable:     walletReconciliationReceivableDTOFrom(wm.Receivable),
+		Faults: walletReconciliationFaultsDTO{
+			QueueDropped:         wm.Faults.QueueDropped,
+			Since:                walletReconciliationTime(wm.Faults.Since),
+			ProcessUptimeSeconds: wm.Faults.ProcessUptimeSeconds,
+		},
 	})
 }
 

@@ -165,6 +165,11 @@ func TestWalletReconciliationWireThroughGin(t *testing.T) {
 			Pending    int64 `json:"pending"`
 			InFlight   int64 `json:"in_flight"`
 			DeadLetter int64 `json:"dead_letter"`
+			Faults     struct {
+				QueueDropped         int64  `json:"queue_dropped"`
+				Since                string `json:"since"`
+				ProcessUptimeSeconds int64  `json:"process_uptime_seconds"`
+			} `json:"faults"`
 		}
 		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &wm))
 		require.Equal(t, 1, wm.Schema)
@@ -179,6 +184,67 @@ func TestWalletReconciliationWireThroughGin(t *testing.T) {
 		require.Equal(t, int64(pending), wm.Pending)
 		require.Equal(t, int64(inFlight), wm.InFlight)
 		require.Equal(t, int64(dead), wm.DeadLetter)
+
+		// Faults verification (Phase 4.4-G Task 1):
+		require.NotEmpty(t, wm.Faults.Since, "faults.since must report process start time")
+		require.GreaterOrEqual(t, wm.Faults.ProcessUptimeSeconds, int64(0))
+		initialDropped := wm.Faults.QueueDropped
+
+		// Force one durability drop through the bridge's existing BeginTx failure path
+		closedDB, err := sql.Open("postgres", "postgres://localhost:5432/nonexistent?sslmode=disable")
+		require.NoError(t, err)
+		require.NoError(t, closedDB.Close())
+		bridgeCfg := &config.Config{
+			CanonicalWallet: config.CanonicalWalletConfig{
+				Mode:                             config.CanonicalWalletModeEnforce,
+				RequestTimeoutMS:                 300,
+				ReceivableRedriveIntervalSeconds: 60,
+			},
+		}
+		bridge := service.NewCanonicalWalletBridge(bridgeCfg, leaseWriter, closedDB, outboxStore)
+		t.Cleanup(bridge.Close)
+		bridge.ObserveSettlement(service.CanonicalWalletSettlementEvent{
+			GatewayRequestID: "req-drop-recon69",
+			PlatformUserID:   user,
+			Currency:         "CNY",
+			AmountUnits:      100,
+		})
+
+		rec2 := get("/api/v1/admin/wallet/reconciliation/watermark", token)
+		require.Equal(t, 200, rec2.Code)
+		var wm2 struct {
+			Faults struct {
+				QueueDropped         int64  `json:"queue_dropped"`
+				Since                string `json:"since"`
+				ProcessUptimeSeconds int64  `json:"process_uptime_seconds"`
+			} `json:"faults"`
+		}
+		require.NoError(t, json.Unmarshal(rec2.Body.Bytes(), &wm2))
+		require.Equal(t, initialDropped+1, wm2.Faults.QueueDropped, "forced durability drop increments queue_dropped delta by 1")
+		require.Equal(t, wm.Faults.Since, wm2.Faults.Since, "faults.since must be identical across calls")
+		require.GreaterOrEqual(t, wm2.Faults.ProcessUptimeSeconds, int64(0))
+
+		// A second call reports >= 1 (monotonic) with the same since
+		rec3 := get("/api/v1/admin/wallet/reconciliation/watermark", token)
+		require.Equal(t, 200, rec3.Code)
+		var wm3 struct {
+			Faults struct {
+				QueueDropped         int64  `json:"queue_dropped"`
+				Since                string `json:"since"`
+				ProcessUptimeSeconds int64  `json:"process_uptime_seconds"`
+			} `json:"faults"`
+		}
+		require.NoError(t, json.Unmarshal(rec3.Body.Bytes(), &wm3))
+		require.GreaterOrEqual(t, wm3.Faults.QueueDropped, initialDropped+1, "faults.queue_dropped is monotonic")
+		require.Equal(t, wm.Faults.Since, wm3.Faults.Since, "faults.since is unchanged")
+
+		// summary carries no faults field (watermark-only)
+		summaryRec := get(fmt.Sprintf("/api/v1/admin/wallet/reconciliation/summary?platform_user_id=%s&since=%s&until=%s",
+			user, since.Format(time.RFC3339), until.Format(time.RFC3339)), token)
+		require.Equal(t, 200, summaryRec.Code)
+		var summaryRaw map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal(summaryRec.Body.Bytes(), &summaryRaw))
+		require.NotContains(t, summaryRaw, "faults", "summary must never contain faults")
 	})
 
 	// --- the truncation leg: 5 001 rows for a second user, every row

@@ -170,6 +170,16 @@ type WalletReconciliationSummary struct {
 	Redis          WalletReconciliationRedisView
 }
 
+// WalletReconciliationFaults reports the durability drop fault counter
+// (process-metric, resets on restart) and the process start timestamp.
+type WalletReconciliationFaults struct {
+	QueueDropped         int64
+	Since                time.Time
+	ProcessUptimeSeconds int64
+}
+
+var processStartTime = time.Now().UTC()
+
 type WalletReconciliationWatermark struct {
 	DeliveredAtMax *time.Time
 	OutboxIDMax    int64
@@ -180,6 +190,7 @@ type WalletReconciliationWatermark struct {
 	// reasons) — unlike the summary's, which is derived from the user's
 	// own returned rows (round-1 MAJOR-3).
 	Receivable WalletReconciliationReceivable
+	Faults     WalletReconciliationFaults
 }
 
 // WalletReconciliationReadService (Phase 4.1-G) composes the four existing
@@ -325,10 +336,19 @@ func (s *WalletReconciliationReadService) Watermark(ctx context.Context) (*Walle
 	if err != nil {
 		return nil, err
 	}
+	uptime := int64(time.Since(processStartTime).Seconds())
+	if uptime < 0 {
+		uptime = 0
+	}
 	return &WalletReconciliationWatermark{
 		DeliveredAtMax: wm.DeliveredAtMax, OutboxIDMax: wm.OutboxIDMax,
 		Pending: wm.Pending, InFlight: wm.InFlight, DeadLetter: wm.DeadLetter,
 		Receivable: WalletReconciliationReceivable{BalanceShortfallUnits: balanceShortfall, SplitExhaustedUnits: splitExhausted},
+		Faults: WalletReconciliationFaults{
+			QueueDropped:         canonicalWalletBridgeMetrics.queueDropped.Load(),
+			Since:                processStartTime,
+			ProcessUptimeSeconds: uptime,
+		},
 	}, nil
 }
 

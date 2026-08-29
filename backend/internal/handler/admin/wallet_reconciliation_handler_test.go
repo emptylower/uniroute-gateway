@@ -244,6 +244,7 @@ func TestWalletReconciliationHandlerSummary(t *testing.T) {
 		require.NoError(t, json.Unmarshal(body["window"], &window))
 		require.Equal(t, since, window.Since)
 		require.Equal(t, until, window.Until)
+		require.NotContains(t, body, "faults", "summary must never contain faults (watermark-only)")
 	})
 
 	t.Run("a reader error is 503, not 500", func(t *testing.T) {
@@ -281,10 +282,16 @@ func TestWalletReconciliationHandlerSummary(t *testing.T) {
 
 	t.Run("watermark renders the global shape", func(t *testing.T) {
 		maxDelivered := time.Date(2026, 8, 29, 10, 0, 0, 0, time.UTC)
+		sinceFaults := time.Date(2026, 8, 29, 8, 0, 0, 0, time.UTC)
 		fake := &fakeWalletReconciliationReader{watermark: &service.WalletReconciliationWatermark{
 			DeliveredAtMax: &maxDelivered, OutboxIDMax: 987654,
 			Pending: 3, InFlight: 2, DeadLetter: 1,
 			Receivable: service.WalletReconciliationReceivable{BalanceShortfallUnits: 6_000000, SplitExhaustedUnits: 1_000000, Rows: 2},
+			Faults: service.WalletReconciliationFaults{
+				QueueDropped:         5,
+				Since:                sinceFaults,
+				ProcessUptimeSeconds: 7200,
+			},
 		}}
 		r := newWalletReconciliationHandlerTestRouter(fake)
 		rec := httptest.NewRecorder()
@@ -301,6 +308,11 @@ func TestWalletReconciliationHandlerSummary(t *testing.T) {
 				BalanceShortfallUnits string `json:"balance_shortfall_units"`
 				SplitExhaustedUnits   string `json:"split_exhausted_units"`
 			} `json:"receivable"`
+			Faults struct {
+				QueueDropped         int64  `json:"queue_dropped"`
+				Since                string `json:"since"`
+				ProcessUptimeSeconds int64  `json:"process_uptime_seconds"`
+			} `json:"faults"`
 		}
 		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 		require.Equal(t, 1, body.Schema)
@@ -311,6 +323,9 @@ func TestWalletReconciliationHandlerSummary(t *testing.T) {
 		require.Equal(t, int64(1), body.DeadLetter)
 		require.Equal(t, "6000000", body.Receivable.BalanceShortfallUnits)
 		require.Equal(t, "1000000", body.Receivable.SplitExhaustedUnits)
+		require.Equal(t, int64(5), body.Faults.QueueDropped)
+		require.Equal(t, "2026-08-29T08:00:00Z", body.Faults.Since)
+		require.Equal(t, int64(7200), body.Faults.ProcessUptimeSeconds)
 	})
 
 	t.Run("an unwired service is 503, never a panic", func(t *testing.T) {
