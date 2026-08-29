@@ -145,7 +145,7 @@ type CanonicalWalletHold struct {
 // CanonicalWalletHoldConversion is ConvertCanonicalWalletHold's result. The
 // caller branches on Code and (for {7}) on EventID, never on an error class.
 type CanonicalWalletHoldConversion struct {
-	Code    int // 0 converted; 1 missing; 3 lease gone; 4 overrun released; 7 not armed
+	Code    int    // 0 converted; 1 missing; 3 lease gone; 4 overrun released; 7 not armed
 	LeaseID string // the {0} answer's lease; also carried on {7} (§13.2.7)
 	State   string
 	EventID string
