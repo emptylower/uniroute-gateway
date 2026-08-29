@@ -146,7 +146,7 @@ type CanonicalWalletHold struct {
 // caller branches on Code and (for {7}) on EventID, never on an error class.
 type CanonicalWalletHoldConversion struct {
 	Code    int // 0 converted; 1 missing; 3 lease gone; 4 overrun released; 7 not armed
-	LeaseID string
+	LeaseID string // the {0} answer's lease; also carried on {7} (§13.2.7)
 	State   string
 	EventID string
 }
@@ -1216,7 +1216,8 @@ func (b *CanonicalWalletBridge) ObserveSettlement(event CanonicalWalletSettlemen
 			event.LeaseID = conv.LeaseID
 			canonicalWalletBridgeMetrics.holdConverted.Add(1)
 		case conv.Code == 7 && conv.EventID != "":
-			canonicalWalletBridgeMetrics.holdConvertDuplicate.Add(1) // a retried submission; the outbox dedups the row
+			event.LeaseID = conv.LeaseID
+			canonicalWalletBridgeMetrics.holdConvertDuplicate.Add(1) // a retried submission: the lease is restored so the payload hashes identically and the outbox dedups the row (§13.2.7)
 		case conv.Code == 7: // released / abandoned: real usage after the money went back (§10.5)
 			canonicalWalletBridgeMetrics.holdSettlementAfterRelease.Add(1)
 			event.LeaseID = ""

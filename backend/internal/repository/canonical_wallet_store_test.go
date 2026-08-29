@@ -574,12 +574,14 @@ func TestCanonicalWalletHoldArmReleaseConvert(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "500", consumed, "the arm of b3 raised consumed to 500; the conversion adds nothing")
 
-	// re-convert the same event: {7, settled, ev-b3}.
+	// re-convert the same event: {7, settled, ev-b3} — with the hold's
+	// lease_id as the fourth element (§13.2.7).
 	conv, err = c.ConvertCanonicalWalletHold(ctx, user, "b3", "ev-b3", 50, now)
 	require.NoError(t, err)
 	require.Equal(t, 7, conv.Code)
 	require.Equal(t, "settled", conv.State)
 	require.Equal(t, "ev-b3", conv.EventID)
+	require.Equal(t, "L2", conv.LeaseID, "the {7} answer carries the hold's lease")
 	rel, err = rdb.HGet(ctx, canonicalWalletLeaseKey(user, "L2"), "released_units").Result()
 	require.NoError(t, err)
 	require.Equal(t, "450", rel, "a re-convert releases nothing")
@@ -615,12 +617,14 @@ func TestCanonicalWalletHoldArmReleaseConvert(t *testing.T) {
 	require.NoError(t, err)
 	require.NotContains(t, members, "b5")
 
-	// convert on a released hold: {7, released, ""}.
+	// convert on a released hold: {7, released, ""} — with the hold's
+	// lease_id as the fourth element (§13.2.7).
 	conv, err = c.ConvertCanonicalWalletHold(ctx, user, "b5", "ev-b5", 150, now)
 	require.NoError(t, err)
 	require.Equal(t, 7, conv.Code)
 	require.Equal(t, "released", conv.State)
 	require.Equal(t, "", conv.EventID)
+	require.Equal(t, "L4", conv.LeaseID, "the {7} answer carries the hold's lease even on a released hold")
 
 	// hold missing: {1}.
 	conv, err = c.ConvertCanonicalWalletHold(ctx, user, "b-missing", "ev-x", 1, now)

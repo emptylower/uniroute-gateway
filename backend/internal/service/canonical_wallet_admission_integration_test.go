@@ -322,7 +322,7 @@ var testReleaseCanonicalWalletHoldScript = redis.NewScript(`
 var testConvertCanonicalWalletHoldScript = redis.NewScript(`
 	if redis.call('EXISTS', KEYS[1]) == 0 then return {1} end
 	local state = redis.call('HGET', KEYS[1], 'state')
-	if state ~= 'armed' then return {7, state, redis.call('HGET', KEYS[1], 'event_id')} end
+	if state ~= 'armed' then return {7, state, redis.call('HGET', KEYS[1], 'event_id'), redis.call('HGET', KEYS[1], 'lease_id')} end
 	local held = tonumber(redis.call('HGET', KEYS[1], 'held_units'))
 	local actual = tonumber(ARGV[3])
 	local lease_id = redis.call('HGET', KEYS[1], 'lease_id')
@@ -736,11 +736,12 @@ func (c *gatewayCacheAdapterForTest) ConvertCanonicalWalletHold(ctx context.Cont
 		}
 		conv.LeaseID = fmt.Sprint(result[1])
 	case 7:
-		if len(result) != 3 {
+		if len(result) != 4 {
 			return CanonicalWalletHoldConversion{}, errors.New("canonical wallet hold convert returned an invalid not-armed reply")
 		}
 		conv.State = fmt.Sprint(result[1])
 		conv.EventID = fmt.Sprint(result[2])
+		conv.LeaseID = fmt.Sprint(result[3])
 	}
 	return conv, nil
 }

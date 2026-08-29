@@ -222,19 +222,22 @@ var releaseCanonicalWalletHoldScript = redis.NewScript(`
 // convertCanonicalWalletHoldScript (§10.5) — KEYS: hold hash, user hold set,
 // lease hash, the event's reservation marker. ARGV: authorization_id,
 // event_id, actual_units, now_ms. Branches: {1} hold missing; {7, state,
-// event_id} not armed — the caller branches on the stored event_id, never on
-// the code alone; A ≤ E → released += E−A, marker = lease_id (PEXPIREAT =
-// the lease's expires_at), settled, event_id — or {3} when the lease hash is
-// already gone (nothing to release or mark; the event proceeds unbound);
-// A > E within budget and unexpired → consumed += excess, marker, settled;
-// otherwise (beyond budget, or the lease expired) → released += E, state=
-// released, {4} — the money-safe direction, consistent with §10.5's
-// expired-before-delivery reasoning (the overrun's expiry guard is an
-// accepted fill of a §10 gap, recorded in the completion table).
+// event_id, lease_id} not armed — the caller branches on the stored
+// event_id, never on the code alone, and §13.2.7's fourth element carries
+// the hold's lease so a retried submission restores event.LeaseID and the
+// outbox dedups it as a same-payload duplicate; A ≤ E → released += E−A,
+// marker = lease_id (PEXPIREAT = the lease's expires_at), settled, event_id
+// — or {3} when the lease hash is already gone (nothing to release or mark;
+// the event proceeds unbound); A > E within budget and unexpired →
+// consumed += excess, marker, settled; otherwise (beyond budget, or the
+// lease expired) → released += E, state= released, {4} — the money-safe
+// direction, consistent with §10.5's expired-before-delivery reasoning (the
+// overrun's expiry guard is an accepted fill of a §10 gap, recorded in the
+// completion table).
 var convertCanonicalWalletHoldScript = redis.NewScript(`
 	if redis.call('EXISTS', KEYS[1]) == 0 then return {1} end
 	local state = redis.call('HGET', KEYS[1], 'state')
-	if state ~= 'armed' then return {7, state, redis.call('HGET', KEYS[1], 'event_id')} end
+	if state ~= 'armed' then return {7, state, redis.call('HGET', KEYS[1], 'event_id'), redis.call('HGET', KEYS[1], 'lease_id')} end
 	local held = tonumber(redis.call('HGET', KEYS[1], 'held_units'))
 	local actual = tonumber(ARGV[3])
 	local lease_id = redis.call('HGET', KEYS[1], 'lease_id')
@@ -641,11 +644,12 @@ func (c *gatewayCache) ConvertCanonicalWalletHold(ctx context.Context, platformU
 	case 3, 4:
 		// no extras on the wire
 	case 7:
-		if len(result) != 3 {
+		if len(result) != 4 {
 			return service.CanonicalWalletHoldConversion{}, errors.New("canonical wallet hold convert returned an invalid not-armed reply")
 		}
 		conv.State = fmt.Sprint(result[1])
 		conv.EventID = fmt.Sprint(result[2])
+		conv.LeaseID = fmt.Sprint(result[3])
 	case 1:
 	default:
 		return service.CanonicalWalletHoldConversion{}, fmt.Errorf("unknown canonical wallet hold convert code %d", code)
