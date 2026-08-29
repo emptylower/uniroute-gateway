@@ -1049,8 +1049,46 @@ func TestProvideBillingCacheServiceDerivesCanonicalWalletBridge(t *testing.T) {
 		"the derived bridge must actually gate eligibility through the real lease store")
 
 	// A cache WITHOUT the lease-store interface leaves the canonical wallet
-	// unwired: the legacy balance path decides instead.
-	plain := ProvideBillingCacheService(&fixedBalanceCache{balance: 0}, nil, nil, nil, nil, nil, cfg, nil, nil, nil)
+	// unwired: the legacy balance path decides instead. Phase 3.8-G Task 1
+	// retargets this leg to disabled mode: in enforce the construction now
+	// REFUSES (requireCanonicalWalletStore panics — the gate below), so the
+	// legacy fallback is asserted where it is still reachable; the enforce
+	// outcome itself is TestCanonicalWalletWiringGateAtProvideBillingCacheService.
+	disabledCfg := &config.Config{RunMode: config.RunModeStandard}
+	disabledCfg.CanonicalWallet = canonicalWalletTestConfig(config.CanonicalWalletModeDisabled)
+	disabledCfg.Billing.ExchangeRate.BootstrapUSDToCNY = 7.2
+	plain := ProvideBillingCacheService(&fixedBalanceCache{balance: 0}, nil, nil, nil, nil, nil, disabledCfg, nil, nil, nil)
 	err := plain.CheckBillingEligibility(ctx, &User{ID: 22, BillingCurrency: "CNY"}, nil, nil, nil, "")
 	require.ErrorIs(t, err, ErrInsufficientBalance, "without a derivable lease store, eligibility falls back to the legacy balance check")
+}
+
+// TestCanonicalWalletWiringGateAtProvideBillingCacheService (Phase 3.8-G
+// Task 1, redesign §14.3 a): the third bridge site is proven AT the
+// constructor — the :1041 call shape verbatim with a BillingCache stub that
+// does NOT implement CanonicalWalletLeaseStore. Enforce panics (the gate
+// would fail OPEN otherwise — 3.3a's hand-on); shadow constructs with the
+// bridge unwired and counts canonicalWalletWiringMissing.
+func TestCanonicalWalletWiringGateAtProvideBillingCacheService(t *testing.T) {
+	nonStore := &fixedBalanceCache{balance: 0}
+
+	enforceCfg := &config.Config{RunMode: config.RunModeStandard}
+	enforceCfg.CanonicalWallet = canonicalWalletTestConfig(config.CanonicalWalletModeEnforce)
+	var panicked any
+	func() {
+		defer func() { panicked = recover() }()
+		_ = ProvideBillingCacheService(nonStore, nil, nil, nil, nil, nil, enforceCfg, nil, nil, nil)
+	}()
+	require.NotNil(t, panicked, "enforce must refuse to start when the cache does not provide the wallet store")
+	msg, ok := panicked.(string)
+	require.True(t, ok, "the gate panics with a string message, got %T", panicked)
+	require.Contains(t, msg, "ProvideBillingCacheService")
+	require.Contains(t, msg, "does not provide the wallet store")
+
+	shadowCfg := &config.Config{RunMode: config.RunModeStandard}
+	shadowCfg.CanonicalWallet = canonicalWalletTestConfig(config.CanonicalWalletModeShadow)
+	before := canonicalWalletWiringMissing.Load()
+	shadow := ProvideBillingCacheService(nonStore, nil, nil, nil, nil, nil, shadowCfg, nil, nil, nil)
+	require.NotNil(t, shadow)
+	require.Nil(t, shadow.canonicalWallet, "shadow constructs with the bridge unwired")
+	require.Equal(t, before+1, canonicalWalletWiringMissing.Load(), "shadow counts canonicalWalletWiringMissing")
 }

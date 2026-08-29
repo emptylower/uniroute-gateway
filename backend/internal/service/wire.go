@@ -666,7 +666,7 @@ func ProvideBillingCacheService(
 	// correctness-neutral; a shared-singleton refactor is a legitimate
 	// follow-up.
 	var canonicalWallet *CanonicalWalletBridge
-	if walletStore, ok := cache.(CanonicalWalletLeaseStore); ok {
+	if walletStore, ok := requireCanonicalWalletStore(cfg, cache, "ProvideBillingCacheService"); ok {
 		canonicalWallet = NewCanonicalWalletBridge(cfg, walletStore, db, outbox)
 	}
 	return NewBillingCacheService(cache, userRepo, subRepo, apiKeyRepo, rpmCache, rateRepo, cfg, userPlatformQuotaRepo, canonicalWallet)

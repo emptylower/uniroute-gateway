@@ -887,10 +887,8 @@ func NewGatewayService(
 		userPlatformQuotaRepo: userPlatformQuotaRepo,
 		exchangeRates:         NewExchangeRateService(cfg),
 	}
-	if walletStore, ok := cache.(CanonicalWalletLeaseStore); ok {
+	if walletStore, ok := requireCanonicalWalletStore(cfg, cache, "NewGatewayService"); ok {
 		svc.canonicalWallet = NewCanonicalWalletBridge(cfg, walletStore, db, outbox)
-	} else if cfg != nil && (cfg.CanonicalWallet.Mode == config.CanonicalWalletModeShadow || cfg.CanonicalWallet.Mode == config.CanonicalWalletModeEnforce) {
-		slog.Error("canonical wallet bridge configured without a Redis lease store; shadow observations are disabled")
 	}
 	svc.userGroupRateResolver = newUserGroupRateResolver(
 		userGroupRateRepo,
