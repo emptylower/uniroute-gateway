@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -107,7 +108,9 @@ func newLiveWindowShared(t *testing.T) *liveWindowShared {
 // ---------------------------------------------------------------------------
 
 type liveTestClock struct {
-	offset atomic.Int64
+	mu     sync.RWMutex
+	frozen bool
+	curr   time.Time
 }
 
 func newLiveTestClock() *liveTestClock {
@@ -115,11 +118,23 @@ func newLiveTestClock() *liveTestClock {
 }
 
 func (c *liveTestClock) Now() time.Time {
-	return time.Now().UTC().Add(time.Duration(c.offset.Load()))
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.frozen {
+		return c.curr
+	}
+	return time.Now().UTC()
 }
 
 func (c *liveTestClock) Advance(d time.Duration) {
-	c.offset.Add(int64(d))
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.frozen {
+		c.frozen = true
+		c.curr = time.Now().UTC().Add(d)
+	} else {
+		c.curr = c.curr.Add(d)
+	}
 }
 
 type liveWindowFixture struct {
@@ -534,13 +549,19 @@ func TestPhase37bWindowsCloseSettleAndReauthorize(t *testing.T) {
 		rec := f.provRecord(t, callHash)
 		require.Len(t, rec.Windows, 1, "the window must not close before live_window_min_seconds")
 
-		// The negative edge: advance to just BELOW the 5 s floor and re-assert.
-		f.clock.Advance(4900 * time.Millisecond)
-		rec = f.provRecord(t, callHash)
-		require.Len(t, rec.Windows, 1, "the window must not close before live_window_min_seconds")
+		// The negative edge: move the fake clock to just BELOW the floor (derived
+		// from opened_at, not a bare delta) and HOLD there while the observer ticks —
+		// the window must not close. require.Never polls in real time, so the
+		// observer gets several ticks to act on the advanced clock.
+		floorEdge := openedAt.Add(time.Duration(f.cfg.CanonicalWallet.LiveWindowMinSeconds)*time.Second - 100*time.Millisecond)
+		f.clock.Advance(floorEdge.Sub(f.clock.Now()))
+		require.Never(t, func() bool {
+			return len(f.provRecord(t, callHash).Windows) > 1
+		}, 1500*time.Millisecond, 100*time.Millisecond,
+			"the window must not close before live_window_min_seconds")
 
 		// Then past it.
-		f.clock.Advance(1100 * time.Millisecond)
+		f.clock.Advance(200 * time.Millisecond)
 
 		// Closes past the floor: len == 2, window 1 settled to its exact usage.
 		prov = f.pollWindowsLen(t, callHash, 2, 8*time.Second)
@@ -1274,13 +1295,22 @@ func TestPhase37bLiveClockSplitIsPinned(t *testing.T) {
 	tokens := int(math.Ceil(2 * float64(E) / f.unitsPerOutputToken(t, callHash)))
 	f.pumpUsage("resp-split-pin-1", 0, tokens)
 
-	// Negative boundary check: advance 4900ms, window 1 must still be open
-	f.clock.Advance(4900 * time.Millisecond)
-	rec := f.provRecord(t, callHash)
-	require.Len(t, rec.Windows, 1, "the window must not close before live_window_min_seconds")
+	openedAt := time.UnixMilli(prov.Windows[0].OpenedAtMS)
+	require.False(t, openedAt.IsZero(), "window 1 carries opened_at_ms")
 
-	// Advance past floor and poll for window 2
-	f.clock.Advance(1100 * time.Millisecond)
+	// The negative edge: move the fake clock to just BELOW the floor (derived
+	// from opened_at, not a bare delta) and HOLD there while the observer ticks —
+	// the window must not close. require.Never polls in real time, so the
+	// observer gets several ticks to act on the advanced clock.
+	floorEdge := openedAt.Add(time.Duration(f.cfg.CanonicalWallet.LiveWindowMinSeconds)*time.Second - 100*time.Millisecond)
+	f.clock.Advance(floorEdge.Sub(f.clock.Now()))
+	require.Never(t, func() bool {
+		return len(f.provRecord(t, callHash).Windows) > 1
+	}, 1500*time.Millisecond, 100*time.Millisecond,
+		"the window must not close before live_window_min_seconds")
+
+	// Then past it.
+	f.clock.Advance(200 * time.Millisecond)
 	prov = f.pollWindowsLen(t, callHash, 2, 8*time.Second)
 	require.NotNil(t, prov)
 
