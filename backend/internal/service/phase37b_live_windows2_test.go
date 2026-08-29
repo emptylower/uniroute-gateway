@@ -55,6 +55,8 @@ type liveWindowShared struct {
 	resolver    *ModelPricingResolver
 	billing     *BillingService
 	fx          *ExchangeRateService
+	fixtureSeq  atomic.Int64
+	callSeq     atomic.Int64
 }
 
 func newLiveWindowShared(t *testing.T) *liveWindowShared {
@@ -106,6 +108,7 @@ func newLiveWindowShared(t *testing.T) *liveWindowShared {
 
 type liveWindowFixture struct {
 	t           *testing.T
+	sh          *liveWindowShared
 	mode        string
 	ctx         context.Context
 	cancel      context.CancelFunc
@@ -165,6 +168,15 @@ func (sh *liveWindowShared) newFixtureCfg(t *testing.T, mode string, mutate func
 		mutate(&cfg.CanonicalWallet)
 	}
 
+	fID := sh.fixtureSeq.Add(1)
+	userCopy := *sh.user
+	userCopy.ID = fID
+	userCopy.PlatformUserID = fmt.Sprintf("%s-%d", sh.user.PlatformUserID, fID)
+	apiKeyCopy := *sh.apiKey
+	apiKeyCopy.ID = fID
+	apiKeyCopy.User = &userCopy
+	apiKeyCopy.UserID = userCopy.ID
+
 	cache := NewRealGatewayCacheForTest(t, sh.rdb)
 	store := cache.(CanonicalWalletLeaseStore)
 	liveStore := cache.(LiveCallStore)
@@ -181,9 +193,9 @@ func (sh *liveWindowShared) newFixtureCfg(t *testing.T, mode string, mutate func
 	conn := newLiveTestFrameConn()
 	dialer := &liveTestDialer{conn: conn}
 	f := &liveWindowFixture{
-		t: t, mode: mode, ctx: ctx, cancel: cancel,
+		t: t, sh: sh, mode: mode, ctx: ctx, cancel: cancel,
 		svc: nil, bridge: bridge, store: store, liveStore: liveStore, provisional: provStore,
-		db: sh.db, rdb: sh.rdb, fake: sh.fake, user: sh.user, apiKey: sh.apiKey, account: sh.account,
+		db: sh.db, rdb: sh.rdb, fake: sh.fake, user: &userCopy, apiKey: &apiKeyCopy, account: sh.account,
 		conn: conn, dialer: dialer, cfg: cfg,
 	}
 	f.svc = &OpenAIGatewayService{
@@ -251,7 +263,12 @@ type p37bHTTPUpstream struct {
 }
 
 func (h *p37bHTTPUpstream) Do(_ *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
-	id := h.fixture.callSeq.Add(1)
+	var id int64
+	if h.fixture != nil && h.fixture.sh != nil {
+		id = h.fixture.sh.callSeq.Add(1)
+	} else if h.fixture != nil {
+		id = h.fixture.callSeq.Add(1)
+	}
 	return &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Location": {"/backend-api/codex/call_p37b_" + strconv.FormatInt(id, 10)}},
@@ -830,150 +847,162 @@ func TestPhase37bDisabledModeAdvancesOnTheHorizon(t *testing.T) {
 // lease_cap_reached under §3.3's cap; (c) shadow admits.
 // ---------------------------------------------------------------------------
 
-// refuseLeg drives one refused-reauthorization leg: a session whose window 1
-// closes at the LEASE HORIZON under its accrued-but-under-E usage (a clean
-// conversion: A < E always), after which the re-authorization is refused and
-// the hard stop must fire.
-func runPhase37bRefusedLeg(t *testing.T, mode string, mutate func(*config.CanonicalWalletConfig), prepare func(f *liveWindowFixture, callHash string, E int64)) {
-	t.Helper()
+// ---------------------------------------------------------------------------
+// Test 51 — refused re-authorizations (consolidated, Phase 4.3-G Task 4):
+// three fixtures over ONE newLiveWindowShared claim (one Redis claim, one DB),
+// all three sessions created BEFORE any wait so the 30 s horizons elapse
+// concurrently; ONE bounded poll waits for all three terminal states; then
+// three assertion blocks named BalanceShortfall, LeaseCapReached, and
+// ShadowAdmits verify their respective terminal invariants.
+// ---------------------------------------------------------------------------
+
+func TestPhase37bRefusedReauthorizations(t *testing.T) {
 	sh := newLiveWindowShared(t)
-	f := sh.newFixtureCfg(t, mode, mutate)
+
+	// Fixture 1: Enforce Mode — Balance Shortfall
 	// The budget rides min_headroom (requested budget 0): the session's one
 	// lease is granted at exactly E, spent by its own arm — the gateway lease
 	// ends with zero remaining, so the boundary's ensure must ISSUE. Funding
-	// for the create is drained to zero right after it: the user can afford
-	// exactly one lease.
-	f.fund(0)
-	callHash, created := f.createSessionFunded(t, 20_000_000_000)
-	require.NotNil(t, created)
-	prov := f.provRecord(t, callHash)
-	E := prov.EstimatedUnits
-	f.fake.mu.Lock()
-	f.fake.balance[f.user.PlatformUserID] = 0
-	f.fake.mu.Unlock()
+	// for the create is drained to zero right after it: balance 1 − E spent
+	// at issue → shortfall at the boundary.
+	f1 := sh.newFixtureCfg(t, config.CanonicalWalletModeEnforce, func(c *config.CanonicalWalletConfig) {
+		c.LeaseBudgetUnits = 0
+	})
+	f1.fund(0)
+	callHash1, created1 := f1.createSessionFunded(t, 20_000_000_000)
+	require.NotNil(t, created1)
 
-	// A known rate R, held under E across the horizon: R = E/45 → A(30 s) =
-	// (2/3)E < E — no usage close, a clean conversion at the horizon.
-	R := E / 45
-	pumpCtx, pumpCancel := context.WithCancel(f.ctx)
-	go f.pumpAtRate(pumpCtx, t, R, callHash)
-	defer pumpCancel()
+	// Fixture 2: Enforce Mode — Lease Cap Reached
+	// The user's ONE lease (the session's own window-1 lease, purpose
+	// authorize, active) does not cover the window (consumed = E,
+	// budget = E → headroom 0); the cap is 1, so the boundary's issue
+	// attempt is refused with lease_cap_reached.
+	f2 := sh.newFixtureCfg(t, config.CanonicalWalletModeEnforce, func(c *config.CanonicalWalletConfig) {
+		c.LeaseBudgetUnits = 0
+	})
+	f2.fund(0)
+	callHash2, created2 := f2.createSessionFunded(t, 20_000_000_000)
+	require.NotNil(t, created2)
 
-	if prepare != nil {
-		prepare(f, callHash, E)
-	}
+	// Fixture 3: Shadow Mode — Shadow Admits
+	// The horizon close's re-authorization is refused — in shadow it is
+	// admitted: no session.close, the session continues, the next window
+	// opens with no hold.
+	f3 := sh.newFixtureCfg(t, config.CanonicalWalletModeShadow, func(c *config.CanonicalWalletConfig) {
+		c.LeaseBudgetUnits = 0
+	})
+	f3.fund(0)
+	callHash3, _ := f3.createSessionFunded(t, 20_000_000_000)
 
-	// Window 1 closes at the horizon with the clean conversion; the
-	// re-authorization is refused and the session closes.
-	deadline := time.Now().Add(40 * time.Second)
-	var controller string
+	// Drain balance and set cap=1 so boundary re-authorizations are refused
+	sh.fake.mu.Lock()
+	sh.fake.balance[f1.user.PlatformUserID] = 0
+	sh.fake.balance[f2.user.PlatformUserID] = 0
+	sh.fake.balance[f3.user.PlatformUserID] = 0
+	sh.fake.cap = 1
+	sh.fake.mu.Unlock()
+
+	prov1 := f1.provRecord(t, callHash1)
+	E1 := prov1.EstimatedUnits
+	R1 := E1 / 45
+	pumpCtx1, pumpCancel1 := context.WithCancel(f1.ctx)
+	go f1.pumpAtRate(pumpCtx1, t, R1, callHash1)
+	defer pumpCancel1()
+
+	prov2 := f2.provRecord(t, callHash2)
+	E2 := prov2.EstimatedUnits
+	R2 := E2 / 45
+	pumpCtx2, pumpCancel2 := context.WithCancel(f2.ctx)
+	go f2.pumpAtRate(pumpCtx2, t, R2, callHash2)
+	defer pumpCancel2()
+
+	prov3 := f3.provRecord(t, callHash3)
+	E3 := prov3.EstimatedUnits
+	R3 := E3 / 45
+	pumpCtx3, pumpCancel3 := context.WithCancel(f3.ctx)
+	go f3.pumpAtRate(pumpCtx3, t, R3, callHash3)
+	defer pumpCancel3()
+
+	// ALL THREE sessions created BEFORE any wait so the horizons elapse concurrently.
+	// ONE bounded poll waiting for all three terminal states.
+	deadline := time.Now().Add(45 * time.Second)
 	for time.Now().Before(deadline) {
-		if rec := f.recordByHash(t, callHash); rec.Controller == LiveControllerClosed {
-			controller = rec.Controller
+		done1 := f1.recordByHash(t, callHash1).Controller == LiveControllerClosed && f1.provRecord(t, callHash1).Status == LiveProvisionalStatusFinalized
+		done2 := f2.recordByHash(t, callHash2).Controller == LiveControllerClosed && f2.provRecord(t, callHash2).Status == LiveProvisionalStatusFinalized
+		done3 := len(f3.provRecord(t, callHash3).Windows) >= 2
+		if done1 && done2 && done3 {
 			break
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	require.Equal(t, LiveControllerClosed, controller, "the hard stop closed the session")
-	pumpCancel()
 
-	// The close frame was written on the sideband (non-billable).
-	select {
-	case frame := <-f.conn.writes:
-		require.Equal(t, coderws.MessageText, frame.messageType)
-		require.JSONEq(t, `{"type":"session.close"}`, string(frame.payload))
-	case <-time.After(2 * time.Second):
-		t.Fatal("session.close never written on the sideband")
-	}
+	pumpCancel1()
+	pumpCancel2()
 
-	// The row finalizes; the last window settles the tail with no hold.
-	deadline = time.Now().Add(15 * time.Second)
-	for time.Now().Before(deadline) {
-		prov = f.provRecord(t, callHash)
-		if prov.Status == LiveProvisionalStatusFinalized {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	require.Equal(t, LiveProvisionalStatusFinalized, prov.Status)
-	require.Empty(t, f.holdIDs(t), "no armed hold remains — the last window settled with no hold")
-
-	// The terms (§13.2.4): the floor term with the known rate —
-	// windows[0].settled_units ≤ E_w + R × live_window_min_seconds.
-	require.LessOrEqual(t, prov.Windows[0].SettledUnits, E+R*5, "the floor term")
-	// The tail ≤ the units of one pumped response (the in-flight frame).
-	require.Greater(t, prov.Windows[0].SettledUnits, int64(0))
-	if len(prov.Windows) > 1 && prov.Windows[1].SettledUnits > 0 {
-		require.LessOrEqual(t, prov.Windows[1].SettledUnits, R+1, "the tail after the refusal ≤ one response's units")
-	}
-	_ = prepare
-}
-
-func TestPhase37bRefusedReauthorizations(t *testing.T) {
 	t.Run("BalanceShortfall", func(t *testing.T) {
-		runPhase37bRefusedLeg(t, config.CanonicalWalletModeEnforce,
-			func(c *config.CanonicalWalletConfig) {
-				c.LeaseBudgetUnits = 0
-				c.LeaseTTLSeconds = 8
-				c.LiveWindowMinSeconds = 3
-			},
-			nil) // balance 1 − E spent at issue → shortfall at the boundary
+		controller := f1.recordByHash(t, callHash1).Controller
+		prov := f1.provRecord(t, callHash1)
+		require.Equal(t, LiveControllerClosed, controller, "the hard stop closed the session")
+
+		// The close frame was written on the sideband (non-billable).
+		select {
+		case frame := <-f1.conn.writes:
+			require.Equal(t, coderws.MessageText, frame.messageType)
+			require.JSONEq(t, `{"type":"session.close"}`, string(frame.payload))
+		case <-time.After(2 * time.Second):
+			t.Fatal("session.close never written on the sideband")
+		}
+
+		// The row finalizes; the last window settles the tail with no hold.
+		require.Equal(t, LiveProvisionalStatusFinalized, prov.Status)
+		require.Empty(t, f1.holdIDs(t), "no armed hold remains — the last window settled with no hold")
+
+		// The terms (§13.2.4): the floor term with the known rate —
+		// windows[0].settled_units ≤ E_w + R × live_window_min_seconds.
+		require.LessOrEqual(t, prov.Windows[0].SettledUnits, E1+R1*5, "the floor term")
+		// The tail ≤ the units of one pumped response (the in-flight frame).
+		require.Greater(t, prov.Windows[0].SettledUnits, int64(0))
+		if len(prov.Windows) > 1 && prov.Windows[1].SettledUnits > 0 {
+			require.LessOrEqual(t, prov.Windows[1].SettledUnits, R1+1, "the tail after the refusal ≤ one response's units")
+		}
 	})
 
 	t.Run("LeaseCapReached", func(t *testing.T) {
-		runPhase37bRefusedLeg(t, config.CanonicalWalletModeEnforce,
-			func(c *config.CanonicalWalletConfig) {
-				c.LeaseBudgetUnits = 0
-				c.LeaseTTLSeconds = 8
-				c.LiveWindowMinSeconds = 3
-			},
-			func(f *liveWindowFixture, callHash string, E int64) {
-				// The user's ONE lease (the session's own window-1 lease, purpose
-				// authorize, active) does not cover the window (consumed = E,
-				// budget = E → headroom 0); the cap is 1, so the boundary's issue
-				// attempt is refused with lease_cap_reached.
-				f.fake.mu.Lock()
-				f.fake.cap = 1
-				f.fake.mu.Unlock()
-			})
+		controller := f2.recordByHash(t, callHash2).Controller
+		prov := f2.provRecord(t, callHash2)
+		require.Equal(t, LiveControllerClosed, controller, "the hard stop closed the session")
+
+		// The close frame was written on the sideband (non-billable).
+		select {
+		case frame := <-f2.conn.writes:
+			require.Equal(t, coderws.MessageText, frame.messageType)
+			require.JSONEq(t, `{"type":"session.close"}`, string(frame.payload))
+		case <-time.After(2 * time.Second):
+			t.Fatal("session.close never written on the sideband")
+		}
+
+		// The row finalizes; the last window settles the tail with no hold.
+		require.Equal(t, LiveProvisionalStatusFinalized, prov.Status)
+		require.Empty(t, f2.holdIDs(t), "no armed hold remains — the last window settled with no hold")
+
+		// The terms (§13.2.4): the floor term with the known rate —
+		// windows[0].settled_units ≤ E_w + R × live_window_min_seconds.
+		require.LessOrEqual(t, prov.Windows[0].SettledUnits, E2+R2*5, "the floor term")
+		// The tail ≤ the units of one pumped response (the in-flight frame).
+		require.Greater(t, prov.Windows[0].SettledUnits, int64(0))
+		if len(prov.Windows) > 1 && prov.Windows[1].SettledUnits > 0 {
+			require.LessOrEqual(t, prov.Windows[1].SettledUnits, R2+1, "the tail after the refusal ≤ one response's units")
+		}
 	})
 
 	t.Run("ShadowAdmits", func(t *testing.T) {
-		sh := newLiveWindowShared(t)
-		f := sh.newFixtureCfg(t, config.CanonicalWalletModeShadow, func(c *config.CanonicalWalletConfig) {
-			c.LeaseBudgetUnits = 0
-			c.LeaseTTLSeconds = 8
-			c.LiveWindowMinSeconds = 3
-		})
-		f.fund(0)
-		callHash, _ := f.createSessionFunded(t, 20_000_000_000)
-		f.fake.mu.Lock()
-		f.fake.balance[f.user.PlatformUserID] = 0
-		f.fake.mu.Unlock()
-		prov := f.provRecord(t, callHash)
-		E := prov.EstimatedUnits
-		R := E / 45
-		pumpCtx, pumpCancel := context.WithCancel(f.ctx)
-		go f.pumpAtRate(pumpCtx, t, R, callHash)
-		defer pumpCancel()
-
-		// The horizon close's re-authorization is refused — in shadow it is
-		// admitted: no session.close, the session continues, the next window
-		// opens with no hold.
-		deadline := time.Now().Add(15 * time.Second)
-		for time.Now().Before(deadline) {
-			if p := f.provRecord(t, callHash); len(p.Windows) >= 2 {
-				prov = p
-				break
-			}
-			time.Sleep(50 * time.Millisecond)
-		}
+		prov := f3.provRecord(t, callHash3)
 		require.GreaterOrEqual(t, len(prov.Windows), 2, "the refused window advanced in shadow")
 		require.Equal(t, int64(1), LiveWindowMetricsSnapshot().RefusedShadow)
-		require.NotEqual(t, LiveControllerClosed, f.recordByHash(t, callHash).Controller, "no hard stop in shadow")
-		require.Empty(t, f.holdIDs(t), "the next window opens with no hold")
+		require.NotEqual(t, LiveControllerClosed, f3.recordByHash(t, callHash3).Controller, "no hard stop in shadow")
+		require.Empty(t, f3.holdIDs(t), "the next window opens with no hold")
 		select {
-		case <-f.conn.writes:
+		case <-f3.conn.writes:
 			t.Fatal("shadow must not write session.close")
 		default:
 		}
