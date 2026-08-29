@@ -218,3 +218,247 @@ func TestLiveProvisionalListByUser(t *testing.T) {
 	require.Equal(t, int64(5), rec.Windows[1].PendingUnits)
 	require.Equal(t, int64(2000), rec.Windows[1].OpenedAtMS)
 }
+
+// TestWalletReconciliationSummaryEqualsDirectSums is test 69 (redesign
+// §15.5): the summary's figures equal the direct-table sums on real
+// Postgres, and a Redis loss is diagnostic only. One shared-Redis claim
+// for the whole test; the FlushDB leg reuses the SAME client (no second
+// claim, no helper re-entry — round-1 MAJOR-5).
+func TestWalletReconciliationSummaryEqualsDirectSums(t *testing.T) {
+	ctx := context.Background()
+	db := startWalletReconciliationTestPostgres(t, ctx)
+	rdb := startCanonicalWalletTestRedis(t, ctx) // the ONE claim
+
+	user := "shipany-user-recon69"
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	since, until := now.Add(-time.Hour), now.Add(time.Hour)
+
+	// --- seed the outbox: one row per status and reason (direct SQL —
+	// test seeding with full control of status/reason/delivered_at).
+	type seeded struct {
+		id                               int64
+		eventID, leaseID, status, reason string
+		amount                           int64
+	}
+	seeds := []seeded{
+		{eventID: "gwusg_69_d1", leaseID: "lease-69-a", status: "delivered", amount: 1_000000},
+		{eventID: "gwusg_69_d2", leaseID: "lease-69-b", status: "delivered", amount: 2_000000},
+		{eventID: "gwusg_69_d3", leaseID: "lease-69-c", status: "delivered", amount: 4_000000},
+		{eventID: "gwusg_69_p1", leaseID: "lease-69-a", status: "pending", amount: 8_000000},
+		{eventID: "gwusg_69_f1", leaseID: "lease-69-b", status: "in_flight", amount: 16_000000},
+		{eventID: "gwusg_69_bs", leaseID: "lease-69-a", status: "dead_letter", reason: "balance_shortfall", amount: 32_000000},
+		{eventID: "gwusg_69_se", leaseID: "lease-69-c", status: "dead_letter", reason: "split_exhausted", amount: 64_000000},
+	}
+	for i, s := range seeds {
+		var deliveredAt any
+		if s.status == "delivered" {
+			deliveredAt = now.Add(-time.Duration(i+1) * time.Minute)
+		}
+		var reason any
+		if s.reason != "" {
+			reason = s.reason
+		}
+		_, err := db.ExecContext(ctx, `
+			INSERT INTO wallet_settlement_outbox
+				(event_id, platform_user_id, lease_id, gateway_request_id, currency, amount_units, payload_hash, status, occurred_at, delivered_at, dead_letter_reason, attempt_count, authorization_id)
+			VALUES ($1, $2, $3, $4, 'CNY', $5, 'hash-69', $6, $7, $8, $9, 1, $10)`,
+			s.eventID, user, s.leaseID, "req-"+s.eventID, s.amount, s.status, now.Add(-30*time.Minute), deliveredAt, reason, "auth-69-"+s.eventID)
+		require.NoError(t, err)
+		require.NoError(t, db.QueryRowContext(ctx, `SELECT id FROM wallet_settlement_outbox WHERE event_id = $1`, s.eventID).Scan(&seeds[i].id))
+	}
+	t.Logf("test 69 seeded outbox rows: %d (user %s)", len(seeds), user)
+
+	// --- seed hold outcomes: one row per resolution of 213's domain.
+	holdStore := &walletHoldOutcomeStore{db: db}
+	holdSeeds := []CanonicalWalletHold{
+		{AuthorizationID: "auth-69-settled", LeaseID: "lease-69-a", HeldUnits: 11_000000, ArmedAt: now.Add(-20 * time.Minute), Class: "indeterminate", State: "armed"},
+		{AuthorizationID: "auth-69-abandoned", LeaseID: "lease-69-b", HeldUnits: 12_000000, ArmedAt: now.Add(-19 * time.Minute), Class: "", State: "armed"},
+		{AuthorizationID: "auth-69-expired", LeaseID: "lease-69-c", HeldUnits: 13_000000, ArmedAt: now.Add(-18 * time.Minute), Class: "not_written", State: "armed"},
+		{AuthorizationID: "auth-69-open", LeaseID: "lease-69-a", HeldUnits: 14_000000, ArmedAt: now.Add(-17 * time.Minute), Class: "indeterminate", State: "armed"},
+	}
+	require.NoError(t, holdStore.InsertIndeterminate(ctx, holdSeeds[0], user, now.Add(-20*time.Minute)))
+	require.NoError(t, holdStore.MarkSettled(ctx, holdSeeds[0].AuthorizationID, "gwusg_69_d1", now.Add(-15*time.Minute)))
+	require.NoError(t, holdStore.InsertAbandoned(ctx, holdSeeds[1], user, now.Add(-19*time.Minute)))
+	require.NoError(t, holdStore.InsertIndeterminate(ctx, holdSeeds[2], user, now.Add(-18*time.Minute)))
+	n, err := holdStore.MarkExpiredOlderThan(ctx, now.Add(-17*time.Minute).Add(time.Second), now.Add(-10*time.Minute))
+	require.NoError(t, err)
+	require.Equal(t, int64(1), n)
+	require.NoError(t, holdStore.InsertIndeterminate(ctx, holdSeeds[3], user, now.Add(-17*time.Minute)))
+
+	// --- seed the billing snapshot + two Live records: one whose
+	// billing_snapshot_id resolves (fx = the snapshot's rate — round-3 fx
+	// fold), one with billing_snapshot_id='' (fx = null).
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO wallet_billing_snapshot (id, version, user_id, api_key_id, account_id, billing_model, pricing_mode, payload)
+		VALUES ('snap-69', 1, 101, 202, 303, 'paygo', 'per_call', '{"fx":{"rate":"7.2451","base":"CNY"}}'::jsonb)`)
+	require.NoError(t, err)
+	liveCallHash := "live_callhash_69"
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO wallet_live_provisional
+			(token, authorization_id, call_hash, platform_user_id, user_id, api_key_id, account_id,
+			 billing_currency, billing_snapshot_id, estimated_units, status, windows, settlement_event_id, created_at)
+		VALUES ('auth-69-live-a', 'auth-69-live-a', $1, $2, 101, 202, 303, 'CNY', 'snap-69', 7_000000, 'finalized',
+			$3::jsonb, 'gwusg_69_live_final', $4)`,
+		liveCallHash, user,
+		`[{"window_seq":1,"lease_id":"lease-69-a","token":"auth-69-live-a","pending_units":0,"settled_units":3,"opened_at_ms":1000},
+		   {"window_seq":2,"lease_id":"lease-69-c","token":"auth-69-live-a","pending_units":5,"settled_units":4,"opened_at_ms":2000}]`,
+		now.Add(-25*time.Minute))
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO wallet_live_provisional
+			(token, authorization_id, call_hash, platform_user_id, user_id, api_key_id, account_id,
+			 billing_currency, billing_snapshot_id, estimated_units, status, windows, settlement_event_id, created_at)
+		VALUES ('auth-69-live-b', 'auth-69-live-b', 'live_callhash_69b', $1, 101, 202, 303, 'CNY', '', 500, 'finalized', '[]'::jsonb, 'gwusg_69_live_b_final', $2)`,
+		user, now.Add(-24*time.Minute))
+	require.NoError(t, err)
+	t.Logf("test 69 seeded: holds=%d live=2 (1 with resolvable fx, 1 without)", len(holdSeeds))
+
+	// --- seed Redis: the current pointer + lease hash for U (the
+	// ensure-shaped seeding: InstallCanonicalWalletLease is exactly what a
+	// successful ensure leaves behind) + two armed holds.
+	leaseStore := &gatewayCacheAdapterForTest{rdb: rdb}
+	leaseID := "lease-69-current"
+	lease := CanonicalWalletLease{
+		LeaseID: leaseID, PlatformUserID: user, Currency: "CNY",
+		BudgetUnits: 500_000000, ConsumedUnits: 9_000000, ExpiresAt: now.Add(10 * time.Minute),
+	}
+	require.NoError(t, leaseStore.InstallCanonicalWalletLease(ctx, lease))
+	for _, authID := range []string{"auth-69-open", "auth-69-open2"} {
+		outLease, held, _, armErr := leaseStore.ArmCanonicalWalletHold(ctx, user, leaseID, "CNY", authID, 14_000000, 60_000, now)
+		require.NoError(t, armErr)
+		require.Equal(t, leaseID, outLease)
+		require.Equal(t, int64(14_000000), held)
+	}
+
+	// --- the service under test, composed exactly as production does.
+	outbox := &outboxStoreForTest{db: db}
+	svc := &WalletReconciliationReadService{
+		outbox: outbox,
+		holds:  holdStore,
+		live:   &liveProvisionalStore{db: db},
+		leases: leaseStore,
+	}
+
+	summary, err := svc.Summary(ctx, user, since, until, 0)
+	require.NoError(t, err)
+	require.Equal(t, user, summary.PlatformUserID)
+
+	// Σ delivered amount_units per lease == the direct SQL GROUP BY.
+	require.Len(t, summary.Outbox, len(seeds))
+	deliveredByLease := map[string]int64{}
+	for _, row := range summary.Outbox {
+		if row.Status == "delivered" {
+			deliveredByLease[row.LeaseID] += row.AmountUnits
+		}
+	}
+	dbRows, err := db.QueryContext(ctx, `SELECT lease_id, SUM(amount_units) FROM wallet_settlement_outbox WHERE platform_user_id = $1 AND status = 'delivered' GROUP BY lease_id`, user)
+	require.NoError(t, err)
+	for dbRows.Next() {
+		var lease string
+		var sum int64
+		require.NoError(t, dbRows.Scan(&lease, &sum))
+		require.Equal(t, sum, deliveredByLease[lease], "lease %s", lease)
+		delete(deliveredByLease, lease)
+	}
+	require.NoError(t, dbRows.Err())
+	dbRows.Close()
+	require.Empty(t, deliveredByLease, "every delivered lease appears in the direct sums")
+
+	// The receivable == the direct sums == SumDeadLetterUnits (this
+	// database holds only U's dead letters).
+	require.Equal(t, int64(32_000000), summary.Receivable.BalanceShortfallUnits)
+	require.Equal(t, int64(64_000000), summary.Receivable.SplitExhaustedUnits)
+	require.Equal(t, 2, summary.Receivable.Rows)
+	for reason, want := range map[string]int64{"balance_shortfall": 32_000000, "split_exhausted": 64_000000} {
+		sum, sumErr := outbox.SumDeadLetterUnits(ctx, reason)
+		require.NoError(t, sumErr)
+		require.Equal(t, want, sum, "SumDeadLetterUnits(%s)", reason)
+	}
+
+	// Every hold row, with its resolution.
+	require.Len(t, summary.Holds, 4)
+	holdResolutions := map[string]string{}
+	for _, h := range summary.Holds {
+		if h.Resolution != nil {
+			holdResolutions[h.AuthorizationID] = *h.Resolution
+		} else {
+			holdResolutions[h.AuthorizationID] = ""
+		}
+	}
+	require.Equal(t, map[string]string{
+		"auth-69-settled":   "settled",
+		"auth-69-abandoned": "abandoned",
+		"auth-69-expired":   "expired",
+		"auth-69-open":      "",
+	}, holdResolutions)
+	settled := summary.Holds[0]
+	for _, h := range summary.Holds {
+		if h.AuthorizationID == "auth-69-settled" {
+			settled = h
+		}
+	}
+	require.NotNil(t, settled.SettlementEventID)
+	require.Equal(t, "gwusg_69_d1", *settled.SettlementEventID)
+
+	// Both windows with their DERIVED event ids; the fx fold.
+	require.Len(t, summary.Live, 2)
+	var liveA, liveB *WalletReconciliationLiveRow
+	for i := range summary.Live {
+		if summary.Live[i].CallHash == liveCallHash {
+			liveA = &summary.Live[i]
+		} else {
+			liveB = &summary.Live[i]
+		}
+	}
+	require.NotNil(t, liveA, "the snapshot-backed Live record")
+	require.NotNil(t, liveB)
+	require.Len(t, liveA.Windows, 2)
+	require.Equal(t, LiveWindowSettlementEventID(liveCallHash, 1, user, "CNY"), liveA.Windows[0].EventID)
+	require.Equal(t, LiveWindowSettlementEventID(liveCallHash, 2, user, "CNY"), liveA.Windows[1].EventID)
+	require.NotEqual(t, liveA.Windows[0].EventID, liveA.Windows[1].EventID)
+	require.NotNil(t, liveA.BillingFX, "the resolvable snapshot reports its rate")
+	require.Equal(t, "7.2451", *liveA.BillingFX)
+	require.Equal(t, "snap-69", liveA.BillingSnapshotID)
+	require.Nil(t, liveB.BillingFX, "an empty billing_snapshot_id degrades to null fx")
+	require.Equal(t, "", liveB.BillingSnapshotID)
+
+	// The Redis view: available, the current lease, two armed holds.
+	require.True(t, summary.Redis.Available)
+	require.NotNil(t, summary.Redis.CurrentLeaseID)
+	require.Equal(t, leaseID, *summary.Redis.CurrentLeaseID)
+	require.NotNil(t, summary.Redis.Lease)
+	require.Equal(t, int64(500_000000), summary.Redis.Lease.BudgetUnits)
+	require.Equal(t, 2, summary.Redis.OpenHolds)
+
+	// The watermark counts match the seeded statuses and the global
+	// receivable equals SumDeadLetterUnits for both reasons.
+	wm, err := svc.Watermark(ctx)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), wm.Pending)
+	require.Equal(t, int64(1), wm.InFlight)
+	require.Equal(t, int64(2), wm.DeadLetter)
+	require.NotNil(t, wm.DeliveredAtMax)
+	require.WithinDuration(t, now.Add(-time.Minute), *wm.DeliveredAtMax, time.Second, "the first delivered seed carries the latest delivered_at")
+	var maxID int64
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT max(id) FROM wallet_settlement_outbox`).Scan(&maxID))
+	require.Equal(t, maxID, wm.OutboxIDMax)
+	require.Equal(t, int64(32_000000), wm.Receivable.BalanceShortfallUnits)
+	require.Equal(t, int64(64_000000), wm.Receivable.SplitExhaustedUnits)
+
+	// --- the empty-keyspace leg (round-1 MAJOR-5): FLUSHDB on the
+	// ALREADY-CLAIMED client — no second claim, no helper re-entry. An
+	// empty keyspace is not an outage (test 63's recoverable shape): the
+	// summary stays 200-shaped with redis.available == true, no current
+	// lease, zero open holds, and the Postgres parts identical.
+	require.NoError(t, rdb.FlushDB(ctx).Err())
+	afterFlush, err := svc.Summary(ctx, user, since, until, 0)
+	require.NoError(t, err)
+	require.True(t, afterFlush.Redis.Available, "an empty keyspace is not an outage")
+	require.Nil(t, afterFlush.Redis.CurrentLeaseID)
+	require.Nil(t, afterFlush.Redis.Lease)
+	require.Zero(t, afterFlush.Redis.OpenHolds)
+	require.Equal(t, summary.Outbox, afterFlush.Outbox, "the Postgres parts are identical")
+	require.Equal(t, summary.Receivable, afterFlush.Receivable)
+	require.Equal(t, summary.Holds, afterFlush.Holds)
+	require.Equal(t, summary.Live, afterFlush.Live)
+}

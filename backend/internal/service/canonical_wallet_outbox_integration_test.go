@@ -353,6 +353,86 @@ func (o *outboxStoreForTest) SumDeadLetterUnits(ctx context.Context, reason stri
 	return sum.Int64, nil
 }
 
+// Phase 4.1-G: the two READ methods of repository.WalletOutboxStore,
+// mirrored here byte-for-byte (test 69's service-level legs run through
+// this mirror — a service-package test cannot import repository, which
+// imports service; the repository's own read/cursor proof is Task 1a's
+// repository test, and test 69's handler file exercises the REAL store).
+func (o *outboxStoreForTest) ListOutboxEventsByUser(ctx context.Context, platformUserID string, since, until time.Time, afterID int64, limit int) ([]CanonicalWalletOutboxEvent, bool, error) {
+	if limit < 1 {
+		limit = 1
+	}
+	rows, err := o.db.QueryContext(ctx, `
+		SELECT id, event_id, platform_user_id, lease_id, gateway_request_id, currency, amount_units,
+			local_balance_after_units, occurred_at, attempt_count, status, dead_letter_reason, delivered_at,
+			parent_event_id, split_depth, pending_release_units, authorization_id
+		FROM wallet_settlement_outbox
+		WHERE platform_user_id = $1 AND occurred_at >= $2 AND occurred_at < $3 AND id > $4
+		ORDER BY id
+		LIMIT $5`, platformUserID, since, until, afterID, limit+1)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+	events := make([]CanonicalWalletOutboxEvent, 0, limit)
+	for rows.Next() {
+		var e CanonicalWalletOutboxEvent
+		var leaseID sql.NullString
+		var parentEventID, authorizationID, deadLetterReason sql.NullString
+		var pendingRelease sql.NullInt64
+		var deliveredAt sql.NullTime
+		if err := rows.Scan(&e.ID, &e.EventID, &e.PlatformUserID, &leaseID, &e.GatewayRequestID, &e.Currency, &e.AmountUnits,
+			&e.LocalBalanceAfterUnits, &e.OccurredAt, &e.AttemptCount, &e.Status, &deadLetterReason, &deliveredAt,
+			&parentEventID, &e.SplitDepth, &pendingRelease, &authorizationID); err != nil {
+			return nil, false, err
+		}
+		e.LeaseID = leaseID.String
+		e.ParentEventID = parentEventID.String
+		e.AuthorizationID = authorizationID.String
+		e.DeadLetterReason = deadLetterReason.String
+		if pendingRelease.Valid {
+			v := pendingRelease.Int64
+			e.PendingReleaseUnits = &v
+		}
+		if deliveredAt.Valid {
+			v := deliveredAt.Time
+			e.DeliveredAt = &v
+		}
+		events = append(events, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	truncated := len(events) > limit
+	if truncated {
+		events = events[:limit]
+	}
+	return events, truncated, nil
+}
+
+func (o *outboxStoreForTest) DeliveredWatermark(ctx context.Context) (OutboxWatermark, error) {
+	var wm OutboxWatermark
+	var deliveredMax sql.NullTime
+	var idMax sql.NullInt64
+	err := o.db.QueryRowContext(ctx, `
+		SELECT max(delivered_at), max(id),
+		       count(*) FILTER (WHERE status = 'pending'),
+		       count(*) FILTER (WHERE status = 'in_flight'),
+		       count(*) FILTER (WHERE status = 'dead_letter')
+		FROM wallet_settlement_outbox`).Scan(&deliveredMax, &idMax, &wm.Pending, &wm.InFlight, &wm.DeadLetter)
+	if err != nil {
+		return wm, err
+	}
+	if deliveredMax.Valid {
+		v := deliveredMax.Time
+		wm.DeliveredAtMax = &v
+	}
+	wm.OutboxIDMax = idMax.Int64
+	return wm, nil
+}
+
+var _ WalletReconciliationOutboxRead = (*outboxStoreForTest)(nil)
+
 var _ CanonicalWalletOutboxStore = (*outboxStoreForTest)(nil)
 
 func TestCanonicalWalletObserveSettlementIsDurableAndGetsDelivered(t *testing.T) {
