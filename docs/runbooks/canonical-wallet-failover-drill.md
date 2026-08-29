@@ -180,3 +180,71 @@ LIMIT 20;
 | **Max Convergence Time** | **960s (16 min)** | **70s–80s** | Time from gateway drop to complete hold reap & outcome recording |
 
 **Automated Test Reference:** `internal/service/openai_live_failover_drill_test.go` (`TestOpenAILiveFailoverDrillTest74`).
+
+---
+
+## 6. ShipAny 4.3-S Operator Handoff, Cross-Plane Verification & Emergency Rollback
+
+### A. ShipAny 4.3-S Verification Checklist
+ShipAny operators responsible for control plane operations should verify the following points when Sub2API operates in `canonical_wallet.mode=enforce`:
+1. **Ensure Route Health**: Verify Sub2API instances are successfully negotiating leases over `/api/v1/wallet/lease/ensure` without unexpected 4xx/5xx responses.
+2. **Zero Orphan Leaks**: Verify that lease reservations granted by ShipAny match the sum of active holds plus released/settled amounts in Sub2API.
+3. **Dispatcher Delivery Latency**: Outbox events from Sub2API should be claimed and resolved within normal HTTP dispatch timeouts (p99 < 500ms).
+
+### B. Shared Metrics Cross-Reference Matrix
+
+| Sub2API Gateway Metric | ShipAny Control Plane Metric | Meaning / Verification Condition |
+|---|---|---|
+| `canonical_wallet_bridge_settlements_enqueued_total` | `shipany_wallet_settlements_received_total` | Settlement events queued on data plane match incoming events at control plane. |
+| `canonical_wallet_bridge_settlements_delivered_total` | `shipany_wallet_settlement_events_applied_total` | Delivered settlement count equals applied ledger adjustments. |
+| `canonical_wallet_bridge_holds_abandoned_total` | `shipany_wallet_holds_abandoned_total` | Holds reaped by Sub2API match abandoned releases recorded by control plane. |
+| `canonical_wallet_settlement_uncollectable_units` | `shipany_wallet_receivable_balance_units` | Uncollectable units (balance shortfalls) match the recorded receivable debt. |
+
+### C. Cross-Plane Reconciliation Drill Query Procedure
+To verify penny-exact ledger balance agreement across both planes for any given platform user:
+
+1. **Query Sub2API Outbox Net Delivered Settlement Sum:**
+   ```sql
+   -- Sub2API PostgreSQL:
+   SELECT 
+     platform_user_id,
+     currency,
+     coalesce(sum(amount_units), 0) AS total_settled_units
+   FROM wallet_settlement_outbox
+   WHERE status = 'delivered' AND platform_user_id = 'shipany-user-example-123'
+   GROUP BY platform_user_id, currency;
+   ```
+
+2. **Query ShipAny Control Plane User Wallet Ledger:**
+   ```sql
+   -- ShipAny PostgreSQL:
+   SELECT 
+     user_id,
+     currency,
+     initial_balance_units - current_balance_units AS ledger_consumed_units,
+     receivable_debt_units
+   FROM user_wallets
+   WHERE user_id = 'shipany-user-example-123';
+   ```
+
+3. **Verification Condition:**
+   `total_settled_units (Sub2API)` **MUST EQUAL** `ledger_consumed_units (ShipAny) + receivable_debt_units (ShipAny)`.
+
+### D. Emergency Rollback Procedure
+If unexpected upstream degradation, control-plane network issues, or operational anomalies occur while in `canonical_wallet.mode=enforce`:
+
+1. **Switch Mode to `shadow` (or `disabled`):**
+   Update environment variable on Sub2API host / container:
+   ```bash
+   # In .env or docker-compose environment:
+   CANONICAL_WALLET_MODE=shadow
+   ```
+2. **Reload / Restart Gateway Service:**
+   ```bash
+   docker compose -f deploy/docker-compose.yml up -d sub2api
+   ```
+3. **Verify Seamless Fallback:**
+   - In shadow mode, user traffic continues without interruption.
+   - Hold failures and refusals are admitted continuously with non-blocking metric increments (`canonical_wallet_live_window_refused_shadow_total`).
+   - The outbox dispatcher remains active and continues draining existing pending outbox rows to ensure no financial events are lost.
+
