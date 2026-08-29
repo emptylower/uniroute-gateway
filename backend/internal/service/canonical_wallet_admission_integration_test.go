@@ -752,6 +752,12 @@ func (c *gatewayCacheAdapterForTest) TryCanonicalWalletReaperLease(ctx context.C
 	return c.rdb.SetNX(ctx, testCanonicalWalletReaperTickKey, "1", ttl).Result()
 }
 
+// TryCanonicalWalletReceivableCollectorLease (Phase 4.2-G Task 2): the
+// collector's OWN leader key, mirroring the production gatewayCache.
+func (c *gatewayCacheAdapterForTest) TryCanonicalWalletReceivableCollectorLease(ctx context.Context, ttl time.Duration) (bool, error) {
+	return c.rdb.SetNX(ctx, "canonical_wallet:receivable_collector:tick", "1", ttl).Result()
+}
+
 func (c *gatewayCacheAdapterForTest) ForgetCanonicalWalletHold(ctx context.Context, platformUserID, authorizationID string) error {
 	return c.rdb.SRem(ctx, testCanonicalWalletHoldSetKey(platformUserID), authorizationID).Err()
 }

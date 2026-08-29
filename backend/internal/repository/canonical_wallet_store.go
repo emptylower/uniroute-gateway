@@ -344,6 +344,11 @@ const canonicalWalletHoldPrefix = "canonical_wallet:hold:"
 const canonicalWalletHoldSetPrefix = "canonical_wallet:holds:"
 const canonicalWalletHoldUsersKey = "canonical_wallet:hold_users"
 const canonicalWalletReaperTickKey = "canonical_wallet:reaper:tick"
+
+// canonicalWalletReceivableCollectorTickKey (Phase 4.2-G Task 2): the
+// collector's OWN leader key — never the reaper's, so the two deployment-
+// wide passes stay independent.
+const canonicalWalletReceivableCollectorTickKey = "canonical_wallet:receivable_collector:tick"
 const canonicalWalletHoldUserEmptyPrefix = "canonical_wallet:holds_empty:"
 
 func canonicalWalletHoldKey(platformUserID, authorizationID string) string {
@@ -729,6 +734,18 @@ func (c *gatewayCache) TryCanonicalWalletReaperLease(ctx context.Context, ttl ti
 		return false, errors.New("canonical wallet Redis store unavailable")
 	}
 	return c.rdb.SetNX(ctx, canonicalWalletReaperTickKey, "1", ttl).Result()
+}
+
+// TryCanonicalWalletReceivableCollectorLease (Phase 4.2-G Task 2) is the
+// receivable collector's deployment-wide tick leader — the reaper's SETNX
+// pattern with its OWN key, so the collector's pass and the reaper's sweep
+// never starve each other (the process builds three bridges; the leader
+// makes the pass singular).
+func (c *gatewayCache) TryCanonicalWalletReceivableCollectorLease(ctx context.Context, ttl time.Duration) (bool, error) {
+	if c == nil || c.rdb == nil {
+		return false, errors.New("canonical wallet Redis store unavailable")
+	}
+	return c.rdb.SetNX(ctx, canonicalWalletReceivableCollectorTickKey, "1", ttl).Result()
 }
 
 func (c *gatewayCache) ForgetCanonicalWalletHold(ctx context.Context, platformUserID, authorizationID string) error {

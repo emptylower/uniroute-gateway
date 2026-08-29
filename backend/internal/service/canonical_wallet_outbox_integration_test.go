@@ -60,7 +60,11 @@ func startCanonicalWalletTestPostgres(t *testing.T, ctx context.Context) *sql.DB
 // real; the other two panic if called, so an accidental future use of this
 // stub for something it wasn't built for fails loudly instead of silently
 // no-op'ing.
-type outboxStoreForTest struct{ db *sql.DB }
+type outboxStoreForTest struct {
+	db          *sql.DB
+	maxAttempts int
+	backoff     func(attempts int, simulatedNow time.Time) time.Time
+}
 
 func (o *outboxStoreForTest) InsertOutboxEventTx(ctx context.Context, tx *sql.Tx, event CanonicalWalletSettlementEvent) error {
 	// Mirrors repository.WalletOutboxStore's identity contract since Phase
@@ -167,12 +171,18 @@ func (o *outboxStoreForTest) MarkOutboxEventFailed(ctx context.Context, id int64
 	if err != nil {
 		return err
 	}
-	const maxAttempts = 8
+	maxAttempts := 8
+	if o.maxAttempts > 0 {
+		maxAttempts = o.maxAttempts
+	}
 	if attempts >= maxAttempts {
 		_, err := o.db.ExecContext(ctx, `UPDATE wallet_settlement_outbox SET status = 'dead_letter', dead_letter_reason = 'attempts_exhausted', claimed_at = NULL, claimed_by = NULL WHERE id = $1 AND status = 'in_flight' AND claimed_by = $2`, id, workerID)
 		return err
 	}
 	next := simulatedNow.Add(time.Duration(1<<uint(attempts)) * time.Second)
+	if o.backoff != nil {
+		next = o.backoff(attempts, simulatedNow)
+	}
 	_, err = o.db.ExecContext(ctx, `UPDATE wallet_settlement_outbox SET status = 'pending', next_attempt_at = $3, claimed_at = NULL, claimed_by = NULL WHERE id = $1 AND status = 'in_flight' AND claimed_by = $2`, id, workerID, next)
 	return err
 }
@@ -491,4 +501,56 @@ func TestCanonicalWalletObserveSettlementIsDurableAndGetsDelivered(t *testing.T)
 	pending, err := outbox.ClaimPendingOutboxEvents(ctx, "test-worker", 10)
 	require.NoError(t, err)
 	require.Len(t, pending, 1)
+}
+
+// ListReceivableRedriveCandidates / RequeueDeadLetter (Phase 4.2-G Task 2)
+// mirror repository.WalletOutboxStore's implementations for the collector
+// tests. The candidate listing deliberately returns rows AT the bound too
+// (`<=`, deviation from the plan's `<`): the collector counts them as
+// receivable_redrive_exhausted — terminal, staying in the receivable —
+// which a strict `<` filter would hide from the only pass that observes
+// them.
+func (o *outboxStoreForTest) ListReceivableRedriveCandidates(ctx context.Context, notBefore time.Time, maxRedrives, limit int) ([]CanonicalWalletOutboxEvent, error) {
+	if limit < 1 {
+		limit = 1
+	}
+	if maxRedrives < 1 {
+		maxRedrives = 1
+	}
+	rows, err := o.db.QueryContext(ctx, `
+		SELECT id, event_id, platform_user_id, lease_id, gateway_request_id, currency, amount_units,
+			local_balance_after_units, occurred_at, attempt_count, redrive_count, parent_event_id, split_depth, authorization_id
+		FROM wallet_settlement_outbox
+		WHERE status = 'dead_letter' AND dead_letter_reason = 'balance_shortfall'
+		  AND occurred_at >= $1 AND redrive_count <= $2
+		ORDER BY id
+		LIMIT $3`, notBefore, maxRedrives, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	events := make([]CanonicalWalletOutboxEvent, 0, limit)
+	for rows.Next() {
+		var e CanonicalWalletOutboxEvent
+		var leaseID sql.NullString
+		var parentEventID, authorizationID sql.NullString
+		if err := rows.Scan(&e.ID, &e.EventID, &e.PlatformUserID, &leaseID, &e.GatewayRequestID, &e.Currency, &e.AmountUnits,
+			&e.LocalBalanceAfterUnits, &e.OccurredAt, &e.AttemptCount, &e.RedriveCount, &parentEventID, &e.SplitDepth, &authorizationID); err != nil {
+			return nil, err
+		}
+		e.LeaseID = leaseID.String
+		e.ParentEventID = parentEventID.String
+		e.AuthorizationID = authorizationID.String
+		events = append(events, e)
+	}
+	return events, rows.Err()
+}
+
+func (o *outboxStoreForTest) RequeueDeadLetter(ctx context.Context, id int64, workerID string) error {
+	_, err := o.db.ExecContext(ctx, `
+		UPDATE wallet_settlement_outbox
+		SET status = 'pending', attempt_count = 0, redrive_count = redrive_count + 1,
+		    next_attempt_at = now(), dead_letter_reason = NULL, claimed_at = NULL, claimed_by = NULL
+		WHERE id = $1 AND status = 'dead_letter' AND dead_letter_reason = 'balance_shortfall'`, id)
+	return err
 }

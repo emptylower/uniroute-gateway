@@ -534,3 +534,66 @@ func (s *WalletOutboxStore) DeliveredWatermark(ctx context.Context) (service.Out
 	wm.OutboxIDMax = idMax.Int64
 	return wm, nil
 }
+
+// ListReceivableRedriveCandidates (Phase 4.2-G Task 2, redesign §15.4/§11.3)
+// is the receivable collector's candidate set: balance_shortfall
+// dead-letters young enough to still be collectable (occurred_at ≥
+// notBefore — the retention bound), at OR under the re-drive bound
+// (redrive_count <= maxRedrives — the AT-bound rows are returned so the
+// collector can count them as receivable_redrive_exhausted; it re-queues
+// only the under-bound ones), oldest first, capped. The receivable is
+// money owed: this query NEVER deletes, and the collector never
+// reclassifies — re-queueing is the only mutation (RequeueDeadLetter).
+// Read-only.
+func (s *WalletOutboxStore) ListReceivableRedriveCandidates(ctx context.Context, notBefore time.Time, maxRedrives, limit int) ([]service.CanonicalWalletOutboxEvent, error) {
+	if limit < 1 {
+		limit = 1
+	}
+	if maxRedrives < 1 {
+		maxRedrives = 1
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, event_id, platform_user_id, lease_id, gateway_request_id, currency, amount_units,
+			local_balance_after_units, occurred_at, attempt_count, redrive_count, parent_event_id, split_depth, authorization_id
+		FROM wallet_settlement_outbox
+		WHERE status = 'dead_letter' AND dead_letter_reason = 'balance_shortfall'
+		  AND occurred_at >= $1 AND redrive_count <= $2
+		ORDER BY id
+		LIMIT $3`, notBefore, maxRedrives, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	events := make([]service.CanonicalWalletOutboxEvent, 0, limit)
+	for rows.Next() {
+		var e service.CanonicalWalletOutboxEvent
+		var leaseID sql.NullString
+		var parentEventID, authorizationID sql.NullString
+		if err := rows.Scan(&e.ID, &e.EventID, &e.PlatformUserID, &leaseID, &e.GatewayRequestID, &e.Currency, &e.AmountUnits,
+			&e.LocalBalanceAfterUnits, &e.OccurredAt, &e.AttemptCount, &e.RedriveCount, &parentEventID, &e.SplitDepth, &authorizationID); err != nil {
+			return nil, err
+		}
+		e.LeaseID = leaseID.String
+		e.ParentEventID = parentEventID.String
+		e.AuthorizationID = authorizationID.String
+		events = append(events, e)
+	}
+	return events, rows.Err()
+}
+
+// RequeueDeadLetter (Phase 4.2-G Task 2) moves ONE balance_shortfall
+// dead-letter back to pending under the collector's re-drive: the transport
+// budget starts fresh (attempt_count = 0), the re-drive is counted in its
+// OWN column (redrive_count + 1), and the row is immediately claimable.
+// ONE statement, idempotent by its status guard (a row already re-driven or
+// resolved by another path updates zero rows — not this caller's outcome).
+// The dead-letter class itself is written ONLY by the dispatcher's
+// unmodified path; this method never reclassifies anything.
+func (s *WalletOutboxStore) RequeueDeadLetter(ctx context.Context, id int64, workerID string) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE wallet_settlement_outbox
+		SET status = 'pending', attempt_count = 0, redrive_count = redrive_count + 1,
+		    next_attempt_at = now(), dead_letter_reason = NULL, claimed_at = NULL, claimed_by = NULL
+		WHERE id = $1 AND status = 'dead_letter' AND dead_letter_reason = 'balance_shortfall'`, id)
+	return err
+}

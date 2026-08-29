@@ -346,6 +346,14 @@ type CanonicalWalletOutboxStore interface {
 	// SumDeadLetterUnits (§11.4) sums amount_units over dead-letter rows
 	// carrying the named reason — the receivable figure.
 	SumDeadLetterUnits(ctx context.Context, reason string) (int64, error)
+	// ListReceivableRedriveCandidates (Phase 4.2-G Task 2): the collector's
+	// candidate set — balance_shortfall dead-letters inside the retention
+	// window and under the re-drive bound. Read-only.
+	ListReceivableRedriveCandidates(ctx context.Context, notBefore time.Time, maxRedrives, limit int) ([]CanonicalWalletOutboxEvent, error)
+	// RequeueDeadLetter (Phase 4.2-G Task 2): ONE balance_shortfall
+	// dead-letter back to pending — attempt_count reset, redrive_count+1,
+	// immediately claimable. One statement, idempotent by its status guard.
+	RequeueDeadLetter(ctx context.Context, id int64, workerID string) error
 	// ReclaimStaleInFlightEvents recovers rows a crashed dispatcher left
 	// stuck in_flight.
 	ReclaimStaleInFlightEvents(ctx context.Context, staleAfter time.Duration) (int64, error)
@@ -835,6 +843,11 @@ type canonicalWalletMetrics struct {
 	// Phase 3.7a (§13.2.6): one per reaper tick, incremented before
 	// reapOnce — the loop's heartbeat for the stop test.
 	reaperTicks atomic.Int64
+	// Phase 4.2-G Task 2: the receivable collector's counters — re-drives
+	// performed, and candidates seen at the bound (terminal, staying in the
+	// receivable) so the collector's exhaustion is observable.
+	receivableRedriven         atomic.Int64
+	receivableRedriveExhausted atomic.Int64
 }
 
 var canonicalWalletBridgeMetrics canonicalWalletMetrics
@@ -882,6 +895,8 @@ func CanonicalWalletBridgeStats() map[string]int64 {
 		"holds_abandoned":                  m.holdsAbandoned.Load(),
 		"hold_outcomes_expired":            m.holdOutcomesExpired.Load(),
 		"reaper_ticks":                     m.reaperTicks.Load(),
+		"receivable_redriven":              m.receivableRedriven.Load(),
+		"receivable_redrive_exhausted":     m.receivableRedriveExhausted.Load(),
 	}
 }
 
@@ -1134,6 +1149,15 @@ func newCanonicalWalletBridge(cfg config.CanonicalWalletConfig, store CanonicalW
 		defer b.loops.Done()
 		b.runOutboxDispatcher()
 	}()
+	// Phase 4.2-G Task 2: the receivable collector, started with the
+	// dispatcher (it re-queues balance_shortfall dead-letters so a funded
+	// user's debt is collected; the SETNX leader makes the deployment-wide
+	// pass singular despite the three bridges per process).
+	b.loops.Add(1)
+	go func() {
+		defer b.loops.Done()
+		b.runReceivableCollector()
+	}()
 	// §10.7: a reaper goroutine per bridge, started with the dispatcher —
 	// only when holds are on AND the outcome row's DB exists (the reaper's
 	// abandoned/expired passes have nowhere to write without it). Each tick
@@ -1148,8 +1172,9 @@ func newCanonicalWalletBridge(cfg config.CanonicalWalletConfig, store CanonicalW
 	return b
 }
 
-// Close (Phase 3.7a, redesign §13.2.6) stops both tick loops and waits for
-// them to exit; it is idempotent (sync.Once) and nil-safe. It is a TEST
+// Close (Phase 3.7a, redesign §13.2.6) stops every tick loop (the
+// dispatcher, the reaper and the receivable collector) and waits for them
+// to exit; it is idempotent (sync.Once) and nil-safe. It is a TEST
 // facility with no production caller: the three bridges are constructed
 // inside NewGatewayService, NewOpenAIGatewayService and
 // ProvideBillingCacheService and are never returned to the DI graph, so in
@@ -1520,6 +1545,112 @@ func (b *CanonicalWalletBridge) refreshReceivableGauge(ctx context.Context) {
 		return
 	}
 	canonicalWalletBridgeMetrics.settlementUncollectableUnits.Store(units)
+}
+
+// canonicalWalletCollectorLease is the receivable collector's
+// deployment-wide leader: the reaper's TryCanonicalWalletReaperLease
+// pattern with its OWN key (the process builds THREE bridges — a per-
+// process loop would re-drive three times). Exposed as a narrow OPTIONAL
+// interface (the NewWalletReconciliationReadService type-assertion
+// pattern): a store that does not implement it never collects, so the
+// in-memory test stubs are not forced to carry Redis leadership.
+type canonicalWalletCollectorLease interface {
+	TryCanonicalWalletReceivableCollectorLease(ctx context.Context, ttl time.Duration) (bool, error)
+}
+
+// walletReceivableRedriveBatch bounds one collector pass.
+const walletReceivableRedriveBatch = 100
+
+// runReceivableCollector (Phase 4.2-G Task 2) is the collector's tick loop
+// — the runHoldReaper shape (stop chan + ticker, tests drive
+// collectReceivableOnce directly with the injected clock).
+func (b *CanonicalWalletBridge) runReceivableCollector() {
+	if b.outbox == nil || b.outboxDB == nil {
+		return
+	}
+	interval := time.Duration(b.receivableRedriveIntervalSeconds()) * time.Second
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-b.stop:
+			return
+		case <-ticker.C:
+			ctx, cancel := context.WithTimeout(context.Background(), interval/2)
+			b.collectReceivableOnce(ctx)
+			cancel()
+		}
+	}
+}
+
+// collectReceivableOnce is one collector pass (§11.3/§11.4's receivable,
+// made collectable): balance_shortfall dead-letters younger than the
+// retention window are re-queued to pending under the SETNX leader, bounded
+// by redrive_count — a funded user's debt is then collected by the ordinary
+// dispatcher. The collector owns ONLY the re-queue and the bound: it never
+// reclassifies (a re-driven delivery refused again re-acquires
+// balance_shortfall through the existing terminal path; one that fails on
+// transport correctly dead-letters attempts_exhausted — a fault is what it
+// is) and it never deletes. Candidates AT the bound are terminal: counted
+// (receivable_redrive_exhausted) and left in the receivable.
+func (b *CanonicalWalletBridge) collectReceivableOnce(ctx context.Context) {
+	if b == nil || b.outbox == nil || b.outboxDB == nil {
+		return
+	}
+	leader, ok := b.store.(canonicalWalletCollectorLease)
+	if !ok {
+		return // a store without the leader surface never collects
+	}
+	interval := time.Duration(b.receivableRedriveIntervalSeconds()) * time.Second
+	held, err := leader.TryCanonicalWalletReceivableCollectorLease(ctx, 2*interval)
+	if err != nil || !held {
+		return
+	}
+	notBefore := b.clock().Add(-time.Duration(b.retentionDays()) * 24 * time.Hour)
+	maxRedrives := b.receivableRedriveMaxAttempts()
+	candidates, err := b.outbox.ListReceivableRedriveCandidates(ctx, notBefore, maxRedrives, walletReceivableRedriveBatch)
+	if err != nil {
+		slog.Warn("canonical wallet receivable redrive candidate listing failed", "error", err)
+		return
+	}
+	for _, c := range candidates {
+		if c.RedriveCount >= maxRedrives {
+			canonicalWalletBridgeMetrics.receivableRedriveExhausted.Add(1)
+			continue
+		}
+		if err := b.outbox.RequeueDeadLetter(ctx, c.ID, b.workerID); err != nil {
+			slog.Warn("canonical wallet receivable redrive requeue failed", "event_id", c.EventID, "error", err)
+			continue
+		}
+		canonicalWalletBridgeMetrics.receivableRedriven.Add(1)
+		slog.Info("canonical wallet receivable re-driven (the user may have funded)",
+			"event_id", c.EventID, "platform_user_id", c.PlatformUserID, "amount_units", c.AmountUnits, "redrive_count", c.RedriveCount+1)
+	}
+}
+
+// receivableRedriveIntervalSeconds defaults the cadence for the struct
+// literals the tests build (viper sets the default in production).
+func (b *CanonicalWalletBridge) receivableRedriveIntervalSeconds() int {
+	if b == nil || b.cfg.ReceivableRedriveIntervalSeconds <= 0 {
+		return 300
+	}
+	return b.cfg.ReceivableRedriveIntervalSeconds
+}
+
+// receivableRedriveMaxAttempts defaults the re-drive bound the same way.
+func (b *CanonicalWalletBridge) receivableRedriveMaxAttempts() int {
+	if b == nil || b.cfg.ReceivableRedriveMaxAttempts <= 0 {
+		return 30
+	}
+	return b.cfg.ReceivableRedriveMaxAttempts
+}
+
+// retentionDays defaults the retention floor (Task 3's pruners share it).
+func (b *CanonicalWalletBridge) retentionDays() int {
+	if b == nil || b.cfg.RetentionDays <= 0 {
+		return 45
+	}
+	return b.cfg.RetentionDays
 }
 
 func (b *CanonicalWalletBridge) runOutboxDispatcher() {

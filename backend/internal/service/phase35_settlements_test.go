@@ -840,6 +840,12 @@ func (o *p35FaultyOutbox) ClearPendingRelease(ctx context.Context, id int64) err
 func (o *p35FaultyOutbox) SumDeadLetterUnits(ctx context.Context, r string) (int64, error) {
 	return o.inner.SumDeadLetterUnits(ctx, r)
 }
+func (o *p35FaultyOutbox) ListReceivableRedriveCandidates(ctx context.Context, notBefore time.Time, maxRedrives, limit int) ([]CanonicalWalletOutboxEvent, error) {
+	return o.inner.ListReceivableRedriveCandidates(ctx, notBefore, maxRedrives, limit)
+}
+func (o *p35FaultyOutbox) RequeueDeadLetter(ctx context.Context, id int64, workerID string) error {
+	return o.inner.RequeueDeadLetter(ctx, id, workerID)
+}
 
 // Test 35 — the settle-purpose under-grant splits PROACTIVELY (§11.3): the
 // under-granted lease is installed (authorize keeps refusing — its sibling

@@ -1624,6 +1624,29 @@ type CanonicalWalletConfig struct {
 	// inert. A configured token shorter than 32 bytes fails Validate()
 	// under enforce/shadow.
 	ReconciliationReadToken string `mapstructure:"reconciliation_read_token"`
+	// ReceivableRedriveIntervalSeconds (Phase 4.2-G Task 2, redesign
+	// §15.4/§11.3): the receivable collector's cadence — how often
+	// balance_shortfall dead-letters younger than the retention window are
+	// re-queued to pending, so a user who funds their balance has the debt
+	// collected by the ordinary dispatcher. Validated ≥ 60 (a redrive is a
+	// control-plane round trip per row; the bound keeps the collector off
+	// the hot path).
+	ReceivableRedriveIntervalSeconds int `mapstructure:"receivable_redrive_interval_seconds"`
+	// ReceivableRedriveMaxAttempts (Phase 4.2-G Task 2): the re-drive bound
+	// — a balance_shortfall dead-letter at this redrive_count is terminal
+	// (stays in the receivable, counted by receivable_redrive_exhausted).
+	// The dispatcher's TRANSPORT budget (attempt_count, 8 attempts) is
+	// disjoint: a re-driven row that fails on transport burns attempts,
+	// never redrives. Validated ≥ 1.
+	ReceivableRedriveMaxAttempts int `mapstructure:"receivable_redrive_max_attempts"`
+	// RetentionDays (Phase 4.2-G, redesign §15.4): the wallet tables'
+	// retention floor behind every pruner and behind the collector's age
+	// bound — retention must cover the wire's maximum reconciliation
+	// window (31 days, 4.1-G) plus the soak's minimum (7 days, §15 Q1),
+	// hence the minimum of 38 (Task 3's Validate() refuses less; default
+	// 45). Pruners delete only rows strictly older than now − retention
+	// and NEVER a dead-letter (the receivable is money owed).
+	RetentionDays int `mapstructure:"retention_days"`
 }
 
 // TotpConfig TOTP 双因素认证配置
@@ -2089,6 +2112,9 @@ func setDefaults() {
 	viper.SetDefault("canonical_wallet.holds", "off")
 	viper.SetDefault("canonical_wallet.orphan_grace_seconds", 900)
 	viper.SetDefault("canonical_wallet.reconciliation_read_token", "")
+	viper.SetDefault("canonical_wallet.receivable_redrive_interval_seconds", 300)
+	viper.SetDefault("canonical_wallet.receivable_redrive_max_attempts", 30)
+	viper.SetDefault("canonical_wallet.retention_days", 45)
 	viper.SetDefault("canonical_wallet.orphan_sweep_interval_seconds", 60)
 	viper.SetDefault("canonical_wallet.orphan_sweep_batch", 200)
 	viper.SetDefault("canonical_wallet.live_window_min_seconds", 20)
@@ -2825,6 +2851,15 @@ func (c *Config) Validate() error {
 		}
 		if c.CanonicalWallet.SettlementWorkers < 1 || c.CanonicalWallet.SettlementWorkers > 64 {
 			return fmt.Errorf("canonical_wallet.settlement_workers must be between 1 and 64")
+		}
+		// Phase 4.2-G Task 2: the receivable collector's cadence and bound.
+		// A redrive is a control-plane round trip per row — the floor keeps
+		// the collector off the hot path.
+		if c.CanonicalWallet.ReceivableRedriveIntervalSeconds < 60 {
+			return fmt.Errorf("canonical_wallet.receivable_redrive_interval_seconds must be at least 60")
+		}
+		if c.CanonicalWallet.ReceivableRedriveMaxAttempts < 1 {
+			return fmt.Errorf("canonical_wallet.receivable_redrive_max_attempts must be at least 1")
 		}
 		if c.CanonicalWallet.Mode == CanonicalWalletModeEnforce {
 			if !c.CanonicalWallet.EnforceReady {

@@ -549,6 +549,12 @@ func (s *outboxStoreStub) ClearPendingRelease(context.Context, int64) error {
 func (s *outboxStoreStub) SumDeadLetterUnits(context.Context, string) (int64, error) {
 	return 0, errors.New("outboxStoreStub does not implement SumDeadLetterUnits")
 }
+func (s *outboxStoreStub) ListReceivableRedriveCandidates(context.Context, time.Time, int, int) ([]CanonicalWalletOutboxEvent, error) {
+	return nil, errors.New("outboxStoreStub does not implement ListReceivableRedriveCandidates")
+}
+func (s *outboxStoreStub) RequeueDeadLetter(context.Context, int64, string) error {
+	return errors.New("outboxStoreStub does not implement RequeueDeadLetter")
+}
 
 func TestObserveCanonicalWalletSettlementReturnBool(t *testing.T) {
 	shadow := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeShadow), &canonicalWalletStoreStub{}, &canonicalWalletControlStub{}, nil, nil, 0, nil)

@@ -1045,6 +1045,21 @@ canonical_wallet:
   # (default) leaves the group unmounted — an undeployed key is inert.
   # When set: ≥ 32 bytes under mode enforce/shadow.
   reconciliation_read_token: ""
+  # The receivable collector's cadence (Phase 4.2-G): how often
+  # balance_shortfall dead-letters younger than the retention window are
+  # re-queued so a funded user's debt is collected by the ordinary
+  # dispatcher. ≥ 60 (a redrive is a control-plane round trip per row).
+  receivable_redrive_interval_seconds: 300
+  # The re-drive bound (Phase 4.2-G): a balance_shortfall dead-letter at
+  # this redrive_count is terminal — it stays in the receivable, counted by
+  # receivable_redrive_exhausted. The dispatcher's transport budget
+  # (8 attempts) is disjoint. ≥ 1.
+  receivable_redrive_max_attempts: 30
+  # The wallet tables' retention floor (Phase 4.2-G): pruners delete only
+  # rows strictly older than now − retention and never a dead-letter (the
+  # receivable is money owed). Must cover the reconciliation wire's maximum
+  # window (31 days) plus the soak's minimum (7 days) — hence ≥ 38.
+  retention_days: 45
 
 # =============================================================================
 # Model Governance Authorization (Phase 2, effective mode remains off)
