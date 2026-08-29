@@ -264,6 +264,101 @@ func TestPassthroughSecondTurnWithPreviousResponseIDAuthorizesOnTheContinuationB
 	require.Equal(t, int64(0), metrics.WritesRefused)
 }
 
+// Test 47 (Phase 3.7a, redesign §13.1/§13.3) — the WebSocket form of the
+// differential invariant across a warm previous_response_id continuation:
+// per turn settled ≤ estimated, and turn 2's estimate carries turn 1's
+// usage. The base test's harness with ONE change — the AuthorizeTurn hook
+// calls a REAL authorizer (shadow mode: it always admits and mints the
+// finite estimate) instead of the bare handle mint. The base script's
+// bodies carry max_output_tokens:512 because the unit fixture's fallback
+// prices set no model maxima — a token-less body would leave the estimate
+// unbounded (shadow admits with EstimatedUnits 0) and the pin vacuous.
+func TestPhase37WSContinuationInvariant(t *testing.T) {
+	resetAuthorizationMetricsForTest()
+	auth, snap, apiKey, _, _ := newAuthorizerFixture(t, config.CanonicalWalletModeShadow)
+
+	type turnRecord struct {
+		turn     int
+		estimate EstimateInput
+		h        *AuthorizationHandle
+	}
+	records := make(chan turnRecord, 8)
+	harness := newPassthroughAuthHarness(t, config.CanonicalWalletModeEnforce, func(turn int, est EstimateInput) (*AuthorizationHandle, error) {
+		h, err := auth.Authorize(context.Background(), AuthorizeInput{Snapshot: snap, Estimate: est, User: apiKey.User})
+		if err == nil && h != nil {
+			records <- turnRecord{turn: turn, estimate: est, h: h}
+		}
+		return h, err
+	}, nil)
+	defer harness.server.Close()
+
+	// Turn 1: response.create without previous_response_id
+	harness.dial(t, `{"type":"response.create","model":"gpt-5.1","max_output_tokens":512}`)
+	call1 := harness.waitCall(t)
+	require.Equal(t, 1, call1.turn)
+	require.Equal(t, ContinuationNone, call1.estimate.Continuation)
+
+	_ = harness.waitUpstreamWrite(t)
+	harness.upstream.Send(`{"type":"response.created","response":{"id":"resp_1","model":"gpt-5.1"}}`)
+	harness.upstream.Send(`{"type":"response.completed","response":{"id":"resp_1","model":"gpt-5.1","usage":{"input_tokens":120,"output_tokens":30,"total_tokens":150}}}`)
+	ev, err := harness.readClient(t)
+	require.NoError(t, err)
+	require.Equal(t, "response.created", gjson.GetBytes(ev, "type").String())
+	ev, err = harness.readClient(t)
+	require.NoError(t, err)
+	require.Equal(t, "response.completed", gjson.GetBytes(ev, "type").String())
+
+	// Inter-turn session.update
+	harness.writeClient(t, `{"type":"session.update","session":{"instructions":"be brief"}}`)
+	interTurnWrite := harness.waitUpstreamWrite(t)
+	require.Equal(t, "session.update", gjson.GetBytes(interTurnWrite, "type").String())
+
+	// Turn 2 with previous_response_id — its own body no smaller than
+	// turn 1's (the monotonicity precondition).
+	harness.writeClient(t, `{"type":"response.create","previous_response_id":"resp_1","max_output_tokens":512}`)
+	call2 := harness.waitCall(t)
+	require.Equal(t, 2, call2.turn)
+
+	_ = harness.waitUpstreamWrite(t)
+	harness.upstream.Send(`{"type":"response.completed","response":{"id":"resp_2","model":"gpt-5.1","usage":{"input_tokens":200,"output_tokens":40,"total_tokens":240}}}`)
+	_, err = harness.readClient(t)
+	require.NoError(t, err)
+	harness.closeClientAndWait(t)
+
+	close(records)
+	var recs []turnRecord
+	for r := range records {
+		recs = append(recs, r)
+	}
+	require.Len(t, recs, 2)
+	r1, r2 := recs[0], recs[1]
+	require.Equal(t, 1, r1.turn)
+	require.Equal(t, 2, r2.turn)
+
+	// Turn 2's estimate is warm and carries turn 1's usage.
+	require.Equal(t, ContinuationWarm, r2.estimate.Continuation)
+	require.Equal(t, 120, r2.estimate.PriorTurnInputTokens)
+	require.Equal(t, 30, r2.estimate.PriorTurnOutputTokens)
+
+	// Per-turn differential invariant: settled_k ≤ h_k.EstimatedUnits, with
+	// settled_k priced from the SAME snapshot the authorizer used.
+	settled := func(in, out int) int64 {
+		cost, cerr := auth.snapshots.billing.CalculateCostFromSnapshot(snap, SnapshotSettlementInput{Tokens: UsageTokens{InputTokens: in, OutputTokens: out}})
+		require.NoError(t, cerr)
+		return settledUnitsForTest(t, auth.snapshots, snap, cost)
+	}
+	s1 := settled(120, 30)
+	s2 := settled(200, 40)
+	t.Logf("test 47: E1=%d settled1=%d E2=%d settled2=%d", r1.h.EstimatedUnits, s1, r2.h.EstimatedUnits, s2)
+	require.Greater(t, r1.h.EstimatedUnits, int64(0), "the estimate is finite — a token-less body would make this pin vacuous")
+	require.LessOrEqual(t, s1, r1.h.EstimatedUnits, "turn 1: settled ≤ estimated")
+	require.LessOrEqual(t, s2, r2.h.EstimatedUnits, "turn 2: settled ≤ estimated")
+
+	// Distinct handles; the warm accumulation is monotone.
+	require.NotEqual(t, r1.h.ID, r2.h.ID)
+	require.GreaterOrEqual(t, r2.h.EstimatedUnits, r1.h.EstimatedUnits, "turn 2's estimate ≥ turn 1's — the accumulation is monotone")
+}
+
 func TestPassthroughFirstFrameWithPreviousResponseIDIsCold(t *testing.T) {
 	resetAuthorizationMetricsForTest()
 	harness := newPassthroughAuthHarness(t, config.CanonicalWalletModeEnforce, nil, nil)
