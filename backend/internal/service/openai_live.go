@@ -132,6 +132,17 @@ func liveWindowRequestID(callHash string, seq int) string {
 	return fmt.Sprintf("%s:window:%d", callHash, seq)
 }
 
+// LiveWindowSettlementEventID (Phase 4.1-G, redesign §15.3 leg 3) is the
+// exported derivation of a Live window's settlement event id — derived,
+// never stored (the outbox row carries it; wallet_live_provisional's
+// windows do not). A thin export of liveWindowRequestID composed with
+// CanonicalWalletSettlementEventID; the reconciliation read model computes
+// it per window so 4.1-S can match leg 2 event id by event id. No
+// behaviour change — the settlement path keeps calling the private pair.
+func LiveWindowSettlementEventID(callHash string, seq int, platformUserID, currency string) string {
+	return CanonicalWalletSettlementEventID(liveWindowRequestID(callHash, seq), platformUserID, currency)
+}
+
 type liveUsageDelta struct {
 	inputTokens     int
 	outputTokens    int

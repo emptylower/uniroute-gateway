@@ -272,6 +272,13 @@ type CanonicalWalletOutboxEvent struct {
 	SplitDepth          int
 	PendingReleaseUnits *int64
 	AuthorizationID     string
+	// Phase 4.1-G (redesign §15.3): the reconciliation read model's
+	// additive columns — only ListOutboxEventsByUser's read query populates
+	// them; every existing scan (the dispatcher's claim, the split) is
+	// unchanged and leaves them zero-valued.
+	Status           string
+	DeadLetterReason string
+	DeliveredAt      *time.Time
 }
 
 // CanonicalWalletOutboxStore is implemented by repository.WalletOutboxStore.

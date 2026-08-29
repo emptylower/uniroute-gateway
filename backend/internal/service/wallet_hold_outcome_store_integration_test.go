@@ -15,19 +15,35 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// startWalletHoldOutcomeTestPostgres applies migration 213 by reading the
-// file directly (the live_provisional_store_integration_test.go pattern):
-// ApplyMigrations lives in internal/repository, which imports
+// startWalletHoldOutcomeTestPostgres applies the wallet migrations by
+// reading the files directly (the live_provisional_store_integration_test.go
+// pattern): ApplyMigrations lives in internal/repository, which imports
 // internal/service — calling it from here would be an import cycle.
-// Phase 3.7c: a database on the one shared container per run; the migration
-// is unchanged.
+// Phase 3.7c: a database on the one shared container per run; the
+// migration is unchanged.
+//
+// Phase 4.1-G (round-2 MAJOR-1): the helper now reads the full wallet
+// chain — 208/212/214 build wallet_settlement_outbox (213 alone is no
+// longer enough, because 215's index migration also touches the outbox),
+// then 213, then 215 LAST so this database carries exactly the indexes
+// 215 ships (the inline DDL of startCanonicalWalletTestPostgres and the
+// migration file must stay in lockstep; this helper reads the real file,
+// so it always does).
 func startWalletHoldOutcomeTestPostgres(t testing.TB, ctx context.Context) *sql.DB {
 	t.Helper()
 	db := SharedTestPostgresDBForTest(t)
-	sqlContent, err := os.ReadFile(filepath.Join("..", "..", "migrations", "213_wallet_hold_outcome.sql"))
-	require.NoError(t, err)
-	_, err = db.ExecContext(ctx, string(sqlContent))
-	require.NoError(t, err)
+	for _, migration := range []string{
+		"208_wallet_settlement_outbox.sql",
+		"212_wallet_outbox_dead_letter_reason.sql",
+		"213_wallet_hold_outcome.sql",
+		"214_wallet_outbox_split_and_authorization.sql",
+		"215_wallet_reconciliation_indexes.sql",
+	} {
+		sqlContent, err := os.ReadFile(filepath.Join("..", "..", "migrations", migration))
+		require.NoError(t, err)
+		_, err = db.ExecContext(ctx, string(sqlContent))
+		require.NoError(t, err)
+	}
 	return db
 }
 func TestWalletHoldOutcomeStoreWriters(t *testing.T) {

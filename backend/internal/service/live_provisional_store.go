@@ -359,3 +359,55 @@ func (s *liveProvisionalStore) GetByCallHash(ctx context.Context, callHash strin
 	`
 	return s.scanRow(s.db.QueryRowContext(ctx, query, callHash))
 }
+
+// ListLiveProvisionalByUser (Phase 4.1-G, redesign §15.3 leg 3) is the
+// reconciliation summary's per-user Live read: every record of ONE platform
+// user created inside the half-open [since, until) window, windows decoded
+// from the JSON column as LiveWindow, with the billing snapshot's fx rate
+// folded in through a LEFT JOIN on wallet_billing_snapshot — a missing
+// snapshot (or an empty billing_snapshot_id) degrades billing_fx to nil
+// and never drops the record (round-3 fx fold; the durable fix — a
+// billing_snapshot_id column on the outbox — is 4.2's). Read-only.
+func (s *liveProvisionalStore) ListLiveProvisionalByUser(ctx context.Context, platformUserID string, since, until time.Time) ([]LiveProvisionalSummaryRecord, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("live provisional store unavailable")
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT p.token, p.authorization_id, p.call_hash, p.platform_user_id,
+		       p.billing_snapshot_id, b.payload->'fx'->>'rate',
+		       p.status, p.estimated_units, p.settlement_event_id, p.windows, p.created_at
+		FROM wallet_live_provisional p
+		LEFT JOIN wallet_billing_snapshot b ON b.id = p.billing_snapshot_id
+		WHERE p.platform_user_id = $1 AND p.created_at >= $2 AND p.created_at < $3
+		ORDER BY p.created_at, p.token`, platformUserID, since, until)
+	if err != nil {
+		return nil, fmt.Errorf("list live provisional by user: %w", err)
+	}
+	defer rows.Close()
+	out := make([]LiveProvisionalSummaryRecord, 0, 4)
+	for rows.Next() {
+		var r LiveProvisionalSummaryRecord
+		var billingFX sql.NullString
+		var windowsJSON []byte
+		var statusStr string
+		if err := rows.Scan(&r.Token, &r.AuthorizationID, &r.CallHash, &r.PlatformUserID,
+			&r.BillingSnapshotID, &billingFX, &statusStr, &r.EstimatedUnits, &r.SettlementEventID, &windowsJSON, &r.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan live provisional summary: %w", err)
+		}
+		r.Status = statusStr
+		if billingFX.Valid {
+			v := billingFX.String
+			r.BillingFX = &v
+		}
+		if len(windowsJSON) > 0 {
+			if err := json.Unmarshal(windowsJSON, &r.Windows); err != nil {
+				return nil, fmt.Errorf("unmarshal windows: %w", err)
+			}
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate live provisional: %w", err)
+	}
+	return out, nil
+}

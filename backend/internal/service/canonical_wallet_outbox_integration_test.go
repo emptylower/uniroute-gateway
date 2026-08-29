@@ -39,6 +39,15 @@ func startCanonicalWalletTestPostgres(t *testing.T, ctx context.Context) *sql.DB
 	require.NoError(t, err)
 	_, err = db.ExecContext(ctx, `CREATE INDEX idx_wallet_settlement_outbox_parent ON wallet_settlement_outbox (parent_event_id)`)
 	require.NoError(t, err)
+	// Phase 4.1-G (round-2 MAJOR-1): the per-user read index of migration
+	// 215, INLINE here in lockstep with the migration file — this helper
+	// builds the outbox by hand, so 215 is NOT read here; when 215 changes
+	// this DDL must change with it (Task 4 greps both for the index name).
+	// 215's wallet_hold_outcome index lands in the helpers that own that
+	// table (startWalletHoldOutcomeTestPostgres reads 215 after 213;
+	// startWalletReconciliationTestPostgres reads every migration).
+	_, err = db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_wallet_settlement_outbox_user_occurred ON wallet_settlement_outbox (platform_user_id, occurred_at, id)`)
+	require.NoError(t, err)
 	return db
 }
 

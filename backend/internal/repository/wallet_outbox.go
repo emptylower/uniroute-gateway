@@ -416,3 +416,89 @@ func (s *WalletOutboxStore) OutboxEventStatus(ctx context.Context, id int64) (st
 	err := s.db.QueryRowContext(ctx, `SELECT status FROM wallet_settlement_outbox WHERE id = $1`, id).Scan(&status)
 	return status, err
 }
+
+// ListOutboxEventsByUser (Phase 4.1-G, redesign §15.3 leg 2) is the
+// reconciliation summary's per-user outbox read: every row of ONE platform
+// user inside the half-open [since, until) occurred_at window, ordered by
+// the BIGSERIAL id, with a keyset cursor (id > afterID) and a limit+1
+// truncation signal. The cursor is the primary key, so it matches the
+// ORDER BY exactly and can neither skip nor duplicate a row — including
+// rows sharing an occurred_at across a page boundary, the leg that breaks
+// a time cursor. Runs on 215's (platform_user_id, occurred_at, id) index,
+// which keeps the predicate AND the ordering index-resident. Read-only.
+func (s *WalletOutboxStore) ListOutboxEventsByUser(ctx context.Context, platformUserID string, since, until time.Time, afterID int64, limit int) ([]service.CanonicalWalletOutboxEvent, bool, error) {
+	if limit < 1 {
+		limit = 1
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, event_id, platform_user_id, lease_id, gateway_request_id, currency, amount_units,
+			local_balance_after_units, occurred_at, attempt_count, status, dead_letter_reason, delivered_at,
+			parent_event_id, split_depth, pending_release_units, authorization_id
+		FROM wallet_settlement_outbox
+		WHERE platform_user_id = $1 AND occurred_at >= $2 AND occurred_at < $3 AND id > $4
+		ORDER BY id
+		LIMIT $5`, platformUserID, since, until, afterID, limit+1)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+	events := make([]service.CanonicalWalletOutboxEvent, 0, limit)
+	for rows.Next() {
+		var e service.CanonicalWalletOutboxEvent
+		var leaseID sql.NullString
+		var parentEventID, authorizationID, deadLetterReason sql.NullString
+		var pendingRelease sql.NullInt64
+		var deliveredAt sql.NullTime
+		if err := rows.Scan(&e.ID, &e.EventID, &e.PlatformUserID, &leaseID, &e.GatewayRequestID, &e.Currency, &e.AmountUnits,
+			&e.LocalBalanceAfterUnits, &e.OccurredAt, &e.AttemptCount, &e.Status, &deadLetterReason, &deliveredAt,
+			&parentEventID, &e.SplitDepth, &pendingRelease, &authorizationID); err != nil {
+			return nil, false, err
+		}
+		e.LeaseID = leaseID.String
+		e.ParentEventID = parentEventID.String
+		e.AuthorizationID = authorizationID.String
+		e.DeadLetterReason = deadLetterReason.String
+		if pendingRelease.Valid {
+			v := pendingRelease.Int64
+			e.PendingReleaseUnits = &v
+		}
+		if deliveredAt.Valid {
+			v := deliveredAt.Time
+			e.DeliveredAt = &v
+		}
+		events = append(events, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	truncated := len(events) > limit
+	if truncated {
+		events = events[:limit]
+	}
+	return events, truncated, nil
+}
+
+// DeliveredWatermark (Phase 4.1-G) is the global high-water mark 4.1-S
+// records per reconciliation run: the outbox's max delivered_at (the
+// parent plan's "settlement high-water mark" successor), the max row id,
+// and the per-status counts. Read-only.
+func (s *WalletOutboxStore) DeliveredWatermark(ctx context.Context) (service.OutboxWatermark, error) {
+	var wm service.OutboxWatermark
+	var deliveredMax sql.NullTime
+	var idMax sql.NullInt64
+	err := s.db.QueryRowContext(ctx, `
+		SELECT max(delivered_at), max(id),
+		       count(*) FILTER (WHERE status = 'pending'),
+		       count(*) FILTER (WHERE status = 'in_flight'),
+		       count(*) FILTER (WHERE status = 'dead_letter')
+		FROM wallet_settlement_outbox`).Scan(&deliveredMax, &idMax, &wm.Pending, &wm.InFlight, &wm.DeadLetter)
+	if err != nil {
+		return wm, err
+	}
+	if deliveredMax.Valid {
+		v := deliveredMax.Time
+		wm.DeliveredAtMax = &v
+	}
+	wm.OutboxIDMax = idMax.Int64
+	return wm, nil
+}
