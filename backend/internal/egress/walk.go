@@ -54,8 +54,10 @@ func (s WriteSite) Key() string { return s.File + "|" + s.Func + "|" + strconv.I
 
 // egressImports: a file importing any of these is an egress candidate at IMPORT
 // granularity (spec §2.0 — gRPC, other WebSocket libraries and vendor SDKs are one
-// import away). net/http is handled at CONSTRUCT granularity below, because every
-// handler imports it for status constants.
+// import away). Because "net" is included with prefix matching, net/http is matched
+// at import granularity (so any file importing net/http has its egress walked),
+// while http.Client / http.Transport and write sites are the specific constructs
+// inspected within those files.
 var egressImports = []string{
 	"net", "crypto/tls",
 	"github.com/coder/websocket", "nhooyr.io/websocket", "github.com/gorilla/websocket", "golang.org/x/net/websocket",
