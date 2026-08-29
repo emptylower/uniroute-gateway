@@ -1872,3 +1872,141 @@ func TestPhase38DataLossReused(t *testing.T) {
 	require.Equal(t, leaseID, afterSecond.Leases[0].ID)
 	require.Equal(t, afterFirst.Balance, afterSecond.Balance, "the balance is unchanged by the reused admission")
 }
+
+// ---------------------------------------------------------------------------
+// Test 64 — the ws_v2 first-frame previous_response_id scenarios (§14.4)
+// ---------------------------------------------------------------------------
+
+// TestPhase38WSFirstFrame — with the model largestAuthorizedBoundUnits
+// named (the reachable set's worst case): (a) a user seeded below the cold
+// bound is refused on the FIRST frame carrying previous_response_id (a
+// fresh connection is ContinuationCold) with the named terminal shape
+// (4402 + balance_shortfall) and no upstream write; (b) seeded above, the
+// same frame is admitted with EstimatedUnits == the cold bound; (c)
+// store:false without previous_response_id is an ordinary turn, admitted at
+// a bound strictly below the cold bound. Assertions on the decision and the
+// client-visible shape only.
+func TestPhase38WSFirstFrame(t *testing.T) {
+	e2eRequireStage(t, "routes_on")
+	ctx := context.Background()
+	raw := strings.TrimSpace(os.Getenv("WALLET_E2E_MODELS"))
+	require.NotEmpty(t, raw, "test 64 needs WALLET_E2E_MODELS (the model is whichever largestAuthorizedBoundUnits named)")
+	pricing := e2eCatalogPricing(t)
+	snapshots, apiKey, user0, account, _, _, _ := e2eSnapshotFixture(t)
+	var models []string
+	for _, m := range strings.Split(raw, ",") {
+		if m = strings.TrimSpace(m); m != "" {
+			models = append(models, m)
+		}
+	}
+	_, overallMaxModel, bounds, _, err := largestAuthorizedBoundUnitsForTest(ctx, models, pricing, snapshots, phase38ModelFixture{apiKey: apiKey, user: user0, account: account})
+	require.NoError(t, err)
+	// The leg's model is the largest bound that FITS one lease (§14.2 (i)'s
+	// precondition): a deployment that passed the pairing check can admit at
+	// that bound. When the overall max exceeds lease_max_credits × 1e6 the
+	// ensure on the real route answers 409 insufficient_balance — exactly
+	// test 59's finding — and the admitted-at-the-bound leg is unreachable
+	// for that model; that is LOGGED here as the cross-reference, not hidden.
+	leaseMaxCredits := int64(10_000)
+	if raw := strings.TrimSpace(os.Getenv("WALLET_E2E_LEASE_MAX_CREDITS")); raw != "" {
+		v, convErr := strconv.ParseInt(raw, 10, 64)
+		require.NoError(t, convErr)
+		leaseMaxCredits = v
+	}
+	var coldBound int64
+	var maxModel string
+	for m, b := range bounds {
+		if b <= leaseMaxCredits*1_000_000 && b > coldBound {
+			coldBound, maxModel = b, m
+		}
+	}
+	require.NotEmpty(t, maxModel,
+		"no reachable model's cold bound fits one lease (lease_max_credits %d × 1e6 = %d) — the pairing check (test 59) is violated for every model in WALLET_E2E_MODELS, so the admitted-at-the-bound scenario cannot run", leaseMaxCredits, leaseMaxCredits*1_000_000)
+	if bounds[overallMaxModel] > leaseMaxCredits*1_000_000 {
+		t.Logf("test 64: FINDING (cross-reference test 59): the overall largest bound %s = %d units EXCEEDS lease_max_credits %d × 1e6 = %d — an uncapped first-frame authorize for it is refused balance_shortfall on the real route (fail-closed); running the admitted-at-the-bound leg on the largest bound that fits: %s (%d units)",
+			overallMaxModel, bounds[overallMaxModel], leaseMaxCredits, leaseMaxCredits*1_000_000, maxModel, coldBound)
+	} else {
+		t.Logf("test 64: the named large-context model is %s (cold bound %d units)", maxModel, coldBound)
+	}
+
+	t.Run("below-the-cold-bound-refused-4402", func(t *testing.T) {
+		// Seeded at half the cold bound (whole credits, at least one):
+		// the ensure's min_headroom is the cold bound — uncoverable.
+		credits := coldBound / 1_000_000 / 2
+		if credits < 1 {
+			credits = 1
+		}
+		broke := e2eUserID("t64-below")
+		f := newE2EServiceFixture(t, config.CanonicalWalletModeEnforce, "off", "ws", broke, credits)
+		harness := newE2EWSHarness(t, f, maxModel)
+		defer harness.server.Close()
+		harness.dial(t, fmt.Sprintf(`{"type":"response.create","model":%q,"previous_response_id":"resp_prev","max_output_tokens":512}`, maxModel))
+		require.Equal(t, 1, harness.waitCall(t))
+		_, err := harness.readClient(t)
+		var closeErr coderws.CloseError
+		require.ErrorAs(t, err, &closeErr, "the first frame is refused below the cold bound")
+		require.Equal(t, coderws.StatusCode(AuthorizationRefusedWSCloseStatus), closeErr.Code, "4402")
+		require.Contains(t, closeErr.Reason, string(AuthorizationRefusalBalanceShortfall), "the named terminal shape")
+		select {
+		case payload := <-harness.f.wsUpstream.writes:
+			t.Fatalf("no upstream write on the refused first frame, got: %s", string(payload))
+		case <-time.After(200 * time.Millisecond):
+		}
+		state := e2eInspect(t, broke)
+		e2eLogState(t, state)
+		require.Empty(t, state.Leases, "nothing issued (ids read: %v)", state.leaseIDs())
+	})
+
+	t.Run("above-the-cold-bound-admitted-at-it", func(t *testing.T) {
+		credits := coldBound/1_000_000 + 500
+		funded := e2eUserID("t64-above")
+		f := newE2EServiceFixture(t, config.CanonicalWalletModeEnforce, "off", "ws", funded, credits)
+		harness := newE2EWSHarness(t, f, maxModel)
+		defer harness.server.Close()
+		harness.dial(t, fmt.Sprintf(`{"type":"response.create","model":%q,"previous_response_id":"resp_prev"}`, maxModel))
+		require.Equal(t, 1, harness.waitCall(t))
+		_ = harness.waitUpstreamWrite(t)
+		harness.f.wsUpstream.Send(fmt.Sprintf(`{"type":"response.completed","response":{"id":"resp_cold","model":%q,"usage":{"input_tokens":50,"output_tokens":10}}}`, maxModel))
+		for {
+			ev, err := harness.readClient(t)
+			require.NoError(t, err)
+			if gjsonGet(ev, "type") == "response.completed" {
+				break
+			}
+		}
+		harness.closeClientAndWait(t)
+		val, ok := harness.handles.Load(1)
+		require.True(t, ok)
+		h := val.(*AuthorizationHandle)
+		require.Nil(t, h.Refusal, "admitted above the cold bound")
+		require.Equal(t, coldBound, h.EstimatedUnits,
+			"the handle's estimate IS the cold bound (the fresh-connection previous_response_id frame is ContinuationCold)")
+	})
+
+	t.Run("store-false-ordinary-bound", func(t *testing.T) {
+		credits := coldBound/1_000_000 + 500
+		funded := e2eUserID("t64-ordinary")
+		f := newE2EServiceFixture(t, config.CanonicalWalletModeEnforce, "off", "ws", funded, credits)
+		harness := newE2EWSHarness(t, f, maxModel)
+		defer harness.server.Close()
+		harness.dial(t, fmt.Sprintf(`{"type":"response.create","model":%q,"store":false,"max_output_tokens":512}`, maxModel))
+		require.Equal(t, 1, harness.waitCall(t))
+		_ = harness.waitUpstreamWrite(t)
+		harness.f.wsUpstream.Send(fmt.Sprintf(`{"type":"response.completed","response":{"id":"resp_ord","model":%q,"usage":{"input_tokens":50,"output_tokens":10}}}`, maxModel))
+		for {
+			ev, err := harness.readClient(t)
+			require.NoError(t, err)
+			if gjsonGet(ev, "type") == "response.completed" {
+				break
+			}
+		}
+		harness.closeClientAndWait(t)
+		val, ok := harness.handles.Load(1)
+		require.True(t, ok)
+		h := val.(*AuthorizationHandle)
+		require.Nil(t, h.Refusal, "an ordinary turn admits")
+		require.Less(t, h.EstimatedUnits, coldBound,
+			"store:false without previous_response_id is ContinuationNone — an ordinary bound, strictly below the cold bound (got %d)", h.EstimatedUnits)
+		t.Logf("test 64(c): ordinary bound %d < cold bound %d", h.EstimatedUnits, coldBound)
+	})
+}
