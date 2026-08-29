@@ -55,8 +55,8 @@ func startLiveRestartPostgres(t *testing.T, ctx context.Context) *sql.DB {
 func startLiveRestartRedis(t *testing.T, ctx context.Context) *redis.Client {
 	t.Helper()
 	// Phase 3.7c: the ONE shared Redis container per run (empty keyspace
-	// per call); the inline container start, its Host/MappedPort reads and
-	// its Terminate cleanup are gone.
+	// per call); the inline container start, its address reads and its
+	// teardown cleanup are gone.
 	return service.SharedTestRedisClientForTest(t)
 }
 
