@@ -1016,6 +1016,29 @@ canonical_wallet:
   settlement_queue_size: 2048
   settlement_workers: 2
   enforce_ready: false
+  # A cached lease within this many ms of its expiry is treated as expired
+  # (redesign §4); validated 0 < margin ≤ request_timeout_ms when enabled.
+  expiry_skew_margin_ms: 100
+  # off = today's settlement paths; record = freeze + persist + compare,
+  # settle as today; settle = settle from the frozen snapshot. Independent
+  # of mode (Phase 3.2).
+  billing_snapshot_mode: "record"
+  # "on" arms a hold at every authorization (§10); requires mode
+  # shadow|enforce; literal match, fail-closed.
+  holds: "off"
+  # An unclassified hold older than this with no live owner is released by
+  # the reaper; must be ≥ every finite upstream deadline and ≥ 60.
+  orphan_grace_seconds: 900
+  # The orphan reaper's tick; between 5 and orphan_grace_seconds/2.
+  orphan_sweep_interval_seconds: 60
+  # Holds examined per user per reaper tick (1–1000).
+  orphan_sweep_batch: 200
+  # A Live window closing on accrued usage is evaluated only after this many
+  # seconds since it opened; range 5–60 and ≤ lease_ttl_seconds/4 (§13.2.1).
+  live_window_min_seconds: 20
+  # The grace after which a stale observer's controller claim may be taken
+  # over; ≥ 1 and ≤ lease_ttl_seconds/4 (§13.2.5).
+  live_controller_takeover_seconds: 15
 
 # =============================================================================
 # Model Governance Authorization (Phase 2, effective mode remains off)
