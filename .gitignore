@@ -141,6 +141,8 @@ docs/*
 !docs/model-governance-phase-2-second-review.md
 !docs/legal/
 !docs/legal/*.md
+!docs/runbooks/
+!docs/runbooks/*.md
 .serena/
 .codex/
 frontend/coverage/
