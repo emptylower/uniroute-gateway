@@ -8,11 +8,11 @@ package service
 // Invariant rule: own tcredis nodes, never the shared instance, ports ≠ 16379
 // — do not consolidate onto the shared claim (tests 61 and 63 follow the same rule).
 //
-// Scenarios:
-// (A) Redis Outage: test 61's shape extended with Sub2API-side assertions
+// Standalone scenario tests (matching tests 61/63, standalone without wrapper):
+// (A) TestWalletFailoverDrillScenarioA_RedisOutage: test 61's shape extended with Sub2API-side assertions
 //     (every outage-time row delivered, zero dead-letters, every hold resolved,
 //     wallet_hold_outcome one row per authorization).
-// (B) Replica Promotion Mid-Hold: two tcredis.Run nodes (primary + replica) on
+// (B) TestWalletFailoverDrillScenarioB_ReplicaPromotion: two tcredis.Run nodes (primary + replica) on
 //     distinct ports (16384, 16385), REPLICAOF the second to the first, holds
 //     armed on primary, promote with REPLICAOF NO ONE, second bridge over store
 //     on promoted node (e2eBridgeOn pattern), then settle/expire: each hold
@@ -306,6 +306,9 @@ func TestWalletFailoverDrillScenarioB_ReplicaPromotion(t *testing.T) {
 	b2 := newCanonicalWalletBridge(cfg, storeReplica, client, db, outbox, 0, clock)
 	t.Cleanup(b2.Close)
 
+	droppedBefore := canonicalWalletBridgeMetrics.queueDropped.Load()
+	convertedBefore := canonicalWalletBridgeMetrics.holdConverted.Load()
+
 	// Step 4: Settle / release / expire the three holds across the promoted bridge b2
 	// Hold 1: Converts via ObserveSettlement
 	reqID1 := "drill-b-settle-1-" + uuid.NewString()
@@ -343,22 +346,12 @@ func TestWalletFailoverDrillScenarioB_ReplicaPromotion(t *testing.T) {
 	require.NoError(t, db.QueryRowContext(ctx, "SELECT count(*) FROM wallet_hold_outcome WHERE platform_user_id = $1 AND resolution IS NOT NULL", user).Scan(&resolvedCount))
 	require.Equal(t, 3, resolvedCount, "all three holds resolved")
 
-	// Bounded fallback-bucket loss & queue_dropped = 0
-	require.Equal(t, int64(0), canonicalWalletBridgeMetrics.queueDropped.Load(), "no queue dropped")
-	require.GreaterOrEqual(t, canonicalWalletBridgeMetrics.holdConverted.Load(), int64(1))
+	// Bounded fallback-bucket loss & queue_dropped delta = 0
+	require.Equal(t, droppedBefore, canonicalWalletBridgeMetrics.queueDropped.Load(), "no queue dropped during the promotion")
+	require.GreaterOrEqual(t, canonicalWalletBridgeMetrics.holdConverted.Load()-convertedBefore, int64(1))
 
 	// No dead-letters
 	var deadCount int
 	require.NoError(t, db.QueryRowContext(ctx, "SELECT count(*) FROM wallet_settlement_outbox WHERE status = 'dead_letter'").Scan(&deadCount))
 	require.Zero(t, deadCount, "zero dead-letters after promotion")
-}
-
-// TestPhase43FailoverDrill combines scenarios A and B under the canonical test name.
-func TestPhase43FailoverDrill(t *testing.T) {
-	t.Run("ScenarioA_RedisOutage", func(t *testing.T) {
-		TestWalletFailoverDrillScenarioA_RedisOutage(t)
-	})
-	t.Run("ScenarioB_ReplicaPromotion", func(t *testing.T) {
-		TestWalletFailoverDrillScenarioB_ReplicaPromotion(t)
-	})
 }
