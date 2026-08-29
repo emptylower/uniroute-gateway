@@ -447,6 +447,18 @@ func ProvideAuditLogService(repo AuditLogRepository, settingService *SettingServ
 	return svc
 }
 
+// ProvideWalletRetentionService 创建并启动 Canonical Wallet 保留期清理服务。
+// 停止逻辑挂在 cmd/server 的 provideCleanup。
+func ProvideWalletRetentionService(cfg *config.Config, db *sql.DB, outbox CanonicalWalletOutboxStore) *WalletRetentionService {
+	var cwCfg config.CanonicalWalletConfig
+	if cfg != nil {
+		cwCfg = cfg.CanonicalWallet
+	}
+	svc := NewWalletRetentionService(cwCfg, db, outbox)
+	svc.Start()
+	return svc
+}
+
 func buildIdempotencyConfig(cfg *config.Config) IdempotencyConfig {
 	idempotencyCfg := DefaultIdempotencyConfig()
 	if cfg != nil {
@@ -890,6 +902,7 @@ var ProviderSet = wire.NewSet(
 	ProvideOpsService,
 	ProvideOpsIngressRejectAggregator,
 	ProvideAuditLogService,
+	ProvideWalletRetentionService,
 	ProvideOpsMetricsCollector,
 	ProvideOpsAggregationService,
 	ProvideOpsAlertEvaluatorService,

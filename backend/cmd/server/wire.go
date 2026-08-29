@@ -114,6 +114,7 @@ func provideCleanup(
 	upstreamBillingProbe *service.UpstreamBillingProbeService,
 	ollamaCloudUsage *service.OllamaCloudUsageService,
 	auditLog *service.AuditLogService,
+	walletRetention *service.WalletRetentionService,
 	promptAudit *securityaudit.PromptService,
 	modelCatalogCandidate *service.ModelCatalogCandidateService,
 ) func() {
@@ -185,6 +186,12 @@ func provideCleanup(
 			{"AuditLogService", func() error {
 				if auditLog != nil {
 					auditLog.Stop()
+				}
+				return nil
+			}},
+			{"WalletRetentionService", func() error {
+				if walletRetention != nil {
+					walletRetention.Stop()
 				}
 				return nil
 			}},

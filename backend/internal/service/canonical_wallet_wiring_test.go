@@ -243,3 +243,39 @@ func TestPhase38StartupGuardPair(t *testing.T) {
 			"the Batch Image refusal is the enforce arm's, not a global one")
 	}
 }
+
+// Phase 4.2-G execution review MAJOR-2: WalletRetentionService must be
+// constructed by wire (ProvideWalletRetentionService), its background loop
+// running upon construction, and stoppable cleanly on Stop().
+func TestProvideWalletRetentionService_StartsAndStops(t *testing.T) {
+	cfg := &config.Config{
+		CanonicalWallet: config.CanonicalWalletConfig{
+			Mode:          config.CanonicalWalletModeEnforce,
+			RetentionDays: 45,
+		},
+	}
+	svc := ProvideWalletRetentionService(cfg, nil, nil)
+	require.NotNil(t, svc, "ProvideWalletRetentionService must return a non-nil service")
+	require.NotNil(t, svc.ctx, "service context must be initialized")
+
+	// Verify the loop is running and stops cleanly without deadlock or panic.
+	stopped := make(chan struct{})
+	go func() {
+		svc.Stop()
+		close(stopped)
+	}()
+
+	select {
+	case <-stopped:
+		// Clean stop.
+	case <-time.After(3 * time.Second):
+		t.Fatal("WalletRetentionService.Stop() timed out waiting for retention loop to terminate")
+	}
+
+	t.Run("nil config defaults gracefully", func(t *testing.T) {
+		svcNil := ProvideWalletRetentionService(nil, nil, nil)
+		require.NotNil(t, svcNil)
+		svcNil.Stop()
+	})
+}
+
