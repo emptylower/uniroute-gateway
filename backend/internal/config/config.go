@@ -1604,6 +1604,16 @@ type CanonicalWalletConfig struct {
 	OrphanSweepIntervalSeconds int `mapstructure:"orphan_sweep_interval_seconds"`
 	// OrphanSweepBatch (§10.7): holds examined per user per tick.
 	OrphanSweepBatch int `mapstructure:"orphan_sweep_batch"`
+	// LiveWindowMinSeconds (Phase 3.7b, redesign §13.2.1): clock (ii) — a
+	// window closing because accrued usage reached its held estimate — is
+	// evaluated only after this many seconds since the window opened; a
+	// settlement-storm bound. Validated 5–60 and ≤ lease_ttl_seconds/4.
+	LiveWindowMinSeconds int `mapstructure:"live_window_min_seconds"`
+	// LiveControllerTakeoverSeconds (Phase 3.7b, redesign §13.2.5): the
+	// grace after which a stale observer's controller claim may be taken
+	// over. Validated ≥ 1 (and ≥ 4 × the 250 ms observer poll) and
+	// ≤ lease_ttl_seconds/4.
+	LiveControllerTakeoverSeconds int `mapstructure:"live_controller_takeover_seconds"`
 }
 
 // TotpConfig TOTP 双因素认证配置
@@ -2069,6 +2079,8 @@ func setDefaults() {
 	viper.SetDefault("canonical_wallet.orphan_grace_seconds", 900)
 	viper.SetDefault("canonical_wallet.orphan_sweep_interval_seconds", 60)
 	viper.SetDefault("canonical_wallet.orphan_sweep_batch", 200)
+	viper.SetDefault("canonical_wallet.live_window_min_seconds", 20)
+	viper.SetDefault("canonical_wallet.live_controller_takeover_seconds", 15)
 
 	// Turnstile
 	viper.SetDefault("turnstile.required", false)
@@ -2759,6 +2771,25 @@ func (c *Config) Validate() error {
 		}
 		if c.CanonicalWallet.LeaseTTLSeconds < 30 || c.CanonicalWallet.LeaseTTLSeconds > 3600 {
 			return fmt.Errorf("canonical_wallet.lease_ttl_seconds must be between 30 and 3600")
+		}
+		// Phase 3.7b (§13.2.1/§13.2.5): the two Live-window keys are bound to
+		// lease_ttl_seconds/4 and refused loudly rather than clamped — the
+		// floor bounds money at risk (Δ_floor = rate × floor) and the grace
+		// bounds how long an orphaned session runs unobserved; an operator
+		// shortening the lease TTL must lower them explicitly.
+		if c.CanonicalWallet.LiveWindowMinSeconds < 5 || c.CanonicalWallet.LiveWindowMinSeconds > 60 {
+			return fmt.Errorf("canonical_wallet.live_window_min_seconds must be between 5 and 60")
+		}
+		if c.CanonicalWallet.LeaseTTLSeconds/4 < c.CanonicalWallet.LiveWindowMinSeconds {
+			return fmt.Errorf("canonical_wallet.live_window_min_seconds (%d) must be ≤ lease_ttl_seconds / 4 (%d) — lower the floor for a short lease TTL",
+				c.CanonicalWallet.LiveWindowMinSeconds, c.CanonicalWallet.LeaseTTLSeconds/4)
+		}
+		takeoverMax := c.CanonicalWallet.LeaseTTLSeconds / 4
+		if takeoverMax < 1 {
+			takeoverMax = 1
+		}
+		if c.CanonicalWallet.LiveControllerTakeoverSeconds < 1 || c.CanonicalWallet.LiveControllerTakeoverSeconds > takeoverMax {
+			return fmt.Errorf("canonical_wallet.live_controller_takeover_seconds must be between 1 and lease_ttl_seconds / 4 (%d)", takeoverMax)
 		}
 		if c.CanonicalWallet.LeaseBudgetUnits <= 0 {
 			return fmt.Errorf("canonical_wallet.lease_budget_units must be positive")

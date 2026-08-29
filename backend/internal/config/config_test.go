@@ -2795,6 +2795,67 @@ func TestValidateCanonicalWalletHolds(t *testing.T) {
 	})
 }
 
+// TestPhase37bLiveWindowAndTakeoverValidation (Phase 3.7b, redesign §13.2.1/
+// §13.2.5): live_window_min_seconds (default 20, range 5–60) and
+// live_controller_takeover_seconds (default 15, range 1–lease_ttl_seconds/4),
+// both validated against lease_ttl_seconds when the wallet is enabled — an
+// explicit refusal, never a silent clamp, on a number that bounds money at
+// risk (round-2 MINOR-2).
+func TestPhase37bLiveWindowAndTakeoverValidation(t *testing.T) {
+	base := func() *Config {
+		t.Helper()
+		c, err := newCanonicalWalletValidateConfig(t, CanonicalWalletModeShadow, false, false) // config_test.go:2701
+		require.NoError(t, err)
+		return c
+	}
+	t.Run("defaults", func(t *testing.T) {
+		c := base()
+		require.Equal(t, 20, c.CanonicalWallet.LiveWindowMinSeconds)
+		require.Equal(t, 15, c.CanonicalWallet.LiveControllerTakeoverSeconds)
+		require.NoError(t, c.Validate(), "the defaults (floor 20, takeover 15) satisfy lease_ttl_seconds=300")
+	})
+	t.Run("floor range 5 to 60", func(t *testing.T) {
+		c := base()
+		c.CanonicalWallet.LiveWindowMinSeconds = 4
+		require.ErrorContains(t, c.Validate(), "must be between 5 and 60")
+		c.CanonicalWallet.LiveWindowMinSeconds = 61
+		require.ErrorContains(t, c.Validate(), "must be between 5 and 60")
+	})
+	t.Run("default floor refused against a short lease TTL, naming both keys", func(t *testing.T) {
+		c := base()
+		c.CanonicalWallet.LeaseTTLSeconds = 30
+		err := c.Validate()
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "live_window_min_seconds (20)")
+		require.Contains(t, err.Error(), "lower the floor for a short lease TTL")
+	})
+	t.Run("takeover range 1 to lease_ttl/4", func(t *testing.T) {
+		c := base()
+		c.CanonicalWallet.LiveControllerTakeoverSeconds = 0
+		require.ErrorContains(t, c.Validate(), "must be between 1 and lease_ttl_seconds / 4")
+		c.CanonicalWallet.LeaseTTLSeconds = 60 // /4 = 15: 16 must refuse
+		c.CanonicalWallet.LiveWindowMinSeconds = 15
+		c.CanonicalWallet.LiveControllerTakeoverSeconds = 16
+		require.ErrorContains(t, c.Validate(), "must be between 1 and lease_ttl_seconds / 4")
+		c.CanonicalWallet.LiveControllerTakeoverSeconds = 15
+		require.NoError(t, c.Validate())
+	})
+	t.Run("short lease TTL admits the minimum floor", func(t *testing.T) {
+		c := base()
+		c.CanonicalWallet.LeaseTTLSeconds = 30
+		c.CanonicalWallet.LiveWindowMinSeconds = 5
+		c.CanonicalWallet.LiveControllerTakeoverSeconds = 2
+		require.NoError(t, c.Validate())
+	})
+	t.Run("disabled mode skips both", func(t *testing.T) {
+		c := base()
+		c.CanonicalWallet.Mode = CanonicalWalletModeDisabled
+		c.CanonicalWallet.LiveWindowMinSeconds = 61
+		c.CanonicalWallet.LiveControllerTakeoverSeconds = 0
+		require.NoError(t, c.Validate())
+	})
+}
+
 func TestPhase34ProtoExpirySkewMarginValidation(t *testing.T) {
 	cfg, err := newCanonicalWalletValidateConfig(t, CanonicalWalletModeShadow, false, false) // config_test.go:2701
 	require.NoError(t, err)
