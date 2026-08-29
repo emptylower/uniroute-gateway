@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -78,6 +79,12 @@ func (c *gatewayCache) IsCyberSessionBlocked(ctx context.Context, key string) (b
 	return n > 0, nil
 }
 
+// claimLiveControllerScript: ARGV[1] target, ARGV[2] owner, ARGV[3]
+// stale_before_ms (Phase 3.7b, redesign §13.2.5). The observer claim still
+// succeeds from pending only; it ALSO succeeds on an existing observer whose
+// controller_heartbeat_ms is strictly older than stale_before_ms — the stale
+// takeover (an absent heartbeat — 0 — counts as stale). ClaimLiveController
+// passes 0 (no takeover); TakeOverLiveObserver passes the grace boundary.
 var claimLiveControllerScript = redis.NewScript(`
 	local key = KEYS[1]
 	local target = ARGV[1]
@@ -86,14 +93,28 @@ var claimLiveControllerScript = redis.NewScript(`
 	if current == false or current == 'closed' then
 		return 0
 	end
-	if target == 'observer' and current ~= 'pending' then
-		return 0
+	if target == 'observer' then
+		if current ~= 'pending' then
+			if not (current == 'observer' and tonumber(ARGV[3] or 0) > 0 and
+				tonumber(redis.call('HGET', key, 'controller_heartbeat_ms') or 0) < tonumber(ARGV[3])) then
+				return 0
+			end
+		end
 	end
 	if target == 'proxy' and current ~= 'pending' and current ~= 'observer' and
 		(current ~= 'proxy' or redis.call('HGET', key, 'controller_owner') ~= owner) then
 		return 0
 	end
 	redis.call('HSET', key, 'controller', target, 'controller_owner', owner)
+	return 1
+`)
+
+// heartbeatLiveControllerScript (§13.2.5): the owner-checked heartbeat — a
+// foreign owner writes nothing and reports success (0 rows, no error).
+var heartbeatLiveControllerScript = redis.NewScript(`
+	if redis.call('HGET', KEYS[1], 'controller_owner') == ARGV[1] then
+		redis.call('HSET', KEYS[1], 'controller_heartbeat_ms', ARGV[2])
+	end
 	return 1
 `)
 
@@ -181,6 +202,7 @@ func (c *gatewayCache) SaveLiveCall(ctx context.Context, record *service.LiveCal
 		"expires_at":                 record.ExpiresAt.UnixMilli(),
 		"controller":                 record.Controller,
 		"controller_owner":           record.ControllerOwner,
+		"controller_heartbeat_ms":    int64(0), // Phase 3.7b (§13.2.5): a fresh record has never heartbeated; 0 counts as stale for takeover
 		"user_agent":                 record.UserAgent,
 		"ip_address":                 record.IPAddress,
 		"inbound_endpoint":           record.InboundEndpoint,
@@ -275,8 +297,52 @@ func (c *gatewayCache) AccumulateLiveUsage(ctx context.Context, callHash, respon
 }
 
 func (c *gatewayCache) ClaimLiveController(ctx context.Context, callHash, controller, owner string) (bool, error) {
-	result, err := claimLiveControllerScript.Run(ctx, c.rdb, []string{liveCallKey(callHash)}, controller, owner).Int()
+	result, err := claimLiveControllerScript.Run(ctx, c.rdb, []string{liveCallKey(callHash)}, controller, owner, 0).Int()
 	return result == 1, err
+}
+
+// TakeOverLiveObserver (Phase 3.7b, §13.2.5): the stale-takeover claim — an
+// observer claim that also succeeds when the current observer's heartbeat is
+// strictly older than staleBefore (absent — 0 — counts as stale).
+func (c *gatewayCache) TakeOverLiveObserver(ctx context.Context, callHash, owner string, staleBefore time.Time) (bool, error) {
+	result, err := claimLiveControllerScript.Run(ctx, c.rdb, []string{liveCallKey(callHash)}, service.LiveControllerObserver, owner, staleBefore.UnixMilli()).Int()
+	return result == 1, err
+}
+
+// HeartbeatLiveController (§13.2.5): writes the heartbeat iff owner still
+// owns the controller — a no-op (no error) for a displaced owner.
+func (c *gatewayCache) HeartbeatLiveController(ctx context.Context, callHash, owner string, at time.Time) error {
+	return heartbeatLiveControllerScript.Run(ctx, c.rdb, []string{liveCallKey(callHash)}, owner, at.UnixMilli()).Err()
+}
+
+// GetLiveControllerState (§13.2.5): controller, owner, and the heartbeat
+// instant (0 ms — never heartbeated — reads as the zero time).
+func (c *gatewayCache) GetLiveControllerState(ctx context.Context, callHash string) (service.LiveControllerState, error) {
+	values, err := c.rdb.HMGet(ctx, liveCallKey(callHash), "controller", "controller_owner", "controller_heartbeat_ms").Result()
+	if err != nil {
+		return service.LiveControllerState{}, err
+	}
+	if len(values) != 3 {
+		return service.LiveControllerState{}, errors.New("live controller state: short HMGET")
+	}
+	state := service.LiveControllerState{}
+	if s, ok := values[0].(string); ok {
+		state.Controller = s
+	}
+	if s, ok := values[1].(string); ok {
+		state.Owner = s
+	}
+	switch v := values[2].(type) {
+	case string:
+		if ms, parseErr := strconv.ParseInt(v, 10, 64); parseErr == nil && ms > 0 {
+			state.HeartbeatAt = time.UnixMilli(ms)
+		}
+	case int64:
+		if v > 0 {
+			state.HeartbeatAt = time.UnixMilli(v)
+		}
+	}
+	return state, nil
 }
 
 func (c *gatewayCache) GetLiveController(ctx context.Context, callHash string) (string, error) {

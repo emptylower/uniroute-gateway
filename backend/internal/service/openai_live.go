@@ -367,7 +367,7 @@ func (s *OpenAIGatewayService) CreateLiveCall(
 			s.activateLiveProvisional(authHandle.ID, record.CallHash)
 		}
 		created.Account = account
-		go s.observeLiveCall(record.CallHash)
+		go s.observeLiveCall(context.Background(), record.CallHash)
 		return created, nil
 	}
 	if lastErr != nil {
@@ -667,7 +667,7 @@ func (s *OpenAIGatewayService) ProxyLiveSideband(
 	upstream, err := s.dialLiveSideband(ctx, record)
 	if err != nil {
 		_, _ = store.ReleaseLiveController(context.Background(), record.CallHash, owner)
-		go s.observeLiveCall(record.CallHash)
+		go s.observeLiveCall(context.Background(), record.CallHash)
 		return err
 	}
 	defer func() { _ = upstream.Close() }()
@@ -718,7 +718,7 @@ func (s *OpenAIGatewayService) ProxyLiveSideband(
 		s.finalizeLiveCall(record)
 		return runErr
 	}
-	go s.observeLiveCall(record.CallHash)
+	go s.observeLiveCall(context.Background(), record.CallHash)
 	return runErr
 }
 
@@ -763,18 +763,71 @@ func (s *OpenAIGatewayService) runLiveController(
 	}
 }
 
-func (s *OpenAIGatewayService) observeLiveCall(callHash string) {
+// liveControllerTakeoverInterval (Phase 3.7b, §13.2.5): the grace after
+// which a stale observer's claim may be taken over — config
+// canonical_wallet.live_controller_takeover_seconds (default 15 s).
+func (s *OpenAIGatewayService) liveControllerTakeoverInterval() time.Duration {
+	if s != nil && s.cfg != nil && s.cfg.CanonicalWallet.LiveControllerTakeoverSeconds > 0 {
+		return time.Duration(s.cfg.CanonicalWallet.LiveControllerTakeoverSeconds) * time.Second
+	}
+	return 15 * time.Second
+}
+
+// observeLiveCall (Phase 3.7b, §13.2.5): claims the observer controller and
+// runs the session. A refused claim no longer returns — the loop retries the
+// claim every live_controller_takeover_seconds through
+// TakeOverLiveObserver(stale_before = now − grace), so any live instance
+// that knows the call hash becomes the observer within one grace of the old
+// one dying. The ctx is the loop's lifetime: cancelled, the loop (and the
+// connection under it) stops WITHOUT releasing the controller or
+// heartbeating — the exact crash shape the takeover exists for. Production
+// call sites pass context.Background() (the loops end with the process, as
+// 13.2.6 says of the bridge); tests cancel theirs at cleanup.
+func (s *OpenAIGatewayService) observeLiveCall(ctx context.Context, callHash string) {
 	store, err := s.liveStore()
 	if err != nil {
 		return
 	}
 	owner := uuid.NewString()
-	claimed, err := store.ClaimLiveController(context.Background(), callHash, LiveControllerObserver, owner)
-	if err != nil || !claimed {
+	takeover := s.liveControllerTakeoverInterval()
+	claimed, claimErr := store.ClaimLiveController(ctx, callHash, LiveControllerObserver, owner)
+	if claimErr != nil {
 		return
 	}
+	if !claimed {
+		// Loop on the takeover interval until the current observer goes stale
+		// or the call ends (record gone, closed, expired) or ctx is done.
+		timer := time.NewTimer(takeover)
+		defer timer.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-timer.C:
+			}
+			record, getErr := store.GetLiveCall(ctx, callHash)
+			if getErr != nil || record.Controller == LiveControllerClosed {
+				return
+			}
+			if !time.Now().Before(record.ExpiresAt) {
+				return
+			}
+			taken, takeErr := store.TakeOverLiveObserver(ctx, callHash, owner, time.Now().Add(-takeover))
+			if takeErr != nil {
+				return
+			}
+			if taken {
+				claimed = true
+				break
+			}
+			timer.Reset(takeover)
+		}
+	}
 	for {
-		record, getErr := store.GetLiveCall(context.Background(), callHash)
+		if ctx.Err() != nil {
+			return
+		}
+		record, getErr := store.GetLiveCall(ctx, callHash)
 		if getErr != nil || record.Controller != LiveControllerObserver {
 			return
 		}
@@ -782,14 +835,14 @@ func (s *OpenAIGatewayService) observeLiveCall(callHash string) {
 			s.finalizeLiveCall(record)
 			return
 		}
-		upstream, dialErr := s.dialLiveSideband(context.Background(), record)
+		upstream, dialErr := s.dialLiveSideband(ctx, record)
 		if dialErr != nil {
 			if !s.waitForLiveObserverRetry(record) {
 				return
 			}
 			continue
 		}
-		runErr := s.runLiveObserverConnection(record, upstream)
+		runErr := s.runLiveObserverConnection(ctx, record, upstream, owner)
 		_ = upstream.Close()
 		if errors.Is(runErr, ErrLiveControllerChanged) {
 			return
@@ -804,8 +857,15 @@ func (s *OpenAIGatewayService) observeLiveCall(callHash string) {
 	}
 }
 
-func (s *OpenAIGatewayService) runLiveObserverConnection(record *LiveCallRecord, upstream liveFrameConn) error {
-	ctx, cancel := context.WithCancel(context.Background())
+// runLiveObserverConnection (Phase 3.7b, §13.2.5): the observer's connection
+// loop. On every controller tick it first heartbeats (as owner) and then
+// re-reads the controller state — an owner mismatch is
+// ErrLiveControllerChanged even while the controller string is unchanged
+// (the displaced observer's exit). ctx is derived from observeLiveCall's, so
+// a cancelled observer exits cleanly: a cancelled ReadFrame surfaces as a
+// plain return, never an escalated read error.
+func (s *OpenAIGatewayService) runLiveObserverConnection(ctx context.Context, record *LiveCallRecord, upstream liveFrameConn, owner string) error {
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	frameCh := make(chan []byte, 1)
 	errCh := make(chan error, 1)
@@ -844,14 +904,25 @@ func (s *OpenAIGatewayService) runLiveObserverConnection(record *LiveCallRecord,
 				return ErrLiveCallNotFound
 			}
 		case err := <-errCh:
+			// A cancelled cleanup is a clean loop exit, not a read error
+			// (round-2 note): never log or escalate it.
+			if errors.Is(err, context.Canceled) && ctx.Err() != nil {
+				return ctx.Err()
+			}
 			return err
 		case <-controllerTicker.C:
-			controller, err := store.GetLiveController(context.Background(), record.CallHash)
-			if err != nil {
-				return err
-			}
-			if controller != LiveControllerObserver {
-				return ErrLiveControllerChanged
+			// §13.2.5: heartbeat first (one owner-checked HSET), then the
+			// state read on the same tick — a foreign owner or a proxy/closed
+			// controller displaces this observer at its next tick.
+			if store != nil {
+				_ = store.HeartbeatLiveController(ctx, record.CallHash, owner, time.Now().UTC())
+				state, stateErr := store.GetLiveControllerState(ctx, record.CallHash)
+				if stateErr != nil {
+					return stateErr
+				}
+				if state.Controller != LiveControllerObserver || state.Owner != owner {
+					return ErrLiveControllerChanged
+				}
 			}
 		case <-refreshTicker.C:
 			if !s.refreshLiveLease(record) {
@@ -862,6 +933,8 @@ func (s *OpenAIGatewayService) runLiveObserverConnection(record *LiveCallRecord,
 			_ = upstream.WriteFrame(WithNonBillableUpstream(closeCtx, NonBillableLiveSideband), coderws.MessageText, []byte(`{"type":"session.close"}`))
 			closeCancel()
 			return context.DeadlineExceeded
+		case <-ctx.Done():
+			return context.Cause(ctx)
 		}
 	}
 }

@@ -113,6 +113,7 @@ type liveTestStore struct {
 	record             *LiveCallRecord
 	responses          map[string]struct{}
 	accumulateFailures int
+	heartbeatMS        int64
 }
 
 func (s *liveTestStore) SaveLiveCall(_ context.Context, record *LiveCallRecord, _ time.Duration) error {
@@ -168,6 +169,49 @@ func (s *liveTestStore) GetLiveController(_ context.Context, callHash string) (s
 		return "", ErrLiveCallNotFound
 	}
 	return s.record.Controller, nil
+}
+
+// HeartbeatLiveController (Phase 3.7b, §13.2.5): the owner-checked heartbeat —
+// a foreign owner writes nothing and reports no error (0 rows).
+func (s *liveTestStore) HeartbeatLiveController(_ context.Context, callHash, owner string, at time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.record == nil || s.record.CallHash != callHash || s.record.ControllerOwner != owner {
+		return nil
+	}
+	s.heartbeatMS = at.UnixMilli()
+	return nil
+}
+
+// GetLiveControllerState mirrors the Redis HMGET: controller, owner, and the
+// heartbeat as an instant (0 ms — never heartbeated — reads as the zero time).
+func (s *liveTestStore) GetLiveControllerState(_ context.Context, callHash string) (LiveControllerState, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.record == nil || s.record.CallHash != callHash {
+		return LiveControllerState{}, ErrLiveCallNotFound
+	}
+	state := LiveControllerState{Controller: s.record.Controller, Owner: s.record.ControllerOwner}
+	if s.heartbeatMS > 0 {
+		state.HeartbeatAt = time.UnixMilli(s.heartbeatMS)
+	}
+	return state, nil
+}
+
+// TakeOverLiveObserver mirrors the claim script's stale-takeover branch: the
+// record must not be closed, the controller must already be observer, and the
+// heartbeat must be strictly older than staleBefore (0 — absent — is stale).
+func (s *liveTestStore) TakeOverLiveObserver(_ context.Context, callHash, owner string, staleBefore time.Time) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.record == nil || s.record.CallHash != callHash || s.record.Controller == LiveControllerClosed {
+		return false, nil
+	}
+	if s.record.Controller != LiveControllerObserver || s.heartbeatMS >= staleBefore.UnixMilli() {
+		return false, nil
+	}
+	s.record.ControllerOwner = owner
+	return true, nil
 }
 
 func (s *liveTestStore) MarkLiveCallClosed(_ context.Context, callHash string, _ time.Duration) (bool, error) {
@@ -595,4 +639,210 @@ func TestWaitForLiveObserverRetryLeavesExpiryToLoopFinalize(t *testing.T) {
 		ExpiresAt:  time.Now().Add(time.Hour),
 	}, time.Hour))
 	require.False(t, svc.waitForLiveObserverRetry(record))
+}
+
+// Phase 3.7b (redesign §13.2.5) — the same takeover table as the repository
+// script test, through the in-memory mirror.
+func TestLiveTestStoreTakeoverTable(t *testing.T) {
+	store := &liveTestStore{}
+	record := &LiveCallRecord{
+		CallID:     "call_takeover_table",
+		CallHash:   hashLiveCallID("call_takeover_table"),
+		Controller: LiveControllerPending,
+		ExpiresAt:  time.Now().Add(time.Hour),
+	}
+	require.NoError(t, store.SaveLiveCall(context.Background(), record, time.Hour))
+
+	state, err := store.GetLiveControllerState(context.Background(), record.CallHash)
+	require.NoError(t, err)
+	require.True(t, state.HeartbeatAt.IsZero(), "SaveLiveCall seeds no heartbeat")
+
+	claimed, err := store.ClaimLiveController(context.Background(), record.CallHash, LiveControllerObserver, "owner-1")
+	require.NoError(t, err)
+	require.True(t, claimed)
+	claimed, err = store.ClaimLiveController(context.Background(), record.CallHash, LiveControllerObserver, "owner-1b")
+	require.NoError(t, err)
+	require.False(t, claimed, "a plain observer claim is granted only from pending")
+
+	now := time.Now().UTC()
+	require.NoError(t, store.HeartbeatLiveController(context.Background(), record.CallHash, "owner-1", now))
+	took, err := store.TakeOverLiveObserver(context.Background(), record.CallHash, "owner-2", now)
+	require.NoError(t, err)
+	require.False(t, took, "a fresh heartbeat refuses the takeover")
+	took, err = store.TakeOverLiveObserver(context.Background(), record.CallHash, "owner-2", now.Add(2*time.Second))
+	require.NoError(t, err)
+	require.True(t, took)
+	state, err = store.GetLiveControllerState(context.Background(), record.CallHash)
+	require.NoError(t, err)
+	require.Equal(t, LiveControllerObserver, state.Controller)
+	require.Equal(t, "owner-2", state.Owner)
+
+	require.NoError(t, store.HeartbeatLiveController(context.Background(), record.CallHash, "owner-1", now.Add(3*time.Second)))
+	state2, err := store.GetLiveControllerState(context.Background(), record.CallHash)
+	require.NoError(t, err)
+	require.Equal(t, state.HeartbeatAt, state2.HeartbeatAt, "the displaced owner's heartbeat is a no-op")
+
+	first, err := store.MarkLiveCallClosed(context.Background(), record.CallHash, time.Hour)
+	require.NoError(t, err)
+	require.True(t, first)
+	took, err = store.TakeOverLiveObserver(context.Background(), record.CallHash, "owner-3", now.Add(time.Hour))
+	require.NoError(t, err)
+	require.False(t, took, "a closed record refuses takeover")
+}
+
+// Phase 3.7b (§13.2.5): the observer connection heartbeats on every
+// controller tick and returns ErrLiveControllerChanged when the owner is
+// displaced even though the controller string is still "observer".
+func TestRunLiveObserverConnectionHeartbeatsAndExitsOnOwnerChange(t *testing.T) {
+	store := &liveTestStore{}
+	record := &LiveCallRecord{
+		CallID:          "call_hb",
+		CallHash:        hashLiveCallID("call_hb"),
+		Controller:      LiveControllerObserver,
+		ControllerOwner: "owner-a",
+		ExpiresAt:       time.Now().Add(time.Hour),
+	}
+	require.NoError(t, store.SaveLiveCall(context.Background(), record, time.Hour))
+	conn := newLiveTestFrameConn()
+	svc := &OpenAIGatewayService{cache: store}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	done := make(chan error, 1)
+	go func() { done <- svc.runLiveObserverConnection(ctx, record, conn, "owner-a") }()
+
+	// The heartbeat must advance across controller ticks (50 ms poll, bounded).
+	deadline := time.Now().Add(3 * time.Second)
+	advances := 0
+	var last time.Time
+	for advances < 2 && time.Now().Before(deadline) {
+		state, err := store.GetLiveControllerState(context.Background(), record.CallHash)
+		require.NoError(t, err)
+		if state.HeartbeatAt.After(last) {
+			last = state.HeartbeatAt
+			advances++
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	require.GreaterOrEqual(t, advances, 2, "the observer must heartbeat on its controller ticks")
+
+	// A foreign owner with the controller string unchanged displaces it. The
+	// conn stays open — the exit must come from the controller tick's owner
+	// check, not from a read error.
+	store.mu.Lock()
+	store.record.Controller = LiveControllerObserver
+	store.record.ControllerOwner = "owner-b"
+	store.mu.Unlock()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, ErrLiveControllerChanged)
+	case <-time.After(3 * time.Second):
+		t.Fatal("the displaced observer never exited")
+	}
+}
+
+// Phase 3.7b (§13.2.5): a second instance's observeLiveCall loops on the
+// takeover interval and does NOT take over while the first observer's
+// heartbeats are fresh; when the first stops heartbeating (its context
+// cancelled — the honest crash simulation), the second takes over within one
+// live_controller_takeover_seconds and runs the connection (its dialer dials).
+func TestObserveLiveCallTakesOverStaleObserver(t *testing.T) {
+	store := &liveTestStore{}
+	attestationCipher := newLiveAttestationCipher(&config.Config{
+		JWT: config.JWTConfig{Secret: "live-takeover-test-secret"},
+	})
+	var err error
+	record := &LiveCallRecord{
+		CallID:                "call_takeover",
+		CallHash:              hashLiveCallID("call_takeover"),
+		AccountID:             11,
+		APIKeyID:              22,
+		UserID:                33,
+		LeaseID:               "lease-1",
+		CreatedAt:             time.Now(),
+		ExpiresAt:             time.Now().Add(time.Hour),
+		Controller:            LiveControllerPending,
+		AttestationCiphertext: "",
+	}
+	record.AttestationCiphertext, err = attestationCipher.Encrypt(`{"v":1,"s":0,"t":"v1.sideband"}`)
+	require.NoError(t, err)
+	require.NoError(t, store.SaveLiveCall(context.Background(), record, time.Hour))
+
+	account := &Account{
+		ID:          11,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Concurrency: 2,
+		Credentials: map[string]any{
+			"access_token":       "test-access-token",
+			"chatgpt_account_id": "acct_test",
+		},
+	}
+	cfg := &config.Config{}
+	cfg.CanonicalWallet.LiveControllerTakeoverSeconds = 1
+
+	newService := func(conn *liveTestFrameConn) (*OpenAIGatewayService, *liveTestDialer) {
+		dialer := &liveTestDialer{conn: conn}
+		return &OpenAIGatewayService{
+			cfg:                       cfg,
+			cache:                     store,
+			accountRepo:               &liveTestAccountRepo{account: account},
+			openaiWSPassthroughDialer: dialer,
+			liveAttestationCipher:     attestationCipher,
+		}, dialer
+	}
+	svcA, dialerA := newService(newLiveTestFrameConn())
+	svcB, dialerB := newService(newLiveTestFrameConn())
+
+	ctxA, cancelA := context.WithCancel(context.Background())
+	t.Cleanup(cancelA)
+	ctxB, cancelB := context.WithCancel(context.Background())
+	t.Cleanup(cancelB)
+
+	go svcA.observeLiveCall(ctxA, record.CallHash)
+
+	// Wait for A to claim and heartbeat (poll the store's controller state).
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		state, err := store.GetLiveControllerState(context.Background(), record.CallHash)
+		require.NoError(t, err)
+		if state.Controller == LiveControllerObserver && !state.HeartbeatAt.IsZero() {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	state, err := store.GetLiveControllerState(context.Background(), record.CallHash)
+	require.NoError(t, err)
+	require.Equal(t, LiveControllerObserver, state.Controller)
+	require.False(t, state.HeartbeatAt.IsZero(), "observer A claimed and heartbeats")
+
+	go svcB.observeLiveCall(ctxB, record.CallHash)
+
+	// While A heartbeats, B must not take over: a negative poll past one full
+	// takeover interval (1 s) — B's takeover attempt at +1 s sees a fresh
+	// heartbeat and is refused.
+	negativeDeadline := time.Now().Add(1300 * time.Millisecond)
+	for time.Now().Before(negativeDeadline) {
+		require.Empty(t, dialerB.url, "B must not take over while A's heartbeats are fresh")
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// A crashes (its context cancelled — the loop stops without releasing the
+	// controller or heartbeating). B takes over and runs the connection.
+	cancelA()
+	takeoverDeadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(takeoverDeadline) {
+		if dialerB.url != "" {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	require.NotEmpty(t, dialerB.url, "B must take over within ~2 takeover intervals of A's death and dial the sideband")
+
+	state, err = store.GetLiveControllerState(context.Background(), record.CallHash)
+	require.NoError(t, err)
+	require.Equal(t, LiveControllerObserver, state.Controller)
+	require.NotEmpty(t, state.Owner)
+	require.False(t, state.HeartbeatAt.IsZero(), "B heartbeats once it owns the controller")
+	_ = dialerA
 }

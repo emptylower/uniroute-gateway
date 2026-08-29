@@ -123,6 +123,19 @@ type LiveCallStore interface {
 	ReleaseLiveController(ctx context.Context, callHash, owner string) (bool, error)
 	GetLiveController(ctx context.Context, callHash string) (string, error)
 	MarkLiveCallClosed(ctx context.Context, callHash string, ttl time.Duration) (bool, error)
+	// Phase 3.7b (redesign §13.2.5): the observer heartbeat and takeover.
+	HeartbeatLiveController(ctx context.Context, callHash, owner string, at time.Time) error
+	GetLiveControllerState(ctx context.Context, callHash string) (LiveControllerState, error)
+	TakeOverLiveObserver(ctx context.Context, callHash, owner string, staleBefore time.Time) (bool, error)
+}
+
+// LiveControllerState (§13.2.5): the controller string, its owner, and the
+// last heartbeat instant. HeartbeatAt is the zero time when the record has
+// never heartbeated (controller_heartbeat_ms == 0 — counts as stale).
+type LiveControllerState struct {
+	Controller  string
+	Owner       string
+	HeartbeatAt time.Time
 }
 
 type LiveConcurrencyCache interface {
