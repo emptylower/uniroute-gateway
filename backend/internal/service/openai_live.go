@@ -11,9 +11,11 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"path"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -33,6 +35,98 @@ const (
 	liveUpstreamBodyLimit         = 2 << 20
 	liveProvisionalWriteTimeout   = 300 * time.Millisecond
 )
+
+// ---------------------------------------------------------------------------
+// Phase 3.7b (redesign §13.2.1–§13.2.4): the Live window clock's counters.
+// Package-level atomics in this file (the file the plan's constraint 2 names
+// for them), the same shape as authorizationMetrics; deltas only in tests.
+// ---------------------------------------------------------------------------
+
+type LiveWindowMetrics struct {
+	Closed        int64
+	Idle          int64
+	SettleRetry   int64
+	ReauthRetry   int64
+	Refused       int64
+	RefusedShadow int64
+}
+
+var liveWindowMetrics struct {
+	closed, idle, settleRetry, reauthRetry, refused, refusedShadow atomic.Int64
+}
+
+func LiveWindowMetricsSnapshot() LiveWindowMetrics {
+	m := &liveWindowMetrics
+	return LiveWindowMetrics{
+		Closed:        m.closed.Load(),
+		Idle:          m.idle.Load(),
+		SettleRetry:   m.settleRetry.Load(),
+		ReauthRetry:   m.reauthRetry.Load(),
+		Refused:       m.refused.Load(),
+		RefusedShadow: m.refusedShadow.Load(),
+	}
+}
+
+func ResetLiveWindowMetricsForTest() {
+	m := &liveWindowMetrics
+	m.closed.Store(0)
+	m.idle.Store(0)
+	m.settleRetry.Store(0)
+	m.reauthRetry.Store(0)
+	m.refused.Store(0)
+	m.refusedShadow.Store(0)
+}
+
+// liveObserverContextProvider (Phase 3.7b Task 4): production observers run
+// for the process lifetime (redesign §13.2.6 — the loops end with the
+// process); nil means context.Background(). Tests inject a cancellable
+// context so every observer they start stops at cleanup — the same honest
+// crash simulation test 52 uses (a cancelled loop stops WITHOUT releasing
+// the controller or heartbeating).
+var liveObserverContextProvider func() context.Context
+
+func liveObserverCtx() context.Context {
+	if liveObserverContextProvider != nil {
+		return liveObserverContextProvider()
+	}
+	return context.Background()
+}
+
+// liveLeaseTTL / liveExpirySkew / liveWindowFloor (§13.2.1): the clock's
+// three config reads — the lease horizon (i), the expiry skew subtracted from
+// it, and the floor that gates clock (ii).
+func (s *OpenAIGatewayService) liveLeaseTTL() time.Duration {
+	if s != nil && s.cfg != nil && s.cfg.CanonicalWallet.LeaseTTLSeconds > 0 {
+		return time.Duration(s.cfg.CanonicalWallet.LeaseTTLSeconds) * time.Second
+	}
+	return 300 * time.Second
+}
+
+func (s *OpenAIGatewayService) liveExpirySkew() time.Duration {
+	if s != nil && s.cfg != nil && s.cfg.CanonicalWallet.ExpirySkewMarginMS > 0 {
+		return time.Duration(s.cfg.CanonicalWallet.ExpirySkewMarginMS) * time.Millisecond
+	}
+	return 0
+}
+
+func (s *OpenAIGatewayService) liveWindowFloor() time.Duration {
+	if s != nil && s.cfg != nil && s.cfg.CanonicalWallet.LiveWindowMinSeconds > 0 {
+		return time.Duration(s.cfg.CanonicalWallet.LiveWindowMinSeconds) * time.Second
+	}
+	return 20 * time.Second
+}
+
+// liveWindowRequestID (§13.2.2/§13.2.3): window 1's gateway request id is the
+// session's own call hash — TODAY's id, so a session in flight across a
+// deploy of this phase cannot double-settle its first window; windows ≥ 2
+// append :window:n. Phase 4's reconciliation must know window 1's id is the
+// bare hash, not :window:1.
+func liveWindowRequestID(callHash string, seq int) string {
+	if seq <= 1 {
+		return callHash
+	}
+	return fmt.Sprintf("%s:window:%d", callHash, seq)
+}
 
 type liveUsageDelta struct {
 	inputTokens     int
@@ -277,7 +371,7 @@ func (s *OpenAIGatewayService) CreateLiveCall(
 			UserID: identity.UserID, APIKeyID: identity.APIKeyID, AccountID: account.ID,
 			BillingCurrency: identity.BillingCurrency, BillingSnapshotID: snapshotIDOf(snap),
 			EstimatedUnits: authHandle.EstimatedUnits, Status: LiveProvisionalStatusProvisional,
-			Windows:   []LiveWindow{{WindowSeq: 1, LeaseID: "", Token: authHandle.ID}},
+			Windows:   []LiveWindow{{WindowSeq: 1, LeaseID: "", Token: authHandle.ID, OpenedAtMS: time.Now().UnixMilli()}},
 			CreatedAt: time.Now().UTC(),
 		}
 		rowWritten, rowErr := s.saveLiveProvisional(ctx, provisional, authHandle)
@@ -367,7 +461,7 @@ func (s *OpenAIGatewayService) CreateLiveCall(
 			s.activateLiveProvisional(authHandle.ID, record.CallHash)
 		}
 		created.Account = account
-		go s.observeLiveCall(context.Background(), record.CallHash)
+		go s.observeLiveCall(liveObserverCtx(), record.CallHash)
 		return created, nil
 	}
 	if lastErr != nil {
@@ -667,7 +761,7 @@ func (s *OpenAIGatewayService) ProxyLiveSideband(
 	upstream, err := s.dialLiveSideband(ctx, record)
 	if err != nil {
 		_, _ = store.ReleaseLiveController(context.Background(), record.CallHash, owner)
-		go s.observeLiveCall(context.Background(), record.CallHash)
+		go s.observeLiveCall(liveObserverCtx(), record.CallHash)
 		return err
 	}
 	defer func() { _ = upstream.Close() }()
@@ -718,7 +812,7 @@ func (s *OpenAIGatewayService) ProxyLiveSideband(
 		s.finalizeLiveCall(record)
 		return runErr
 	}
-	go s.observeLiveCall(context.Background(), record.CallHash)
+	go s.observeLiveCall(liveObserverCtx(), record.CallHash)
 	return runErr
 }
 
@@ -895,6 +989,9 @@ func (s *OpenAIGatewayService) runLiveObserverConnection(ctx context.Context, re
 	maxTimer := time.NewTimer(time.Until(record.ExpiresAt))
 	defer maxTimer.Stop()
 	store, _ := s.liveStore()
+	// §13.2.1: the window clock's cached state — loaded lazily on the first
+	// tick, reloaded after every advance and every lost CAS.
+	var liveClockState *liveWindowState
 	for {
 		select {
 		case payload := <-frameCh:
@@ -924,6 +1021,13 @@ func (s *OpenAIGatewayService) runLiveObserverConnection(ctx context.Context, re
 					return ErrLiveControllerChanged
 				}
 			}
+			// §13.2.1: only the observer loop runs the window clock, after the
+			// heartbeat, on this same 250 ms tick.
+			if next, clockErr := s.maybeCloseLiveWindow(ctx, record, upstream, liveClockState); next != nil {
+				liveClockState = next
+			} else if clockErr != nil {
+				return clockErr
+			}
 		case <-refreshTicker.C:
 			if !s.refreshLiveLease(record) {
 				return ErrLiveUnavailable
@@ -937,6 +1041,290 @@ func (s *OpenAIGatewayService) runLiveObserverConnection(ctx context.Context, re
 			return context.Cause(ctx)
 		}
 	}
+}
+
+// liveWindowState is the window clock's cached view of the provisional
+// record's window list (§13.2.2): the live window's seq/token/lease/opening
+// instant, the session estimate E_w, the sum of the settled windows behind
+// it, the PERSISTED pending amount (a crash between pending and the advance
+// re-issues exactly it — never a recomputation, §13.2.2's recovery rule),
+// and, after a successful re-authorization, the next window's handle until
+// the advance commits (a lost advance retries the ADVANCE with the SAME
+// handle — never a second arm, preserving "at most one armed hold").
+type liveWindowState struct {
+	seq        int
+	token      string // the LIVE WINDOW's token (the settlement's AuthorizationID)
+	rowToken   string // the provisional ROW's primary key (window 1's token) — the CAS address
+	leaseID    string
+	openedAt   time.Time
+	estimate   int64
+	settledSum int64
+	pending    int64
+	next       *LiveWindow
+}
+
+// loadLiveWindowState reads the window list by call hash (§13.2.2). A window
+// with no opened_at_ms (a pre-3.7b record) anchors on the record's creation —
+// the same instant class the window opened at.
+func (s *OpenAIGatewayService) loadLiveWindowState(ctx context.Context, callHash string) (*liveWindowState, error) {
+	if s.liveProvisional == nil {
+		return nil, ErrLiveProvisionalNotFound
+	}
+	rec, err := s.liveProvisional.GetByCallHash(ctx, callHash)
+	if err != nil {
+		return nil, err
+	}
+	n := len(rec.Windows)
+	if n == 0 || rec.Status != LiveProvisionalStatusActive {
+		return nil, ErrLiveProvisionalNotFound
+	}
+	last := rec.Windows[n-1]
+	st := &liveWindowState{
+		seq:      last.WindowSeq,
+		token:    last.Token,
+		rowToken: rec.Token,
+		leaseID:  last.LeaseID,
+		estimate: rec.EstimatedUnits,
+		pending:  last.PendingUnits,
+		openedAt: rec.CreatedAt,
+	}
+	if last.OpenedAtMS > 0 {
+		st.openedAt = time.UnixMilli(last.OpenedAtMS)
+	}
+	for _, w := range rec.Windows[:n-1] {
+		st.settledSum += w.SettledUnits
+	}
+	return st, nil
+}
+
+// liveUsageUnits prices the session's cumulative tokens with the record's
+// frozen prices exactly as finalization does (§13.2.2: A_n =
+// units(total tokens at close) − Σ_{k<n} A_k; the cost block factored out of
+// tryFinalizeLiveCall so both settle the same way).
+func liveUsageUnits(record *LiveCallRecord) (int64, error) {
+	if record == nil {
+		return 0, errors.New("nil live call record")
+	}
+	inputTokens := record.InputTokens - record.CacheReadTokens
+	if inputTokens < 0 {
+		inputTokens = 0
+	}
+	inputCost := float64(inputTokens) * record.InputPricePerToken
+	outputCost := float64(record.OutputTokens) * record.OutputPricePerToken
+	cacheReadCost := float64(record.CacheReadTokens) * record.CacheReadPricePerToken
+	sourceCost := inputCost + outputCost + cacheReadCost
+	baseCost := sourceCost * record.ExchangeRate
+	actualCost := baseCost * record.RateMultiplier
+	return canonicalWalletUnitsFromCNY(actualCost)
+}
+
+// liveClockArmed: the clock runs only with a provisional store, an
+// authorizer and a snapshot service (the re-authorization needs all three);
+// unit fixtures without them are untouched.
+func (s *OpenAIGatewayService) liveClockArmed() bool {
+	return s != nil && s.liveProvisional != nil && s.authorizer != nil &&
+		s.billingSnapshotSettler.snapshots != nil
+}
+
+// maybeCloseLiveWindow (§13.2.1–§13.2.4) runs on the observer's controller
+// tick. It returns the (possibly reloaded) state — nil only together with a
+// non-nil error (the loop's terminal exits) — and settles nothing unless a
+// close condition holds. A nil st on entry loads fresh.
+//
+// Close conditions, evaluated per tick: (i) now ≥ opened_at + lease_ttl −
+// skew (the lease horizon); (ii) now ≥ opened_at + floor AND accrued ≥ E_w
+// (the held estimate — a chunk, not a bound). The floor bounds the
+// settlement storm: a session far over its estimate closes at most one
+// window per floor.
+func (s *OpenAIGatewayService) maybeCloseLiveWindow(ctx context.Context, record *LiveCallRecord, upstream liveFrameConn, st *liveWindowState) (*liveWindowState, error) {
+	if !s.liveClockArmed() || record == nil {
+		return st, nil
+	}
+	if st == nil {
+		loaded, err := s.loadLiveWindowState(ctx, record.CallHash)
+		if err != nil {
+			// A missing/inactive record parks the clock silently (the unit
+			// fixtures); the loop's own exits handle the terminal cases.
+			if os.Getenv("P37B_DEBUG") != "" {
+				fmt.Fprintf(os.Stderr, "P37B-EXIT load err=%v\n", err)
+			}
+			return nil, nil
+		}
+		st = loaded
+	}
+	store, err := s.liveStore()
+	if err != nil {
+		return st, nil
+	}
+	// The counters are the Redis hash's — read fresh each tick.
+	fresh, getErr := store.GetLiveCall(ctx, record.CallHash)
+	if getErr != nil {
+		return st, nil
+	}
+	total, unitsErr := liveUsageUnits(fresh)
+	if unitsErr != nil {
+		return st, nil
+	}
+	A := total - st.settledSum
+	if A < 0 {
+		A = 0
+	}
+	now := time.Now().UTC()
+	horizon := st.openedAt.Add(s.liveLeaseTTL() - s.liveExpirySkew())
+	closeByClock := !now.Before(horizon)
+	closeByUsage := !now.Before(st.openedAt.Add(s.liveWindowFloor())) && st.estimate > 0 && A >= st.estimate
+	if !closeByClock && !closeByUsage {
+		return st, nil
+	}
+
+	mode := s.canonicalWalletMode()
+	// §13.2.3: in disabled mode no settlement is attempted at all; the clock
+	// advances on the horizon alone so the record shape stays uniform.
+	if mode == config.CanonicalWalletModeDisabled {
+		if !closeByClock {
+			return st, nil
+		}
+		next := LiveWindow{WindowSeq: st.seq + 1, OpenedAtMS: now.UnixMilli()}
+		if advErr := s.liveProvisional.AdvanceLiveWindow(ctx, st.token, st.seq, 0, next); advErr != nil {
+			liveWindowMetrics.reauthRetry.Add(1)
+			return st, nil
+		}
+		liveWindowMetrics.closed.Add(1)
+		return s.loadLiveWindowState(ctx, record.CallHash)
+	}
+
+	idle := A == 0
+	if !idle {
+		// §13.2.2: persist FIRST (recovery re-issues this exact amount); skip
+		// the write when a pending amount is already persisted.
+		if st.pending == 0 {
+			if casErr := s.liveProvisional.SetLiveWindowPending(ctx, st.rowToken, st.seq, A); casErr != nil {
+				return s.loadLiveWindowState(ctx, record.CallHash) // CAS lost: reload, retry next tick
+			}
+			st.pending = A
+		}
+		amount := st.pending
+		ok := s.canonicalWallet.ObserveSettlement(CanonicalWalletSettlementEvent{
+			GatewayRequestID:   liveWindowRequestID(record.CallHash, st.seq),
+			PlatformUserID:     fresh.PlatformUserID,
+			Currency:           fresh.BillingCurrency,
+			AmountUnits:        amount,
+			OccurredAt:         now,
+			AuthorizationID:    st.token,
+			AuthorizationToken: st.token,
+		})
+		if !ok {
+			liveWindowMetrics.settleRetry.Add(1)
+			if closeByClock {
+				// §13.2.3: an unsettled window at the horizon closes the
+				// session — the money resolves by conversion or the reaper.
+				return st, s.hardStopLiveSession(ctx, fresh, upstream, "settle_unresolved")
+			}
+			return st, nil
+		}
+	} else {
+		// §13.2.3: an idle window writes NO outbox row; its armed hold, if
+		// any, is released through §11.7's zero-cost abort point.
+		s.canonicalWallet.releaseHoldZeroCost(ctx, fresh.PlatformUserID, st.token)
+	}
+
+	// Re-authorize the next window through the ordinary gate at the session's
+	// original estimate (§13.2.1). The advance carries the new window
+	// {seq+1, lease, token, 0, 0, now} — only after a handle exists.
+	if st.next == nil {
+		snap, snapErr := s.billingSnapshotSettler.snapshots.Load(ctx, fresh.BillingSnapshotID)
+		if snapErr != nil {
+			snap = nil
+		}
+		handle, authErr := s.authorizer.Authorize(ctx, AuthorizeInput{
+			Snapshot:           snap,
+			User:               &User{PlatformUserID: fresh.PlatformUserID, BillingCurrency: fresh.BillingCurrency},
+			FixedEstimateUnits: st.estimate, // the session's ORIGINAL estimate (§13.2.1)
+		})
+		if authErr != nil && errors.Is(authErr, ErrAuthorizationRefused) {
+			// §13.2.4: the hard stop. The refused handle still names the next
+			// window (its id, no lease, no hold) — shadow admits below,
+			// enforce closes.
+			if handle != nil {
+				next := LiveWindow{WindowSeq: st.seq + 1, Token: handle.ID, OpenedAtMS: now.UnixMilli()}
+				if handle.LeaseID != "" {
+					next.LeaseID = handle.LeaseID
+				}
+				st.next = &next
+			}
+			if mode == config.CanonicalWalletModeEnforce {
+				// The refused handle still names the next window; the advance
+				// is best-effort here (a lost CAS retries nothing — the stop
+				// is terminal and finalization owns the record from here).
+				_ = s.advanceLiveWindowSafe(ctx, st, idle)
+				return st, s.hardStopLiveSession(ctx, fresh, upstream, "reauthorization_refused")
+			}
+			liveWindowMetrics.refusedShadow.Add(1)
+			// Shadow admits: the window advances with the refused handle's id
+			// and no hold, and the session continues.
+		} else if authErr != nil {
+			liveWindowMetrics.reauthRetry.Add(1)
+			return st, nil // transient: the window stays pending-resolved
+		} else if handle != nil {
+			next := LiveWindow{WindowSeq: st.seq + 1, Token: handle.ID, OpenedAtMS: now.UnixMilli()}
+			if handle.LeaseID != "" {
+				next.LeaseID = handle.LeaseID
+			}
+			st.next = &next
+		}
+	}
+	if st.next == nil {
+		return st, nil
+	}
+	if advErr := s.advanceLiveWindowSafe(ctx, st, idle); advErr != nil {
+		return st, nil
+	}
+	if idle {
+		liveWindowMetrics.idle.Add(1)
+	} else {
+		liveWindowMetrics.closed.Add(1)
+	}
+	return s.loadLiveWindowState(ctx, record.CallHash)
+}
+
+// advanceLiveWindowSafe settles window seq and appends st.next in ONE store
+// statement; a failure keeps st.next so the next tick retries the ADVANCE
+// with the SAME handle (never a second arm).
+func (s *OpenAIGatewayService) advanceLiveWindowSafe(ctx context.Context, st *liveWindowState, idle bool) error {
+	settled := st.pending
+	if idle {
+		settled = 0
+	}
+	next := *st.next
+	if err := s.liveProvisional.AdvanceLiveWindow(ctx, st.rowToken, st.seq, settled, next); err != nil {
+		liveWindowMetrics.reauthRetry.Add(1)
+		return err
+	}
+	st.next = nil
+	return nil
+}
+
+// hardStopLiveSession (§13.2.4): the hard stop. In enforce the observer
+// writes session.close on its own sideband conn (non-billable — the close
+// frame is sideband, least of all on the path that fires because the user is
+// out of money), marks the record closed, counts the refusal, and returns
+// ErrLiveCallNotFound so observeLiveCall finalizes. In shadow there is no
+// stop (counted, the session continues).
+func (s *OpenAIGatewayService) hardStopLiveSession(ctx context.Context, record *LiveCallRecord, upstream liveFrameConn, reason string) error {
+	liveWindowMetrics.refused.Add(1)
+	logger.L().Warn("openai.live_window_hard_stop",
+		zap.String("call_hash", record.CallHash), zap.String("reason", reason))
+	if upstream != nil {
+		closeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		_ = upstream.WriteFrame(WithNonBillableUpstream(closeCtx, NonBillableLiveSideband), coderws.MessageText, []byte(`{"type":"session.close"}`))
+		cancel()
+	}
+	if store, err := s.liveStore(); err == nil {
+		markCtx, markCancel := context.WithTimeout(ctx, liveRedisOperationTimeout)
+		_, _ = store.MarkLiveCallClosed(markCtx, record.CallHash, liveClosedRecordTTL)
+		markCancel()
+	}
+	return ErrLiveCallNotFound
 }
 
 func (s *OpenAIGatewayService) waitForLiveObserverRetry(record *LiveCallRecord) bool {
@@ -1119,7 +1507,7 @@ func (s *OpenAIGatewayService) tryFinalizeLiveCall(record *LiveCallRecord) bool 
 			currency := NormalizeUserBillingCurrency(record.BillingCurrency)
 			eventID := CanonicalWalletSettlementEventID(record.CallHash, user.PlatformUserID, currency)
 			if record.AuthorizationToken != "" && observeCanonicalWalletSettlement(s.canonicalWallet, record.CallHash, user, cost, record.SubscriptionBilling, applied, billingResult, record.AuthorizationToken, record.AuthorizationID) {
-				settledUnits, _ := canonicalWalletUnitsFromCNY(cost.ActualCost)                                                 // the error is discarded only because a true return from the observer implies this same conversion already succeeded inside it — do not reorder
+				settledUnits, _ := liveUsageUnits(record)                                                                       // the factored cost block (§13.2.2) — the same arithmetic as the observer's window amounts; the error is discarded only because a true return from the observer implies this same conversion already succeeded inside it — do not reorder
 				if err := s.completeLiveProvisionalFinalization(record.AuthorizationID, eventID, settledUnits, 1); err != nil { // Phase 3.7b Task 2: seq-aware complete; 1 is today's single-window record (Task 5 computes the final seq)
 					logger.L().Error("openai.live_provisional_complete_failed", zap.String("call_hash", record.CallHash), zap.Error(err))
 					return false // the row stays finalizing: "settlement outcome unknown" to Phase 4 — the named residual

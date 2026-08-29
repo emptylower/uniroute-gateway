@@ -15,10 +15,52 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/Wei-Shaw/sub2api/internal/platform/liveattestation"
+	redisclient "github.com/redis/go-redis/v9"
 )
 
 func NewLiveProvisionalStoreForTest(db *sql.DB) LiveProvisionalStore {
 	return newLiveProvisionalStore(db)
+}
+
+// Phase 3.7b (Task 4): package service cannot import repository (repository
+// imports service — a real import cycle, including in-package test files), so
+// the real gatewayCache and the real BillingSnapshotStore reach this
+// package's integration fixtures through constructors registered here by the
+// external bridge file (phase37b_external_bridge_test.go, package
+// service_test) at init time — before any test runs.
+var (
+	p37bGatewayCacheCtor         func(rdb *redisclient.Client) GatewayCache
+	p37bBillingSnapshotStoreCtor func(db *sql.DB) BillingSnapshotStore
+)
+
+func RegisterGatewayCacheCtorForTest(f func(rdb *redisclient.Client) GatewayCache) {
+	p37bGatewayCacheCtor = f
+}
+
+func RegisterBillingSnapshotStoreCtorForTest(f func(db *sql.DB) BillingSnapshotStore) {
+	p37bBillingSnapshotStoreCtor = f
+}
+
+// NewRealGatewayCacheForTest returns a REAL repository gatewayCache over the
+// test Redis — one object that is LiveCallStore, LiveUsageStore,
+// LiveFinalizationStore and the canonical-wallet lease/hold store at once.
+func NewRealGatewayCacheForTest(t *testing.T, rdb *redisclient.Client) GatewayCache {
+	t.Helper()
+	if p37bGatewayCacheCtor == nil {
+		t.Fatal("gateway cache ctor not registered — phase37b_external_bridge_test.go must compile in this run")
+	}
+	return p37bGatewayCacheCtor(rdb)
+}
+
+// NewBillingSnapshotStoreForTest returns the real snapshot store over the
+// test Postgres, so the window re-authorization's snapshots.Load reads what
+// the session's Freeze persisted.
+func NewBillingSnapshotStoreForTest(t *testing.T, db *sql.DB) BillingSnapshotStore {
+	t.Helper()
+	if p37bBillingSnapshotStoreCtor == nil {
+		t.Fatal("billing snapshot store ctor not registered — phase37b_external_bridge_test.go must compile in this run")
+	}
+	return p37bBillingSnapshotStoreCtor(db)
 }
 
 func NewCanonicalWalletBridgeForTest(t *testing.T, cfg config.CanonicalWalletConfig, store CanonicalWalletLeaseStore, control canonicalWalletControlPlane, outboxDB *sql.DB, outbox CanonicalWalletOutboxStore) *CanonicalWalletBridge {

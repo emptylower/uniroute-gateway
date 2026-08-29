@@ -30,6 +30,19 @@ type AuthorizeInput struct {
 	Snapshot *BillingSnapshot
 	Estimate EstimateInput
 	User     *User
+	// FixedEstimateUnits (Phase 3.7b, redesign §13.2.1): when > 0 it REPLACES
+	// the estimation step only — Authorize skips EstimateUpperBoundUnits and
+	// uses this value as the units bound. The snapshot, identity and currency
+	// checks, the ensure, the hold arm and the refusal mapping are unchanged,
+	// which is what lets the Live hard stop key on ErrAuthorizationRefused.
+	// The estimate is a CHUNK, not a bound: each Live window re-authorizes at
+	// the session's ORIGINAL estimate (the window closes when accrued usage
+	// reaches it), so the estimator — which would re-bound from the request
+	// body — is bypassed by design. Setting both Estimate and
+	// FixedEstimateUnits is a programming error: FixedEstimateUnits wins and
+	// the authorizer does not estimate. Exactly one caller: the Live window
+	// re-authorization.
+	FixedEstimateUnits int64
 }
 
 func (a *CanonicalWalletAuthorizer) mode() string {
@@ -75,10 +88,18 @@ func (a *CanonicalWalletAuthorizer) Authorize(ctx context.Context, in AuthorizeI
 		return refuse(AuthorizationRefusalSnapshotMissing, "no billing snapshot for this attempt", nil)
 	}
 	h.SnapshotID = in.Snapshot.ID
-	units, err := a.snapshots.EstimateUpperBoundUnits(in.Snapshot, in.Estimate)
-	if err != nil {
-		authorizationMetrics.estimateFailed.Add(1)
-		return refuse(AuthorizationRefusalEstimateFailed, "model "+in.Snapshot.BillingModel, err)
+	// Phase 3.7b (§13.2.1): FixedEstimateUnits > 0 replaces the estimation
+	// step ONLY — the bound is the caller's (the Live window's chunk).
+	var units int64
+	if in.FixedEstimateUnits > 0 {
+		units = in.FixedEstimateUnits
+	} else {
+		estimated, estimateErr := a.snapshots.EstimateUpperBoundUnits(in.Snapshot, in.Estimate)
+		if estimateErr != nil {
+			authorizationMetrics.estimateFailed.Add(1)
+			return refuse(AuthorizationRefusalEstimateFailed, "model "+in.Snapshot.BillingModel, estimateErr)
+		}
+		units = estimated
 	}
 	h.EstimatedUnits = units
 	h.Continuation = in.Estimate.Continuation
