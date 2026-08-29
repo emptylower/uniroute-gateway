@@ -1027,10 +1027,14 @@ func (s *OpenAIGatewayService) runLiveObserverConnection(ctx context.Context, re
 				}
 			}
 			// §13.2.1: only the observer loop runs the window clock, after the
-			// heartbeat, on this same 250 ms tick.
-			if next, clockErr := s.maybeCloseLiveWindow(ctx, record, upstream, liveClockState); next != nil {
+			// heartbeat, on this same 250 ms tick. A terminal clock error
+			// (the hard stop's ErrLiveCallNotFound) returns even when a state
+			// came back — the caller finalizes.
+			next, clockErr := s.maybeCloseLiveWindow(ctx, record, upstream, liveClockState)
+			if next != nil {
 				liveClockState = next
-			} else if clockErr != nil {
+			}
+			if clockErr != nil {
 				return clockErr
 			}
 		case <-refreshTicker.C:
@@ -1209,12 +1213,16 @@ func (s *OpenAIGatewayService) maybeCloseLiveWindow(ctx context.Context, record 
 			st.pending = A
 		}
 		amount := st.pending
+		// §13.2.2's recovery rule needs a BYTE-IDENTICAL re-issue: the outbox
+		// payload hash includes occurred_at, so the event's instant is the
+		// window's PERSISTED opening — stable across ticks, observers and
+		// crashes (a fresh now would make every retry a payload conflict).
 		ok := s.canonicalWallet.ObserveSettlement(CanonicalWalletSettlementEvent{
 			GatewayRequestID:   liveWindowRequestID(record.CallHash, st.seq),
 			PlatformUserID:     fresh.PlatformUserID,
 			Currency:           fresh.BillingCurrency,
 			AmountUnits:        amount,
-			OccurredAt:         now,
+			OccurredAt:         st.openedAt,
 			AuthorizationID:    st.token,
 			AuthorizationToken: st.token,
 		})
@@ -1241,12 +1249,23 @@ func (s *OpenAIGatewayService) maybeCloseLiveWindow(ctx context.Context, record 
 		if snapErr != nil {
 			snap = nil
 		}
+		// A refusal is an error in enforce; in shadow the attempt is admitted
+		// with NO refusal on the returned handle — the only in-band signal is
+		// the per-reason counter the authorizer increments in both modes
+		// (§13.2.4: a shadow refusal still counts liveWindowRefusedShadow).
+		reasons := func() int64 {
+			m := &authorizationMetrics
+			return m.balanceShortfall.Load() + m.leaseCapReached.Load() + m.leaseUnavailable.Load() +
+				m.snapshotMissing.Load() + m.estimateFailed.Load() + m.identityMissing.Load() + m.currencyUnsupported.Load()
+		}
+		reasonsBefore := reasons()
 		handle, authErr := s.authorizer.Authorize(ctx, AuthorizeInput{
 			Snapshot:           snap,
 			User:               &User{PlatformUserID: fresh.PlatformUserID, BillingCurrency: fresh.BillingCurrency},
 			FixedEstimateUnits: st.estimate, // the session's ORIGINAL estimate (§13.2.1)
 		})
-		if authErr != nil && errors.Is(authErr, ErrAuthorizationRefused) {
+		refused := errors.Is(authErr, ErrAuthorizationRefused) || reasons() > reasonsBefore
+		if refused {
 			// §13.2.4: the hard stop. The refused handle still names the next
 			// window (its id, no lease, no hold) — shadow admits below,
 			// enforce closes.
@@ -1396,7 +1415,17 @@ func (s *OpenAIGatewayService) tryFinalizeLiveCall(record *LiveCallRecord) bool 
 	if loadErr != nil {
 		return errors.Is(loadErr, ErrLiveCallNotFound)
 	}
-	if latest.Controller == LiveControllerClosed {
+	// §13.2.4's hard stop marks the record closed BEFORE the observer returns
+	// ErrLiveCallNotFound for finalization — a closed record whose provisional
+	// row is still ACTIVE must still settle here (the row's status is the
+	// one-shot guard; a finalized/absent row keeps today's early return).
+	rowPendingFinalization := false
+	if s.canonicalWalletMode() != config.CanonicalWalletModeDisabled && latest.AuthorizationID != "" && s.liveProvisional != nil {
+		if provRec, provErr := s.liveProvisional.Get(context.Background(), latest.AuthorizationID); provErr == nil && provRec.Status == LiveProvisionalStatusActive {
+			rowPendingFinalization = true
+		}
+	}
+	if latest.Controller == LiveControllerClosed && !rowPendingFinalization {
 		return true
 	}
 	record = latest

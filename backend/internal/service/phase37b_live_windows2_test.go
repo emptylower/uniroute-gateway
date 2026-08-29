@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -134,6 +135,14 @@ func newLiveWindowTestFixture(t *testing.T, mode string) *liveWindowFixture {
 
 func (sh *liveWindowShared) newFixture(t *testing.T, mode string) *liveWindowFixture {
 	t.Helper()
+	return sh.newFixtureCfg(t, mode, nil)
+}
+
+// newFixtureCfg mutates the wallet config BEFORE the bridge copies it — the
+// ensure's requested budget rides the bridge's copy, so per-test budget
+// shapes (test 51's exactly-one-lease funding) must be set here.
+func (sh *liveWindowShared) newFixtureCfg(t *testing.T, mode string, mutate func(*config.CanonicalWalletConfig)) *liveWindowFixture {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 
 	cfg := &config.Config{}
@@ -152,6 +161,9 @@ func (sh *liveWindowShared) newFixture(t *testing.T, mode string) *liveWindowFix
 	cfg.CanonicalWallet.OrphanSweepBatch = 200
 	cfg.JWT.Secret = "test-jwt-secret-32-bytes-long!!!"
 	cfg.Gateway.Live.MaxSessionDurationSeconds = 60
+	if mutate != nil {
+		mutate(&cfg.CanonicalWallet)
+	}
 
 	cache := NewRealGatewayCacheForTest(t, sh.rdb)
 	store := cache.(CanonicalWalletLeaseStore)
@@ -234,7 +246,12 @@ func (h *p37bHTTPUpstream) DoWithTLS(req *http.Request, proxyURL string, account
 
 func (f *liveWindowFixture) createSession(t *testing.T) (callHash string, created *LiveCallCreated) {
 	t.Helper()
-	f.fund(20_000_000_000) // 200 CNY — plenty for the default legs; shortfall legs fund separately
+	return f.createSessionFunded(t, 20_000_000_000) // 200 CNY — plenty for the default legs; shortfall legs fund separately
+}
+
+func (f *liveWindowFixture) createSessionFunded(t *testing.T, fundUnits int64) (callHash string, created *LiveCallCreated) {
+	t.Helper()
+	f.fund(fundUnits)
 	created, err := f.svc.CreateLiveCall(context.Background(), &LiveCallRequest{
 		SDP:     "v=0\r\n",
 		Session: json.RawMessage(`{"model":"claude-sonnet-4","max_output_tokens":4096,"instructions":"p37b live window session"}`),
@@ -296,7 +313,8 @@ func (f *liveWindowFixture) pumpAtRate(ctx context.Context, t *testing.T, unitsP
 	t.Helper()
 	tokens := int(math.Round(float64(unitsPerSecond) / f.unitsPerOutputToken(t, callHash)))
 	if tokens <= 0 {
-		t.Fatalf("rate %d units/s prices to zero tokens at %f units/token", unitsPerSecond, f.unitsPerOutputToken(t, callHash))
+		t.Errorf("rate %d units/s prices to zero tokens at %f units/token", unitsPerSecond, f.unitsPerOutputToken(t, callHash))
+		return
 	}
 	seq := 0
 	ticker := time.NewTicker(time.Second)
@@ -320,14 +338,14 @@ func (f *liveWindowFixture) pumpAtRate(ctx context.Context, t *testing.T, unitsP
 
 func (f *liveWindowFixture) provRecord(t *testing.T, callHash string) *LiveProvisionalRecord {
 	t.Helper()
-	rec, err := f.provisional.GetByCallHash(f.ctx, callHash)
+	rec, err := f.provisional.GetByCallHash(context.Background(), callHash) // reads outlive the fixture's observer context (test 52 polls after killing A)
 	require.NoError(t, err)
 	return rec
 }
 
 func (f *liveWindowFixture) recordByHash(t *testing.T, callHash string) *LiveCallRecord {
 	t.Helper()
-	rec, err := f.liveStore.GetLiveCall(f.ctx, callHash)
+	rec, err := f.liveStore.GetLiveCall(context.Background(), callHash)
 	require.NoError(t, err)
 	return rec
 }
@@ -336,7 +354,7 @@ func (f *liveWindowFixture) pollWindowsLen(t *testing.T, callHash string, want i
 	t.Helper()
 	end := time.Now().Add(deadline)
 	for time.Now().Before(end) {
-		rec, err := f.provisional.GetByCallHash(f.ctx, callHash)
+		rec, err := f.provisional.GetByCallHash(context.Background(), callHash)
 		if err == nil && len(rec.Windows) >= want {
 			return rec
 		}
@@ -578,4 +596,420 @@ func TestPhase37bWindowsCloseSettleAndReauthorize(t *testing.T) {
 		require.Equal(t, id1, f.outboxRow(t, id1).EventID, "window 1's row exists under the session id")
 		require.LessOrEqual(t, atomic.LoadInt32(&maxArmed), int32(1), "at most one armed hold on every sample")
 	})
+}
+
+// ---------------------------------------------------------------------------
+// Test 49, last leg — the last window settles at finalization through the
+// REAL path (§13.3): after two closed windows the session ends; the third
+// window settles under :window:3 through the bridge, the outbox and the
+// fake's v2 route, and the fake's captured figure equals the windows' sum.
+// ---------------------------------------------------------------------------
+
+func TestPhase37bLastWindowSettlesAtFinalization(t *testing.T) {
+	f := newLiveWindowTestFixture(t, config.CanonicalWalletModeEnforce)
+	callHash, _ := f.createSession(t)
+	prov := f.provRecord(t, callHash)
+	E := prov.EstimatedUnits
+	tokens := int(math.Ceil(2 * float64(E) / f.unitsPerOutputToken(t, callHash)))
+
+	f.pumpUsage("resp-49d-1", 0, tokens)
+	prov = f.pollWindowsLen(t, callHash, 2, 8*time.Second)
+	f.pumpUsage("resp-49d-2", 0, tokens)
+	prov = f.pollWindowsLen(t, callHash, 3, 8*time.Second)
+	T3 := prov.Windows[2].Token
+
+	// The tail: usage accruing after window 2's close — the last window's
+	// remainder (the response in flight when the session ended). Without it
+	// the last window would finalize idle (remainder zero, no row).
+	tailTokens := 1000
+	f.pumpUsage("resp-49d-tail", 0, tailTokens)
+
+	// End the session: the fake sideband emits session.closed.
+	f.conn.reads <- liveTestFrame{messageType: coderws.MessageText, payload: []byte(`{"type":"session.closed"}`)}
+
+	// The provisional row reaches finalized (poll).
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		prov = f.provRecord(t, callHash)
+		if prov.Status == LiveProvisionalStatusFinalized {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	require.Equal(t, LiveProvisionalStatusFinalized, prov.Status, "the row finalizes after session.closed")
+
+	// A third outbox row: :window:3, T(3)'s authorization, the remainder.
+	rec := f.recordByHash(t, callHash)
+	totalUnits, err := liveUsageUnits(rec)
+	require.NoError(t, err)
+	remainder := totalUnits - prov.Windows[0].SettledUnits - prov.Windows[1].SettledUnits
+	require.Equal(t, f.unitsForTokens(t, rec, 0, tailTokens, 0), remainder)
+	id3 := CanonicalWalletSettlementEventID(liveWindowRequestID(callHash, 3), f.user.PlatformUserID, "CNY")
+	f.waitDeliveredThroughFake(t, id3, 15*time.Second)
+	row := f.outboxRow(t, id3)
+	require.Equal(t, liveWindowRequestID(callHash, 3), row.GatewayID)
+	require.Equal(t, T3, row.AuthID)
+	require.Equal(t, remainder, row.Amount)
+
+	// Σ windows == units(total); the fake captured exactly the same figure on
+	// the session's lease.
+	sum := prov.Windows[0].SettledUnits + prov.Windows[1].SettledUnits + prov.Windows[2].SettledUnits
+	require.Equal(t, totalUnits, sum)
+	f.fake.mu.Lock()
+	leaseID := prov.Windows[1].LeaseID
+	captured := f.fake.lease(f.user.PlatformUserID, leaseID).Captured
+	f.fake.mu.Unlock()
+	require.Equal(t, totalUnits, captured, "the fake's captured sum on the session's lease equals the windows' sum")
+}
+
+// ---------------------------------------------------------------------------
+// Test 50 — a crash between the pending_units write and the advance
+// re-issues the SAME amount (§13.2.2's recovery rule), via the established
+// fault-injection idiom (3.5-G's test 34 crash leg; round-1 MINOR-2). The
+// takeover-based crash is test 52's job — this one is deterministic.
+// ---------------------------------------------------------------------------
+
+type p37bFaultProvisionalStore struct {
+	LiveProvisionalStore
+	advanceFailures int32
+}
+
+func (s *p37bFaultProvisionalStore) AdvanceLiveWindow(ctx context.Context, token string, seq int, settledUnits int64, next LiveWindow) error {
+	if atomic.AddInt32(&s.advanceFailures, -1) >= 0 {
+		return errors.New("injected advance failure (crash between pending and advance)")
+	}
+	return s.LiveProvisionalStore.AdvanceLiveWindow(ctx, token, seq, settledUnits, next)
+}
+
+func TestPhase37bCrashBetweenPendingAndAdvanceReissuesSameAmount(t *testing.T) {
+	f := newLiveWindowTestFixture(t, config.CanonicalWalletModeEnforce)
+	faulty := &p37bFaultProvisionalStore{LiveProvisionalStore: f.provisional, advanceFailures: 1}
+	f.svc.liveProvisional = faulty
+	callHash, _ := f.createSession(t)
+	prov := f.provRecord(t, callHash)
+	E := prov.EstimatedUnits
+	tokens := int(math.Ceil(2 * float64(E) / f.unitsPerOutputToken(t, callHash)))
+	conflictsBefore := canonicalWalletBridgeMetrics.outboxPayloadConflict.Load()
+
+	f.pumpUsage("resp-50", 0, tokens)
+
+	// The crash point: pending persisted, advance failed — the window stays
+	// pending with the persisted amount (poll; the transient lasts a tick).
+	var persisted int64
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		prov = f.provRecord(t, callHash)
+		if len(prov.Windows) == 1 && prov.Windows[0].PendingUnits > 0 {
+			persisted = prov.Windows[0].PendingUnits
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	require.Greater(t, persisted, int64(0), "the pending amount was persisted before the advance failed")
+
+	// The next tick re-issues THAT amount and the advance completes.
+	prov = f.pollWindowsLen(t, callHash, 2, 5*time.Second)
+	require.Equal(t, persisted, prov.Windows[0].SettledUnits, "the re-issued amount is the persisted pending, never a recomputation")
+	require.Equal(t, int64(0), prov.Windows[0].PendingUnits)
+
+	// Exactly one outbox row for window 1 — the duplicate submission deduped.
+	eventID := CanonicalWalletSettlementEventID(callHash, f.user.PlatformUserID, "CNY")
+	require.Equal(t, 1, f.outboxRowCount(t, eventID))
+	require.Equal(t, persisted, f.outboxRow(t, eventID).Amount)
+	require.Equal(t, int64(0), canonicalWalletBridgeMetrics.outboxPayloadConflict.Load()-conflictsBefore, "no payload conflict from the re-issue")
+
+	// End the session; Σ == units(total).
+	f.conn.reads <- liveTestFrame{messageType: coderws.MessageText, payload: []byte(`{"type":"session.closed"}`)}
+	deadline = time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		prov = f.provRecord(t, callHash)
+		if prov.Status == LiveProvisionalStatusFinalized {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	require.Equal(t, LiveProvisionalStatusFinalized, prov.Status)
+	rec := f.recordByHash(t, callHash)
+	totalUnits, err := liveUsageUnits(rec)
+	require.NoError(t, err)
+	require.Equal(t, totalUnits, prov.Windows[0].SettledUnits+prov.Windows[1].SettledUnits)
+}
+
+// ---------------------------------------------------------------------------
+// Test 51 — a refused re-authorization closes the session; the invariant's
+// three terms (§13.2.4, §13.3). Legs: (a) balance shortfall; (b)
+// lease_cap_reached under §3.3's cap; (c) shadow admits.
+// ---------------------------------------------------------------------------
+
+// refuseLeg drives one refused-reauthorization leg: a session whose window 1
+// closes at the LEASE HORIZON under its accrued-but-under-E usage (a clean
+// conversion: A < E always), after which the re-authorization is refused and
+// the hard stop must fire.
+func runPhase37bRefusedLeg(t *testing.T, mode string, mutate func(*config.CanonicalWalletConfig), prepare func(f *liveWindowFixture, callHash string, E int64)) {
+	t.Helper()
+	sh := newLiveWindowShared(t)
+	f := sh.newFixtureCfg(t, mode, mutate)
+	// The budget rides min_headroom (requested budget 0): the session's one
+	// lease is granted at exactly E, spent by its own arm — the gateway lease
+	// ends with zero remaining, so the boundary's ensure must ISSUE. Funding
+	// for the create is drained to zero right after it: the user can afford
+	// exactly one lease.
+	f.fund(0)
+	callHash, created := f.createSessionFunded(t, 20_000_000_000)
+	require.NotNil(t, created)
+	prov := f.provRecord(t, callHash)
+	E := prov.EstimatedUnits
+	f.fake.mu.Lock()
+	f.fake.balance[f.user.PlatformUserID] = 0
+	f.fake.mu.Unlock()
+
+	// A known rate R, held under E across the horizon: R = E/45 → A(30 s) =
+	// (2/3)E < E — no usage close, a clean conversion at the horizon.
+	R := E / 45
+	pumpCtx, pumpCancel := context.WithCancel(f.ctx)
+	go f.pumpAtRate(pumpCtx, t, R, callHash)
+	defer pumpCancel()
+
+	if prepare != nil {
+		prepare(f, callHash, E)
+	}
+
+	// Window 1 closes at the horizon with the clean conversion; the
+	// re-authorization is refused and the session closes.
+	deadline := time.Now().Add(40 * time.Second)
+	var controller string
+	for time.Now().Before(deadline) {
+		if rec := f.recordByHash(t, callHash); rec.Controller == LiveControllerClosed {
+			controller = rec.Controller
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	require.Equal(t, LiveControllerClosed, controller, "the hard stop closed the session")
+	pumpCancel()
+
+	// The close frame was written on the sideband (non-billable).
+	select {
+	case frame := <-f.conn.writes:
+		require.Equal(t, coderws.MessageText, frame.messageType)
+		require.JSONEq(t, `{"type":"session.close"}`, string(frame.payload))
+	case <-time.After(2 * time.Second):
+		t.Fatal("session.close never written on the sideband")
+	}
+
+	// The row finalizes; the last window settles the tail with no hold.
+	deadline = time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		prov = f.provRecord(t, callHash)
+		if prov.Status == LiveProvisionalStatusFinalized {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	require.Equal(t, LiveProvisionalStatusFinalized, prov.Status)
+	require.Empty(t, f.holdIDs(t), "no armed hold remains — the last window settled with no hold")
+
+	// The terms (§13.2.4): the floor term with the known rate —
+	// windows[0].settled_units ≤ E_w + R × live_window_min_seconds.
+	require.LessOrEqual(t, prov.Windows[0].SettledUnits, E+R*5, "the floor term")
+	// The tail ≤ the units of one pumped response (the in-flight frame).
+	require.Greater(t, prov.Windows[0].SettledUnits, int64(0))
+	if len(prov.Windows) > 1 && prov.Windows[1].SettledUnits > 0 {
+		require.LessOrEqual(t, prov.Windows[1].SettledUnits, R+1, "the tail after the refusal ≤ one response's units")
+	}
+	_ = prepare
+}
+
+func TestPhase37bRefusedReauthorizationBalanceShortfall(t *testing.T) {
+	runPhase37bRefusedLeg(t, config.CanonicalWalletModeEnforce,
+		func(c *config.CanonicalWalletConfig) { c.LeaseBudgetUnits = 0 }, // the lease grants exactly min_headroom = E
+		nil) // balance 1 − E spent at issue → shortfall at the boundary
+}
+
+func TestPhase37bRefusedReauthorizationLeaseCapReached(t *testing.T) {
+	runPhase37bRefusedLeg(t, config.CanonicalWalletModeEnforce,
+		func(c *config.CanonicalWalletConfig) { c.LeaseBudgetUnits = 0 },
+		func(f *liveWindowFixture, callHash string, E int64) {
+			// The user's ONE lease (the session's own window-1 lease, purpose
+			// authorize, active) does not cover the window (consumed = E,
+			// budget = E → headroom 0); the cap is 1, so the boundary's issue
+			// attempt is refused with lease_cap_reached.
+			f.fake.mu.Lock()
+			f.fake.cap = 1
+			f.fake.mu.Unlock()
+		})
+}
+
+func TestPhase37bRefusedReauthorizationShadowAdmits(t *testing.T) {
+	sh := newLiveWindowShared(t)
+	f := sh.newFixtureCfg(t, config.CanonicalWalletModeShadow, func(c *config.CanonicalWalletConfig) { c.LeaseBudgetUnits = 0 })
+	f.fund(0)
+	callHash, _ := f.createSessionFunded(t, 20_000_000_000)
+	f.fake.mu.Lock()
+	f.fake.balance[f.user.PlatformUserID] = 0
+	f.fake.mu.Unlock()
+	prov := f.provRecord(t, callHash)
+	E := prov.EstimatedUnits
+	R := E / 45
+	pumpCtx, pumpCancel := context.WithCancel(f.ctx)
+	go f.pumpAtRate(pumpCtx, t, R, callHash)
+	defer pumpCancel()
+
+	// The horizon close's re-authorization is refused — in shadow it is
+	// admitted: no session.close, the session continues, the next window
+	// opens with no hold.
+	deadline := time.Now().Add(40 * time.Second)
+	for time.Now().Before(deadline) {
+		if p := f.provRecord(t, callHash); len(p.Windows) >= 2 {
+			prov = p
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	require.GreaterOrEqual(t, len(prov.Windows), 2, "the refused window advanced in shadow")
+	require.Equal(t, int64(1), LiveWindowMetricsSnapshot().RefusedShadow)
+	require.NotEqual(t, LiveControllerClosed, f.recordByHash(t, callHash).Controller, "no hard stop in shadow")
+	require.Empty(t, f.holdIDs(t), "the next window opens with no hold")
+	select {
+	case <-f.conn.writes:
+		t.Fatal("shadow must not write session.close")
+	default:
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Test 52 — controller loss during an over-budget session: instance A dies
+// mid-window (its context cancelled — the honest crash: the loop stops
+// without releasing the controller or heartbeating); B takes over within
+// 2 × live_controller_takeover_seconds, closes the window, and the hard stop
+// still fires on the refused re-authorization; A revived against the same
+// record gets ErrLiveControllerChanged on its first tick.
+// ---------------------------------------------------------------------------
+
+func TestPhase37bControllerLossAndTakeover(t *testing.T) {
+	sh := newLiveWindowShared(t)
+	// The exactly-E lease shape (requested budget 0) on BOTH instances: the
+	// session's one lease ends with zero remaining, so the boundary's ensure
+	// must ISSUE — and the fake's canned refusal answers it. Window 1's
+	// over-estimate amount then converts through the {4} overrun path (the
+	// hold released, the event unbound) — money-safe, and the over-budget
+	// shape is exactly what this test exists to drive.
+	shBudget := func(c *config.CanonicalWalletConfig) { c.LeaseBudgetUnits = 0 }
+	fA := sh.newFixtureCfg(t, config.CanonicalWalletModeEnforce, shBudget)
+	callHash, _ := fA.createSession(t)
+	prov := fA.provRecord(t, callHash)
+	E := prov.EstimatedUnits
+	tokens := int(math.Ceil(2 * float64(E) / fA.unitsPerOutputToken(t, callHash)))
+
+	// Pump past E_w on A's conn, then kill A mid-window (before the floor).
+	fA.pumpUsage("resp-52a", 0, tokens)
+	time.Sleep(300 * time.Millisecond) // let the frame be read and accumulated
+	fA.cancel()
+
+	// B on the same stores: its observer loops on the takeover interval.
+	fB := sh.newFixtureCfg(t, config.CanonicalWalletModeEnforce, shBudget)
+	// The fake refuses the re-authorization (balance shortfall): the hard
+	// stop must fire from B after it closes the window. The canned response
+	// is path-scoped — the settlements route (window 1's settle) is untouched.
+	fB.fake.respondWith("/api/internal/v2/wallet/leases/ensure", 409,
+		`{"code":-1,"message":"balance_shortfall","data":{"reason":"balance_shortfall"}}`, -1)
+	go fB.svc.observeLiveCall(fB.ctx, callHash)
+
+	// B takes over within 2 × takeover (4 s) — evidenced by its dial — and
+	// the window closes under B.
+	takeoverDeadline := time.Now().Add(2 * fB.svc.liveControllerTakeoverInterval() * 2)
+	for time.Now().Before(takeoverDeadline) {
+		if fB.dialer.url != "" {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	require.NotEmpty(t, fB.dialer.url, "B took over within 2 takeover intervals and dialed the sideband")
+	prov = fA.pollWindowsLen(t, callHash, 2, 10*time.Second)
+	require.Greater(t, prov.Windows[0].SettledUnits, int64(0), "the window closed under B")
+
+	// The hard stop fires from B: the session closes and B's conn carries the
+	// non-billable session.close.
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if fA.recordByHash(t, callHash).Controller == LiveControllerClosed {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	require.Equal(t, LiveControllerClosed, fA.recordByHash(t, callHash).Controller, "the hard stop fired from B")
+	select {
+	case frame := <-fB.conn.writes:
+		require.JSONEq(t, `{"type":"session.close"}`, string(frame.payload))
+	case <-time.After(2 * time.Second):
+		t.Fatal("B never wrote session.close")
+	}
+
+	// A revived against the same record: ErrLiveControllerChanged on its
+	// first controller tick.
+	done := make(chan error, 1)
+	go func() {
+		done <- fA.svc.runLiveObserverConnection(context.Background(), fA.recordByHash(t, callHash), newLiveTestFrameConn(), "owner-A-revived")
+	}()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, ErrLiveControllerChanged)
+	case <-time.After(3 * time.Second):
+		t.Fatal("the revived observer never exited")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Test 53 — a disconnected sideband (G14's shape): the observer keeps
+// retrying at waitForLiveObserverRetry's one-second cadence, nothing closes
+// and nothing is billed during the outage; after reconnect the next close is
+// normal. The outage's usage is UNOBSERVED — the outbox has no row for it.
+// ---------------------------------------------------------------------------
+
+type p37bFlakyDialer struct {
+	inner    *liveTestDialer
+	failures int32
+	attempts int32
+}
+
+func (d *p37bFlakyDialer) Dial(ctx context.Context, wsURL string, headers http.Header, proxyURL string) (openAIWSClientConn, int, http.Header, error) {
+	n := atomic.AddInt32(&d.attempts, 1)
+	if atomic.LoadInt32(&d.failures) > 0 {
+		atomic.AddInt32(&d.failures, -1)
+		return nil, http.StatusServiceUnavailable, nil, fmt.Errorf("sideband outage (attempt %d)", n)
+	}
+	return d.inner.Dial(ctx, wsURL, headers, proxyURL)
+}
+
+func TestPhase37bDisconnectedSideband(t *testing.T) {
+	f := newLiveWindowTestFixture(t, config.CanonicalWalletModeEnforce)
+	flaky := &p37bFlakyDialer{inner: f.dialer, failures: 7}
+	f.svc.openaiWSPassthroughDialer = flaky
+	callHash, _ := f.createSession(t)
+	prov := f.provRecord(t, callHash)
+	E := prov.EstimatedUnits
+
+	// Hold the outage for floor + 2 s = 7 s (7 failing dials at the observer's
+	// one-second retry cadence). During the outage nothing is pumped —
+	// nothing is connected, that is the point.
+	conflictsBefore := canonicalWalletBridgeMetrics.outboxPayloadConflict.Load()
+	outageEnd := time.Now().Add(7 * time.Second)
+	for time.Now().Before(outageEnd) {
+		p := f.provRecord(t, callHash)
+		require.Len(t, p.Windows, 1, "no window closes during the outage")
+		require.Equal(t, int64(0), p.Windows[0].PendingUnits)
+		time.Sleep(200 * time.Millisecond)
+	}
+	require.Zero(t, f.outboxRowCount(t, CanonicalWalletSettlementEventID(callHash, f.user.PlatformUserID, "CNY")), "no settlement during the outage")
+	attempts := atomic.LoadInt32(&flaky.attempts)
+	require.GreaterOrEqual(t, attempts, int32(5), "the observer keeps retrying (under-runs are diagnosable)")
+	require.LessOrEqual(t, attempts, int32(9), "the retry cadence is the one-second waitForLiveObserverRetry")
+
+	// Reconnect: the next dial succeeds; pump past E_w; the floor has long
+	// passed, so the next close is normal — a row with the pumped amount.
+	tokens := int(math.Ceil(2 * float64(E) / f.unitsPerOutputToken(t, callHash)))
+	f.pumpUsage("resp-53", 0, tokens)
+	prov = f.pollWindowsLen(t, callHash, 2, 8*time.Second)
+	require.Equal(t, f.unitsForTokens(t, f.recordByHash(t, callHash), 0, tokens, 0), prov.Windows[0].SettledUnits)
+	require.Equal(t, int64(0), canonicalWalletBridgeMetrics.outboxPayloadConflict.Load()-conflictsBefore)
 }
