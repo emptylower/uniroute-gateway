@@ -112,7 +112,7 @@ func TestOpenAILiveRestartSurvivalAndRedisLossIntegration(t *testing.T) {
 		},
 	}
 	control := &service.LiveRestartControlStub{}
-	bridge := service.NewCanonicalWalletBridgeForTest(cfg.CanonicalWallet, leaseStore, control, db, realOutbox)
+	bridge := service.NewCanonicalWalletBridgeForTest(t, cfg.CanonicalWallet, leaseStore, control, db, realOutbox)
 	authorizer := service.NewCanonicalWalletAuthorizer(cfg, bridge, snapService)
 
 	// --- Instance A: creates the session via CreateLiveCall over the real repository.GatewayCache ---

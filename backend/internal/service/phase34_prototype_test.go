@@ -28,7 +28,9 @@ func p34Bridge(t *testing.T, ctx context.Context, cfgMode string, store Canonica
 	cfg := canonicalWalletTestConfig(cfgMode)
 	cfg.ExpirySkewMarginMS = int(p34Margin / time.Millisecond)
 	cfg.LeaseBudgetUnits = 500_000_000 // 5 CNY, the production default
-	return newCanonicalWalletBridge(cfg, store, control, nil, nil, 0, func() time.Time { return now })
+	b := newCanonicalWalletBridge(cfg, store, control, nil, nil, 0, func() time.Time { return now })
+	t.Cleanup(b.Close)
+	return b
 }
 
 // Test 15a (seal): after a seal, a NEW reservation on the lease is refused by
@@ -120,7 +122,9 @@ func p34HTTPBridge(t *testing.T, ctx context.Context, fake *fakeEnsureControlPla
 	cfg.LeaseBudgetUnits = 500_000_000
 	client := newCanonicalWalletHTTPClient(cfg, fake.Server.Client())
 	client.now = func() time.Time { return now }
-	return newCanonicalWalletBridge(cfg, store, client, nil, nil, 0, func() time.Time { return now })
+	b := newCanonicalWalletBridge(cfg, store, client, nil, nil, 0, func() time.Time { return now })
+	t.Cleanup(b.Close)
+	return b
 }
 
 // p34Fill issues (or reuses) a lease for a 100,000,000 ask, exhausts it on the

@@ -81,6 +81,7 @@ func newLiveFinalizationWithOutboxFixture(t *testing.T, mode string) (*liveAuthT
 	t.Cleanup(func() { _ = db.Close() })
 	outbox := &outboxStoreStub{}
 	bridge := newCanonicalWalletBridge(canonicalWalletTestConfig(mode), f.leaseStore, f.control, db, outbox, 0, nil)
+	t.Cleanup(bridge.Close)
 	f.svc.canonicalWallet = bridge
 	return f, rec, mock
 }

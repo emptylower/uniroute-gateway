@@ -36,6 +36,7 @@ func TestPhase34ProbeEnsureRouteAtStartup(t *testing.T) {
 		beforeProbes := fake.probeCallsLocked()
 		baseIncompat := CanonicalWalletBridgeStats()["control_plane_incompatible"]
 		b := NewCanonicalWalletBridge(p34ProbeConfig(config.CanonicalWalletModeShadow, fake.Server.URL), &canonicalWalletStoreStub{}, nil, nil)
+		t.Cleanup(b.Close)
 		require.NotNil(t, b)
 		require.Equal(t, 1, fake.probeCallsLocked()-beforeProbes, "the probe ran exactly once at construction")
 		require.Equal(t, int64(0), CanonicalWalletBridgeStats()["control_plane_incompatible"]-baseIncompat, "a 405 is the route present — compatible")
@@ -46,6 +47,7 @@ func TestPhase34ProbeEnsureRouteAtStartup(t *testing.T) {
 		fake.withoutEnsureRoute = true
 		baseIncompat := CanonicalWalletBridgeStats()["control_plane_incompatible"]
 		b := NewCanonicalWalletBridge(p34ProbeConfig(config.CanonicalWalletModeShadow, fake.Server.URL), &canonicalWalletStoreStub{}, nil, nil)
+		t.Cleanup(b.Close)
 		require.NotNil(t, b, "shadow observes; it must not take the process down")
 		require.Equal(t, int64(1), CanonicalWalletBridgeStats()["control_plane_incompatible"]-baseIncompat)
 		_, err := b.ensureLease(ctx, "user-probe", "CNY", 1_000_000, canonicalWalletLeasePurposeAuthorize, "")
@@ -78,6 +80,7 @@ func TestPhase34ProbeEnsureRouteAtStartup(t *testing.T) {
 		defer srv.Close()
 		baseProbeFailed := CanonicalWalletBridgeStats()["control_plane_probe_failed"]
 		b := NewCanonicalWalletBridge(p34ProbeConfig(config.CanonicalWalletModeEnforce, srv.URL), &canonicalWalletStoreStub{}, nil, nil)
+		t.Cleanup(b.Close)
 		require.NotNil(t, b, "a WAF, a misrouted URL or a transient must never crash-loop a healthy deployment")
 		require.Equal(t, int64(1), CanonicalWalletBridgeStats()["control_plane_probe_failed"]-baseProbeFailed)
 	})

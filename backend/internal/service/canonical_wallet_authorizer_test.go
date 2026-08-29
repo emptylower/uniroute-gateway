@@ -242,6 +242,7 @@ func benchmarkAuthorize(b *testing.B, leaseOnStore bool) {
 	bridgeCfg := canonicalWalletTestConfig(config.CanonicalWalletModeShadow)
 	bridgeCfg.LeaseBudgetUnits = 500_000_000
 	bridge := newCanonicalWalletBridge(bridgeCfg, store, control, nil, nil, 0, nil)
+	b.Cleanup(bridge.Close)
 	cfg := &config.Config{}
 	cfg.CanonicalWallet.Mode = config.CanonicalWalletModeShadow
 	cfg.CanonicalWallet.RequestTimeoutMS = 300

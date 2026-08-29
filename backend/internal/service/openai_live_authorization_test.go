@@ -242,6 +242,7 @@ func newLiveAuthTestFixture(t *testing.T, mode string) *liveAuthTestFixture {
 		},
 	}
 	bridge := newCanonicalWalletBridge(cfg.CanonicalWallet, leaseStore, control, nil, nil, 0, nil)
+	t.Cleanup(bridge.Close)
 	authorizer := NewCanonicalWalletAuthorizer(cfg, bridge, snapService)
 
 	liveStore := &liveTestStore{}

@@ -24,7 +24,9 @@ func p34DispatcherBridge(t *testing.T, fake *fakeEnsureControlPlane, store Canon
 	client.now = func() time.Time { return now }
 	// §9.5: the clock goes through the CONSTRUCTOR — the dispatcher goroutine
 	// sees it from its first tick (the old post-construction assignment raced it).
-	return newCanonicalWalletBridge(cfg, store, client, db, outbox, 0, func() time.Time { return now })
+	b := newCanonicalWalletBridge(cfg, store, client, db, outbox, 0, func() time.Time { return now })
+	t.Cleanup(b.Close)
+	return b
 }
 
 // p34WaitOutboxStatus polls the row (status values are the strings

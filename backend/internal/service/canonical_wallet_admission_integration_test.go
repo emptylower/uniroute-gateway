@@ -49,6 +49,7 @@ func TestCanonicalWalletCheckAndReserveEnforcesRealHardCap(t *testing.T) {
 		BudgetUnits: 50_000000, ExpiresAt: time.Now().UTC().Add(time.Minute), // 0.5 CNY budget, deliberately small
 	}}
 	bridge := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeEnforce), store, control, nil, nil, 0, nil) // outboxDB/outbox nil — this test doesn't call ObserveSettlement
+	t.Cleanup(bridge.Close)
 
 	first := CanonicalWalletSettlementEvent{GatewayRequestID: "req-1", PlatformUserID: platformUserID, Currency: "CNY", AmountUnits: 30_000000}
 	allowed, err := bridge.CheckAndReserve(ctx, first)
@@ -76,6 +77,7 @@ func TestCanonicalWalletCheckAndReserveHonorsExplicitLeaseIDOnRetry(t *testing.T
 		BudgetUnits: 100_000000, ExpiresAt: time.Now().UTC().Add(time.Minute),
 	}}
 	bridge := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeEnforce), store, control, nil, nil, 0, nil) // outboxDB/outbox nil — this test doesn't call ObserveSettlement
+	t.Cleanup(bridge.Close)
 
 	first := CanonicalWalletSettlementEvent{GatewayRequestID: "req-retry-1", PlatformUserID: platformUserID, Currency: "CNY", AmountUnits: 10_000000}
 	allowed, err := bridge.CheckAndReserve(ctx, first)
@@ -113,6 +115,7 @@ func TestCanonicalWalletMidStreamOverrunToppedUpAtomicallyBeforeExceeding(t *tes
 		BudgetUnits: 100_000000, ExpiresAt: time.Now().UTC().Add(time.Minute),
 	}}
 	bridge := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeEnforce), store, control, nil, nil, 0, nil) // outboxDB/outbox nil — this test doesn't call ObserveSettlement
+	t.Cleanup(bridge.Close)
 
 	initial := CanonicalWalletSettlementEvent{GatewayRequestID: "req-stream-1", PlatformUserID: platformUserID, Currency: "CNY", AmountUnits: 40_000000}
 	allowed, err := bridge.CheckAndReserve(ctx, initial)
@@ -154,6 +157,7 @@ func TestBillingCacheServiceChecksBalanceEligibilityAgainstCanonicalWalletInEnfo
 		t.Helper()
 		require.NoError(t, store.InstallCanonicalWalletLease(ctx, lease))
 		bridge := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeEnforce), store, &canonicalWalletControlStub{}, nil, nil, 0, nil) // control/outboxDB/outbox unused by HasCanonicalWalletHeadroom
+		t.Cleanup(bridge.Close)
 		// A real bootstrap exchange rate keeps CheckBillingEligibility's
 		// downstream currency-conversion step (reached when
 		// user.BillingCurrency is non-empty) out of this test's way without
@@ -901,6 +905,7 @@ func TestCanonicalWalletShadowModeAllowsEverythingAndReservesNothing(t *testing.
 	leaseID := "lease-" + uuid.NewString()
 
 	bridge := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeShadow), store, &canonicalWalletControlStub{}, nil, nil, 0, nil)
+	t.Cleanup(bridge.Close)
 
 	allowed, err := bridge.CheckAndReserve(ctx, CanonicalWalletSettlementEvent{
 		GatewayRequestID: "req-shadow", PlatformUserID: platformUserID, Currency: "CNY", AmountUnits: 999_000000,
@@ -928,6 +933,7 @@ func TestHasCanonicalWalletHeadroomEnforceBranches(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Millisecond)
 
 	bridge := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeEnforce), store, &canonicalWalletControlStub{}, nil, nil, 0, nil)
+	t.Cleanup(bridge.Close)
 
 	// No lease ever issued: fail closed with the store's own error.
 	_, err := bridge.HasCanonicalWalletHeadroom(ctx, "shipany-user-"+uuid.NewString(), "CNY")
@@ -968,7 +974,9 @@ func TestCheckBalanceEligibilityEnforceBranchesThroughRealEntryPoints(t *testing
 	store := &gatewayCacheAdapterForTest{rdb: rdb}
 
 	newBridge := func() *CanonicalWalletBridge {
-		return newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeEnforce), store, &canonicalWalletControlStub{}, nil, nil, 0, nil)
+		b := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeEnforce), store, &canonicalWalletControlStub{}, nil, nil, 0, nil)
+		t.Cleanup(b.Close)
+		return b
 	}
 	cfg := &config.Config{RunMode: config.RunModeStandard}
 	cfg.Billing.ExchangeRate.BootstrapUSDToCNY = 7.2

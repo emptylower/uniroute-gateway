@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -802,6 +803,9 @@ type canonicalWalletMetrics struct {
 	reaperError         atomic.Int64
 	holdsAbandoned      atomic.Int64
 	holdOutcomesExpired atomic.Int64
+	// Phase 3.7a (§13.2.6): one per reaper tick, incremented before
+	// reapOnce — the loop's heartbeat for the stop test.
+	reaperTicks atomic.Int64
 }
 
 var canonicalWalletBridgeMetrics canonicalWalletMetrics
@@ -847,6 +851,7 @@ func CanonicalWalletBridgeStats() map[string]int64 {
 		"reaper_error":                     m.reaperError.Load(),
 		"holds_abandoned":                  m.holdsAbandoned.Load(),
 		"hold_outcomes_expired":            m.holdOutcomesExpired.Load(),
+		"reaper_ticks":                     m.reaperTicks.Load(),
 	}
 }
 
@@ -876,6 +881,13 @@ type CanonicalWalletBridge struct {
 	// per-attempt durable record exists before 3.5's outbox authorization_id
 	// column). Built from the same outbox DB, the liveProvisionalStore pattern.
 	liveProvisional LiveProvisionalStore
+	// stop/stopOnce/loops (Phase 3.7a, §13.2.6): Close closes stop once and
+	// waits on loops; both tick loops select on stop. Tests only — a nil
+	// stop means the bridge was built as a bare struct literal and started
+	// no loops, and Close is a no-op for it.
+	stop     chan struct{}
+	stopOnce sync.Once
+	loops    sync.WaitGroup
 }
 
 // walletHoldOutcomeSink is the durable outcome row's write surface (§10.6).
@@ -1086,15 +1098,44 @@ func newCanonicalWalletBridge(cfg config.CanonicalWalletConfig, store CanonicalW
 			return newLiveProvisionalStore(outboxDB)
 		}(),
 	}
-	go b.runOutboxDispatcher()
+	b.stop = make(chan struct{})
+	b.loops.Add(1)
+	go func() {
+		defer b.loops.Done()
+		b.runOutboxDispatcher()
+	}()
 	// §10.7: a reaper goroutine per bridge, started with the dispatcher —
 	// only when holds are on AND the outcome row's DB exists (the reaper's
 	// abandoned/expired passes have nowhere to write without it). Each tick
 	// is idempotent and the SETNX leader serialises sweeps deployment-wide.
 	if b.HoldsEnabled() && b.outboxDB != nil {
-		go b.runHoldReaper()
+		b.loops.Add(1)
+		go func() {
+			defer b.loops.Done()
+			b.runHoldReaper()
+		}()
 	}
 	return b
+}
+
+// Close (Phase 3.7a, redesign §13.2.6) stops both tick loops and waits for
+// them to exit; it is idempotent (sync.Once) and nil-safe. It is a TEST
+// facility with no production caller: the three bridges are constructed
+// inside NewGatewayService, NewOpenAIGatewayService and
+// ProvideBillingCacheService and are never returned to the DI graph, so in
+// production the loops end with the process exactly as before. A bridge
+// built as a bare &CanonicalWalletBridge{…} literal has stop == nil and
+// never started a loop — Close on it is a no-op, not a nil-channel panic.
+// Close is never called from inside a tick (neither deliverOutboxEvent nor
+// reapOnce reaches it), so loops.Wait cannot deadlock; for a nil-outbox
+// bridge Add(1) precedes the goroutine, the loop returns on its guard,
+// Done() fires, and Wait() returns at once.
+func (b *CanonicalWalletBridge) Close() {
+	if b == nil || b.stop == nil {
+		return
+	}
+	b.stopOnce.Do(func() { close(b.stop) })
+	b.loops.Wait()
 }
 
 // ObserveSettlement durably records the settlement event in the Postgres
@@ -1352,10 +1393,16 @@ func (b *CanonicalWalletBridge) runHoldReaper() {
 	interval := time.Duration(b.cfg.OrphanSweepIntervalSeconds) * time.Second
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
-	for range ticker.C {
-		ctx, cancel := context.WithTimeout(context.Background(), interval/2)
-		b.reapOnce(ctx, b.clock())
-		cancel()
+	for {
+		select {
+		case <-b.stop:
+			return
+		case <-ticker.C:
+			canonicalWalletBridgeMetrics.reaperTicks.Add(1)
+			ctx, cancel := context.WithTimeout(context.Background(), interval/2)
+			b.reapOnce(ctx, b.clock())
+			cancel()
+		}
 	}
 }
 
@@ -1493,7 +1540,12 @@ func (b *CanonicalWalletBridge) runOutboxDispatcher() {
 	ticker := time.NewTicker(perAttempt)
 	defer ticker.Stop()
 	ticks := int64(0)
-	for range ticker.C {
+	for {
+		select {
+		case <-b.stop:
+			return
+		case <-ticker.C:
+		}
 		ticks++
 		// §11.4: the receivable gauge refreshes every 100th tick (~30 s at
 		// the default 300 ms RequestTimeoutMS) — per-tick would be ~3

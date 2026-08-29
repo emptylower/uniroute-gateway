@@ -252,6 +252,7 @@ func TestNewCanonicalWalletBridgeNilForDisabledOrUnsetMode(t *testing.T) {
 	cfg.CanonicalWallet = canonicalWalletTestConfig(config.CanonicalWalletModeEnforce)
 	bridge := NewCanonicalWalletBridge(cfg, &canonicalWalletStoreStub{}, nil, nil)
 	require.NotNil(t, bridge)
+	t.Cleanup(bridge.Close)
 	require.NotEmpty(t, bridge.workerID, "the claim token is generated once per bridge")
 	require.True(t, strings.HasPrefix(bridge.workerID, "sub2api-wallet-dispatcher-"))
 }

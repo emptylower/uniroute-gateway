@@ -30,7 +30,9 @@ func p34bReaperBridge(t *testing.T, store CanonicalWalletLeaseStore, db *sql.DB,
 	if batch > 0 {
 		cfg.OrphanSweepBatch = batch
 	}
-	return newCanonicalWalletBridge(cfg, store, &canonicalWalletControlStub{}, db, nil, 0, func() time.Time { return now })
+	b := newCanonicalWalletBridge(cfg, store, &canonicalWalletControlStub{}, db, nil, 0, func() time.Time { return now })
+	t.Cleanup(b.Close)
+	return b
 }
 
 // p34bArmOrphan installs a lease and arms a hold at armedAt, outside Authorize
@@ -275,7 +277,9 @@ func p34bBridge(t *testing.T, ctx context.Context, mode string, fake *fakeEnsure
 	cfg.LeaseBudgetUnits = 500_000_000
 	client := newCanonicalWalletHTTPClient(cfg, fake.Server.Client())
 	client.now = func() time.Time { return now }
-	return newCanonicalWalletBridge(cfg, store, client, nil, nil, 0, func() time.Time { return now })
+	b := newCanonicalWalletBridge(cfg, store, client, nil, nil, 0, func() time.Time { return now })
+	t.Cleanup(b.Close)
+	return b
 }
 
 // p34bDispatcherBridge: the p34DispatcherBridge shape with holds ON and a
@@ -290,7 +294,9 @@ func p34bDispatcherBridge(t *testing.T, fake *fakeEnsureControlPlane, store Cano
 	cfg.LeaseBudgetUnits = 500_000_000
 	client := newCanonicalWalletHTTPClient(cfg, fake.Server.Client())
 	client.now = func() time.Time { return now }
-	return newCanonicalWalletBridge(cfg, store, client, db, outbox, 0, func() time.Time { return now })
+	b := newCanonicalWalletBridge(cfg, store, client, db, outbox, 0, func() time.Time { return now })
+	t.Cleanup(b.Close)
+	return b
 }
 
 // p34bAuthorize drives the real authorization point (the authorizer + the
@@ -354,6 +360,7 @@ func TestPhase34bHoldArmedAtAuthorize(t *testing.T) {
 	offClient := newCanonicalWalletHTTPClient(offCfg, fakeOff.Server.Client())
 	offClient.now = func() time.Time { return now }
 	bOff := newCanonicalWalletBridge(offCfg, store, offClient, db, outbox, 0, func() time.Time { return now })
+	t.Cleanup(bOff.Close)
 	hOff := p34bAuthorize(t, ctx, config.CanonicalWalletModeEnforce, bOff, userOff, `{"max_tokens":64}`)
 	require.False(t, hOff.HoldArmed, "holds off: 3.4a byte-for-byte")
 	keys, err := rdb.Keys(ctx, "canonical_wallet:hold*").Result()

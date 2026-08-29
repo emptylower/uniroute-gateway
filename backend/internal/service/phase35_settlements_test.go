@@ -1172,7 +1172,9 @@ func TestPhase35ZeroCostAbortPointsReleaseTheHold(t *testing.T) {
 		cfg.LeaseBudgetUnits = 500_000_000
 		client := newCanonicalWalletHTTPClient(cfg, fake.Server.Client())
 		client.now = func() time.Time { return now }
-		return fake, store, newCanonicalWalletBridge(cfg, store, client, db, &outboxStoreForTest{db: db}, 0, func() time.Time { return now }), db
+		b := newCanonicalWalletBridge(cfg, store, client, db, &outboxStoreForTest{db: db}, 0, func() time.Time { return now })
+		t.Cleanup(b.Close)
+		return fake, store, b, db
 	}
 	arm := func(t *testing.T, user, authID string) {
 		t.Helper()

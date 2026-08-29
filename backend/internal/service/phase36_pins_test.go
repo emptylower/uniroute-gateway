@@ -67,6 +67,7 @@ func TestPhase36OneEnsurePerExhaustion(t *testing.T) {
 		client := newCanonicalWalletHTTPClient(cfg, fake.Server.Client())
 		client.now = func() time.Time { return now }
 		b := newCanonicalWalletBridge(cfg, store, client, nil, nil, 0, func() time.Time { return now })
+		t.Cleanup(b.Close)
 
 		const E = budget / 4
 		authorize := func() *AuthorizationHandle {
@@ -203,6 +204,7 @@ func TestPhase36FailClosedArmsUnpinned(t *testing.T) {
 
 		shadowStore := &canonicalWalletStoreStub{getErr: outage}
 		shadow := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeShadow), shadowStore, &canonicalWalletControlStub{}, nil, nil, 0, nil)
+		t.Cleanup(shadow.Close)
 		hs := p34bAuthorize(t, ctx, config.CanonicalWalletModeShadow, shadow, "shipany-user-"+uuid.NewString(), `{"max_tokens":64}`)
 		require.Nil(t, hs.Refusal, "shadow admits despite the store outage")
 		require.Equal(t, "", hs.LeaseID)
@@ -211,6 +213,7 @@ func TestPhase36FailClosedArmsUnpinned(t *testing.T) {
 
 		enforceStore := &canonicalWalletStoreStub{getErr: outage}
 		enforce := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeEnforce), enforceStore, &canonicalWalletControlStub{}, nil, nil, 0, nil)
+		t.Cleanup(enforce.Close)
 		he := p34bAuthorize(t, ctx, config.CanonicalWalletModeEnforce, enforce, "shipany-user-"+uuid.NewString(), `{"max_tokens":64}`)
 		require.NotNil(t, he.Refusal)
 		require.Equal(t, AuthorizationRefusalLeaseUnavailable, he.Refusal.Reason, "the store-error variant of the already-pinned control-plane refusal")
@@ -221,11 +224,13 @@ func TestPhase36FailClosedArmsUnpinned(t *testing.T) {
 		outage := errors.New("redis down")
 
 		shadow := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeShadow), &canonicalWalletStoreStub{getErr: outage}, &canonicalWalletControlStub{}, nil, nil, 0, nil)
+		t.Cleanup(shadow.Close)
 		ok, err := shadow.HasCanonicalWalletHeadroom(ctx, "user-45b", "CNY")
 		require.True(t, ok, "shadow never denies admission — the shadow return precedes the error check")
 		require.NoError(t, err)
 
 		enforce := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeEnforce), &canonicalWalletStoreStub{getErr: outage}, &canonicalWalletControlStub{}, nil, nil, 0, nil)
+		t.Cleanup(enforce.Close)
 		ok, err = enforce.HasCanonicalWalletHeadroom(ctx, "user-45b", "CNY")
 		require.False(t, ok)
 		require.ErrorIs(t, err, outage, "a transport error — the existing test pins only ErrCanonicalWalletLeaseMissing here")
@@ -243,11 +248,13 @@ func TestPhase36FailClosedArmsUnpinned(t *testing.T) {
 		event := CanonicalWalletSettlementEvent{GatewayRequestID: "req-45c", PlatformUserID: "user-45c", Currency: "CNY", AmountUnits: 100}
 
 		shadow := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeShadow), &canonicalWalletStoreStub{lease: coveringLease(), reserveErr: reserveFailure}, &canonicalWalletControlStub{}, nil, nil, 0, nil)
+		t.Cleanup(shadow.Close)
 		allowed, err := shadow.CheckAndReserve(ctx, event)
 		require.True(t, allowed, "shadow observes the failed reservation and admits")
 		require.NoError(t, err)
 
 		enforce := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeEnforce), &canonicalWalletStoreStub{lease: coveringLease(), reserveErr: reserveFailure}, &canonicalWalletControlStub{}, nil, nil, 0, nil)
+		t.Cleanup(enforce.Close)
 		allowed, err = enforce.CheckAndReserve(ctx, event)
 		require.False(t, allowed)
 		require.ErrorIs(t, err, reserveFailure, "the reserve-error arm the existing test does not pin")
@@ -260,6 +267,7 @@ func TestPhase36FailClosedArmsUnpinned(t *testing.T) {
 			reserveErr: errors.New("reserve failed"),
 		}
 		b := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeDisabled), store, &canonicalWalletControlStub{}, nil, nil, 0, nil)
+		t.Cleanup(b.Close)
 		user := "shipany-user-" + uuid.NewString()
 
 		h := p34bAuthorize(t, ctx, config.CanonicalWalletModeDisabled, b, user, `{"max_tokens":64}`)
