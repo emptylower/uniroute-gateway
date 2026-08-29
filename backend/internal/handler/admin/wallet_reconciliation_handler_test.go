@@ -80,7 +80,7 @@ func walletReconciliationFixtureSummary() *service.WalletReconciliationSummary {
 			EventID: "gwusg_evt_2", GatewayRequestID: "req_2", Currency: "CNY",
 			AmountUnits: 6_000000, Status: "dead_letter", DeadLetterReason: "balance_shortfall",
 			ParentEventID: "gwusg_evt_1", SplitDepth: 1, PendingReleaseUnits: &pendingRelease,
-			OccurredAt:    occurred,
+			OccurredAt: occurred,
 		}},
 		Receivable:  service.WalletReconciliationReceivable{BalanceShortfallUnits: 6_000000, SplitExhaustedUnits: 0, Rows: 1},
 		Truncated:   true,
@@ -291,13 +291,13 @@ func TestWalletReconciliationHandlerSummary(t *testing.T) {
 		r.ServeHTTP(rec, httptest.NewRequest("GET", "/api/v1/admin/wallet/reconciliation/watermark", nil))
 		require.Equal(t, 200, rec.Code)
 		var body struct {
-			Schema        int    `json:"schema"`
+			Schema         int    `json:"schema"`
 			DeliveredAtMax string `json:"delivered_at_max"`
-			OutboxIDMax   int64  `json:"outbox_id_max"`
-			Pending       int64  `json:"pending"`
-			InFlight      int64  `json:"in_flight"`
-			DeadLetter    int64  `json:"dead_letter"`
-			Receivable    struct {
+			OutboxIDMax    int64  `json:"outbox_id_max"`
+			Pending        int64  `json:"pending"`
+			InFlight       int64  `json:"in_flight"`
+			DeadLetter     int64  `json:"dead_letter"`
+			Receivable     struct {
 				BalanceShortfallUnits string `json:"balance_shortfall_units"`
 				SplitExhaustedUnits   string `json:"split_exhausted_units"`
 			} `json:"receivable"`
