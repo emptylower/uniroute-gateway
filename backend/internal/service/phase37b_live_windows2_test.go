@@ -192,7 +192,7 @@ func (sh *liveWindowShared) newFixtureCfg(t *testing.T, mode string, mutate func
 		concurrencyService:        NewConcurrencyService(&liveTestConcurrencyCache{}),
 		liveProvisional:           provStore,
 		httpUpstream:              &p37bHTTPUpstream{fixture: f},
-		openaiWSPassthroughDialer: dialer,
+		openaiWSPassthroughDialer: &p37bFakeOnlyDialer{inner: dialer, fake: conn, t: t},
 		openaiScheduler:           &LiveRestartSchedulerStub{Account: sh.account},
 		accountRepo:               &liveTestAccountRepo{account: sh.account},
 		liveAttestation:           liveAttestationStub{header: `{"v":1,"s":0,"t":"v1.test"}`},
@@ -219,6 +219,29 @@ func (sh *liveWindowShared) newFixtureCfg(t *testing.T, mode string, mutate func
 		bridge.Close()
 	})
 	return f
+}
+
+// p37bFakeOnlyDialer (execution review MINOR-3): the fixture's sideband dialer
+// hands the service the fixture's OWN conn and nothing else — the sideband
+// never leaves the fake. A re-plumbed dialer fails HERE by name; a nil
+// passthrough dialer bypasses this wrapper entirely (dialLiveSideband builds
+// the real one, which dials the real wss://chatgpt.com) and is caught by the
+// dial-record check createSessionFunded registers — a silent 403 either way
+// becomes a named failure. t.Errorf, not require: Dial runs on observer
+// goroutines, where FailNow is illegal.
+type p37bFakeOnlyDialer struct {
+	inner *liveTestDialer
+	fake  *liveTestFrameConn
+	t     *testing.T
+}
+
+func (d *p37bFakeOnlyDialer) Dial(ctx context.Context, wsURL string, headers http.Header, proxyURL string) (openAIWSClientConn, int, http.Header, error) {
+	conn, status, respHeaders, err := d.inner.Dial(ctx, wsURL, headers, proxyURL)
+	if err == nil && conn != openAIWSClientConn(d.fake) {
+		d.t.Errorf("the fixture's sideband conn must be the fixture's fake, got %T", conn)
+		return nil, http.StatusForbidden, nil, fmt.Errorf("non-fake sideband conn: %T", conn)
+	}
+	return conn, status, respHeaders, err
 }
 
 // p37bHTTPUpstream answers each CreateLiveCall with a DISTINCT call id (the
@@ -267,6 +290,14 @@ func (f *liveWindowFixture) createSessionFunded(t *testing.T, fundUnits int64) (
 	}, 5)
 	require.NoError(t, err)
 	require.NotNil(t, created)
+	// Execution review MINOR-3: the session's sideband must have gone through
+	// the fixture's fake — a nil passthrough dialer bypasses the fake entirely
+	// and silently dials the real wss://chatgpt.com (a silent 403); the
+	// missing dial record names that shape here.
+	t.Cleanup(func() {
+		require.NotEmpty(t, f.dialer.url,
+			"the session's sideband dialed through the fixture's fake — a nil passthrough dialer falls through to the real wss://chatgpt.com")
+	})
 	return hashLiveCallID(created.CallID), created
 }
 

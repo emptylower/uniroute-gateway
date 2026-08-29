@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"math"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -176,6 +177,28 @@ func TestTryFinalizeLiveCallIdleLastWindow(t *testing.T) {
 	require.Equal(t, totalUnits, provRec.Windows[0].SettledUnits)
 	require.Equal(t, int64(0), provRec.Windows[1].SettledUnits, "the idle last window completes at zero")
 	require.Equal(t, int64(1), LiveWindowMetricsSnapshot().IdleFinalized-idleBefore)
+}
+
+// Execution review MINOR-2: a finalization whose usage cannot be priced (a
+// non-finite cost reaching canonicalWalletUnitsFromCNY) retries instead of
+// finalizing as idle — idleFinalized unmoved, no settlement observed.
+func TestTryFinalizeLiveCallUnpriceableUsageRetriesNotIdle(t *testing.T) {
+	f, rec := newLiveFinalizationFixture(t, config.CanonicalWalletModeShadow)
+
+	// A non-finite price makes liveUsageUnits' conversion fail; the record
+	// must carry it (tryFinalizeLiveCall re-reads it from the store).
+	rec.OutputPricePerToken = math.NaN()
+	_ = f.liveStore.SaveLiveCall(context.Background(), rec, time.Hour)
+
+	var observedCount atomic.Int64
+	f.svc.canonicalWallet.observedForTest = func(event CanonicalWalletSettlementEvent) {
+		observedCount.Add(1)
+	}
+	idleBefore := LiveWindowMetricsSnapshot().IdleFinalized
+
+	require.False(t, f.svc.tryFinalizeLiveCall(rec), "an unpriceable finalization retries rather than finalizing")
+	require.Equal(t, idleBefore, LiveWindowMetricsSnapshot().IdleFinalized, "idleFinalized unmoved — a pricing failure is not an idle window")
+	require.Equal(t, int64(0), observedCount.Load(), "no settlement observed")
 }
 
 func TestTryFinalizeLiveCallNilOutboxReleasesClaimAndReturnsActive(t *testing.T) {

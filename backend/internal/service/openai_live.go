@@ -1557,12 +1557,16 @@ func (s *OpenAIGatewayService) tryFinalizeLiveCall(record *LiveCallRecord) bool 
 					eventAuthorizationToken = provRec.Windows[seq-1].Token
 				}
 			}
-			remainder := int64(0)
-			if units, unitsErr := liveUsageUnits(record); unitsErr == nil {
-				remainder = units - settledSum
-				if remainder < 0 {
-					remainder = 0
-				}
+			units, unitsErr := liveUsageUnits(record)
+			if unitsErr != nil {
+				// A pricing failure must not finalize as idle — that would
+				// mislabel it on the one metric an operator would chase.
+				logger.L().Error("openai.live_finalization_units_failed", zap.String("call_hash", record.CallHash), zap.Error(unitsErr))
+				return false
+			}
+			remainder := units - settledSum
+			if remainder < 0 {
+				remainder = 0
 			}
 			if remainder == 0 {
 				// The idle-window rule at finalization: there is nothing to
