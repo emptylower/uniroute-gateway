@@ -374,7 +374,7 @@ func (s *liveProvisionalStore) ListLiveProvisionalByUser(ctx context.Context, pl
 	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT p.token, p.authorization_id, p.call_hash, p.platform_user_id,
-		       p.billing_snapshot_id, b.payload->'fx'->>'rate',
+		       p.billing_currency, p.billing_snapshot_id, b.payload->'fx'->>'rate',
 		       p.status, p.estimated_units, p.settlement_event_id, p.windows, p.created_at
 		FROM wallet_live_provisional p
 		LEFT JOIN wallet_billing_snapshot b ON b.id = p.billing_snapshot_id
@@ -391,7 +391,7 @@ func (s *liveProvisionalStore) ListLiveProvisionalByUser(ctx context.Context, pl
 		var windowsJSON []byte
 		var statusStr string
 		if err := rows.Scan(&r.Token, &r.AuthorizationID, &r.CallHash, &r.PlatformUserID,
-			&r.BillingSnapshotID, &billingFX, &statusStr, &r.EstimatedUnits, &r.SettlementEventID, &windowsJSON, &r.CreatedAt); err != nil {
+			&r.BillingCurrency, &r.BillingSnapshotID, &billingFX, &statusStr, &r.EstimatedUnits, &r.SettlementEventID, &windowsJSON, &r.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan live provisional summary: %w", err)
 		}
 		r.Status = statusStr

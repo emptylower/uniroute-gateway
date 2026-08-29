@@ -199,6 +199,7 @@ func TestLiveProvisionalListByUser(t *testing.T) {
 	require.Equal(t, "auth_live_read", rec.AuthorizationID)
 	require.Equal(t, callHash, rec.CallHash)
 	require.Equal(t, user, rec.PlatformUserID)
+	require.Equal(t, "CNY", rec.BillingCurrency)
 	require.Equal(t, "", rec.BillingSnapshotID)
 	require.Nil(t, rec.BillingFX, "an empty billing_snapshot_id degrades to null fx — never drops the record")
 	require.Equal(t, "active", rec.Status)

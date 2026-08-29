@@ -1614,6 +1614,16 @@ type CanonicalWalletConfig struct {
 	// over. Validated ≥ 1 (and ≥ 4 × the 250 ms observer poll) and
 	// ≤ lease_ttl_seconds/4.
 	LiveControllerTakeoverSeconds int `mapstructure:"live_controller_takeover_seconds"`
+	// ReconciliationReadToken (Phase 4.1-G, redesign §15.3): the machine-
+	// to-machine bearer token ShipAny's scheduled reconciliation job
+	// presents to the read-only /api/v1/admin/wallet/reconciliation/*
+	// group — a dedicated token, NOT the admin JWT and NOT the Sub2API→
+	// ShipAny assertion secret (the signature direction is settled:
+	// ShipAny→Sub2API carries this token from ShipAny's config). Empty
+	// (the default) leaves the group UNMOUNTED, so an undeployed key is
+	// inert. A configured token shorter than 32 bytes fails Validate()
+	// under enforce/shadow.
+	ReconciliationReadToken string `mapstructure:"reconciliation_read_token"`
 }
 
 // TotpConfig TOTP 双因素认证配置
@@ -1823,6 +1833,7 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 	cfg.CanonicalWallet.Issuer = strings.TrimSpace(cfg.CanonicalWallet.Issuer)
 	cfg.CanonicalWallet.Audience = strings.TrimSpace(cfg.CanonicalWallet.Audience)
 	cfg.CanonicalWallet.Secret = strings.TrimSpace(cfg.CanonicalWallet.Secret)
+	cfg.CanonicalWallet.ReconciliationReadToken = strings.TrimSpace(cfg.CanonicalWallet.ReconciliationReadToken)
 	cfg.CanonicalWallet.Version = strings.TrimSpace(cfg.CanonicalWallet.Version)
 	cfg.LinuxDo.ClientID = strings.TrimSpace(cfg.LinuxDo.ClientID)
 	cfg.LinuxDo.ClientSecret = strings.TrimSpace(cfg.LinuxDo.ClientSecret)
@@ -2077,6 +2088,7 @@ func setDefaults() {
 	viper.SetDefault("canonical_wallet.billing_snapshot_mode", "record")
 	viper.SetDefault("canonical_wallet.holds", "off")
 	viper.SetDefault("canonical_wallet.orphan_grace_seconds", 900)
+	viper.SetDefault("canonical_wallet.reconciliation_read_token", "")
 	viper.SetDefault("canonical_wallet.orphan_sweep_interval_seconds", 60)
 	viper.SetDefault("canonical_wallet.orphan_sweep_batch", 200)
 	viper.SetDefault("canonical_wallet.live_window_min_seconds", 20)
@@ -2768,6 +2780,14 @@ func (c *Config) Validate() error {
 		}
 		if c.CanonicalWallet.Secret == jwtSecret || c.CanonicalWallet.Secret == c.PlatformIdentity.Secret {
 			return fmt.Errorf("canonical_wallet.secret must be independent from jwt.secret and platform_identity.secret")
+		}
+		// Phase 4.1-G: the reconciliation read token is a deployed secret
+		// guarding a money-adjacent read surface; a short token is a
+		// misconfiguration, refused here in the config layer (never the
+		// wiring gate's panic). Empty is legal in every mode — it leaves
+		// the group unmounted.
+		if n := len([]byte(c.CanonicalWallet.ReconciliationReadToken)); n > 0 && n < 32 {
+			return fmt.Errorf("canonical_wallet.reconciliation_read_token must be at least 32 bytes when canonical_wallet.mode is enforce or shadow")
 		}
 		if c.CanonicalWallet.LeaseTTLSeconds < 30 || c.CanonicalWallet.LeaseTTLSeconds > 3600 {
 			return fmt.Errorf("canonical_wallet.lease_ttl_seconds must be between 30 and 3600")

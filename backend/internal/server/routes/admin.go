@@ -26,6 +26,26 @@ func RegisterAdminRoutes(
 	// 审计中间件挂在认证之后：所有管理面变更类操作 + 敏感读取入审计日志
 	admin.Use(gin.HandlerFunc(auditLog))
 	admin.Use(middleware.AdminComplianceGuard(settingService))
+
+	// Phase 4.1-G (redesign §15.3): the reconciliation read group — a
+	// SIBLING of the admin group that replaces ONLY the admin JWT link
+	// with the machine-to-machine token gate and keeps the chain's other
+	// links (the panel rate limiter and the audit log; every call is
+	// audited under service:shipany-reconciliation). AdminComplianceGuard
+	// is deliberately omitted: it gates a human admin's compliance
+	// acceptance, which a machine principal has no way to give. The group
+	// is mounted only when canonical_wallet.reconciliation_read_token is
+	// configured — an undeployed key is inert (the paths 404).
+	if h.Admin.WalletReconciliation != nil {
+		if token := h.Admin.WalletReconciliation.ReadToken(); token != "" {
+			recon := v1.Group("/admin/wallet/reconciliation")
+			recon.Use(middleware.NewWalletReconciliationTokenAuth(token))
+			recon.Use(panelRateLimiter.Global())
+			recon.Use(gin.HandlerFunc(auditLog))
+			recon.GET("/summary", h.Admin.WalletReconciliation.Summary)
+			recon.GET("/watermark", h.Admin.WalletReconciliation.Watermark)
+		}
+	}
 	{
 		// 部署与运营合规确认
 		registerAdminComplianceRoutes(admin, h)

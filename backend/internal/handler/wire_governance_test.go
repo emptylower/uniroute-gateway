@@ -79,6 +79,7 @@ func TestProvideAdminHandlers_WiresGovernanceHandlersForReal(t *testing.T) {
 		governanceAccountRepositoryStub{},                                       // accountRepository
 		governanceUpstreamConnectionRepositoryStub{},                            // upstreamConnectionRepository
 		repository.NewModelGovernanceReadRepository(nil),                        // modelGovernanceReadRepository
+		nil, // walletReconciliationHandler (Phase 4.1-G; not under test here)
 	)
 	require.NotNil(t, adminHandlers)
 

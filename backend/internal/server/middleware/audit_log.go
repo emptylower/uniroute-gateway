@@ -119,6 +119,13 @@ var auditSensitiveReads = map[string]string{
 	"GET /api/v1/admin/backups/s3-config":                                             "admin.backups.s3_config.read",
 	"GET /api/v1/admin/data-management/s3/config":                                     "admin.data_management.s3_config.read",
 	"GET /api/internal/v1/gateway-admin/:platform_user_id/model-governance/inventory": "admin.model_governance.inventory.read",
+	// Phase 4.1-G: the reconciliation reads are money-adjacent sensitive
+	// reads pulled by ShipAny's scheduler — audited under the synthetic
+	// service principal the token middleware sets
+	// (service:shipany-reconciliation), the same machine-to-machine
+	// pattern as the gateway-admin inventory read above.
+	"GET /api/v1/admin/wallet/reconciliation/summary":   "admin.wallet.reconciliation.summary.read",
+	"GET /api/v1/admin/wallet/reconciliation/watermark": "admin.wallet.reconciliation.watermark.read",
 }
 
 // auditActionOverrides 变更类请求的动作名精确映射（未命中时自动推导）。

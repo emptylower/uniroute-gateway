@@ -1039,6 +1039,12 @@ canonical_wallet:
   # The grace after which a stale observer's controller claim may be taken
   # over; ≥ 1 and ≤ lease_ttl_seconds/4 (§13.2.5).
   live_controller_takeover_seconds: 15
+  # Machine-to-machine bearer token ShipAny's scheduled reconciliation job
+  # presents to the read-only /api/v1/admin/wallet/reconciliation/* group
+  # (Phase 4.1-G). NOT the admin JWT and NOT the assertion secret. Empty
+  # (default) leaves the group unmounted — an undeployed key is inert.
+  # When set: ≥ 32 bytes under mode enforce/shadow.
+  reconciliation_read_token: ""
 
 # =============================================================================
 # Model Governance Authorization (Phase 2, effective mode remains off)
