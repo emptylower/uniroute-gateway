@@ -24,8 +24,9 @@ import (
 
 func startLiveRestartPostgres(t *testing.T, ctx context.Context) *sql.DB {
 	t.Helper()
-	// Phase 3.7c: a database on the one shared container per run; the four
-	// migrations below are unchanged.
+	// Lockstep rule: any migration that adds a column to
+	// wallet_settlement_outbox, wallet_live_provisional or wallet_hold_outcome
+	// must be added HERE and to startCanonicalWalletTestPostgres's inline DDL.
 	db := service.SharedTestPostgresDBForTest(t)
 
 	outboxSQL, err := os.ReadFile(filepath.Join("..", "..", "migrations", "208_wallet_settlement_outbox.sql"))
@@ -47,6 +48,12 @@ func startLiveRestartPostgres(t *testing.T, ctx context.Context) *sql.DB {
 	splitSQL, err := os.ReadFile(filepath.Join("..", "..", "migrations", "214_wallet_outbox_split_and_authorization.sql"))
 	require.NoError(t, err)
 	_, err = db.ExecContext(ctx, string(splitSQL))
+	require.NoError(t, err)
+
+	// Phase 4.2-G (migration 216): outbox billing_snapshot_id and redrive_count.
+	snapshotSQL, err := os.ReadFile(filepath.Join("..", "..", "migrations", "216_wallet_outbox_billing_snapshot.sql"))
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, string(snapshotSQL))
 	require.NoError(t, err)
 
 	return db
