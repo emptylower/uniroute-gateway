@@ -554,3 +554,22 @@ func (o *outboxStoreForTest) RequeueDeadLetter(ctx context.Context, id int64, wo
 		WHERE id = $1 AND status = 'dead_letter' AND dead_letter_reason = 'balance_shortfall'`, id)
 	return err
 }
+
+func (o *outboxStoreForTest) PruneDeliveredOlderThan(ctx context.Context, cutoff time.Time, batch int) (int64, error) {
+	if batch <= 0 {
+		batch = 5000
+	}
+	res, err := o.db.ExecContext(ctx, `
+		DELETE FROM wallet_settlement_outbox
+		WHERE id IN (
+			SELECT id FROM wallet_settlement_outbox
+			WHERE status = 'delivered' AND occurred_at < $1
+			ORDER BY id
+			LIMIT $2
+			FOR UPDATE SKIP LOCKED
+		)`, cutoff, batch)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}

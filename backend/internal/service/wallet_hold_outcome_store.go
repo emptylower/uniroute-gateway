@@ -161,3 +161,30 @@ func (s *walletHoldOutcomeStore) ListHoldOutcomesByUser(ctx context.Context, pla
 	}
 	return out, nil
 }
+
+// PruneResolvedOlderThan (Phase 4.2-G Task 3, redesign §15.4) deletes
+// resolved hold outcomes (resolution IS NOT NULL AND resolved_at < cutoff)
+// strictly older than cutoff in batches using SKIP LOCKED.
+// It never touches open holds (resolution IS NULL) and never touches rows
+// inside the retention window.
+func (s *walletHoldOutcomeStore) PruneResolvedOlderThan(ctx context.Context, cutoff time.Time, batch int) (int64, error) {
+	if s == nil || s.db == nil {
+		return 0, nil
+	}
+	if batch <= 0 {
+		batch = 5000
+	}
+	res, err := s.db.ExecContext(ctx, `
+		DELETE FROM wallet_hold_outcome
+		WHERE authorization_id IN (
+			SELECT authorization_id FROM wallet_hold_outcome
+			WHERE resolution IS NOT NULL AND resolved_at IS NOT NULL AND resolved_at < $1
+			ORDER BY authorization_id
+			LIMIT $2
+			FOR UPDATE SKIP LOCKED
+		)`, cutoff, batch)
+	if err != nil {
+		return 0, fmt.Errorf("prune resolved wallet hold outcomes: %w", err)
+	}
+	return res.RowsAffected()
+}

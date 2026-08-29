@@ -308,6 +308,8 @@ func canonicalWalletTestConfig(mode string) config.CanonicalWalletConfig {
 		Mode: mode, ControlPlaneURL: "https://control.example.test", Issuer: "gateway", Audience: "control",
 		Secret: strings.Repeat("w", 32), Version: "v1", LeaseTTLSeconds: 300, LeaseBudgetUnits: 100000,
 		RequestTimeoutMS: 300, ExpirySkewMarginMS: 100, SettlementQueueSize: 1, SettlementWorkers: 1, EnforceReady: mode == config.CanonicalWalletModeEnforce,
+		BillingSnapshotMode: "record", LiveWindowMinSeconds: 20, LiveControllerTakeoverSeconds: 15,
+		ReceivableRedriveIntervalSeconds: 60, ReceivableRedriveMaxAttempts: 2, RetentionDays: 45,
 	}
 }
 

@@ -2861,6 +2861,12 @@ func (c *Config) Validate() error {
 		if c.CanonicalWallet.ReceivableRedriveMaxAttempts < 1 {
 			return fmt.Errorf("canonical_wallet.receivable_redrive_max_attempts must be at least 1")
 		}
+		// Phase 4.2-G Task 3: the wallet tables' retention floor.
+		// Retention must cover the wire's maximum reconciliation window
+		// (31 days) plus the soak's minimum (7 days) — hence >= 38.
+		if c.CanonicalWallet.RetentionDays < 38 {
+			return fmt.Errorf("canonical_wallet.retention_days must be at least 38 (the 31-day reconciliation window + the 7-day soak)")
+		}
 		if c.CanonicalWallet.Mode == CanonicalWalletModeEnforce {
 			if !c.CanonicalWallet.EnforceReady {
 				// enforce_ready (config.go:1584, default false) was declared and read

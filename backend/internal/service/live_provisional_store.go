@@ -411,3 +411,30 @@ func (s *liveProvisionalStore) ListLiveProvisionalByUser(ctx context.Context, pl
 	}
 	return out, nil
 }
+
+// PruneTerminalOlderThan (Phase 4.2-G Task 3, redesign §15.4) deletes
+// terminal live records (terminal_at IS NOT NULL AND terminal_at < cutoff)
+// strictly older than cutoff in batches using SKIP LOCKED.
+// It never touches active/provisional/finalizing rows (terminal_at IS NULL)
+// and never touches rows inside the retention window.
+func (s *liveProvisionalStore) PruneTerminalOlderThan(ctx context.Context, cutoff time.Time, batch int) (int64, error) {
+	if s == nil || s.db == nil {
+		return 0, nil
+	}
+	if batch <= 0 {
+		batch = 5000
+	}
+	res, err := s.db.ExecContext(ctx, `
+		DELETE FROM wallet_live_provisional
+		WHERE token IN (
+			SELECT token FROM wallet_live_provisional
+			WHERE terminal_at IS NOT NULL AND terminal_at < $1
+			ORDER BY token
+			LIMIT $2
+			FOR UPDATE SKIP LOCKED
+		)`, cutoff, batch)
+	if err != nil {
+		return 0, fmt.Errorf("prune terminal live provisional records: %w", err)
+	}
+	return res.RowsAffected()
+}

@@ -597,3 +597,30 @@ func (s *WalletOutboxStore) RequeueDeadLetter(ctx context.Context, id int64, wor
 		WHERE id = $1 AND status = 'dead_letter' AND dead_letter_reason = 'balance_shortfall'`, id)
 	return err
 }
+
+// PruneDeliveredOlderThan (Phase 4.2-G Task 3, redesign §15.4) deletes
+// delivered outbox rows strictly older than cutoff in batches using
+// SKIP LOCKED. It never touches dead-letters (the receivable is money
+// owed) and never touches rows inside the retention window.
+func (s *WalletOutboxStore) PruneDeliveredOlderThan(ctx context.Context, cutoff time.Time, batch int) (int64, error) {
+	if batch <= 0 {
+		batch = 5000
+	}
+	res, err := s.db.ExecContext(ctx, `
+		DELETE FROM wallet_settlement_outbox
+		WHERE id IN (
+			SELECT id FROM wallet_settlement_outbox
+			WHERE status = 'delivered' AND occurred_at < $1
+			ORDER BY id
+			LIMIT $2
+			FOR UPDATE SKIP LOCKED
+		)`, cutoff, batch)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+func (s *WalletOutboxStore) PruneDelivered(ctx context.Context, cutoff time.Time, batch int) (int64, error) {
+	return s.PruneDeliveredOlderThan(ctx, cutoff, batch)
+}
