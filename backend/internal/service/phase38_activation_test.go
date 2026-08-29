@@ -43,10 +43,14 @@ import (
 	"time"
 
 	coderws "github.com/coder/websocket"
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/go-connections/nat"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
+	"github.com/testcontainers/testcontainers-go"
+	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
 	"github.com/tidwall/gjson"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -1613,4 +1617,258 @@ func TestPhase38LeaseCapCeiling(t *testing.T) {
 	require.Equal(t, int64(capLeases)*budget, sumBudget,
 		"Σ budget == %d × lease_budget (%d CNY held at most)", capLeases, int64(capLeases)*budget/10_000_000/10)
 	t.Logf("[shipany] test 60: cap reached — %d active leases %v, Σ budget %d units", active, state.leaseIDs(), sumBudget)
+}
+
+// ---------------------------------------------------------------------------
+// Tests 61–63 — the outage, the rollback, the data loss (redesign §14.4)
+// ---------------------------------------------------------------------------
+
+// runThrowawayE2ERedis starts a THROWAWAY Redis container PUBLISHED ON A
+// FIXED HOST PORT (round-1 MAJOR-3: a stopped/started container gets a new
+// ephemeral port, and go-redis reconnects only to its configured address —
+// a fixed binding is what makes Stop→Start the same address). This is
+// tcredis.Run DIRECTLY, never SharedTestRedisClientForTest: the shared
+// instance is process-lifetime under the one-live-claim guard (3.7c) and
+// stopping it would break every later test. Tests 61 and 63 each start
+// their own; do not consolidate them onto the shared instance.
+// stopTimeout is the docker stop grace for the throwaway Redis (SIGKILL
+// after — the container holds no durable state).
+var e2eRedisStopTimeout = 5 * time.Second
+
+func runThrowawayE2ERedis(t *testing.T, ctx context.Context) (*tcredis.RedisContainer, *redis.Client) {
+	t.Helper()
+	port := strings.TrimSpace(os.Getenv("WALLET_E2E_REDIS_PORT"))
+	if port == "" {
+		port = "16379"
+	}
+	c, err := tcredis.Run(ctx, "redis:8.4-alpine",
+		testcontainers.WithHostConfigModifier(func(hc *container.HostConfig) {
+			hc.PortBindings = nat.PortMap{"6379/tcp": {{HostIP: "127.0.0.1", HostPort: port}}}
+		}),
+	)
+	if err != nil {
+		t.Fatalf("Phase 3.8 test 61/63: the throwaway Redis could not bind 127.0.0.1:%s (a collision is a setup error — free the port or set WALLET_E2E_REDIS_PORT): %v", port, err)
+	}
+	t.Cleanup(func() { _ = c.Terminate(ctx) })
+	client := redis.NewClient(&redis.Options{Addr: "127.0.0.1:" + port})
+	t.Cleanup(func() { _ = client.Close() })
+	require.NoError(t, client.Ping(ctx).Err())
+	return c, client
+}
+
+// Test 61 — fail-closed through a REAL Redis outage (test 45(a)'s arm on
+// the real wire): enforce refuses lease_unavailable while the store is
+// down, the dispatcher's row is never lost and never dead-letters, and the
+// SAME address recovers after docker start (go-redis reconnects on its
+// own). A shadow bridge on the same stopped instance admits.
+func TestPhase38RedisOutage(t *testing.T) {
+	e2eRequireStage(t, "routes_on")
+	ctx := context.Background()
+	user := e2eUserID("t61")
+	e2eSeed(t, user, 100_000)
+
+	rc, rdb := runThrowawayE2ERedis(t, ctx)
+	db := startCanonicalWalletTestPostgres(t, ctx)
+	store := &gatewayCacheAdapterForTest{rdb: rdb}
+	outbox := &outboxStoreForTest{db: db}
+	cfg := e2eWalletConfig(t, config.CanonicalWalletModeEnforce, "off")
+	client := newCanonicalWalletHTTPClient(cfg, nil)
+	b := newCanonicalWalletBridge(cfg, store, client, db, outbox, 0, nil)
+	t.Cleanup(b.Close)
+
+	h, err := e2eAuthorize(t, ctx, b, "off", user, `{"max_tokens":64}`)
+	require.NoError(t, err)
+	require.Nil(t, h.Refusal, "admitted before the outage")
+	state := e2eInspect(t, user)
+	require.Len(t, state.Leases, 1, "the pre-outage ensure issued (ids read: %v)", state.leaseIDs())
+	leaseID := state.Leases[0].ID
+
+	reqID := "phase38-t61-" + user
+	const amount = int64(10_000_000)
+	b.ObserveSettlement(CanonicalWalletSettlementEvent{
+		GatewayRequestID: reqID, PlatformUserID: user, Currency: "CNY",
+		AmountUnits: amount, OccurredAt: time.Now().UTC(),
+	})
+	// Wait for the row to exist (it may already have delivered — the outage
+	// leg below re-drives it through the store anyway).
+	e2eWaitOutboxStatus(t, ctx, db, reqID, "delivered", 60*time.Second)
+
+	// THE OUTAGE: stop the container; the store errors; enforce refuses.
+	require.NoError(t, rc.Stop(ctx, &e2eRedisStopTimeout))
+	_, err = e2eAuthorize(t, ctx, b, "off", user, `{"max_tokens":64}`)
+	require.Error(t, err, "enforce refuses when the store is down (fail-closed)")
+	refused, ok := AsAuthorizationRefused(err)
+	require.True(t, ok, "the store outage's refusal carries the client-visible shape, got %v", err)
+	require.Equal(t, AuthorizationRefusalLeaseUnavailable, refused.Reason)
+
+	// Queue a settlement DURING the outage: the row is durable (pending /
+	// in_flight), never lost, never dead-lettered.
+	reqID2 := "phase38-t61-outage-" + user
+	b.ObserveSettlement(CanonicalWalletSettlementEvent{
+		GatewayRequestID: reqID2, PlatformUserID: user, Currency: "CNY",
+		AmountUnits: amount, OccurredAt: time.Now().UTC(),
+	})
+	require.Eventually(t, func() bool {
+		row := e2eOutboxRowByRequest(t, ctx, db, reqID2)
+		return row.Status == "pending" || row.Status == "in_flight"
+	}, 10*time.Second, 100*time.Millisecond, "the outage-time row is durably pending or in_flight")
+	row := e2eOutboxRowByRequest(t, ctx, db, reqID2)
+	require.False(t, row.DeadLetterReason.Valid, "a store outage is transient — no dead-letter")
+	require.NotEqual(t, "dead_letter", row.Status)
+
+	// RECOVERY: start the SAME container — same fixed address, go-redis
+	// reconnects, the bridge/store/dispatcher untouched — and the row
+	// delivers.
+	require.NoError(t, rc.Start(ctx))
+	e2eWaitOutboxStatus(t, ctx, db, reqID2, "delivered", 60*time.Second)
+	state = e2eInspect(t, user)
+	e2eLogState(t, state)
+	require.Equal(t, 2*amount, state.leaseByID(t, leaseID).capturedUnits(t),
+		"both settlements captured on lease %s (ids read: %v)", leaseID, state.leaseIDs())
+
+	// A SHADOW bridge on the same instance, stopped again, admits.
+	require.NoError(t, rc.Stop(ctx, &e2eRedisStopTimeout))
+	shadow := e2eBridgeOn(t, config.CanonicalWalletModeShadow, "off", rdb, db)
+	hs, err := e2eAuthorize(t, ctx, shadow, "off", user, `{"max_tokens":64}`)
+	require.NoError(t, err, "shadow admits through a store outage")
+	require.NotNil(t, hs)
+	require.Nil(t, hs.Refusal)
+}
+
+// Test 62, routes_on half — the rollback is reversible at every step: walk
+// enforce → shadow → disabled on fresh bridges over one user's stores; no
+// row dead-letters, every pending row delivers, and ShipAny's balance moves
+// only by the issued lease's reserve (captures land on the lease; the
+// remainder returns at close).
+func TestPhase38RollbackReversible(t *testing.T) {
+	e2eRequireStage(t, "routes_on")
+	ctx := context.Background()
+	user := e2eUserID("t62")
+	e2eSeed(t, user, 100_000)
+
+	bEnforce, db0, rdb0 := e2eBridge(t, config.CanonicalWalletModeEnforce, "off")
+	bShadow := e2eBridgeOn(t, config.CanonicalWalletModeShadow, "off", rdb0, db0)
+	bDisabled := e2eBridgeOn(t, config.CanonicalWalletModeDisabled, "off", rdb0, db0)
+
+	seededBalance := int64(100_000)
+	type leg struct {
+		name   string
+		bridge *CanonicalWalletBridge
+	}
+	for i, l := range []leg{{"enforce", bEnforce}, {"shadow", bShadow}, {"disabled", bDisabled}} {
+		h, err := e2eAuthorize(t, ctx, l.bridge, "off", user, `{"max_tokens":64}`)
+		require.NoError(t, err, "leg %s", l.name)
+		require.Nil(t, h.Refusal, "leg %s admits (routes on, funded)", l.name)
+		reqID := fmt.Sprintf("phase38-t62-%s-%d-", l.name, i) + user
+		l.bridge.ObserveSettlement(CanonicalWalletSettlementEvent{
+			GatewayRequestID: reqID, PlatformUserID: user, Currency: "CNY",
+			AmountUnits: 10_000_000, OccurredAt: time.Now().UTC(),
+		})
+		if l.name != "disabled" {
+			// disabled mode observes nothing (ObserveSettlement's first
+			// statement) — the walk's settle path ends at shadow.
+			e2eWaitOutboxStatus(t, ctx, db0, reqID, "delivered", 60*time.Second)
+		}
+	}
+
+	// No dead-letter anywhere in the walk's outbox.
+	var dead int
+	require.NoError(t, db0.QueryRowContext(ctx, `SELECT count(*) FROM wallet_settlement_outbox WHERE status = 'dead_letter'`).Scan(&dead))
+	require.Zero(t, dead, "the rollback walk dead-letters nothing")
+
+	state := e2eInspect(t, user)
+	e2eLogState(t, state)
+	// One lease covers the whole walk (the later authorizes reuse it);
+	// ShipAny's balance decreased by the lease RESERVE (500 credits), not by
+	// captures — the captures ride the lease and return at close.
+	require.NotEmpty(t, state.Leases)
+	var captured int64
+	for _, l := range state.Leases {
+		captured += l.capturedUnits(t)
+	}
+	require.Equal(t, int64(20_000_000), captured, "the two observed settlements (enforce + shadow legs) captured on ShipAny")
+	require.Equal(t, seededBalance-500, state.Balance,
+		"the balance moved only by the lease reserve (credit ids %v)", state.creditIDs())
+}
+
+// Test 62, routes_off half — with the ledger routes off (the second driver
+// pass), the client sees 503 transient, the outbox retries, and NO ShipAny
+// row changed across the window (inspect before/after by id).
+func TestPhase38RollbackRoutesOffNoMoneyMoved(t *testing.T) {
+	e2eRequireStage(t, "routes_off")
+	ctx := context.Background()
+	user := e2eUserID("t62-off")
+	e2eSeed(t, user, 1000)
+
+	before := e2eInspect(t, user)
+	e2eLogState(t, before)
+	require.Empty(t, before.Leases, "with the routes off nothing can issue (ids read: %v)", before.leaseIDs())
+
+	b, db, _ := e2eBridge(t, config.CanonicalWalletModeShadow, "off")
+	h, err := e2eAuthorize(t, ctx, b, "off", user, `{"max_tokens":64}`)
+	require.NoError(t, err)
+	require.Nil(t, h.Refusal, "shadow still admits")
+	reqID := "phase38-t62-off-" + user
+	b.ObserveSettlement(CanonicalWalletSettlementEvent{
+		GatewayRequestID: reqID, PlatformUserID: user, Currency: "CNY",
+		AmountUnits: 10_000_000, OccurredAt: time.Now().UTC(),
+	})
+	// 503 → transient: the row retries (at least one attempt), never
+	// dead-letters.
+	require.Eventually(t, func() bool {
+		row := e2eOutboxRowByRequest(t, ctx, db, reqID)
+		return row.AttemptCount >= 1 && (row.Status == "pending" || row.Status == "in_flight")
+	}, 15*time.Second, 100*time.Millisecond, "the 503'd row is retrying")
+	row := e2eOutboxRowByRequest(t, ctx, db, reqID)
+	require.False(t, row.DeadLetterReason.Valid, "transient — no dead-letter during the rollback window")
+
+	after := e2eInspect(t, user)
+	e2eLogState(t, after)
+	require.Equal(t, before.Balance, after.Balance, "no money moved (credit ids before %v after %v)", before.creditIDs(), after.creditIDs())
+	require.Empty(t, after.Leases, "no lease row appeared (ids read: %v)", after.leaseIDs())
+	require.Equal(t, before.creditIDs(), after.creditIDs(), "the same credit rows, unchanged")
+}
+
+// Test 63 — admission after data loss on one lease budget (G2, §4): with
+// the gateway's whole lease cache flushed, the next authorization's ensure
+// finds no current pointer and ShipAny answers REUSED for the still-active
+// lease — matched server-side on (user_id, status='active'), unexpired,
+// headroom ≥ the requested minimum — so the user is admitted with ONE lease
+// and no second issuance.
+func TestPhase38DataLossReused(t *testing.T) {
+	e2eRequireStage(t, "routes_on")
+	ctx := context.Background()
+	user := e2eUserID("t63")
+	e2eSeed(t, user, 500) // exactly one lease budget at LeaseBudgetUnits 500_000_000
+
+	_, rdb := runThrowawayE2ERedis(t, ctx)
+	db := startCanonicalWalletTestPostgres(t, ctx)
+	store := &gatewayCacheAdapterForTest{rdb: rdb}
+	cfg := e2eWalletConfig(t, config.CanonicalWalletModeEnforce, "off")
+	client := newCanonicalWalletHTTPClient(cfg, nil)
+	b := newCanonicalWalletBridge(cfg, store, client, db, &outboxStoreForTest{db: db}, 0, nil)
+	t.Cleanup(b.Close)
+
+	h1, err := e2eAuthorize(t, ctx, b, "off", user, `{"max_tokens":64}`)
+	require.NoError(t, err)
+	require.Nil(t, h1.Refusal)
+	afterFirst := e2eInspect(t, user)
+	e2eLogState(t, afterFirst)
+	require.Len(t, afterFirst.Leases, 1, "one lease issued (ids read: %v)", afterFirst.leaseIDs())
+	leaseID := afterFirst.Leases[0].ID
+	require.Equal(t, int64(0), afterFirst.Balance, "the single budget is fully reserved")
+
+	// DATA LOSS: the gateway's whole lease cache disappears.
+	require.NoError(t, rdb.FlushAll(ctx).Err())
+
+	h2, err := e2eAuthorize(t, ctx, b, "off", user, `{"max_tokens":64}`)
+	require.NoError(t, err, "admitted after data loss — the server's view covers")
+	require.Nil(t, h2.Refusal)
+	require.Equal(t, leaseID, h2.LeaseID, "the ensure answered REUSED for the same lease")
+
+	afterSecond := e2eInspect(t, user)
+	e2eLogState(t, afterSecond)
+	require.Len(t, afterSecond.Leases, 1, "still ONE lease — no second issuance (ids read: %v)", afterSecond.leaseIDs())
+	require.Equal(t, leaseID, afterSecond.Leases[0].ID)
+	require.Equal(t, afterFirst.Balance, afterSecond.Balance, "the balance is unchanged by the reused admission")
 }
