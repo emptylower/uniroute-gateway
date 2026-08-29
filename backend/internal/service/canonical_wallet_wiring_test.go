@@ -196,3 +196,50 @@ func TestCanonicalWalletWiringGateAtNewOpenAIGatewayService(t *testing.T) {
 	require.Nil(t, svc.authorizer, "the authorizer follows the bridge")
 	require.Equal(t, before+1, canonicalWalletWiringMissing.Load())
 }
+
+// Test 58 (Phase 3.8-G Task 5, redesign §14.2 — "Batch Image asserted
+// disabled"): enforce + batch_image.enabled is REFUSED by config validation
+// — Batch Image debits outside the canonical wallet (spec §2.5, G10). This
+// and Task 1's runtime-wiring gate
+// (TestCanonicalWalletWiringGateAtProvideBillingCacheService /
+// ...AtNewGatewayService / ...AtNewOpenAIGatewayService above) are the PAIR
+// §14.2 names: the two startup guards every enforce deployment passes
+// through — the config-level Batch Image guard and the constructor-level
+// store gate. Count Tokens is cited, not re-proven (NonBillableCountTokens,
+// authorization points 3.3a).
+func TestPhase38StartupGuardPair(t *testing.T) {
+	// LoadForBootstrap gives viper's fully-defaulted config (no file on the
+	// package's search path; jwt allowed missing) — the baseline every
+	// startup guard then fires against. The wallet block keeps the DEFAULTS
+	// (the 3.7 live keys etc. — canonicalWalletTestConfig predates them) and
+	// takes only the mode/ready shape from the test config.
+	base, err := config.LoadForBootstrap()
+	require.NoError(t, err)
+	base.JWT.Secret = strings.Repeat("j", 32) // Validate requires it; bootstrap load allows it missing
+	test := canonicalWalletTestConfig(config.CanonicalWalletModeEnforce)
+	base.CanonicalWallet.Mode = test.Mode
+	base.CanonicalWallet.EnforceReady = test.EnforceReady
+	base.CanonicalWallet.ControlPlaneURL = test.ControlPlaneURL
+	base.CanonicalWallet.Secret = test.Secret
+	base.CanonicalWallet.BillingSnapshotMode = "record"
+	base.BatchImage.Enabled = true
+	err = base.Validate()
+	require.Error(t, err, "enforce cannot start with batch_image.enabled=true")
+	require.Contains(t, err.Error(), "batch_image.enabled=true",
+		"the existing Batch Image guard (config.go:2815) fires for enforce + batch_image")
+
+	// The guard is enforce-scoped: shadow + batch_image passes THIS check
+	// (the wallet switch's guard is inside the enforce arm).
+	shadow, err := config.LoadForBootstrap()
+	require.NoError(t, err)
+	shadow.JWT.Secret = strings.Repeat("j", 32)
+	shadow.CanonicalWallet.Mode = config.CanonicalWalletModeShadow
+	shadow.CanonicalWallet.EnforceReady = false
+	shadow.CanonicalWallet.BillingSnapshotMode = "record"
+	shadow.BatchImage.Enabled = true
+	shadowErr := shadow.Validate()
+	if shadowErr != nil {
+		require.NotContains(t, shadowErr.Error(), "batch_image",
+			"the Batch Image refusal is the enforce arm's, not a global one")
+	}
+}

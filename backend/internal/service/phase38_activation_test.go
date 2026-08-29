@@ -1348,3 +1348,269 @@ func TestPhase38EnforceRefusesUnfunded(t *testing.T) {
 		require.NotEmpty(t, state.Leases, "the session's ensure issued (ids read: %v)", state.leaseIDs())
 	})
 }
+
+// ---------------------------------------------------------------------------
+// Tests 58–60 — the guards (unit pair above), the two computed deployment
+// invariants, and the ceiling (redesign §14.2/§14.4)
+// ---------------------------------------------------------------------------
+
+// phase38ModelFixture is the FreezeInput identity the bound computation
+// freezes under (NewSnapshotTestFixtureForTest's apiKey/user/account).
+type phase38ModelFixture struct {
+	apiKey  *APIKey
+	user    *User
+	account *Account
+}
+
+// familyFor is three-way (round-2 minor 2): BillingFamilyOpenAI when the
+// pricing's LiteLLMProvider is openai, else BillingFamilyGeneric. Live
+// models are NEVER silently classified — the caller excludes and lists them
+// exactly like image/video (Live authorizes per window under 3.7b; a
+// whole-session cold bound is the wrong quantity for it).
+func familyFor(pricing *LiteLLMModelPricing) BillingFamily {
+	if pricing != nil && strings.EqualFold(strings.TrimSpace(pricing.LiteLLMProvider), "openai") {
+		return BillingFamilyOpenAI
+	}
+	return BillingFamilyGeneric
+}
+
+// phase38ModelClass classifies a catalog entry for the bound computation.
+type phase38ModelClass string
+
+const (
+	phase38ModelBounded phase38ModelClass = "bounded"
+	phase38ModelImage   phase38ModelClass = "image"
+	phase38ModelVideo   phase38ModelClass = "video"
+	phase38ModelLive    phase38ModelClass = "live"
+)
+
+func classifyPhase38Model(pricing *LiteLLMModelPricing) phase38ModelClass {
+	mode := strings.ToLower(strings.TrimSpace(pricing.Mode))
+	switch {
+	case strings.Contains(mode, "image"):
+		return phase38ModelImage
+	case strings.Contains(mode, "video"):
+		return phase38ModelVideo
+	case mode == "realtime":
+		return phase38ModelLive
+	}
+	return phase38ModelBounded
+}
+
+// largestAuthorizedBoundUnitsForTest — the reusable helper the runbook's
+// production command shares (redesign §14.2: computed, not typed in). Each
+// model is priced through GetModelPricing (the family fallback applies), so
+// familyFor sees the pricing a request would actually settle under. Image,
+// video and Live models are EXCLUDED from the cold-bound set and listed by
+// name, and so are UNPRICEABLE names (GetModelPricing/Freeze found nothing)
+// — they are refused at pricing BEFORE any authorization, so no bound exists
+// to compute and no money can move (deviation from the plan's literal
+// count, recorded: the dev DB's own reachable set contains such a name).
+// A PRICED model without maxima FAILS naming every such model — never
+// skipped: an unbounded model is exactly what lease_max_credits cannot
+// cover.
+func largestAuthorizedBoundUnitsForTest(ctx context.Context, models []string, pricing *PricingService, snapshots *BillingSnapshotService, fixture phase38ModelFixture) (max int64, model string, bounds map[string]int64, excluded map[string]string, err error) {
+	bounds = map[string]int64{}
+	excluded = map[string]string{}
+	var unbounded []string
+	for _, m := range models {
+		entry := pricing.GetModelPricing(m)
+		if entry == nil {
+			excluded[m] = "unpriceable (GetModelPricing found no entry — requests for it are refused at pricing before any authorization; no bound to compute, no money at risk)"
+			continue
+		}
+		switch class := classifyPhase38Model(entry); class {
+		case phase38ModelImage:
+			excluded[m] = "image (per-request priced by the image branch, bounded by the image price — not a context window)"
+			continue
+		case phase38ModelVideo:
+			excluded[m] = "video (per-request priced, bounded by VideoBillingMaxDurationSeconds — not a context window)"
+			continue
+		case phase38ModelLive:
+			excluded[m] = "live (authorizes per window under 3.7b; a whole-session cold bound is the wrong quantity)"
+			continue
+		}
+		snap, freezeErr := snapshots.Freeze(ctx, FreezeInput{
+			APIKey: fixture.apiKey, User: fixture.apiKey.User, Account: fixture.account,
+			RequestedModel: m, BillingModel: m, Family: familyFor(entry),
+		})
+		if freezeErr != nil {
+			excluded[m] = fmt.Sprintf("unpriceable (Freeze failed: %v — refused at pricing before any authorization)", freezeErr)
+			continue
+		}
+		bound, estErr := snapshots.EstimateUpperBoundUnits(snap, EstimateInput{Continuation: ContinuationCold})
+		if estErr != nil || bound <= 0 {
+			unbounded = append(unbounded, m)
+			continue
+		}
+		bounds[m] = bound
+		if bound > max {
+			max, model = bound, m
+		}
+	}
+	if len(unbounded) > 0 {
+		return 0, "", nil, nil, fmt.Errorf("largestAuthorizedBoundUnits: models without maxima (MaxInputTokens/MaxOutputTokens) — a reachable model without maxima has no cold bound, which lease_max_credits cannot cover: %s", strings.Join(unbounded, ", "))
+	}
+	return max, model, bounds, excluded, nil
+}
+
+// TestPhase38Invariants — test 59, the two computed deployment invariants
+// (§14.2) against the environment's values; the runbook re-runs the same
+// computation against production as
+//
+//	WALLET_E2E_MODELS=<query output> WALLET_E2E_CONFIG=<production config> \
+//	  go test -tags=integration,e2e ./internal/service/ -run TestPhase38Invariants -count=1 -v
+//
+// The reachable set comes from WALLET_E2E_MODELS — required and non-empty
+// (round-1 MAJOR-2: the runtime enumerators' data is not seeded in Shape A;
+// the runbook's query is the distinct model_mapping keys over schedulable
+// rows of table `accounts`, column `credentials` — the same tables
+// GetAvailableModels reads).
+func TestPhase38Invariants(t *testing.T) {
+	e2eWalletEnv(t)
+	ctx := context.Background()
+	raw := strings.TrimSpace(os.Getenv("WALLET_E2E_MODELS"))
+	require.NotEmpty(t, raw,
+		"WALLET_E2E_MODELS is required and non-empty — the deployment's configured reachable set (the runbook's query); an empty set would pass the invariants vacuously")
+	var models []string
+	for _, m := range strings.Split(raw, ",") {
+		if m = strings.TrimSpace(m); m != "" {
+			models = append(models, m)
+		}
+	}
+	require.NotEmpty(t, models)
+
+	// The loaded config: WALLET_E2E_CONFIG (the runbook's production path)
+	// through CONFIG_FILE, else viper's defaults.
+	if cfgFile := strings.TrimSpace(os.Getenv("WALLET_E2E_CONFIG")); cfgFile != "" {
+		t.Setenv("CONFIG_FILE", cfgFile)
+	}
+	loaded, err := config.LoadForBootstrap()
+	require.NoError(t, err, "the deployment config loaded")
+
+	pricing := e2eCatalogPricing(t)
+	snapshots, apiKey, user, account, _, _, _ := e2eSnapshotFixture(t)
+	maxBound, maxModel, bounds, excluded, err := largestAuthorizedBoundUnitsForTest(ctx, models, pricing, snapshots, phase38ModelFixture{apiKey: apiKey, user: user, account: account})
+	require.NoError(t, err)
+
+	// None is silently dropped: the listed count + the bounded count == the
+	// input count (the plan's own assertion).
+	require.Equal(t, len(models), len(bounds)+len(excluded),
+		"every input model is either bounded or listed: bounded=%d listed=%d input=%d (listed: %v)", len(bounds), len(excluded), len(models), excluded)
+	t.Logf("test 59: %d models — largest cold bound %d units (%s)", len(models), maxBound, maxModel)
+	for _, m := range models {
+		if b, ok := bounds[m]; ok {
+			t.Logf("test 59: bound %s = %d units", m, b)
+		}
+	}
+	for m, why := range excluded {
+		t.Logf("test 59: excluded %s — %s", m, why)
+	}
+
+	// (i) ShipAny's lease_max_credits × 1e6 ≥ the largest single authorized
+	// amount (the driver passes ShipAny's own value; ShipAny's default is
+	// 10000 when unset).
+	leaseMaxCredits := int64(10_000)
+	if raw := strings.TrimSpace(os.Getenv("WALLET_E2E_LEASE_MAX_CREDITS")); raw != "" {
+		v, err := strconv.ParseInt(raw, 10, 64)
+		require.NoError(t, err, "WALLET_E2E_LEASE_MAX_CREDITS must be an integer")
+		leaseMaxCredits = v
+	}
+	require.LessOrEqual(t, maxBound, leaseMaxCredits*1_000_000,
+		"(i) the largest cold bound (%d units, %s) must fit one lease: lease_max_credits %d × 1e6", maxBound, maxModel, leaseMaxCredits)
+	t.Logf("test 59: (i) max bound %d ≤ lease_max_credits %d × 1e6 = %d", maxBound, leaseMaxCredits, leaseMaxCredits*1_000_000)
+
+	// (iii) The per-settlement bound: splitOutboxEvent dead-letters at depth
+	// 8, so a single settlement spans at most eight leases.
+	leaseBudget := loaded.CanonicalWallet.LeaseBudgetUnits
+	require.Greater(t, leaseBudget, int64(0))
+	require.LessOrEqual(t, maxBound, 8*leaseBudget,
+		"(iii) the largest cold bound (%d units) must be coverable by one settlement: 8 × lease_budget_units %d", maxBound, leaseBudget)
+	t.Logf("test 59: (iii) max bound %d ≤ 8 × lease_budget_units %d = %d", maxBound, leaseBudget, 8*leaseBudget)
+
+	// (ii) orphan_grace_seconds ≥ every finite upstream deadline the config
+	// carries (validated at startup too — computed here for the record).
+	grace := loaded.CanonicalWallet.OrphanGraceSeconds
+	deadlines := map[string]int{
+		"gateway.response_header_timeout":    loaded.Gateway.ResponseHeaderTimeout,
+		"image_stream_data_interval_timeout": loaded.Gateway.ImageStreamDataIntervalTimeout,
+		"openai_response_header_timeout":     loaded.Gateway.OpenAIResponseHeaderTimeout,
+	}
+	for name, seconds := range deadlines {
+		if seconds <= 0 {
+			t.Logf("test 59: (ii) %s = %d (no timeout — skipped)", name, seconds)
+			continue
+		}
+		require.GreaterOrEqual(t, grace, seconds, "(ii) orphan_grace_seconds %d must be ≥ the finite upstream deadline %s = %d", grace, name, seconds)
+		t.Logf("test 59: (ii) orphan_grace_seconds %d ≥ %s %d", grace, name, seconds)
+	}
+}
+
+// TestPhase38LeaseCapCeiling — test 60: max_active_leases reached through
+// the real ensure → the cap refusal on the real route; the per-user held
+// money never exceeds max_active_leases × lease_budget on ShipAny's rows.
+// The driver's routes_on stage sets GATEWAY_WALLET_MAX_ACTIVE_LEASES=2.
+func TestPhase38LeaseCapCeiling(t *testing.T) {
+	e2eRequireStage(t, "routes_on")
+	ctx := context.Background()
+	capLeases := 2
+	if raw := strings.TrimSpace(os.Getenv("WALLET_E2E_MAX_ACTIVE_LEASES")); raw != "" {
+		v, err := strconv.Atoi(raw)
+		require.NoError(t, err)
+		capLeases = v
+	}
+	const budget = int64(500_000_000) // e2eWalletConfig's LeaseBudgetUnits
+	user := e2eUserID("t60")
+	e2eSeed(t, user, int64(capLeases)*budget/1_000_000) // exactly capLeases budgets
+
+	b, _, rdb := e2eBridge(t, config.CanonicalWalletModeEnforce, "off")
+	store := &gatewayCacheAdapterForTest{rdb: rdb}
+	authorize := func() *AuthorizationHandle {
+		h, err := e2eAuthorize(t, ctx, b, "off", user, `{"max_tokens":64}`)
+		require.NoError(t, err)
+		return h
+	}
+	// The 3.6-G test 44 exhaustion pattern: consume each lease through the
+	// reserve script (E = budget/4, four reservations), so the NEXT
+	// authorization's ensure is a real exhaustion-point call.
+	const E = budget / 4
+	exhaust := func(leaseID string, generation int) {
+		for step := 1; step <= 4; step++ {
+			_, err := store.ReserveCanonicalWalletLease(ctx, user, leaseID, "CNY",
+				fmt.Sprintf("evt-t60-%d-%d", generation, step), E, time.Now().UTC())
+			require.NoError(t, err, "generation %d step %d", generation, step)
+		}
+	}
+
+	var leaseIDs []string
+	for i := 1; i <= capLeases; i++ {
+		h := authorize()
+		require.Nil(t, h.Refusal, "lease %d of the cap is issued", i)
+		require.NotContains(t, leaseIDs, h.LeaseID)
+		leaseIDs = append(leaseIDs, h.LeaseID)
+		exhaust(h.LeaseID, i)
+	}
+
+	// The cap is now full of slot-holding leases: the next authorize's
+	// ensure is REFUSED by the real route.
+	_, err := e2eAuthorize(t, ctx, b, "off", user, `{"max_tokens":64}`)
+	require.Error(t, err, "the third ensure hits the cap on the real route")
+	refused, ok := AsAuthorizationRefused(err)
+	require.True(t, ok, "the cap refusal carries the client-visible shape, got %v", err)
+	require.Equal(t, AuthorizationRefusalLeaseCapReached, refused.Reason, "lease_cap_reached — terminal on the authorize path")
+
+	state := e2eInspect(t, user)
+	e2eLogState(t, state)
+	var active int
+	var sumBudget int64
+	for _, l := range state.Leases {
+		if l.Status == "active" {
+			active++
+			sumBudget += l.budgetUnits(t)
+		}
+	}
+	require.Equal(t, capLeases, active, "exactly %d active leases on ShipAny (ids read: %v)", capLeases, state.leaseIDs())
+	require.Equal(t, int64(capLeases)*budget, sumBudget,
+		"Σ budget == %d × lease_budget (%d CNY held at most)", capLeases, int64(capLeases)*budget/10_000_000/10)
+	t.Logf("[shipany] test 60: cap reached — %d active leases %v, Σ budget %d units", active, state.leaseIDs(), sumBudget)
+}
