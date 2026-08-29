@@ -86,6 +86,98 @@ func newLiveFinalizationWithOutboxFixture(t *testing.T, mode string) (*liveAuthT
 	return f, rec, mock
 }
 
+// Phase 3.7b (§13.2.3): finalization is the LAST window. A record with
+// settled windows [a1, a2, 0] finalizes under :window:3's event id, settling
+// exactly units(total) − a1 − a2 with windows[2]'s authorization, and
+// completes with seq = 3.
+func TestTryFinalizeLiveCallSettlesTheLastWindow(t *testing.T) {
+	f, rec, mock := newLiveFinalizationWithOutboxFixture(t, config.CanonicalWalletModeShadow)
+
+	authID := rec.AuthorizationID
+	callHash := rec.CallHash
+	a1, a2 := int64(30_000), int64(20_000)
+	// The record's counters price to a total ABOVE a1+a2: the last window's
+	// amount is the remainder. liveUsageUnits prices (InputTokens −
+	// CacheReadTokens) at the input price: 100 − 10 = 90.
+	inputTokens := 100 - 10
+	actualCost := (float64(inputTokens)*3e-6 + 50*15e-6 + 10*1e-6) * 7.0 * 1.5
+	totalUnits, err := canonicalWalletUnitsFromCNY(actualCost)
+	require.NoError(t, err)
+	require.Greater(t, totalUnits, a1+a2)
+	f.provStore.mu.Lock()
+	f.provStore.records[authID].Windows = []LiveWindow{
+		{WindowSeq: 1, Token: authID + ".1", SettledUnits: a1},
+		{WindowSeq: 2, LeaseID: "lease_2", Token: authID + ".2", SettledUnits: a2},
+		{WindowSeq: 3, LeaseID: "lease_3", Token: authID + ".3"},
+	}
+	f.provStore.mu.Unlock()
+
+	var observedEvent CanonicalWalletSettlementEvent
+	var observedCount atomic.Int64
+	f.svc.canonicalWallet.observedForTest = func(event CanonicalWalletSettlementEvent) {
+		observedEvent = event
+		observedCount.Add(1)
+	}
+	mock.ExpectBegin()
+	mock.ExpectCommit()
+
+	require.True(t, f.svc.tryFinalizeLiveCall(rec))
+	require.NoError(t, mock.ExpectationsWereMet())
+
+	require.Equal(t, int64(1), observedCount.Load())
+	require.Equal(t, callHash+":window:3", observedEvent.GatewayRequestID)
+	require.Equal(t, totalUnits-a1-a2, observedEvent.AmountUnits)
+	require.Equal(t, authID+".3", observedEvent.AuthorizationID)
+	require.Equal(t, authID+".3", observedEvent.AuthorizationToken)
+
+	provRec, err := f.provStore.Get(context.Background(), authID)
+	require.NoError(t, err)
+	require.Equal(t, LiveProvisionalStatusFinalized, provRec.Status)
+	require.Equal(t, totalUnits-a1-a2, provRec.Windows[2].SettledUnits, "CompleteFinalization wrote windows[seq-1] (seq = 3)")
+	require.Equal(t, a1, provRec.Windows[0].SettledUnits, "window 1 untouched")
+	require.Equal(t, a2, provRec.Windows[1].SettledUnits, "window 2 untouched")
+}
+
+// Phase 3.7b (§13.2.3): a last window whose amount is 0 — all usage already
+// settled by earlier windows — finalizes with NO settlement observed, the row
+// still finalized, and liveFinalizedIdleWindow +1 (the idle-window rule at
+// finalization).
+func TestTryFinalizeLiveCallIdleLastWindow(t *testing.T) {
+	f, rec := newLiveFinalizationFixture(t, config.CanonicalWalletModeShadow)
+
+	authID := rec.AuthorizationID
+	totalUnits, err := liveUsageUnits(rec)
+	require.NoError(t, err)
+	require.Greater(t, totalUnits, int64(0))
+	// The reachable zero-remainder shape: window 1 settled EVERYTHING (its
+	// advance recorded its amount); window 2 is the open last window with no
+	// usage since — the last window's own settled amount is excluded from the
+	// remainder by construction (A_n = total − Σ_{k<n}).
+	f.provStore.mu.Lock()
+	f.provStore.records[authID].Windows = []LiveWindow{
+		{WindowSeq: 1, Token: authID + ".1", SettledUnits: totalUnits},
+		{WindowSeq: 2, LeaseID: "lease_2", Token: authID + ".2"},
+	}
+	f.provStore.mu.Unlock()
+
+	var observedCount atomic.Int64
+	f.svc.canonicalWallet.observedForTest = func(event CanonicalWalletSettlementEvent) {
+		observedCount.Add(1)
+	}
+	idleBefore := LiveWindowMetricsSnapshot().IdleFinalized
+
+	require.True(t, f.svc.tryFinalizeLiveCall(rec))
+	require.Equal(t, int64(0), observedCount.Load(), "a zero-remainder last window observes no settlement")
+	require.Equal(t, int64(0), LiveProvisionalMetricsSnapshot().SettlementNotEnqueued)
+
+	provRec, err := f.provStore.Get(context.Background(), authID)
+	require.NoError(t, err)
+	require.Equal(t, LiveProvisionalStatusFinalized, provRec.Status)
+	require.Equal(t, totalUnits, provRec.Windows[0].SettledUnits)
+	require.Equal(t, int64(0), provRec.Windows[1].SettledUnits, "the idle last window completes at zero")
+	require.Equal(t, int64(1), LiveWindowMetricsSnapshot().IdleFinalized-idleBefore)
+}
+
 func TestTryFinalizeLiveCallNilOutboxReleasesClaimAndReturnsActive(t *testing.T) {
 	f, rec := newLiveFinalizationFixture(t, config.CanonicalWalletModeShadow)
 

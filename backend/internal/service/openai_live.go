@@ -49,10 +49,13 @@ type LiveWindowMetrics struct {
 	ReauthRetry   int64
 	Refused       int64
 	RefusedShadow int64
+	// IdleFinalized (§13.2.3): a finalization whose last window carried a
+	// zero remainder — all usage already settled by earlier windows.
+	IdleFinalized int64
 }
 
 var liveWindowMetrics struct {
-	closed, idle, settleRetry, reauthRetry, refused, refusedShadow atomic.Int64
+	closed, idle, settleRetry, reauthRetry, refused, refusedShadow, idleFinalized atomic.Int64
 }
 
 func LiveWindowMetricsSnapshot() LiveWindowMetrics {
@@ -64,6 +67,7 @@ func LiveWindowMetricsSnapshot() LiveWindowMetrics {
 		ReauthRetry:   m.reauthRetry.Load(),
 		Refused:       m.refused.Load(),
 		RefusedShadow: m.refusedShadow.Load(),
+		IdleFinalized: m.idleFinalized.Load(),
 	}
 }
 
@@ -75,6 +79,7 @@ func ResetLiveWindowMetricsForTest() {
 	m.reauthRetry.Store(0)
 	m.refused.Store(0)
 	m.refusedShadow.Store(0)
+	m.idleFinalized.Store(0)
 }
 
 // liveObserverContextProvider (Phase 3.7b Task 4): production observers run
@@ -1469,7 +1474,7 @@ func (s *OpenAIGatewayService) tryFinalizeLiveCall(record *LiveCallRecord) bool 
 	}
 	cost := &CostBreakdown{InputCost: inputCost, OutputCost: outputCost, CacheReadCost: cacheReadCost, TotalCost: sourceCost, ActualCost: actualCost, BillingMode: string(BillingModeToken)}
 
-	applied, billingResult, billingErr := applyUsageBillingDetailed(context.Background(), record.CallHash, usageLog, &postUsageBillingParams{
+	applied, _, billingErr := applyUsageBillingDetailed(context.Background(), record.CallHash, usageLog, &postUsageBillingParams{ // billingResult was only consumed by the pre-3.7b per-session observer call; the last-window event carries the remainder directly (§13.2.3)
 		Cost: cost,
 		User: user, APIKey: apiKey, Account: account, Subscription: subscription,
 		IsSubscriptionBill:    record.SubscriptionBilling,
@@ -1503,22 +1508,84 @@ func (s *OpenAIGatewayService) tryFinalizeLiveCall(record *LiveCallRecord) bool 
 			return false // retried by scheduleLiveFinalizationRetry; QueueLiveFinalization keeps the Redis record
 		}
 		if claimed {
-			cost := &CostBreakdown{InputCost: inputCost, OutputCost: outputCost, CacheReadCost: cacheReadCost, TotalCost: sourceCost, ActualCost: actualCost, BillingMode: string(BillingModeToken)}
-			currency := NormalizeUserBillingCurrency(record.BillingCurrency)
-			eventID := CanonicalWalletSettlementEventID(record.CallHash, user.PlatformUserID, currency)
-			if record.AuthorizationToken != "" && observeCanonicalWalletSettlement(s.canonicalWallet, record.CallHash, user, cost, record.SubscriptionBilling, applied, billingResult, record.AuthorizationToken, record.AuthorizationID) {
-				settledUnits, _ := liveUsageUnits(record)                                                                       // the factored cost block (§13.2.2) — the same arithmetic as the observer's window amounts; the error is discarded only because a true return from the observer implies this same conversion already succeeded inside it — do not reorder
-				if err := s.completeLiveProvisionalFinalization(record.AuthorizationID, eventID, settledUnits, 1); err != nil { // Phase 3.7b Task 2: seq-aware complete; 1 is today's single-window record (Task 5 computes the final seq)
+			// Phase 3.7b (§13.2.3): finalization is the LAST window. The
+			// provisional row names the windows; the final seq is the row's
+			// window count, the amount is the remainder after the settled
+			// windows, and the settlement's authorization is the LAST
+			// window's token. A pre-3.7 record (one window, never advanced)
+			// finalizes exactly as today under seq 1 and the bare call hash.
+			seq := 1
+			settledSum := int64(0)
+			// Window 1's authorization is the record's own (== windows[0].Token
+			// in production; the fixture models the settled token there, and
+			// the pre-3.7 shape must stay byte-for-byte). Windows ≥ 2 carry
+			// their own tokens.
+			eventAuthorizationID := record.AuthorizationID
+			eventAuthorizationToken := record.AuthorizationToken
+			if provRec, provErr := s.liveProvisional.Get(context.Background(), record.AuthorizationID); provErr == nil && len(provRec.Windows) > 0 {
+				seq = len(provRec.Windows)
+				for _, w := range provRec.Windows[:seq-1] {
+					settledSum += w.SettledUnits
+				}
+				if seq > 1 {
+					eventAuthorizationID = provRec.Windows[seq-1].Token
+					eventAuthorizationToken = provRec.Windows[seq-1].Token
+				}
+			}
+			remainder := int64(0)
+			if units, unitsErr := liveUsageUnits(record); unitsErr == nil {
+				remainder = units - settledSum
+				if remainder < 0 {
+					remainder = 0
+				}
+			}
+			if remainder == 0 {
+				// The idle-window rule at finalization: there is nothing to
+				// settle — no observer call, no not-enqueued count; the row
+				// completes with settledUnits = 0.
+				liveWindowMetrics.idleFinalized.Add(1)
+				if err := s.completeLiveProvisionalFinalization(record.AuthorizationID, "", 0, seq); err != nil {
 					logger.L().Error("openai.live_provisional_complete_failed", zap.String("call_hash", record.CallHash), zap.Error(err))
-					return false // the row stays finalizing: "settlement outcome unknown" to Phase 4 — the named residual
+					return false
 				}
 			} else {
-				// The observer's own guards (subscription-billed, non-CNY, zero cost, not applied)
-				// legitimately drop the event, and so does a dropped outbox write — distinguishable
-				// only by the bridge's counters. Release the claim so a later attempt or Phase 4 can
-				// observe again; record no settlement_event_id.
-				authorizationMetrics.liveProvisionalSettlementNotEnqueued.Add(1)
-				s.releaseLiveProvisionalFinalizationClaim(record.AuthorizationID)
+				// The last window's settlement carries the REMAINDER (§13.2.3),
+				// not the session total — observeCanonicalWalletSettlement
+				// derives its amount from the cost, so the event is built
+				// here. The observer's zero-cost guards (subscription-billed,
+				// not applied) route to §11.7's release exactly as before.
+				currency := NormalizeUserBillingCurrency(record.BillingCurrency)
+				requestID := liveWindowRequestID(record.CallHash, seq)
+				eventID := CanonicalWalletSettlementEventID(requestID, user.PlatformUserID, currency)
+				ok := false
+				if !record.SubscriptionBilling && applied {
+					ok = s.canonicalWallet.ObserveSettlement(CanonicalWalletSettlementEvent{
+						GatewayRequestID:   requestID,
+						PlatformUserID:     user.PlatformUserID,
+						Currency:           user.BillingCurrency,
+						AmountUnits:        remainder,
+						OccurredAt:         time.Now().UTC(),
+						AuthorizationToken: eventAuthorizationToken,
+						AuthorizationID:    eventAuthorizationID,
+					})
+				} else {
+					relCtx, relCancel := context.WithTimeout(context.Background(), liveRedisOperationTimeout)
+					s.canonicalWallet.releaseHoldZeroCost(relCtx, user.PlatformUserID, eventAuthorizationID)
+					relCancel()
+				}
+				if eventAuthorizationToken != "" && ok {
+					if err := s.completeLiveProvisionalFinalization(record.AuthorizationID, eventID, remainder, seq); err != nil {
+						logger.L().Error("openai.live_provisional_complete_failed", zap.String("call_hash", record.CallHash), zap.Error(err))
+						return false // the row stays finalizing: "settlement outcome unknown" to Phase 4 — the named residual
+					}
+				} else {
+					// The observer's own guards (subscription-billed, non-CNY, zero cost, not applied)
+					// legitimately drop the event, and so does a dropped outbox write — distinguishable
+					// only by the bridge's counters. Release the claim so a later attempt or Phase 4 can
+					// observe again; record no settlement_event_id.
+					authorizationMetrics.liveProvisionalSettlementNotEnqueued.Add(1)
+					s.releaseLiveProvisionalFinalizationClaim(record.AuthorizationID)
+				}
 			}
 		}
 	}
