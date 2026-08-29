@@ -19,6 +19,11 @@ import (
 type canonicalWalletStoreStub struct {
 	lease      *CanonicalWalletLease
 	reserveErr error
+	// getErr/getCalls (Phase 3.6, test 45): the STORE-OUTAGE injection —
+	// both getters return it (and count the call) so the fail-closed arms
+	// can be driven without Redis; a transport failure is not a cache miss.
+	getErr   error
+	getCalls int
 	// Phase 3.3a: how many times a lease was installed / reserved — the
 	// ensureLease rejection tests assert a rejected grant is never installed.
 	installCalls int
@@ -63,6 +68,10 @@ func (s *canonicalWalletStoreStub) InstallCanonicalWalletLease(_ context.Context
 	return nil
 }
 func (s *canonicalWalletStoreStub) GetCanonicalWalletLease(context.Context, string) (*CanonicalWalletLease, error) {
+	s.getCalls++
+	if s.getErr != nil {
+		return nil, s.getErr
+	}
 	if s.lease == nil {
 		return nil, ErrCanonicalWalletLeaseMissing
 	}
@@ -70,6 +79,10 @@ func (s *canonicalWalletStoreStub) GetCanonicalWalletLease(context.Context, stri
 	return &copy, nil
 }
 func (s *canonicalWalletStoreStub) GetCanonicalWalletLeaseByID(_ context.Context, _, leaseID string) (*CanonicalWalletLease, error) {
+	s.getCalls++
+	if s.getErr != nil {
+		return nil, s.getErr
+	}
 	if s.lease == nil || s.lease.LeaseID != leaseID {
 		return nil, ErrCanonicalWalletLeaseMissing
 	}
