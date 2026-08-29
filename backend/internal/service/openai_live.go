@@ -11,7 +11,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"path"
 	"strings"
 	"sync"
@@ -1154,9 +1153,6 @@ func (s *OpenAIGatewayService) maybeCloseLiveWindow(ctx context.Context, record 
 		if err != nil {
 			// A missing/inactive record parks the clock silently (the unit
 			// fixtures); the loop's own exits handle the terminal cases.
-			if os.Getenv("P37B_DEBUG") != "" {
-				fmt.Fprintf(os.Stderr, "P37B-EXIT load err=%v\n", err)
-			}
 			return nil, nil
 		}
 		st = loaded
@@ -1194,7 +1190,7 @@ func (s *OpenAIGatewayService) maybeCloseLiveWindow(ctx context.Context, record 
 			return st, nil
 		}
 		next := LiveWindow{WindowSeq: st.seq + 1, OpenedAtMS: now.UnixMilli()}
-		if advErr := s.liveProvisional.AdvanceLiveWindow(ctx, st.token, st.seq, 0, next); advErr != nil {
+		if advErr := s.liveProvisional.AdvanceLiveWindow(ctx, st.rowToken, st.seq, 0, next); advErr != nil {
 			liveWindowMetrics.reauthRetry.Add(1)
 			return st, nil
 		}

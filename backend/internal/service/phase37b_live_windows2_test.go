@@ -736,6 +736,64 @@ func TestPhase37bCrashBetweenPendingAndAdvanceReissuesSameAmount(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Test 50(b) — the disabled-mode horizon (§13.2.3, execution review MAJOR-1):
+// in disabled mode no settlement is attempted and the clock advances on the
+// horizon ALONE so the record shape stays uniform. The advance is keyed on
+// the provisional ROW's token — windows ≥ 2 carry no token of their own in
+// disabled mode, so a window-keyed advance loses its CAS on every 250 ms
+// tick past window 1 (reauthRetry climbing, the window list frozen).
+// ---------------------------------------------------------------------------
+
+func TestPhase37bDisabledModeAdvancesOnTheHorizon(t *testing.T) {
+	f := newLiveWindowTestFixture(t, config.CanonicalWalletModeDisabled)
+	// Two lease horizons need ~60 s — outlive the fixture's 60 s session cap
+	// so the max-duration timer cannot race the second horizon.
+	f.cfg.Gateway.Live.MaxSessionDurationSeconds = 180
+	callHash, _ := f.createSession(t)
+
+	// Disabled mode writes no provisional row of its own (saveLiveProvisional
+	// is a no-op there), so seed the row a mid-session mode flip leaves
+	// behind — the record an enforce/shadow session had when the gateway was
+	// turned down to disabled (3.8's rollback shape), the only shape in which
+	// this branch runs. Window 1's token IS the row's token (§13.2.6).
+	rec := f.recordByHash(t, callHash)
+	now := time.Now().UTC()
+	rowToken := "p37b-disabled-row"
+	seed := &LiveProvisionalRecord{
+		Token:             rowToken,
+		AuthorizationID:   rowToken,
+		UserID:            rec.UserID,
+		APIKeyID:          rec.APIKeyID,
+		AccountID:         rec.AccountID,
+		PlatformUserID:    rec.PlatformUserID,
+		BillingCurrency:   rec.BillingCurrency,
+		BillingSnapshotID: rec.BillingSnapshotID,
+		EstimatedUnits:    1_000_000,
+		Status:            LiveProvisionalStatusProvisional,
+		CallHash:          callHash,
+		Windows:           []LiveWindow{{WindowSeq: 1, Token: rowToken, OpenedAtMS: now.UnixMilli()}},
+		CreatedAt:         now,
+	}
+	require.NoError(t, f.provisional.Save(context.Background(), seed))
+	require.NoError(t, f.provisional.Activate(context.Background(), rowToken, callHash, now))
+
+	reauthBefore := LiveWindowMetricsSnapshot().ReauthRetry
+
+	// Two lease horizons (30 s − 50 ms skew each): windows 2 AND 3 appear.
+	prov := f.pollWindowsLen(t, callHash, 3, 70*time.Second)
+
+	var windowsLen int
+	require.NoError(t, f.db.QueryRowContext(f.ctx,
+		`SELECT jsonb_array_length(windows) FROM wallet_live_provisional WHERE call_hash = $1`, callHash).Scan(&windowsLen))
+	require.Equal(t, 3, windowsLen, "jsonb_array_length(windows) == 3 — the clock advanced on the horizon alone")
+	for _, w := range prov.Windows {
+		require.Equal(t, int64(0), w.SettledUnits, "disabled mode settles nothing")
+	}
+	require.Equal(t, reauthBefore, LiveWindowMetricsSnapshot().ReauthRetry,
+		"the horizon advance must never retry: a window-keyed CAS loses on every tick past window 1")
+}
+
+// ---------------------------------------------------------------------------
 // Test 51 — a refused re-authorization closes the session; the invariant's
 // three terms (§13.2.4, §13.3). Legs: (a) balance shortfall; (b)
 // lease_cap_reached under §3.3's cap; (c) shadow admits.
