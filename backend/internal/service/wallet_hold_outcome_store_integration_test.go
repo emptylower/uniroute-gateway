@@ -13,34 +13,22 @@ import (
 	"github.com/google/uuid"
 	_ "github.com/lib/pq"
 	"github.com/stretchr/testify/require"
-	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 )
 
 // startWalletHoldOutcomeTestPostgres applies migration 213 by reading the
-// file directly (the live_provisional_store_integration_test.go:36-39
-// pattern): ApplyMigrations lives in internal/repository, which imports
+// file directly (the live_provisional_store_integration_test.go pattern):
+// ApplyMigrations lives in internal/repository, which imports
 // internal/service — calling it from here would be an import cycle.
+// Phase 3.7c: a database on the one shared container per run; the migration
+// is unchanged.
 func startWalletHoldOutcomeTestPostgres(t testing.TB, ctx context.Context) *sql.DB {
 	t.Helper()
-	container, err := tcpostgres.Run(ctx, "postgres:18.1-alpine3.23",
-		tcpostgres.WithDatabase("wallet_hold_outcome_test"),
-		tcpostgres.WithUsername("postgres"),
-		tcpostgres.WithPassword("postgres"),
-		tcpostgres.BasicWaitStrategies(),
-	)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = container.Terminate(ctx) })
-	connStr, err := container.ConnectionString(ctx, "sslmode=disable")
-	require.NoError(t, err)
-	sqlDB, err := sql.Open("postgres", connStr)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = sqlDB.Close() })
-	require.NoError(t, sqlDB.PingContext(ctx))
+	db := SharedTestPostgresDBForTest(t)
 	sqlContent, err := os.ReadFile(filepath.Join("..", "..", "migrations", "213_wallet_hold_outcome.sql"))
 	require.NoError(t, err)
-	_, err = sqlDB.ExecContext(ctx, string(sqlContent))
+	_, err = db.ExecContext(ctx, string(sqlContent))
 	require.NoError(t, err)
-	return sqlDB
+	return db
 }
 func TestWalletHoldOutcomeStoreWriters(t *testing.T) {
 	ctx := context.Background()

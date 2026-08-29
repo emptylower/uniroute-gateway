@@ -13,25 +13,14 @@ import (
 	"github.com/google/uuid"
 	_ "github.com/lib/pq"
 	"github.com/stretchr/testify/require"
-	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 )
 
 func startLiveProvisionalTestPostgres(t testing.TB, ctx context.Context) *sql.DB {
 	t.Helper()
-	container, err := tcpostgres.Run(ctx, "postgres:18.1-alpine3.23",
-		tcpostgres.WithDatabase("live_provisional_test"),
-		tcpostgres.WithUsername("postgres"),
-		tcpostgres.WithPassword("postgres"),
-		tcpostgres.BasicWaitStrategies(),
-	)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = container.Terminate(ctx) })
-	connStr, err := container.ConnectionString(ctx, "sslmode=disable")
-	require.NoError(t, err)
-	db, err := sql.Open("postgres", connStr)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-	require.NoError(t, db.PingContext(ctx))
+	// Phase 3.7c: a database on the one shared container per run; the
+	// migration below is unchanged (this helper's contract is a fresh
+	// *sql.DB with migration 211 applied).
+	db := SharedTestPostgresDBForTest(t)
 
 	sqlContent, err := os.ReadFile(filepath.Join("..", "..", "migrations", "211_wallet_live_provisional.sql"))
 	require.NoError(t, err)

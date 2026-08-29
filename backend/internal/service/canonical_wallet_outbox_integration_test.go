@@ -16,7 +16,6 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	_ "github.com/lib/pq"
-	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -24,16 +23,11 @@ import (
 
 func startCanonicalWalletTestPostgres(t *testing.T, ctx context.Context) *sql.DB {
 	t.Helper()
-	container, err := tcpostgres.Run(ctx, "postgres:18.1-alpine3.23", tcpostgres.WithDatabase("wallet_outbox_test"), tcpostgres.WithUsername("postgres"), tcpostgres.WithPassword("postgres"), tcpostgres.BasicWaitStrategies())
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = container.Terminate(ctx) })
-	connStr, err := container.ConnectionString(ctx, "sslmode=disable")
-	require.NoError(t, err)
-	db, err := sql.Open("postgres", connStr)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-	require.NoError(t, db.PingContext(ctx))
-	_, err = db.ExecContext(ctx, `
+	// Phase 3.7c: a database on the one shared container per run (the DDL
+	// below is unchanged — this helper's contract is a fresh *sql.DB with
+	// exactly the outbox table).
+	db := SharedTestPostgresDBForTest(t)
+	_, err := db.ExecContext(ctx, `
 		CREATE TABLE wallet_settlement_outbox (
 			id BIGSERIAL PRIMARY KEY, event_id TEXT NOT NULL UNIQUE, platform_user_id TEXT NOT NULL,
 			lease_id TEXT, gateway_request_id TEXT NOT NULL, currency TEXT NOT NULL,
