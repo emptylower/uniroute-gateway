@@ -779,6 +779,8 @@ type canonicalWalletMetrics struct {
 	settlementSplitFull      atomic.Int64
 	settlementSplitExhausted atomic.Int64
 	pendingReleaseReplayed   atomic.Int64
+	// Phase 3.7a (§13.2.8): the reactive split's seal of the refusing lease.
+	settlementSplitSealed atomic.Int64
 	// Phase 3.5 (§11.4): the late capture and the receivable gauge.
 	lateCaptureRetargeted        atomic.Int64
 	settlementUncollectableUnits atomic.Int64
@@ -831,6 +833,7 @@ func CanonicalWalletBridgeStats() map[string]int64 {
 		"settlement_split":                 m.settlementSplit.Load(),
 		"settlement_split_full":            m.settlementSplitFull.Load(),
 		"settlement_split_exhausted":       m.settlementSplitExhausted.Load(),
+		"settlement_split_sealed":          m.settlementSplitSealed.Load(),
 		"pending_release_replayed":         m.pendingReleaseReplayed.Load(),
 		"late_capture_retargeted":          m.lateCaptureRetargeted.Load(),
 		"settlement_uncollectable_units":   m.settlementUncollectableUnits.Load(),
@@ -1836,6 +1839,19 @@ func (b *CanonicalWalletBridge) splitOutboxEvent(ctx context.Context, e Canonica
 		if cerr := b.outbox.ClearPendingRelease(ctx, e.ID); cerr != nil {
 			slog.Warn("canonical wallet split release clear failed — the next delivery replays it through the release marker", "event_id", e.EventID, "error", cerr)
 			return
+		}
+		// §13.2.8 — the same seal as §11.4's late capture: consumed = budget
+		// so the hash never covers again, the current pointer dropped if it
+		// names this lease, the hash kept so the parent's marker still
+		// resolves. Without it the remainder's ensureLease(settle, "") would
+		// return this lease as covering (RemainingUnits() ignores
+		// released_units) and burn split depth on the one that refused. A
+		// seal failure is logged, not fatal — it degrades to the pre-existing
+		// depth-burn behaviour.
+		if _, _, sealErr := b.store.SealCanonicalWalletLease(ctx, e.PlatformUserID, lease.LeaseID); sealErr != nil && !errors.Is(sealErr, ErrCanonicalWalletLeaseMissing) {
+			slog.Warn("canonical wallet split seal failed — the remainder may rebind to the refusing lease", "event_id", e.EventID, "lease_id", lease.LeaseID, "error", sealErr)
+		} else {
+			canonicalWalletBridgeMetrics.settlementSplitSealed.Add(1)
 		}
 	}
 	if headroomUnits == 0 {

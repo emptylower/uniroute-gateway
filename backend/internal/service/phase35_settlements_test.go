@@ -476,29 +476,107 @@ func TestPhase35OverCaptureSplits(t *testing.T) {
 		}
 		fake.mu.Unlock()
 		require.Equal(t, A-H, settleCaptured, "the remainder captured on a settle-purpose lease")
-		// The lease's identity: consumed A == captured H + released (A − H) —
-		// this event's figures on L, in PRE-seAL form (§10.2: the seal caps
-		// the stored consumed at budget; the identity is what rides the
-		// drain wire). The remainder's ensure sealed L and drained it with
-		// exactly these figures.
+		// The lease after §13.2.8: the SPLIT sealed L itself (consumed =
+		// budget, current pointer gone) immediately after the partial
+		// release, so the remainder's ensure found no cached lease to seal —
+		// NO drain entry names L and the wire never carries the pre-seal
+		// figures (the pre-3.7a drain, sent by the remainder's ensure with
+		// consumed == A, is gone with the rebinding it existed for). The
+		// hash keeps the partial release's figure; the server view carries
+		// the seed plus H (== budget); L is never covering again.
 		rawReleased, err := rdb.HGet(ctx, testCanonicalWalletLeaseKey(user, L), "released_units").Int64()
 		require.NoError(t, err)
 		require.Equal(t, A-H, rawReleased)
+		rawConsumed, err := rdb.HGet(ctx, testCanonicalWalletLeaseKey(user, L), "consumed_units").Int64()
+		require.NoError(t, err)
+		require.Equal(t, int64(500_000_000), rawConsumed, "the split's seal set consumed == budget")
 		fake.mu.Lock()
-		var drainedConsumed, drainedReleased int64
+		drainsForL := 0
 		for _, req := range fake.requests {
 			for _, d := range req.Drained {
 				if d.LeaseID == L {
-					drainedConsumed = mustUnits(d.GatewayConsumed)
-					if d.GatewayReleased != nil {
-						drainedReleased = mustUnits(*d.GatewayReleased)
-					}
+					drainsForL++
 				}
 			}
 		}
 		fake.mu.Unlock()
-		require.Equal(t, A, drainedConsumed, "the drain carried pre-seal consumed == A")
-		require.Equal(t, A-H, drainedReleased, "the drain carried released == A − H")
+		require.Equal(t, 0, drainsForL, "no drain names L — the split sealed it before the remainder's ensure")
+	})
+
+	// §13.2.8 (Task 3's leg): a SMALL A — below the cached lease's own
+	// remaining — is §11.3's residual. Without the seal, the remainder's
+	// ensureLease(settle, "") returns the cached L (RemainingUnits() ignores
+	// released_units) and burns split depth on the lease that just refused;
+	// the reactive split now seals L after the partial release, so the
+	// remainder re-targets a FRESH lease at depth 1.
+	t.Run("a small A re-targets the remainder to a fresh lease", func(t *testing.T) {
+		db, outbox := p35Outbox(t)
+		fake := newFakeEnsureControlPlane(t, func() time.Time { return now })
+		user := "shipany-user-" + uuid.NewString()
+		fake.fund(user, 1_000_000_000) // two leases of LeaseBudgetUnits (500M)
+		const smallA = int64(40_000_000)
+		const smallH = int64(10_000_000)
+		const L5 = "srv-split-l5"
+		seedOverCapturable(t, fake, store, user, L5, smallH)
+		b := p34DispatcherBridge(t, fake, store, db, outbox, now)
+		exhaustedBase := canonicalWalletBridgeMetrics.settlementSplitExhausted.Load()
+		fake.mu.Lock()
+		issuancesBase := fake.issuances
+		fake.mu.Unlock()
+
+		require.True(t, b.ObserveSettlement(CanonicalWalletSettlementEvent{
+			GatewayRequestID: "req-35-34e", PlatformUserID: user, Currency: "CNY", AmountUnits: smallA, LeaseID: L5, OccurredAt: now,
+		}))
+		eventID := CanonicalWalletSettlementEventID("req-35-34e", user, "CNY")
+		p34WaitOutboxStatus(t, ctx, db, "req-35-34e", "delivered")
+		p35WaitRemainderDelivered(t, ctx, db, eventID+":r1")
+
+		// the parent captured H on L; the remainder delivered on a lease ≠ L
+		fake.mu.Lock()
+		require.Equal(t, int64(500_000_000), fake.lease(user, L5).Captured, "the seed 490M plus exactly H")
+		require.Equal(t, 1, fake.issuances-issuancesBase, "the remainder was issued a FRESH settle lease")
+		fake.mu.Unlock()
+		remainderRow := p35ReadRow(t, ctx, db, eventID+":r1")
+		require.Equal(t, "delivered", remainderRow.Status)
+		require.True(t, remainderRow.LeaseID.Valid, "the remainder row is bound to its delivery lease")
+		require.NotEqual(t, L5, remainderRow.LeaseID.String, "the remainder delivered on a lease other than the refusing L")
+		var depth int
+		require.NoError(t, db.QueryRowContext(ctx, `SELECT split_depth FROM wallet_settlement_outbox WHERE event_id = $1`, eventID+":r1").Scan(&depth))
+		require.Equal(t, 1, depth, "split_depth == 1 — no depth burned on the refusing lease")
+		require.Equal(t, int64(0), canonicalWalletBridgeMetrics.settlementSplitExhausted.Load()-exhaustedBase, "no split_exhausted")
+		var deadLetters int
+		require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM wallet_settlement_outbox WHERE platform_user_id = $1 AND status = 'dead_letter'`, user).Scan(&deadLetters))
+		require.Equal(t, 0, deadLetters, "no dead_letter (split_exhausted or attempts_exhausted) for this user")
+
+		// L's hash shows the seal: consumed == budget, the current pointer no
+		// longer names L — and the hash itself is KEPT so the parent's marker
+		// still resolves.
+		require.Equal(t, "500000000", p34bHashField(t, ctx, store, user, L5, "consumed_units"), "the seal set consumed == budget")
+		if current, err := store.GetCanonicalWalletLease(ctx, user); err == nil {
+			require.NotEqual(t, L5, current.LeaseID, "redis.current(user) no longer names L")
+		} else {
+			require.ErrorIs(t, err, ErrCanonicalWalletLeaseMissing, "the current pointer is gone or names another lease")
+		}
+
+		// the parent's marker still resolves: a redelivery of the captured
+		// parent is a duplicate, not a capture (the existing leg's property)
+		fake.mu.Lock()
+		capturedBefore := fake.lease(user, L5).Captured
+		fake.mu.Unlock()
+		var id int64
+		require.NoError(t, db.QueryRowContext(ctx,
+			`UPDATE wallet_settlement_outbox SET status = 'in_flight', claimed_by = $2, claimed_at = now() WHERE event_id = $1 RETURNING id`,
+			eventID, b.workerID).Scan(&id))
+		b.deliverOutboxEvent(ctx, CanonicalWalletOutboxEvent{
+			ID: id, EventID: eventID, GatewayRequestID: "req-35-34e", PlatformUserID: user, LeaseID: L5,
+			Currency: "CNY", AmountUnits: smallH, OccurredAt: now,
+		})
+		status, err := outbox.OutboxEventStatus(ctx, id)
+		require.NoError(t, err)
+		require.Equal(t, "delivered", status, "a redelivery of the captured parent is a duplicate, not an error")
+		fake.mu.Lock()
+		require.Equal(t, capturedBefore, fake.lease(user, L5).Captured, "the sealed lease's marker still resolves — nothing was captured twice")
+		fake.mu.Unlock()
 	})
 
 	t.Run("H = 0 is split_full", func(t *testing.T) {
