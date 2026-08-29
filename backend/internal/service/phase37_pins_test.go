@@ -10,6 +10,7 @@ package service
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -33,6 +34,22 @@ func (c *countingOutbox) ClaimPendingOutboxEvents(ctx context.Context, workerID 
 	return c.CanonicalWalletOutboxStore.ClaimPendingOutboxEvents(ctx, workerID, limit)
 }
 
+// hangingRoundTripper (3.7a review note 2) holds every request inside the
+// transport until the request's own context cancels: the enqueued row's
+// delivery is thereby provably IN FLIGHT when Close runs — entry is
+// signalled, then the RoundTrip blocks — while the request never reaches
+// the fake (no handler delay, no f.mu contention for the reaper leg below).
+type hangingRoundTripper struct{ entered chan struct{} }
+
+func (h *hangingRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) {
+	select {
+	case h.entered <- struct{}{}:
+	default:
+	}
+	<-r.Context().Done()
+	return nil, r.Context().Err()
+}
+
 // TestPhase37DispatcherStopsOnClose (redesign §13.2.6): Close stops BOTH tick
 // loops — the dispatcher's claim counter and the reaper's reaper_ticks are
 // unchanged across a ten-tick window after Close returns, and Close is
@@ -53,7 +70,8 @@ func TestPhase37DispatcherStopsOnClose(t *testing.T) {
 	cfg.ControlPlaneURL, cfg.Secret = fake.Server.URL, strings.Repeat("s", 32)
 	cfg.ExpirySkewMarginMS, cfg.RequestTimeoutMS = 50, 20 // a 20 ms tick
 	cfg.LeaseBudgetUnits = 500_000_000
-	client := newCanonicalWalletHTTPClient(cfg, fake.Server.Client())
+	hanging := &hangingRoundTripper{entered: make(chan struct{}, 1)}
+	client := newCanonicalWalletHTTPClient(cfg, &http.Client{Transport: hanging})
 	client.now = func() time.Time { return now }
 	b := newCanonicalWalletBridge(cfg, store, client, db, counting, 0, func() time.Time { return now })
 	t.Cleanup(b.Close)
@@ -66,8 +84,24 @@ func TestPhase37DispatcherStopsOnClose(t *testing.T) {
 	}
 	require.GreaterOrEqual(t, counting.claims.Load(), int64(3), "the dispatcher loop is live")
 
+	// Review note 2: make the in-flight clause below true instead of
+	// dropping it — enqueue one settlement row; its delivery's ensure POST
+	// (a lease-less row resolves its lease first) is signalled and held in
+	// the hanging transport until the per-event context cancels, so a
+	// delivery is in flight across the Close that follows.
+	require.True(t, b.ObserveSettlement(CanonicalWalletSettlementEvent{
+		GatewayRequestID: "req-37a-stop-in-flight", PlatformUserID: user, Currency: "CNY", AmountUnits: 1_000_000, OccurredAt: now,
+	}))
+	select {
+	case <-hanging.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the enqueued row's delivery never started — no delivery could be in flight at Close")
+	}
+
 	// Close blocks until both loops have exited — it must return well inside
-	// the two-second bound even with a delivery in flight.
+	// the two-second bound even with a delivery in flight (the row above:
+	// its ensure POST sits in the transport until the 20 ms per-event
+	// context cancels, then the loop observes stop and exits).
 	closed := make(chan struct{})
 	go func() {
 		b.Close()
@@ -79,8 +113,10 @@ func TestPhase37DispatcherStopsOnClose(t *testing.T) {
 		t.Fatal("Close did not return within 2 s")
 	}
 
-	// The ONE permitted wait in this plan (constraint 4): the absence of
-	// further claims cannot be polled for — ten ticks of the 20 ms loop.
+	// Absence window 1 of the plan's TWO (constraint 4): the absence of a
+	// further claim cannot be polled for — there is no positive event to
+	// await — so ten ticks of the 20 ms loop must pass silent. The reaper
+	// leg below carries absence window 2 for the same reason.
 	claimsAtClose := counting.claims.Load()
 	<-time.After(200 * time.Millisecond)
 	require.Equal(t, claimsAtClose, counting.claims.Load(), "no further claim after Close")
@@ -105,6 +141,11 @@ func TestPhase37DispatcherStopsOnClose(t *testing.T) {
 	reaper := newCanonicalWalletBridge(holdCfg, store, holdClient, db, counting, 0, func() time.Time { return now })
 	t.Cleanup(reaper.Close)
 
+	// Review note 3: the delta below is asserted on the GLOBAL
+	// canonicalWalletBridgeMetrics.reaperTicks — sound only because this
+	// integration package runs strictly sequentially and every bridge is
+	// closed at its cleanup (both properties verified by the 3.7a review);
+	// 3.7c makes the same two properties load-bearing for its shared Redis.
 	ticksBase := canonicalWalletBridgeMetrics.reaperTicks.Load()
 	deadline = time.Now().Add(30 * time.Second)
 	for canonicalWalletBridgeMetrics.reaperTicks.Load() == ticksBase && time.Now().Before(deadline) {
@@ -113,6 +154,8 @@ func TestPhase37DispatcherStopsOnClose(t *testing.T) {
 	require.Greater(t, canonicalWalletBridgeMetrics.reaperTicks.Load(), ticksBase, "the reaper loop is live")
 	reaper.Close()
 	ticksAtClose := canonicalWalletBridgeMetrics.reaperTicks.Load()
+	// Absence window 2 of 2 (constraint 4): as above, the absence of a
+	// further reaper tick has no positive form to poll for.
 	<-time.After(200 * time.Millisecond)
 	require.Equal(t, ticksAtClose, canonicalWalletBridgeMetrics.reaperTicks.Load(), "reapOnce is never entered again after Close")
 }

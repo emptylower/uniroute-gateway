@@ -325,10 +325,19 @@ func TestPhase37WSContinuationInvariant(t *testing.T) {
 	require.NoError(t, err)
 	harness.closeClientAndWait(t)
 
-	close(records)
+	// Review note 4: the channel is drained, never closed — the harness
+	// signals authCalls BEFORE authFn runs, so closeClientAndWait does not
+	// provably happen-after every records send, and a late AuthorizeTurn
+	// would panic on send-to-closed; a late send to this buffered,
+	// unread-again channel is harmless. Reads are bounded by a deadline.
 	var recs []turnRecord
-	for r := range records {
-		recs = append(recs, r)
+	drainDeadline := time.Now().Add(5 * time.Second)
+	for len(recs) < 2 && time.Now().Before(drainDeadline) {
+		select {
+		case r := <-records:
+			recs = append(recs, r)
+		case <-time.After(100 * time.Millisecond):
+		}
 	}
 	require.Len(t, recs, 2)
 	r1, r2 := recs[0], recs[1]
@@ -341,7 +350,9 @@ func TestPhase37WSContinuationInvariant(t *testing.T) {
 	require.Equal(t, 30, r2.estimate.PriorTurnOutputTokens)
 
 	// Per-turn differential invariant: settled_k ≤ h_k.EstimatedUnits, with
-	// settled_k priced from the SAME snapshot the authorizer used.
+	// settled_k priced from the SAME snapshot the authorizer used. Loose
+	// form: 30/40 output tokens against the 512 bound clears it by ~17× —
+	// the tight case is test 46 leg 1 (integration tag, phase37_pins_test.go).
 	settled := func(in, out int) int64 {
 		cost, cerr := auth.snapshots.billing.CalculateCostFromSnapshot(snap, SnapshotSettlementInput{Tokens: UsageTokens{InputTokens: in, OutputTokens: out}})
 		require.NoError(t, cerr)
