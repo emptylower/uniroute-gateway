@@ -534,8 +534,13 @@ func TestPhase37bWindowsCloseSettleAndReauthorize(t *testing.T) {
 		rec := f.provRecord(t, callHash)
 		require.Len(t, rec.Windows, 1, "the window must not close before live_window_min_seconds")
 
-		// Advance fake clock past the 5s floor
-		f.clock.Advance(6 * time.Second)
+		// The negative edge: advance to just BELOW the 5 s floor and re-assert.
+		f.clock.Advance(4900 * time.Millisecond)
+		rec = f.provRecord(t, callHash)
+		require.Len(t, rec.Windows, 1, "the window must not close before live_window_min_seconds")
+
+		// Then past it.
+		f.clock.Advance(1100 * time.Millisecond)
 
 		// Closes past the floor: len == 2, window 1 settled to its exact usage.
 		prov = f.pollWindowsLen(t, callHash, 2, 8*time.Second)
@@ -885,6 +890,7 @@ func TestPhase37bDisabledModeAdvancesOnTheHorizon(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestPhase37bRefusedReauthorizations(t *testing.T) {
+	refusedShadowBefore := LiveWindowMetricsSnapshot().RefusedShadow
 	sh := newLiveWindowShared(t)
 
 	// Fixture 1: Enforce Mode — Balance Shortfall
@@ -1028,7 +1034,7 @@ func TestPhase37bRefusedReauthorizations(t *testing.T) {
 	t.Run("ShadowAdmits", func(t *testing.T) {
 		prov := f3.provRecord(t, callHash3)
 		require.GreaterOrEqual(t, len(prov.Windows), 2, "the refused window advanced in shadow")
-		require.Equal(t, int64(1), LiveWindowMetricsSnapshot().RefusedShadow)
+		require.Equal(t, refusedShadowBefore+1, LiveWindowMetricsSnapshot().RefusedShadow)
 		require.NotEqual(t, LiveControllerClosed, f3.recordByHash(t, callHash3).Controller, "no hard stop in shadow")
 		require.Empty(t, f3.holdIDs(t), "the next window opens with no hold")
 		select {
@@ -1207,4 +1213,104 @@ func TestPhase37bLiveClockSeam(t *testing.T) {
 		svc.SetLiveClockForTest(staticLiveClock{t: pinned})
 		require.Equal(t, pinned, svc.liveNow())
 	})
+}
+
+// TestPhase37bLiveClockSplitIsPinned (Phase 4.4-G, MAJOR-2) pins the
+// split between converted (fake-clock driven) and never-converted (wall-clock
+// driven) time sites. With a fixture whose liveClock is advanced by one hour,
+// driving a session far enough to write a provisional record, a settlement,
+// and a heartbeat proves that:
+//   1. wallet_live_provisional.created_at (openai_live.go:390)
+//   2. the controller heartbeat (openai_live.go:1030)
+//   3. the settlement's occurred_at (openai_live.go:1608)
+// all remain within a few seconds of wall-clock time.Now(), NOT of the
+// advanced fake clock (+1 hour).
+//
+// This test explicitly guards the eight never-converted sites:
+//   - openai_live.go:390 (CreatedAt on provisional row creation)
+//   - openai_live.go:924 (TakeOverLiveObserver staleBefore threshold)
+//   - openai_live.go:1030 (HeartbeatLiveController periodic heartbeat)
+//   - openai_live.go:1608 (OccurredAt on settlement outbox insertion)
+//   - openai_live.go:1893 (Abort live provisional timestamp)
+//   - openai_live.go:1906 (Activate live provisional timestamp)
+//   - openai_live.go:1919 (ClaimFinalization live provisional timestamp)
+//   - openai_live.go:1928 (CompleteFinalization live provisional timestamp)
+func TestPhase37bLiveClockSplitIsPinned(t *testing.T) {
+	f := newLiveWindowTestFixture(t, config.CanonicalWalletModeEnforce)
+
+	// Advance fake clock by one full hour BEFORE session creation
+	f.clock.Advance(1 * time.Hour)
+	advanceOrigin := time.Now().UTC()
+
+	callHash, created := f.createSession(t)
+	require.NotNil(t, created)
+
+	// 1. wallet_live_provisional.created_at stays wall-clock (openai_live.go:390)
+	prov := f.provRecord(t, callHash)
+	require.WithinDuration(t, advanceOrigin, prov.CreatedAt, 10*time.Second,
+		"wallet_live_provisional.created_at must be within seconds of wall-clock time, not advanced fake clock")
+	require.True(t, f.clock.Now().Sub(prov.CreatedAt) > 50*time.Minute,
+		"created_at must not track the 1-hour advanced fake clock")
+
+	// 2. Controller heartbeat stays wall-clock (openai_live.go:1030)
+	var heartbeat time.Time
+	heartbeatDeadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(heartbeatDeadline) {
+		state, err := f.liveStore.GetLiveControllerState(f.ctx, callHash)
+		if err == nil && !state.HeartbeatAt.IsZero() {
+			heartbeat = state.HeartbeatAt
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	require.False(t, heartbeat.IsZero(), "controller heartbeat must be recorded")
+	require.WithinDuration(t, advanceOrigin, heartbeat, 10*time.Second,
+		"controller heartbeat must be within seconds of wall-clock time, not advanced fake clock")
+	require.True(t, f.clock.Now().Sub(heartbeat) > 50*time.Minute,
+		"controller heartbeat must not track the 1-hour advanced fake clock")
+
+	// Pump usage and advance fake clock past floor to close window 1
+	E := prov.EstimatedUnits
+	tokens := int(math.Ceil(2 * float64(E) / f.unitsPerOutputToken(t, callHash)))
+	f.pumpUsage("resp-split-pin-1", 0, tokens)
+
+	// Negative boundary check: advance 4900ms, window 1 must still be open
+	f.clock.Advance(4900 * time.Millisecond)
+	rec := f.provRecord(t, callHash)
+	require.Len(t, rec.Windows, 1, "the window must not close before live_window_min_seconds")
+
+	// Advance past floor and poll for window 2
+	f.clock.Advance(1100 * time.Millisecond)
+	prov = f.pollWindowsLen(t, callHash, 2, 8*time.Second)
+	require.NotNil(t, prov)
+
+	// Pump tail usage on window 2, then finalize the session
+	tailTokens := 1000
+	f.pumpUsage("resp-split-pin-tail", 0, tailTokens)
+
+	// End the session: fake sideband emits session.closed
+	f.conn.reads <- liveTestFrame{messageType: coderws.MessageText, payload: []byte(`{"type":"session.closed"}`)}
+
+	// The provisional row reaches finalized (poll under deadline)
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		prov = f.provRecord(t, callHash)
+		if prov.Status == LiveProvisionalStatusFinalized {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	require.Equal(t, LiveProvisionalStatusFinalized, prov.Status, "the row finalizes after session.closed")
+
+	// 3. Settlement occurred_at stays wall-clock (openai_live.go:1608)
+	id2 := CanonicalWalletSettlementEventID(liveWindowRequestID(callHash, 2), f.user.PlatformUserID, "CNY")
+	f.waitDeliveredThroughFake(t, id2, 15*time.Second)
+
+	var occurredAt time.Time
+	err := f.db.QueryRowContext(f.ctx, `SELECT occurred_at FROM wallet_settlement_outbox WHERE event_id = $1`, id2).Scan(&occurredAt)
+	require.NoError(t, err)
+	require.WithinDuration(t, advanceOrigin, occurredAt, 10*time.Second,
+		"settlement occurred_at must be within seconds of wall-clock time, not advanced fake clock")
+	require.True(t, f.clock.Now().Sub(occurredAt) > 50*time.Minute,
+		"settlement occurred_at must not track the 1-hour advanced fake clock")
 }
