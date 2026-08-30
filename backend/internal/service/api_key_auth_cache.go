@@ -32,7 +32,15 @@ type APIKeyAuthSnapshot struct {
 
 // APIKeyAuthUserSnapshot 用户快照
 type APIKeyAuthUserSnapshot struct {
-	ID              int64   `json:"id"`
+	ID int64 `json:"id"`
+	// PlatformUserID (canonical wallet, redesign §3, §8): the ShipAny
+	// identity behind this Sub2API user. The authorizer and
+	// checkBalanceEligibility's enforce-mode branch read it off the User
+	// this snapshot round-trips through the auth cache — omitted here
+	// once made every real gateway request refuse identity_missing
+	// regardless of the column's DB value, because the snapshot (not the
+	// DB query) is what the hot path actually reads back.
+	PlatformUserID  string  `json:"platform_user_id,omitempty"`
 	Status          string  `json:"status"`
 	Role            string  `json:"role"`
 	Balance         float64 `json:"balance"`

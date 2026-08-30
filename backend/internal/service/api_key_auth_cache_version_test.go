@@ -42,6 +42,44 @@ func TestAPIKeyService_RejectsV10AuthSnapshotWithoutModelsListConfig(t *testing.
 	}
 }
 
+func TestAPIKeyService_RejectsV19AuthSnapshotWithoutPlatformUserID(t *testing.T) {
+	svc := &APIKeyService{}
+
+	apiKey, ok, err := svc.applyAuthCacheEntry("k-legacy-no-platform-user-id", &APIKeyAuthCacheEntry{
+		Snapshot: &APIKeyAuthSnapshot{Version: 19},
+	})
+
+	if err != nil {
+		t.Fatalf("expected stale snapshot to be ignored without error, got %v", err)
+	}
+	if ok {
+		t.Fatal("expected v19 auth snapshot to be rejected after platform_user_id was added")
+	}
+	if apiKey != nil {
+		t.Fatalf("expected no API key from stale snapshot, got %#v", apiKey)
+	}
+}
+
+func TestAPIKeyService_AuthSnapshotRoundTripsPlatformUserID(t *testing.T) {
+	svc := &APIKeyService{}
+	snapshot := svc.snapshotFromAPIKey(t.Context(), &APIKey{
+		ID: 1, UserID: 2, Status: StatusActive,
+		User: &User{ID: 2, Status: StatusActive, PlatformUserID: "shipany-user-7d08ed79"},
+	})
+
+	if snapshot == nil {
+		t.Fatal("expected snapshot")
+	}
+	if snapshot.User.PlatformUserID != "shipany-user-7d08ed79" {
+		t.Fatalf("expected platform_user_id to survive the snapshot, got %q", snapshot.User.PlatformUserID)
+	}
+
+	restored := svc.snapshotToAPIKey("key", snapshot)
+	if restored.User.PlatformUserID != "shipany-user-7d08ed79" {
+		t.Fatalf("expected platform_user_id to survive the round trip, got %q", restored.User.PlatformUserID)
+	}
+}
+
 func TestAPIKeyService_RejectsV15AuthSnapshotWithoutReasoningEffortPolicy(t *testing.T) {
 	svc := &APIKeyService{}
 
