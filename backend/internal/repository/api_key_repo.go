@@ -172,6 +172,15 @@ func (r *apiKeyRepository) GetByKeyForAuth(ctx context.Context, key string) (*se
 				user.FieldRole,
 				user.FieldBalance,
 				user.FieldConcurrency,
+				// canonical wallet (redesign §3, §8): the authorizer and
+				// checkBalanceEligibility's enforce-mode branch read
+				// user.PlatformUserID / user.BillingCurrency off this SAME
+				// struct (handler passes routedKey.User straight through to
+				// RecordUsage) — omitted here since before this field
+				// existed, every real gateway request reads
+				// identity_missing regardless of the column's DB value.
+				user.FieldPlatformUserID,
+				user.FieldBillingCurrency,
 				user.FieldBalanceNotifyEnabled,
 				user.FieldBalanceNotifyThresholdType,
 				user.FieldBalanceNotifyThreshold,
