@@ -27,25 +27,6 @@ func RegisterAdminRoutes(
 	admin.Use(gin.HandlerFunc(auditLog))
 	admin.Use(middleware.AdminComplianceGuard(settingService))
 
-	// Phase 4.1-G (redesign §15.3): the reconciliation read group — a
-	// SIBLING of the admin group that replaces ONLY the admin JWT link
-	// with the machine-to-machine token gate and keeps the chain's other
-	// links (the panel rate limiter and the audit log; every call is
-	// audited under service:shipany-reconciliation). AdminComplianceGuard
-	// is deliberately omitted: it gates a human admin's compliance
-	// acceptance, which a machine principal has no way to give. The group
-	// is mounted only when canonical_wallet.reconciliation_read_token is
-	// configured — an undeployed key is inert (the paths 404).
-	if h.Admin.WalletReconciliation != nil {
-		if token := h.Admin.WalletReconciliation.ReadToken(); token != "" {
-			recon := v1.Group("/admin/wallet/reconciliation")
-			recon.Use(middleware.NewWalletReconciliationTokenAuth(token))
-			recon.Use(panelRateLimiter.Global())
-			recon.Use(gin.HandlerFunc(auditLog))
-			recon.GET("/summary", h.Admin.WalletReconciliation.Summary)
-			recon.GET("/watermark", h.Admin.WalletReconciliation.Watermark)
-		}
-	}
 	{
 		// 部署与运营合规确认
 		registerAdminComplianceRoutes(admin, h)
@@ -770,6 +751,44 @@ func registerChannelMonitorRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		templates.GET("/:id/monitors", h.Admin.ChannelMonitorTemplate.AssociatedMonitors)
 		templates.POST("/:id/apply", h.Admin.ChannelMonitorTemplate.Apply)
 	}
+}
+
+// RegisterWalletReconciliationRoutes mounts the Phase 4.1-G (redesign
+// §15.3) reconciliation read group — a machine-to-machine SIBLING of the
+// human admin group, not a member of it. It is deliberately registered
+// OUTSIDE RegisterAdminRoutes and outside the caller's DataPlaneOnly gate:
+// in a ShipAny data-plane-only deployment (SERVER_DATA_PLANE_ONLY=true)
+// RegisterAdminRoutes never runs at all, and this endpoint is exactly the
+// one ShipAny's own reconciliation cron calls in that exact shape — gating
+// it on "no human admin panel here" made it unreachable by construction,
+// discovered when the runbook's §1.7 cron reconcile step 404'd end to end
+// despite a correctly configured token (root-caused via wire_gen.go's
+// call graph, not a config or token problem). It keeps the same links the
+// admin group gave it (the panel rate limiter and the audit log; every
+// call is audited under service:shipany-reconciliation) and the same
+// exclusion (AdminComplianceGuard gates a human admin's compliance
+// acceptance, which a machine principal has no way to give). Mounted only
+// when canonical_wallet.reconciliation_read_token is configured — an
+// undeployed key is inert (the paths 404).
+func RegisterWalletReconciliationRoutes(
+	v1 *gin.RouterGroup,
+	h *handler.Handlers,
+	auditLog middleware.AuditLogMiddleware,
+	panelRateLimiter *middleware.PanelRateLimiter,
+) {
+	if h.Admin.WalletReconciliation == nil {
+		return
+	}
+	token := h.Admin.WalletReconciliation.ReadToken()
+	if token == "" {
+		return
+	}
+	recon := v1.Group("/admin/wallet/reconciliation")
+	recon.Use(middleware.NewWalletReconciliationTokenAuth(token))
+	recon.Use(panelRateLimiter.Global())
+	recon.Use(gin.HandlerFunc(auditLog))
+	recon.GET("/summary", h.Admin.WalletReconciliation.Summary)
+	recon.GET("/watermark", h.Admin.WalletReconciliation.Watermark)
 }
 
 // registerAffiliateRoutes 注册邀请返利的管理端路由（专属用户配置）

@@ -17,16 +17,25 @@ import (
 const walletReconciliationRoutesTestToken = "routes-test-token-0123456789abcdef"
 
 // Phase 4.1-G: the reconciliation group's mounting rule, through the REAL
-// RegisterAdminRoutes. An empty canonical_wallet.reconciliation_read_token
-// leaves the group ABSENT — an undeployed key is inert (404); a configured
-// token mounts it as a sibling of the admin group where the token gate is
-// the only replaced link: no token is 401, the right token reaches the
-// handler (503 against an unwired service — never a panic).
+// RegisterWalletReconciliationRoutes. An empty
+// canonical_wallet.reconciliation_read_token leaves the group ABSENT — an
+// undeployed key is inert (404); a configured token mounts it where the
+// token gate is the only auth link: no token is 401, the right token
+// reaches the handler (503 against an unwired service — never a panic).
+//
+// This function is called directly (never through RegisterAdminRoutes) —
+// production discovered why: RegisterAdminRoutes and everything inside it
+// is skipped entirely when cfg.Server.DataPlaneOnly is true (ShipAny's own
+// deployment shape, SERVER_DATA_PLANE_ONLY=true), which made this
+// machine-to-machine endpoint unreachable when it lived inside that
+// function — the runbook's §1.7 reconcile cron 404'd end to end despite a
+// correctly configured token. The test below (no AdminAuthMiddleware, no
+// StepUpAuthMiddleware, no SettingService — none of RegisterAdminRoutes's
+// scaffolding) is the regression guard: it proves the group mounts without
+// any of that, the exact shape DataPlaneOnly deployments run in.
 func TestWalletReconciliationGroupMounting(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	stubAuth := middleware.AdminAuthMiddleware(func(c *gin.Context) { c.AbortWithStatus(401) })
 	stubAudit := middleware.AuditLogMiddleware(func(c *gin.Context) { c.Next() })
-	stubStepUp := middleware.StepUpAuthMiddleware(func(c *gin.Context) { c.Next() })
 
 	build := func(token string) *gin.Engine {
 		cfg := &config.Config{}
@@ -36,7 +45,7 @@ func TestWalletReconciliationGroupMounting(t *testing.T) {
 		}}
 		r := gin.New()
 		v1 := r.Group("/api/v1")
-		RegisterAdminRoutes(v1, h, stubAuth, stubAudit, stubStepUp, nil, nil)
+		RegisterWalletReconciliationRoutes(v1, h, stubAudit, nil)
 		return r
 	}
 

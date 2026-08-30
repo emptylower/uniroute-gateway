@@ -134,6 +134,11 @@ func registerRoutes(
 		routes.RegisterPaymentRoutes(v1, h.Payment, h.PaymentWebhook, h.Admin.Payment, jwtAuth, adminAuth, auditLog, settingService, panelRateLimiter)
 		handler.RegisterPageRoutes(v1, cfg.Pricing.DataDir, gin.HandlerFunc(jwtAuth), gin.HandlerFunc(adminAuth), settingService)
 	}
+	// Phase 4.1-G (redesign §15.3): the reconciliation read group is a
+	// machine-to-machine surface, not a human admin one — it stays
+	// reachable in data-plane-only deployments (see the function doc for
+	// why it cannot live inside the DataPlaneOnly-gated block above).
+	routes.RegisterWalletReconciliationRoutes(v1, h, auditLog, panelRateLimiter)
 	routes.RegisterGatewayRoutes(r, h, apiKeyAuth, apiKeyService, subscriptionService, opsService, settingService, compositeResolver, cfg)
 	routes.RegisterPlatformIdentityRoutes(r, h, platformIdentityService, userService, auditLog, cfg.PlatformIdentity, redisClient)
 }
