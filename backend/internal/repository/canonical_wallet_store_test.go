@@ -185,11 +185,14 @@ func TestCanonicalWalletStoreValidationRejectsInvalidLeases(t *testing.T) {
 	bad.Currency = "USD"
 	require.Error(t, store.InstallCanonicalWalletLease(ctx, bad), "cny-e8-v1 is CNY-only — reject, never coerce")
 
-	// A nil gatewayCache (or one without a Redis client) reports
-	// unavailability instead of panicking.
-	var nilStore *gatewayCache
+	// A nil store (or one without a Redis client) reports unavailability
+	// instead of panicking. Phase 5-G Task 2 moved the lease-store methods
+	// onto canonicalWalletRedisStore — both cache types reach them through
+	// the embedded pointer, so the nil-receiver guarantee is pinned on the
+	// store type itself.
+	var nilStore *canonicalWalletRedisStore
 	require.Error(t, nilStore.InstallCanonicalWalletLease(ctx, valid))
-	require.Error(t, (&gatewayCache{}).InstallCanonicalWalletLease(ctx, valid))
+	require.Error(t, (&canonicalWalletRedisStore{}).InstallCanonicalWalletLease(ctx, valid))
 	_, err = nilStore.GetCanonicalWalletLease(ctx, "shipany-user-validate")
 	require.Error(t, err)
 	_, err = nilStore.ReserveCanonicalWalletLease(ctx, "shipany-user-validate", "lease-v", "CNY", "event-x", 1, now)
@@ -268,7 +271,7 @@ func TestRedisResultInt64AcceptsEveryRealShape(t *testing.T) {
 
 func TestCanonicalWalletStoreNilClientGuardsOnEveryMethod(t *testing.T) {
 	ctx := context.Background()
-	empty := &gatewayCache{}
+	empty := &canonicalWalletRedisStore{} // Phase 5-G Task 2: the lease-store methods' receiver
 	now := time.Now().UTC()
 	require.Error(t, empty.InstallCanonicalWalletLease(ctx, service.CanonicalWalletLease{
 		LeaseID: "l", PlatformUserID: "u", Currency: "CNY", BudgetUnits: 1, ExpiresAt: now.Add(time.Minute),
@@ -407,7 +410,7 @@ func TestCanonicalWalletReservationMarkerCannotOutliveItsLease(t *testing.T) {
 func TestCanonicalWalletReserveGuardSubtractsReleased(t *testing.T) {
 	mr := miniredis.RunT(t)
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
-	c := &gatewayCache{rdb: rdb}
+	c := &gatewayCache{rdb: rdb, canonicalWalletRedisStore: &canonicalWalletRedisStore{rdb: rdb}} // Phase 5-G Task 2: the lease-store methods moved onto the embedded store
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	exp := now.Add(time.Minute)
@@ -454,7 +457,7 @@ func TestCanonicalWalletHoldArmReleaseConvert(t *testing.T) {
 	mr := miniredis.RunT(t)
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	t.Cleanup(func() { _ = rdb.Close() })
-	c := &gatewayCache{rdb: rdb}
+	c := &gatewayCache{rdb: rdb, canonicalWalletRedisStore: &canonicalWalletRedisStore{rdb: rdb}} // Phase 5-G Task 2: the lease-store methods moved onto the embedded store
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	mr.SetTime(now)
@@ -701,7 +704,7 @@ func TestCanonicalWalletReaperLease(t *testing.T) {
 	mr := miniredis.RunT(t)
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	t.Cleanup(func() { _ = rdb.Close() })
-	c := &gatewayCache{rdb: rdb}
+	c := &gatewayCache{rdb: rdb, canonicalWalletRedisStore: &canonicalWalletRedisStore{rdb: rdb}} // Phase 5-G Task 2: the lease-store methods moved onto the embedded store
 	ctx := context.Background()
 	interval := time.Second
 	first, err := c.TryCanonicalWalletReaperLease(ctx, 2*interval)
