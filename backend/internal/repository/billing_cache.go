@@ -138,10 +138,11 @@ var (
 
 type billingCache struct {
 	rdb *redis.Client
+	*canonicalWalletRedisStore
 }
 
 func NewBillingCache(rdb *redis.Client) service.BillingCache {
-	return &billingCache{rdb: rdb}
+	return &billingCache{rdb: rdb, canonicalWalletRedisStore: &canonicalWalletRedisStore{rdb: rdb}}
 }
 
 func (c *billingCache) GetUserBalance(ctx context.Context, userID int64) (float64, error) {

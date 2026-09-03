@@ -19,10 +19,11 @@ const liveFinalizationQueueKey = "live:pending_finalization"
 
 type gatewayCache struct {
 	rdb *redis.Client
+	*canonicalWalletRedisStore
 }
 
 func NewGatewayCache(rdb *redis.Client) service.GatewayCache {
-	return &gatewayCache{rdb: rdb}
+	return &gatewayCache{rdb: rdb, canonicalWalletRedisStore: &canonicalWalletRedisStore{rdb: rdb}}
 }
 
 // buildSessionKey 构建 session key，包含 groupID 实现分组隔离

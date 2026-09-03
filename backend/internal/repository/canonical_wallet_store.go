@@ -368,7 +368,18 @@ func canonicalWalletUserHash(platformUserID string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func (c *gatewayCache) InstallCanonicalWalletLease(ctx context.Context, lease service.CanonicalWalletLease) error {
+// canonicalWalletRedisStore is the one implementation of
+// service.CanonicalWalletLeaseStore, shared by every cache type the three
+// canonical-wallet construction sites receive (redesign §14.3). It was
+// previously written on *gatewayCache alone, which left
+// ProvideBillingCacheService's *billingCache unable to satisfy the
+// interface — an ERROR in shadow at every start, a startup panic in
+// enforce (found 2026-09-03 walking the activation runbook).
+type canonicalWalletRedisStore struct {
+	rdb *redis.Client
+}
+
+func (c *canonicalWalletRedisStore) InstallCanonicalWalletLease(ctx context.Context, lease service.CanonicalWalletLease) error {
 	if c == nil || c.rdb == nil {
 		return errors.New("canonical wallet Redis store unavailable")
 	}
@@ -392,7 +403,7 @@ func (c *gatewayCache) InstallCanonicalWalletLease(ctx context.Context, lease se
 	).Err()
 }
 
-func (c *gatewayCache) GetCanonicalWalletLease(ctx context.Context, platformUserID string) (*service.CanonicalWalletLease, error) {
+func (c *canonicalWalletRedisStore) GetCanonicalWalletLease(ctx context.Context, platformUserID string) (*service.CanonicalWalletLease, error) {
 	if c == nil || c.rdb == nil {
 		return nil, errors.New("canonical wallet Redis store unavailable")
 	}
@@ -406,7 +417,7 @@ func (c *gatewayCache) GetCanonicalWalletLease(ctx context.Context, platformUser
 	return c.GetCanonicalWalletLeaseByID(ctx, platformUserID, currentID)
 }
 
-func (c *gatewayCache) GetCanonicalWalletLeaseByID(ctx context.Context, platformUserID, leaseID string) (*service.CanonicalWalletLease, error) {
+func (c *canonicalWalletRedisStore) GetCanonicalWalletLeaseByID(ctx context.Context, platformUserID, leaseID string) (*service.CanonicalWalletLease, error) {
 	if c == nil || c.rdb == nil {
 		return nil, errors.New("canonical wallet Redis store unavailable")
 	}
@@ -420,7 +431,7 @@ func (c *gatewayCache) GetCanonicalWalletLeaseByID(ctx context.Context, platform
 	return parseCanonicalWalletLease(values)
 }
 
-func (c *gatewayCache) ReserveCanonicalWalletLease(ctx context.Context, platformUserID, leaseID, currency, eventID string, amountUnits int64, now time.Time) (*service.CanonicalWalletReservation, error) {
+func (c *canonicalWalletRedisStore) ReserveCanonicalWalletLease(ctx context.Context, platformUserID, leaseID, currency, eventID string, amountUnits int64, now time.Time) (*service.CanonicalWalletReservation, error) {
 	if c == nil || c.rdb == nil {
 		return nil, errors.New("canonical wallet Redis store unavailable")
 	}
@@ -444,7 +455,7 @@ func (c *gatewayCache) ReserveCanonicalWalletLease(ctx context.Context, platform
 	return decodeCanonicalWalletReservationResult(result, platformUserID)
 }
 
-func (c *gatewayCache) SealCanonicalWalletLease(ctx context.Context, platformUserID, leaseID string) (int64, int64, error) {
+func (c *canonicalWalletRedisStore) SealCanonicalWalletLease(ctx context.Context, platformUserID, leaseID string) (int64, int64, error) {
 	if c == nil || c.rdb == nil {
 		return 0, 0, errors.New("canonical wallet Redis store unavailable")
 	}
@@ -482,7 +493,7 @@ func (c *gatewayCache) SealCanonicalWalletLease(ctx context.Context, platformUse
 	return preSealConsumed, released, nil
 }
 
-func (c *gatewayCache) ArmCanonicalWalletHold(ctx context.Context, platformUserID, leaseID, currency, authorizationID string, units int64, graceMS int64, now time.Time) (string, int64, bool, error) {
+func (c *canonicalWalletRedisStore) ArmCanonicalWalletHold(ctx context.Context, platformUserID, leaseID, currency, authorizationID string, units int64, graceMS int64, now time.Time) (string, int64, bool, error) {
 	if c == nil || c.rdb == nil {
 		return "", 0, false, errors.New("canonical wallet Redis store unavailable")
 	}
@@ -549,7 +560,7 @@ func (c *gatewayCache) ArmCanonicalWalletHold(ctx context.Context, platformUserI
 	}
 }
 
-func (c *gatewayCache) ReleaseCanonicalWalletHold(ctx context.Context, platformUserID, authorizationID, stateAfter, classAfter string) (int64, error) {
+func (c *canonicalWalletRedisStore) ReleaseCanonicalWalletHold(ctx context.Context, platformUserID, authorizationID, stateAfter, classAfter string) (int64, error) {
 	if c == nil || c.rdb == nil {
 		return 0, errors.New("canonical wallet Redis store unavailable")
 	}
@@ -603,7 +614,7 @@ func (c *gatewayCache) ReleaseCanonicalWalletHold(ctx context.Context, platformU
 	}
 }
 
-func (c *gatewayCache) ConvertCanonicalWalletHold(ctx context.Context, platformUserID, authorizationID, eventID string, actualUnits int64, now time.Time) (service.CanonicalWalletHoldConversion, error) {
+func (c *canonicalWalletRedisStore) ConvertCanonicalWalletHold(ctx context.Context, platformUserID, authorizationID, eventID string, actualUnits int64, now time.Time) (service.CanonicalWalletHoldConversion, error) {
 	if c == nil || c.rdb == nil {
 		return service.CanonicalWalletHoldConversion{}, errors.New("canonical wallet Redis store unavailable")
 	}
@@ -662,7 +673,7 @@ func (c *gatewayCache) ConvertCanonicalWalletHold(ctx context.Context, platformU
 	return conv, nil
 }
 
-func (c *gatewayCache) GetCanonicalWalletHold(ctx context.Context, platformUserID, authorizationID string) (*service.CanonicalWalletHold, error) {
+func (c *canonicalWalletRedisStore) GetCanonicalWalletHold(ctx context.Context, platformUserID, authorizationID string) (*service.CanonicalWalletHold, error) {
 	if c == nil || c.rdb == nil {
 		return nil, errors.New("canonical wallet Redis store unavailable")
 	}
@@ -691,7 +702,7 @@ func parseCanonicalWalletHold(authorizationID string, values map[string]string) 
 	}, nil
 }
 
-func (c *gatewayCache) ListCanonicalWalletHolds(ctx context.Context, platformUserID string, limit int) ([]string, error) {
+func (c *canonicalWalletRedisStore) ListCanonicalWalletHolds(ctx context.Context, platformUserID string, limit int) ([]string, error) {
 	if c == nil || c.rdb == nil {
 		return nil, errors.New("canonical wallet Redis store unavailable")
 	}
@@ -708,7 +719,7 @@ func (c *gatewayCache) ListCanonicalWalletHolds(ctx context.Context, platformUse
 	return members, nil
 }
 
-func (c *gatewayCache) ListCanonicalWalletHoldUsers(ctx context.Context, cursor uint64, count int64) ([]string, uint64, error) {
+func (c *canonicalWalletRedisStore) ListCanonicalWalletHoldUsers(ctx context.Context, cursor uint64, count int64) ([]string, uint64, error) {
 	if c == nil || c.rdb == nil {
 		return nil, 0, errors.New("canonical wallet Redis store unavailable")
 	}
@@ -722,14 +733,14 @@ func (c *gatewayCache) ListCanonicalWalletHoldUsers(ctx context.Context, cursor 
 	return keys, next, nil
 }
 
-func (c *gatewayCache) PruneCanonicalWalletHoldUser(ctx context.Context, platformUserID string) error {
+func (c *canonicalWalletRedisStore) PruneCanonicalWalletHoldUser(ctx context.Context, platformUserID string) error {
 	if c == nil || c.rdb == nil {
 		return errors.New("canonical wallet Redis store unavailable")
 	}
 	return c.rdb.SRem(ctx, canonicalWalletHoldUsersKey, strings.TrimSpace(platformUserID)).Err()
 }
 
-func (c *gatewayCache) TryCanonicalWalletReaperLease(ctx context.Context, ttl time.Duration) (bool, error) {
+func (c *canonicalWalletRedisStore) TryCanonicalWalletReaperLease(ctx context.Context, ttl time.Duration) (bool, error) {
 	if c == nil || c.rdb == nil {
 		return false, errors.New("canonical wallet Redis store unavailable")
 	}
@@ -741,21 +752,21 @@ func (c *gatewayCache) TryCanonicalWalletReaperLease(ctx context.Context, ttl ti
 // pattern with its OWN key, so the collector's pass and the reaper's sweep
 // never starve each other (the process builds three bridges; the leader
 // makes the pass singular).
-func (c *gatewayCache) TryCanonicalWalletReceivableCollectorLease(ctx context.Context, ttl time.Duration) (bool, error) {
+func (c *canonicalWalletRedisStore) TryCanonicalWalletReceivableCollectorLease(ctx context.Context, ttl time.Duration) (bool, error) {
 	if c == nil || c.rdb == nil {
 		return false, errors.New("canonical wallet Redis store unavailable")
 	}
 	return c.rdb.SetNX(ctx, canonicalWalletReceivableCollectorTickKey, "1", ttl).Result()
 }
 
-func (c *gatewayCache) ForgetCanonicalWalletHold(ctx context.Context, platformUserID, authorizationID string) error {
+func (c *canonicalWalletRedisStore) ForgetCanonicalWalletHold(ctx context.Context, platformUserID, authorizationID string) error {
 	if c == nil || c.rdb == nil {
 		return errors.New("canonical wallet Redis store unavailable")
 	}
 	return c.rdb.SRem(ctx, canonicalWalletHoldSetKey(platformUserID), authorizationID).Err()
 }
 
-func (c *gatewayCache) MarkCanonicalWalletHoldUserEmpty(ctx context.Context, platformUserID string, ttl time.Duration) (bool, error) {
+func (c *canonicalWalletRedisStore) MarkCanonicalWalletHoldUserEmpty(ctx context.Context, platformUserID string, ttl time.Duration) (bool, error) {
 	if c == nil || c.rdb == nil {
 		return false, errors.New("canonical wallet Redis store unavailable")
 	}
@@ -766,14 +777,14 @@ func (c *gatewayCache) MarkCanonicalWalletHoldUserEmpty(ctx context.Context, pla
 	return !ok, nil // alreadySeen = the key existed (SETNX answered false)
 }
 
-func (c *gatewayCache) ClearCanonicalWalletHoldUserEmpty(ctx context.Context, platformUserID string) error {
+func (c *canonicalWalletRedisStore) ClearCanonicalWalletHoldUserEmpty(ctx context.Context, platformUserID string) error {
 	if c == nil || c.rdb == nil {
 		return errors.New("canonical wallet Redis store unavailable")
 	}
 	return c.rdb.Del(ctx, canonicalWalletHoldUserEmptyKey(platformUserID)).Err()
 }
 
-func (c *gatewayCache) MarkCanonicalWalletHoldClass(ctx context.Context, platformUserID, authorizationID, class string) (*service.CanonicalWalletHold, error) {
+func (c *canonicalWalletRedisStore) MarkCanonicalWalletHoldClass(ctx context.Context, platformUserID, authorizationID, class string) (*service.CanonicalWalletHold, error) {
 	if c == nil || c.rdb == nil {
 		return nil, errors.New("canonical wallet Redis store unavailable")
 	}
@@ -820,7 +831,7 @@ func (c *gatewayCache) MarkCanonicalWalletHoldClass(ctx context.Context, platfor
 // its marker must survive for the reserve script's {5}) and is gated on the
 // per-event release marker. Returns true iff the script ran its write path;
 // {1}/{6}/{7} answer (false, nil).
-func (c *gatewayCache) ReleaseCanonicalWalletReservation(ctx context.Context, platformUserID, leaseID, eventID string, units int64, dropMarker bool) (bool, error) {
+func (c *canonicalWalletRedisStore) ReleaseCanonicalWalletReservation(ctx context.Context, platformUserID, leaseID, eventID string, units int64, dropMarker bool) (bool, error) {
 	if c == nil || c.rdb == nil {
 		return false, errors.New("canonical wallet Redis store unavailable")
 	}
@@ -948,4 +959,6 @@ func redisResultInt64(value any) (int64, error) {
 	}
 }
 
+var _ service.CanonicalWalletLeaseStore = (*canonicalWalletRedisStore)(nil)
 var _ service.CanonicalWalletLeaseStore = (*gatewayCache)(nil)
+var _ service.CanonicalWalletLeaseStore = (*billingCache)(nil)
