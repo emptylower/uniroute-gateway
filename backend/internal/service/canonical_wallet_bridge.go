@@ -1723,6 +1723,18 @@ func (b *CanonicalWalletBridge) runOutboxDispatcher() {
 	}
 }
 
+// freshOutboxMarkCtx (Phase 5-G, Task 4): an outbox failure record never
+// rides the attempt's own context. When the attempt itself consumed the
+// whole per-attempt budget, marking on that context failed on an expired
+// context and the error was discarded — the row stayed in_flight, was
+// reclaimed ~6 s later by ReclaimStaleInFlightEvents (which does not touch
+// attempt_count), and looped forever without aging toward dead-letter
+// (production logged 71 stale reclaims in three days). Each mark gets its
+// OWN budget.
+func (b *CanonicalWalletBridge) freshOutboxMarkCtx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), time.Duration(b.cfg.RequestTimeoutMS)*time.Millisecond)
+}
+
 func (b *CanonicalWalletBridge) deliverOutboxEvent(ctx context.Context, e CanonicalWalletOutboxEvent) {
 	event := CanonicalWalletSettlementEvent{
 		EventID: e.EventID, GatewayRequestID: e.GatewayRequestID, PlatformUserID: e.PlatformUserID,
@@ -1762,7 +1774,11 @@ func (b *CanonicalWalletBridge) deliverOutboxEvent(ctx context.Context, e Canoni
 			canonicalWalletBridgeMetrics.deadLetterBalanceShortfall.Add(1)
 			slog.Warn("canonical wallet outbox dead-lettered balance_shortfall (the receivable)",
 				"event_id", e.EventID, "parent_event_id", e.ParentEventID, "split_depth", e.SplitDepth, "amount_units", e.AmountUnits)
-			_ = b.outbox.MarkOutboxEventDeadLetter(ctx, e.ID, b.workerID, "balance_shortfall")
+			markCtx, cancelMark := b.freshOutboxMarkCtx()
+			defer cancelMark()
+			if err := b.outbox.MarkOutboxEventDeadLetter(markCtx, e.ID, b.workerID, "balance_shortfall"); err != nil {
+				slog.Warn("canonical wallet outbox dead-letter mark failed", "event_id", e.EventID, "error", err)
+			}
 			return
 		}
 		// §11.5 classification: a terminal control-plane answer (a wire bug
@@ -1824,7 +1840,11 @@ func (b *CanonicalWalletBridge) deliverOutboxEvent(ctx context.Context, e Canoni
 			_ = b.outbox.BindOutboxEventLease(ctx, e.ID, b.workerID, "")
 		}
 		canonicalWalletBridgeMetrics.reserveError.Add(1)
-		_ = b.outbox.MarkOutboxEventFailed(ctx, e.ID, b.workerID, b.clock())
+		markCtx, cancelMark := b.freshOutboxMarkCtx()
+		defer cancelMark()
+		if err := b.outbox.MarkOutboxEventFailed(markCtx, e.ID, b.workerID, b.clock()); err != nil {
+			slog.Warn("canonical wallet outbox failure mark failed", "event_id", e.EventID, "error", err)
+		}
 		return
 	}
 	canonicalWalletBridgeMetrics.reserveOK.Add(1)
@@ -1880,7 +1900,11 @@ func (b *CanonicalWalletBridge) deliverOutboxEvent(ctx context.Context, e Canoni
 			b.markTerminalClassification(ctx, e.ID, reason)
 			return
 		}
-		_ = b.outbox.MarkOutboxEventFailed(ctx, e.ID, b.workerID, b.clock())
+		markCtx, cancelMark := b.freshOutboxMarkCtx()
+		defer cancelMark()
+		if err := b.outbox.MarkOutboxEventFailed(markCtx, e.ID, b.workerID, b.clock()); err != nil {
+			slog.Warn("canonical wallet outbox failure mark failed", "event_id", e.EventID, "error", err)
+		}
 		return
 	}
 	canonicalWalletBridgeMetrics.settlementOK.Add(1)

@@ -4,7 +4,9 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -132,4 +134,65 @@ func TestCanonicalWalletOutboxDispatcherDeliversEndToEnd(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	require.Equal(t, "delivered", status, "the dispatcher must resolve the claimed row as delivered under its own claim token")
+}
+
+// budgetConsumingControlPlane (Phase 5-G, Task 4): the control plane whose
+// SubmitSettlement consumes the attempt's ENTIRE per-attempt budget and then
+// fails transiently — the production shape behind the 71 stale reclaims
+// logged in three days (a slow or stalled control-plane call).
+type budgetConsumingControlPlane struct {
+	canonicalWalletControlStub
+}
+
+func (c *budgetConsumingControlPlane) SubmitSettlement(ctx context.Context, _ CanonicalWalletSettlementEvent) (*CanonicalWalletSettlementResult, error) {
+	<-ctx.Done()
+	return nil, errors.New("canonical wallet control plane: transport failure after the attempt budget")
+}
+
+// TestDeliverOutboxEventRecordsFailureWhenTheAttemptConsumedItsBudget (Wallet
+// Lease Phase 5-G, Task 4): the failure record must never ride the attempt's
+// own context. When the attempt itself consumed the budget, the mark on that
+// expired context fails and is discarded — the row stays in_flight, is
+// reclaimed ~6 s later by ReclaimStaleInFlightEvents (which does not touch
+// attempt_count), and loops forever without aging toward dead-letter.
+func TestDeliverOutboxEventRecordsFailureWhenTheAttemptConsumedItsBudget(t *testing.T) {
+	ctx := context.Background()
+	db := startCanonicalWalletTestPostgres(t, ctx)
+	rdb := startCanonicalWalletTestRedis(t, ctx)
+	store := &gatewayCacheAdapterForTest{rdb: rdb}
+	outbox := &outboxStoreForTest{db: db}
+
+	platformUserID := "shipany-user-" + uuid.NewString()
+	control := &budgetConsumingControlPlane{canonicalWalletControlStub{lease: CanonicalWalletLease{
+		LeaseID: "lease-budget-" + uuid.NewString(), PlatformUserID: platformUserID, Currency: "CNY",
+		BudgetUnits: 500_000000, ExpiresAt: time.Now().UTC().Add(time.Minute),
+	}}}
+	cfg := canonicalWalletTestConfig(config.CanonicalWalletModeEnforce)
+	cfg.RequestTimeoutMS = 150
+	bridge := newCanonicalWalletBridge(cfg, store, control, db, outbox, 0, nil)
+	t.Cleanup(bridge.Close)
+
+	require.True(t, bridge.ObserveSettlement(CanonicalWalletSettlementEvent{
+		GatewayRequestID: "req-budget-1", PlatformUserID: platformUserID,
+		Currency: "CNY", AmountUnits: 10_000000,
+	}))
+	claimed, err := outbox.ClaimPendingOutboxEvents(ctx, bridge.workerID, 1)
+	require.NoError(t, err)
+	require.Len(t, claimed, 1)
+	e := claimed[0]
+
+	// The dispatcher gives each event exactly one per-attempt budget.
+	eventCtx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.RequestTimeoutMS)*time.Millisecond)
+	bridge.deliverOutboxEvent(eventCtx, e)
+	cancel()
+
+	var attemptCount int
+	var status string
+	var nextAttemptAt sql.NullTime
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT attempt_count, status, next_attempt_at FROM wallet_settlement_outbox WHERE id = $1`, e.ID,
+	).Scan(&attemptCount, &status, &nextAttemptAt))
+	require.Equal(t, 1, attemptCount, "the failure must be recorded even when the attempt consumed its whole budget — otherwise the row loops in_flight without aging toward dead-letter")
+	require.Equal(t, "pending", status, "the row returns to pending for the backoff")
+	require.True(t, nextAttemptAt.Valid, "next_attempt_at must be set")
 }
