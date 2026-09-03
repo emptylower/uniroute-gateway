@@ -398,7 +398,9 @@ var testConvertCanonicalWalletHoldScript = redis.NewScript(`
 	if actual <= held then
 		if lease_exists then
 			redis.call('HINCRBY', KEYS[3], 'released_units', held - actual)
-			redis.call('SET', KEYS[4], lease_id); redis.call('PEXPIREAT', KEYS[4], expires_at)
+			-- synced with production's Phase 5-G Step 3b line (execution review round 1,
+			-- minor 1): the marker takes the lease key's remaining life, not expires_at.
+			redis.call('SET', KEYS[4], lease_id); local ttl = redis.call('PTTL', KEYS[3]); if ttl > 0 then redis.call('PEXPIRE', KEYS[4], ttl) end
 		end
 		redis.call('HSET', KEYS[1], 'state', 'settled', 'event_id', ARGV[2]); redis.call('SREM', KEYS[2], ARGV[1])
 		if not lease_exists then return {3} end
