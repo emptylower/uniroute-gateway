@@ -72,6 +72,14 @@ var installCanonicalWalletLeaseScript = redis.NewScript(`
 	local incoming_consumed = tonumber(ARGV[4])
 	local incoming_expires = tonumber(ARGV[5])
 	local lease_key_prefix = ARGV[7]
+	-- Phase 5-G (Task 3): the key retention deadline — expires_at plus the
+	-- caller slot TTL, ARGV[8] — keeps the hash and the current pointer
+	-- readable through the grace window so the next ensure after expiry
+	-- seals and drains the lease (redesign §3.3) instead of waiting for the
+	-- grace sweep. expires_at_ms in the hash is unchanged: liveness is
+	-- decided on that field (the reserve/arm guards, leaseCovers), never on
+	-- the key TTL.
+	local retain_until = tonumber(ARGV[8])
 	if redis.call('EXISTS', KEYS[1]) == 1 then
 		local current_consumed = tonumber(redis.call('HGET', KEYS[1], 'consumed_units') or '0')
 		if current_consumed > incoming_consumed then
@@ -81,7 +89,7 @@ var installCanonicalWalletLeaseScript = redis.NewScript(`
 	redis.call('HSET', KEYS[1],
 		'lease_id', ARGV[1], 'platform_user_id', ARGV[2], 'currency', ARGV[3],
 		'budget_units', ARGV[6], 'consumed_units', incoming_consumed, 'expires_at_ms', ARGV[5])
-	redis.call('PEXPIREAT', KEYS[1], incoming_expires)
+	redis.call('PEXPIREAT', KEYS[1], retain_until)
 
 	local current_pointer_lease_id = redis.call('GET', KEYS[2])
 	local should_advance_pointer = true
@@ -96,7 +104,7 @@ var installCanonicalWalletLeaseScript = redis.NewScript(`
 	end
 	if should_advance_pointer then
 		redis.call('SET', KEYS[2], ARGV[1])
-		redis.call('PEXPIREAT', KEYS[2], incoming_expires)
+		redis.call('PEXPIREAT', KEYS[2], retain_until)
 	end
 	return 1
 `)
@@ -226,7 +234,8 @@ var releaseCanonicalWalletHoldScript = redis.NewScript(`
 // event_id, never on the code alone, and §13.2.7's fourth element carries
 // the hold's lease so a retried submission restores event.LeaseID and the
 // outbox dedups it as a same-payload duplicate; A ≤ E → released += E−A,
-// marker = lease_id (PEXPIREAT = the lease's expires_at), settled, event_id
+// marker = lease_id (the lease key's remaining life — Phase 5-G Task 3b),
+// settled, event_id
 // — or {3} when the lease hash is already gone (nothing to release or mark;
 // the event proceeds unbound); A > E within budget and unexpired →
 // consumed += excess, marker, settled; otherwise (beyond budget, or the
@@ -246,7 +255,11 @@ var convertCanonicalWalletHoldScript = redis.NewScript(`
 	if actual <= held then
 		if lease_exists then
 			redis.call('HINCRBY', KEYS[3], 'released_units', held - actual)
-			redis.call('SET', KEYS[4], lease_id); redis.call('PEXPIREAT', KEYS[4], expires_at)
+			-- Phase 5-G (Task 3, Step 3b): the marker carries the lease key's
+			-- remaining life so both age out together by construction —
+			-- PEXPIREAT expires_at deleted the marker at once once the hash
+			-- outlives expires_at through the retention window.
+			redis.call('SET', KEYS[4], lease_id); local ttl = redis.call('PTTL', KEYS[3]); if ttl > 0 then redis.call('PEXPIRE', KEYS[4], ttl) end
 		end
 		redis.call('HSET', KEYS[1], 'state', 'settled', 'event_id', ARGV[2]); redis.call('SREM', KEYS[2], ARGV[1])
 		if not lease_exists then return {3} end
@@ -396,10 +409,19 @@ func (c *canonicalWalletRedisStore) InstallCanonicalWalletLease(ctx context.Cont
 	if err != nil {
 		return err
 	}
+	// Phase 5-G (Task 3): the hash and the current pointer live until
+	// RetainUntil — expires_at + caller_slot_ttl_seconds when the bridge
+	// installs a grant — so an expired lease stays drainable through the
+	// grace window. An unset RetainUntil keeps the baseline behaviour (both
+	// keys age out at ExpiresAt).
+	retainUntil := lease.RetainUntil
+	if retainUntil.IsZero() || retainUntil.Before(lease.ExpiresAt) {
+		retainUntil = lease.ExpiresAt
+	}
 	return installCanonicalWalletLeaseScript.Run(ctx, c.rdb,
 		[]string{canonicalWalletLeaseKey(lease.PlatformUserID, lease.LeaseID), canonicalWalletCurrentKey(lease.PlatformUserID)},
 		lease.LeaseID, strings.TrimSpace(lease.PlatformUserID), currency,
-		lease.ConsumedUnits, lease.ExpiresAt.UnixMilli(), lease.BudgetUnits, canonicalWalletLeaseKeyPrefix(lease.PlatformUserID),
+		lease.ConsumedUnits, lease.ExpiresAt.UnixMilli(), lease.BudgetUnits, canonicalWalletLeaseKeyPrefix(lease.PlatformUserID), retainUntil.UnixMilli(),
 	).Err()
 }
 

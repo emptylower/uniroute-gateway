@@ -141,6 +141,117 @@ func TestBillingCacheServiceChecksBalanceEligibilityAgainstCanonicalWalletInEnfo
 	require.NoError(t, allowedSvc.CheckBillingEligibility(ctx, allowedUser, nil, nil, nil, ""), "a lease with real headroom must admit the request through the real CheckBillingEligibility entry point")
 }
 
+// TestEnsureLeaseDrainsAnExpiredLeaseWithinTheGrace (Wallet Lease Phase 5-G,
+// Task 3 Step 1): a lease that dies of EXPIRY (not exhaustion) must still be
+// drained by the next ensure — redesign §3.3's seal+drain, not the 1800 s
+// grace sweep. The install keeps the Redis lease hash and the current pointer
+// alive through the caller slot TTL (RetainUntil), so after expires_at passes
+// the cached read still finds the lease, ensureLease seals it, and the ensure
+// request carries exactly one drained entry with the pre-seal consumed. At
+// baseline the key ages out at expires_at, cached == nil, and the drain gate
+// is structurally dead — soak window 1 measured 85.8 % insufficient_balance
+// refusals against the closed form grace/(ttl+grace) = 85.7 %.
+func TestEnsureLeaseDrainsAnExpiredLeaseWithinTheGrace(t *testing.T) {
+	ctx := context.Background()
+	rdb := startCanonicalWalletTestRedis(t, ctx)
+	store := &gatewayCacheAdapterForTest{rdb: rdb}
+	platformUserID := "shipany-user-" + uuid.NewString()
+
+	// The control plane grants a lease with 1 s of life and 40_000000 units
+	// already consumed — the pre-seal consumed the drain entry must report.
+	granted := CanonicalWalletLease{
+		LeaseID: "lease-" + uuid.NewString(), PlatformUserID: platformUserID, Currency: "CNY",
+		BudgetUnits: 100_000000, ConsumedUnits: 40_000000, ExpiresAt: time.Now().UTC().Add(1 * time.Second),
+	}
+	control := &canonicalWalletControlStub{lease: granted}
+	bridge := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeEnforce), store, control, nil, nil, 1800, nil)
+	t.Cleanup(bridge.Close)
+
+	first, err := bridge.ensureLease(ctx, platformUserID, "CNY", 10_000000, canonicalWalletLeasePurposeAuthorize, "")
+	require.NoError(t, err)
+	require.Equal(t, granted.LeaseID, first.LeaseID)
+
+	// Advance the REAL clock past expires_at — no fake clock reaches Redis's
+	// PEXPIREAT, so the retention must actually hold the keys in Redis.
+	time.Sleep(1200 * time.Millisecond)
+
+	renewal := CanonicalWalletLease{
+		LeaseID: "lease-" + uuid.NewString(), PlatformUserID: platformUserID, Currency: "CNY",
+		BudgetUnits: 100_000000, ExpiresAt: time.Now().UTC().Add(time.Minute),
+	}
+	control.lease = renewal
+	renewed, err := bridge.ensureLease(ctx, platformUserID, "CNY", 10_000000, canonicalWalletLeasePurposeAuthorize, "")
+	require.NoError(t, err)
+	require.Equal(t, renewal.LeaseID, renewed.LeaseID)
+
+	require.Equal(t, 2, control.ensureCalls)
+	require.Len(t, control.lastEnsure.Drained, 1, "the next ensure after expiry must drain the finished lease, not wait out the grace sweep")
+	entry := control.lastEnsure.Drained[0]
+	require.Equal(t, granted.LeaseID, entry.LeaseID)
+	require.Equal(t, "40000000", entry.GatewayConsumed.AmountUnits, "the drained entry carries the pre-seal consumed units")
+}
+
+// TestEnsureLeaseDrainCarriesGatewayReleasedAfterAPostExpiryRelease (Phase
+// 5-G, Task 3 Step 4b(ii)): the release script's HINCRBY released_units is
+// presence-gated on the lease hash. With the hash retained through the grace
+// a release landing after expires_at now APPLIES instead of silently
+// no-op'ing — the correct direction: the drain identity is consumed ==
+// captured + released, and a dropped release is exactly what made drains
+// fail to verify on ShipAny's side. The next ensure's drained entry must
+// carry gateway_released so the identity can close.
+func TestEnsureLeaseDrainCarriesGatewayReleasedAfterAPostExpiryRelease(t *testing.T) {
+	ctx := context.Background()
+	rdb := startCanonicalWalletTestRedis(t, ctx)
+	store := &gatewayCacheAdapterForTest{rdb: rdb}
+	platformUserID := "shipany-user-" + uuid.NewString()
+	now := time.Now().UTC()
+
+	granted := CanonicalWalletLease{
+		LeaseID: "lease-" + uuid.NewString(), PlatformUserID: platformUserID, Currency: "CNY",
+		BudgetUnits: 100_000000, ExpiresAt: now.Add(1 * time.Second), RetainUntil: now.Add(1800 * time.Second),
+	}
+	control := &canonicalWalletControlStub{lease: granted}
+	bridge := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeEnforce), store, control, nil, nil, 1800, nil)
+	t.Cleanup(bridge.Close)
+
+	first, err := bridge.ensureLease(ctx, platformUserID, "CNY", 10_000000, canonicalWalletLeasePurposeAuthorize, "")
+	require.NoError(t, err)
+
+	// A hold is armed while the lease is live; consumed rises by the held
+	// figure (the arm script's own HINCRBY).
+	authorizationID := "auth-" + uuid.NewString()
+	_, held, duplicate, err := store.ArmCanonicalWalletHold(ctx, platformUserID, first.LeaseID, "CNY", authorizationID, 20_000000, 1_800_000, now)
+	require.NoError(t, err)
+	require.False(t, duplicate)
+	require.Equal(t, int64(20_000000), held)
+
+	time.Sleep(1200 * time.Millisecond) // the real clock passes expires_at; the hash is retained
+
+	releasedUnits, err := store.ReleaseCanonicalWalletHold(ctx, platformUserID, authorizationID, "released", "")
+	require.NoError(t, err)
+	require.Equal(t, int64(20_000000), releasedUnits)
+
+	// The release APPLIED on the retained hash: released_units rose by held.
+	stored, err := rdb.HGet(ctx, testCanonicalWalletLeaseKey(platformUserID, first.LeaseID), "released_units").Result()
+	require.NoError(t, err, "the post-expiry release must land on the retained lease hash")
+	require.Equal(t, "20000000", stored)
+
+	renewal := CanonicalWalletLease{
+		LeaseID: "lease-" + uuid.NewString(), PlatformUserID: platformUserID, Currency: "CNY",
+		BudgetUnits: 100_000000, ExpiresAt: time.Now().UTC().Add(time.Minute),
+	}
+	control.lease = renewal
+	_, err = bridge.ensureLease(ctx, platformUserID, "CNY", 10_000000, canonicalWalletLeasePurposeAuthorize, "")
+	require.NoError(t, err)
+
+	require.Len(t, control.lastEnsure.Drained, 1)
+	entry := control.lastEnsure.Drained[0]
+	require.Equal(t, granted.LeaseID, entry.LeaseID)
+	require.Equal(t, "20000000", entry.GatewayConsumed.AmountUnits, "pre-seal consumed is the arm's HINCRBY figure")
+	require.NotNil(t, entry.GatewayReleased, "the drained entry must carry gateway_released so consumed == captured + released can verify")
+	require.Equal(t, "20000000", entry.GatewayReleased.AmountUnits)
+}
+
 // gatewayCacheAdapterForTest duplicates repository.gatewayCache's four
 // CanonicalWalletLeaseStore methods and their private dependencies (the two
 // Lua scripts, the key-builder functions, ensureRedisLuaSafeInt64, and the
@@ -169,6 +280,7 @@ var testInstallCanonicalWalletLeaseScript = redis.NewScript(`
 	local incoming_consumed = tonumber(ARGV[4])
 	local incoming_expires = tonumber(ARGV[5])
 	local lease_key_prefix = ARGV[7]
+	local retain_until = tonumber(ARGV[8])
 	if redis.call('EXISTS', KEYS[1]) == 1 then
 		local current_consumed = tonumber(redis.call('HGET', KEYS[1], 'consumed_units') or '0')
 		if current_consumed > incoming_consumed then
@@ -178,7 +290,7 @@ var testInstallCanonicalWalletLeaseScript = redis.NewScript(`
 	redis.call('HSET', KEYS[1],
 		'lease_id', ARGV[1], 'platform_user_id', ARGV[2], 'currency', ARGV[3],
 		'budget_units', ARGV[6], 'consumed_units', incoming_consumed, 'expires_at_ms', ARGV[5])
-	redis.call('PEXPIREAT', KEYS[1], incoming_expires)
+	redis.call('PEXPIREAT', KEYS[1], retain_until)
 
 	local current_pointer_lease_id = redis.call('GET', KEYS[2])
 	local should_advance_pointer = true
@@ -193,7 +305,7 @@ var testInstallCanonicalWalletLeaseScript = redis.NewScript(`
 	end
 	if should_advance_pointer then
 		redis.call('SET', KEYS[2], ARGV[1])
-		redis.call('PEXPIREAT', KEYS[2], incoming_expires)
+		redis.call('PEXPIREAT', KEYS[2], retain_until)
 	end
 	return 1
 `)
@@ -419,10 +531,17 @@ func (c *gatewayCacheAdapterForTest) InstallCanonicalWalletLease(ctx context.Con
 	if err != nil {
 		return err
 	}
+	// Mirrors the production store (Phase 5-G, Task 3): RetainUntil keeps
+	// the hash and pointer alive through the grace window; unset means
+	// baseline behaviour (age out at ExpiresAt).
+	retainUntil := lease.RetainUntil
+	if retainUntil.IsZero() || retainUntil.Before(lease.ExpiresAt) {
+		retainUntil = lease.ExpiresAt
+	}
 	return testInstallCanonicalWalletLeaseScript.Run(ctx, c.rdb,
 		[]string{testCanonicalWalletLeaseKey(lease.PlatformUserID, lease.LeaseID), testCanonicalWalletCurrentKey(lease.PlatformUserID)},
 		lease.LeaseID, strings.TrimSpace(lease.PlatformUserID), currency,
-		lease.ConsumedUnits, lease.ExpiresAt.UnixMilli(), lease.BudgetUnits, testCanonicalWalletLeaseKeyPrefix(lease.PlatformUserID),
+		lease.ConsumedUnits, lease.ExpiresAt.UnixMilli(), lease.BudgetUnits, testCanonicalWalletLeaseKeyPrefix(lease.PlatformUserID), retainUntil.UnixMilli(),
 	).Err()
 }
 

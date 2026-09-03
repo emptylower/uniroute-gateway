@@ -93,3 +93,70 @@ func TestCanonicalWalletRedisSafeIntegerGuardHoldsAgainstRealRedis(t *testing.T)
 	}
 	require.Error(t, store.InstallCanonicalWalletLease(ctx, tooLarge))
 }
+
+// TestCanonicalWalletReservationAgainstRetainedExpiredLeaseIsRefused (Wallet
+// Lease Phase 5-G, Task 3 Step 4): the safety property the retention change
+// rests on. A lease whose expires_at_ms is in the past but whose key is still
+// present (retained through the caller slot TTL so the next ensure can drain
+// it) must still REFUSE a new reservation — the reserve script's own guard
+// (expires_at <= now → {3}), not the key TTL, decides liveness. Without the
+// retention this fails with ErrCanonicalWalletLeaseMissing instead (the key
+// aged out); with it, the refusal is the named expired error.
+func TestCanonicalWalletReservationAgainstRetainedExpiredLeaseIsRefused(t *testing.T) {
+	ctx := context.Background()
+	store := NewGatewayCache(integrationRedis).(service.CanonicalWalletLeaseStore)
+	platformUserID := "shipany-user-" + uuid.NewString()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	lease := service.CanonicalWalletLease{
+		LeaseID: "lease-" + uuid.NewString(), PlatformUserID: platformUserID, Currency: "CNY",
+		BudgetUnits: 100_000000, ExpiresAt: now.Add(1 * time.Second), RetainUntil: now.Add(1800 * time.Second),
+	}
+	require.NoError(t, store.InstallCanonicalWalletLease(ctx, lease))
+
+	time.Sleep(1200 * time.Millisecond) // the real clock passes expires_at; the key is retained
+
+	_, err := store.ReserveCanonicalWalletLease(ctx, platformUserID, lease.LeaseID, "CNY", "event-retained-expired-1", 1_000000, time.Now().UTC())
+	require.ErrorIs(t, err, service.ErrCanonicalWalletLeaseExpired, "a retained-but-expired lease must never be reservable — liveness is expires_at_ms, never the key TTL")
+}
+
+// TestCanonicalWalletConvertInsideRetentionKeepsTheMarkerAliveWithTheLease
+// (Wallet Lease Phase 5-G, Task 3 Step 4b(i)): inside the retention window
+// the convert script's exact-match branch (actual ≤ held) must write the
+// redelivery-idempotency marker with the LEASE KEY'S remaining life, not
+// PEXPIREAT expires_at — with expires_at in the past that PEXPIREAT deleted
+// the marker at once and a conversion landing inside the window lost its
+// dedup marker. Both keys must age out together, by construction.
+func TestCanonicalWalletConvertInsideRetentionKeepsTheMarkerAliveWithTheLease(t *testing.T) {
+	ctx := context.Background()
+	store := NewGatewayCache(integrationRedis).(service.CanonicalWalletLeaseStore)
+	platformUserID := "shipany-user-" + uuid.NewString()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	lease := service.CanonicalWalletLease{
+		LeaseID: "lease-" + uuid.NewString(), PlatformUserID: platformUserID, Currency: "CNY",
+		BudgetUnits: 100_000000, ExpiresAt: now.Add(1 * time.Second), RetainUntil: now.Add(1800 * time.Second),
+	}
+	require.NoError(t, store.InstallCanonicalWalletLease(ctx, lease))
+
+	authorizationID := "auth-" + uuid.NewString()
+	_, held, duplicate, err := store.ArmCanonicalWalletHold(ctx, platformUserID, lease.LeaseID, "CNY", authorizationID, 10_000000, 1_800_000, now)
+	require.NoError(t, err)
+	require.False(t, duplicate)
+	require.Equal(t, int64(10_000000), held)
+
+	time.Sleep(1200 * time.Millisecond) // the real clock passes expires_at; the hash is retained
+
+	conv, err := store.ConvertCanonicalWalletHold(ctx, platformUserID, authorizationID, "event-convert-in-retention", 10_000000, time.Now().UTC())
+	require.NoError(t, err)
+	require.Equal(t, 0, conv.Code, "the exact-match branch converts (the lease hash is present inside the retention window)")
+	require.Equal(t, lease.LeaseID, conv.LeaseID)
+
+	leasePTTL, err := integrationRedis.PTTL(ctx, canonicalWalletLeaseKey(platformUserID, lease.LeaseID)).Result()
+	require.NoError(t, err)
+	require.Greater(t, leasePTTL, time.Duration(0), "the lease key must still be alive inside the retention window")
+	markerPTTL, err := integrationRedis.PTTL(ctx, canonicalWalletReservationKey(platformUserID, "event-convert-in-retention")).Result()
+	require.NoError(t, err)
+	require.Greater(t, markerPTTL, time.Duration(0), "the redelivery-idempotency marker must exist after a conversion inside the retention window")
+	require.InDelta(t, leasePTTL.Seconds(), markerPTTL.Seconds(), 1.0, "marker and lease key age out together — the marker carries the lease key's remaining life")
+}

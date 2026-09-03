@@ -104,6 +104,16 @@ type CanonicalWalletLease struct {
 	BudgetUnits    int64     `json:"budget_units"`
 	ConsumedUnits  int64     `json:"consumed_units"`
 	ExpiresAt      time.Time `json:"expires_at"`
+	// RetainUntil (Phase 5-G, Task 3): local-only retention deadline for the
+	// Redis lease hash and the current pointer — expires_at plus the caller
+	// slot TTL — so a lease that dies of expiry stays readable through the
+	// grace window and the next ensure seals and drains it (redesign §3.3)
+	// instead of waiting for the grace sweep at expires_at +
+	// settle_grace_seconds. Zero means baseline behaviour (both keys age out
+	// at ExpiresAt). Liveness is unchanged: the reserve guard, the arm script
+	// and leaseCovers decide on expires_at_ms, never on the key TTL. Never
+	// serialized.
+	RetainUntil time.Time `json:"-"`
 }
 
 func (l CanonicalWalletLease) RemainingUnits() int64 {
@@ -2133,6 +2143,13 @@ func (b *CanonicalWalletBridge) ensureLease(ctx context.Context, platformUserID,
 		canonicalWalletBridgeMetrics.leaseGrantBelowAmount.Add(1)
 		return nil, fmt.Errorf("%w: granted %d units, %d required", ErrCanonicalWalletLeaseGrantBelowAmount, lease.RemainingUnits(), amountUnits)
 	}
+	// Phase 5-G (Task 3): the grant's Redis hash and current pointer are
+	// retained through the caller slot TTL so a lease that dies of expiry is
+	// still readable by the next ensure — which seals it and sends the
+	// drained entry (§3.3) instead of waiting out the grace sweep. Liveness
+	// still expires at ExpiresAt: the reserve/arm guards and leaseCovers
+	// decide on expires_at_ms, never on the key TTL.
+	lease.RetainUntil = lease.ExpiresAt.Add(time.Duration(b.callerSlotTTLSeconds) * time.Second)
 	if err := b.store.InstallCanonicalWalletLease(ctx, lease); err != nil {
 		return nil, err
 	}
