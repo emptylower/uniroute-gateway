@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -282,9 +283,20 @@ type canonicalWalletControlStub struct {
 	outcome string
 	// nilLease makes EnsureLease return the (nil, nil) grant ensureLease names.
 	nilLease bool
+	// Eligibility bootstrap (spec 2026-09-29 §4 test 7): when outcomeSeq is
+	// non-empty each call POPS its outcome from the front (a per-call script
+	// emulating ShipAny's per-user serialization — first arrival "issued",
+	// later arrivals "reused"; once exhausted it falls back to `outcome`),
+	// and every answered outcome lands in outcomesSeen. mu makes the stub
+	// safe for the concurrent-bootstrap test; sequential tests are unaffected.
+	mu           sync.Mutex
+	outcomeSeq   []string
+	outcomesSeen []string
 }
 
 func (s *canonicalWalletControlStub) EnsureLease(_ context.Context, req canonicalWalletEnsureRequest) (*canonicalWalletEnsureResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.ensureCalls++
 	s.lastEnsure = req
 	if s.leaseErr != nil {
@@ -293,10 +305,18 @@ func (s *canonicalWalletControlStub) EnsureLease(_ context.Context, req canonica
 	if s.nilLease {
 		return nil, nil
 	}
-	outcome := s.outcome
+	outcome := ""
+	if len(s.outcomeSeq) > 0 {
+		outcome = s.outcomeSeq[0]
+		s.outcomeSeq = s.outcomeSeq[1:]
+	}
+	if outcome == "" {
+		outcome = s.outcome
+	}
 	if outcome == "" {
 		outcome = "issued"
 	}
+	s.outcomesSeen = append(s.outcomesSeen, outcome)
 	return &canonicalWalletEnsureResult{Lease: s.lease, Outcome: outcome, ClampedBy: "none"}, nil
 }
 func (s *canonicalWalletControlStub) SubmitSettlement(context.Context, CanonicalWalletSettlementEvent) (*CanonicalWalletSettlementResult, error) {

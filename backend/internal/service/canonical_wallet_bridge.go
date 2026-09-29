@@ -858,6 +858,13 @@ type canonicalWalletMetrics struct {
 	// receivable) so the collector's exhaustion is observable.
 	receivableRedriven         atomic.Int64
 	receivableRedriveExhausted atomic.Int64
+	// Eligibility bootstrap (spec 2026-09-29-wallet-lease-enforce-
+	// eligibility-bootstrap §3): the eligibility gate's bounded synchronous
+	// ensure — issued/reused/failed, the soak signal for redesign §11.1's
+	// "revisit pre-warm" trigger.
+	eligibilityBootstrapIssued atomic.Int64
+	eligibilityBootstrapReused atomic.Int64
+	eligibilityBootstrapFailed atomic.Int64
 }
 
 var canonicalWalletBridgeMetrics canonicalWalletMetrics
@@ -866,8 +873,11 @@ func CanonicalWalletBridgeStats() map[string]int64 {
 	m := &canonicalWalletBridgeMetrics
 	return map[string]int64{
 		"queued": m.queued.Load(), "queue_dropped": m.queueDropped.Load(),
-		"outbox_payload_conflict": m.outboxPayloadConflict.Load(),
-		"lease_acquire_ok":        m.leaseAcquireOK.Load(), "lease_acquire_error": m.leaseAcquireError.Load(),
+		"outbox_payload_conflict":      m.outboxPayloadConflict.Load(),
+		"eligibility_bootstrap_issued": m.eligibilityBootstrapIssued.Load(),
+		"eligibility_bootstrap_reused": m.eligibilityBootstrapReused.Load(),
+		"eligibility_bootstrap_failed": m.eligibilityBootstrapFailed.Load(),
+		"lease_acquire_ok":             m.leaseAcquireOK.Load(), "lease_acquire_error": m.leaseAcquireError.Load(),
 		"lease_issued": m.leaseIssued.Load(), "lease_reused": m.leaseReused.Load(),
 		"lease_grant_below_amount": m.leaseGrantBelowAmount.Load(), "lease_grant_expired": m.leaseGrantExpired.Load(),
 		"lease_bind_error": m.leaseBindError.Load(),
@@ -1415,6 +1425,50 @@ func (b *CanonicalWalletBridge) HasCanonicalWalletHeadroom(ctx context.Context, 
 		return false, nil
 	}
 	return lease.RemainingUnits() > 0, nil
+}
+
+// EnsureCanonicalWalletLeaseForAdmission (spec
+// 2026-09-29-wallet-lease-enforce-eligibility-bootstrap §2/§3) is the
+// eligibility gate's ONE bounded synchronous bootstrap. When the gate's pure
+// read answered "nothing admissible" — no lease ever issued, or an
+// expired-retained/exhausted one — the gate calls this before refusing:
+// exactly the authorization point's own ensureLease (same purpose, same
+// budget, same TTL, same request_timeout_ms bound, same circuit of
+// refusals), so the first request of a cold user pays the one control-plane
+// round trip redesign §11.1 already priced and accepted. It is NOT a
+// reservation: ensureLease never arms a hold, and ShipAny's issue path only
+// reads available credits and inserts a lease row. The admission decision
+// stays with the caller — on nil it re-reads HasCanonicalWalletHeadroom;
+// ErrCanonicalWalletLeaseMissing is normalized to nil for the same reason
+// (the re-read is the verdict, and a concurrent request may have installed
+// the lease already). ensureLease, HasCanonicalWalletHeadroom and
+// leaseCovers themselves are unchanged.
+//
+// issued/reused classification: ensureLease (unchanged) reports its outcome
+// only through the lease_issued/lease_reused counters, so this wrapper
+// diffs lease_issued around the call. Exact for the gate's own call in the
+// single-request case; under concurrency an unrelated acquire landing
+// between the two reads can be attributed to this bootstrap — acceptable
+// for a soak signal, never read as a money-path fact.
+func (b *CanonicalWalletBridge) EnsureCanonicalWalletLeaseForAdmission(ctx context.Context, platformUserID, currency string) error {
+	if b == nil || b.cfg.Mode != config.CanonicalWalletModeEnforce {
+		return nil // the gate only bootstraps in enforce; a nil bridge can't
+	}
+	issuedBefore := canonicalWalletBridgeMetrics.leaseIssued.Load()
+	_, err := b.ensureLease(ctx, platformUserID, currency, 1, canonicalWalletLeasePurposeAuthorize, "")
+	if err != nil && errors.Is(err, ErrCanonicalWalletLeaseMissing) {
+		err = nil // nothing was installed — the caller's re-read decides
+	}
+	if err != nil {
+		canonicalWalletBridgeMetrics.eligibilityBootstrapFailed.Add(1)
+		return err
+	}
+	if canonicalWalletBridgeMetrics.leaseIssued.Load() > issuedBefore {
+		canonicalWalletBridgeMetrics.eligibilityBootstrapIssued.Add(1)
+	} else {
+		canonicalWalletBridgeMetrics.eligibilityBootstrapReused.Add(1)
+	}
+	return nil
 }
 
 // runHoldReaper (§10.7) is the per-bridge tick loop. Every decision reads

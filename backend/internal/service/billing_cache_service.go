@@ -900,8 +900,14 @@ func (s *BillingCacheService) balanceBelowEligibilityThreshold(balance float64) 
 // HasCanonicalWalletHeadroom's doc comment for why a reservation probe here
 // was found broken and scrapped); the single real, atomic debit per request
 // stays in ObserveSettlement's post-hoc settlement once actual usage is
-// known. The legacy float64 balance path below remains the admission
-// decision for every other mode.
+// known. When the read answers "nothing admissible" (no lease ever issued,
+// or an expired-retained/exhausted one), the gate first makes ONE bounded
+// synchronous bootstrap — EnsureCanonicalWalletLeaseForAdmission, the same
+// ensureLease the authorization point runs — and only then refuses (spec
+// 2026-09-29-wallet-lease-enforce-eligibility-bootstrap §2.2; the 2026-09-29
+// incident: with pre-warm dropped, nothing else could ever install the
+// first lease, so a funded user was refused forever). The legacy float64
+// balance path below remains the admission decision for every other mode.
 func (s *BillingCacheService) checkBalanceEligibility(ctx context.Context, user *User) error {
 	if s.canonicalWallet != nil && s.canonicalWallet.Mode() == config.CanonicalWalletModeEnforce {
 		platformUserID := strings.TrimSpace(user.PlatformUserID)
@@ -919,6 +925,12 @@ func (s *BillingCacheService) checkBalanceEligibility(ctx context.Context, user 
 			return ErrBillingServiceUnavailable
 		}
 		allowed, err := s.canonicalWallet.HasCanonicalWalletHeadroom(ctx, platformUserID, currency)
+		if err != nil && errors.Is(err, ErrCanonicalWalletLeaseMissing) {
+			// The bootstrap window (spec §2.2 leg 2): no lease data exists
+			// for this user. One bounded synchronous ensure, then the re-read
+			// decides — never a bare terminal refusal on absence.
+			return s.bootstrapCanonicalWalletLease(ctx, platformUserID, currency)
+		}
 		if err != nil {
 			// An expected "lease exhausted" denial is NOT an infrastructure
 			// failure: it maps to ErrInsufficientBalance and must not trip
@@ -927,18 +939,25 @@ func (s *BillingCacheService) checkBalanceEligibility(ctx context.Context, user 
 			if errors.Is(err, ErrCanonicalWalletLeaseExhausted) {
 				return ErrInsufficientBalance
 			}
+			// A transport error is NOT absence: bootstrapping against a
+			// store/control plane that just failed the read is a doomed
+			// round trip — fail closed exactly as before (spec §2.2 leg 3).
 			if s.circuitBreaker != nil {
 				s.circuitBreaker.OnFailure(err)
 			}
 			return ErrBillingServiceUnavailable.WithCause(err)
 		}
-		if s.circuitBreaker != nil {
-			s.circuitBreaker.OnSuccess()
+		if allowed {
+			if s.circuitBreaker != nil {
+				s.circuitBreaker.OnSuccess()
+			}
+			return nil
 		}
-		if !allowed {
-			return ErrInsufficientBalance
-		}
-		return nil
+		// Read succeeded but nothing admissible (expired-retained lease,
+		// exhausted lease, currency mismatch): the same bootstrap window —
+		// the seal+drain inside ensureLease is the only path that can turn
+		// an expired lease into a fresh one.
+		return s.bootstrapCanonicalWalletLease(ctx, platformUserID, currency)
 	}
 
 	balance, err := s.GetUserBalance(ctx, user.ID)
@@ -957,6 +976,58 @@ func (s *BillingCacheService) checkBalanceEligibility(ctx context.Context, user 
 		return ErrInsufficientBalance
 	}
 
+	return nil
+}
+
+// bootstrapCanonicalWalletLease (spec 2026-09-29-wallet-lease-enforce-
+// eligibility-bootstrap §2.2) is the enforce gate's bootstrap window: one
+// bounded synchronous ensure, then one re-read. Error classification:
+//
+//   - ErrCanonicalWalletBalanceShortfall → ErrInsufficientBalance (terminal
+//     403, the control plane's own "this wallet has no money" answer; no
+//     breaker — same principle as the exhausted rule above);
+//   - ErrCanonicalWalletLeaseCapReached / ErrCanonicalWalletLeaseContention
+//     → ErrBillingServiceUnavailable (retryable 503, no breaker — per-user
+//     state is not cluster health; a cap drains synchronously as leases
+//     close, so a persistent cap-reached self-heals);
+//   - anything else (transport/timeout) → breaker OnFailure +
+//     ErrBillingServiceUnavailable: fail-closed, and exactly redesign
+//     §11.1's accepted lease_unavailable + client-retry shape.
+//
+// On success the re-read decides: admissible → OnSuccess + admit; still not
+// admissible → ErrInsufficientBalance (the terminal answer — the control
+// plane just told us what this wallet can do). A re-read transport error
+// fails closed like any read.
+func (s *BillingCacheService) bootstrapCanonicalWalletLease(ctx context.Context, platformUserID, currency string) error {
+	ensureErr := s.canonicalWallet.EnsureCanonicalWalletLeaseForAdmission(ctx, platformUserID, currency)
+	switch {
+	case ensureErr == nil:
+	case errors.Is(ensureErr, ErrCanonicalWalletBalanceShortfall):
+		return ErrInsufficientBalance
+	case errors.Is(ensureErr, ErrCanonicalWalletLeaseCapReached), errors.Is(ensureErr, ErrCanonicalWalletLeaseContention):
+		return ErrBillingServiceUnavailable.WithCause(ensureErr)
+	default:
+		if s.circuitBreaker != nil {
+			s.circuitBreaker.OnFailure(ensureErr)
+		}
+		return ErrBillingServiceUnavailable.WithCause(ensureErr)
+	}
+	allowed, err := s.canonicalWallet.HasCanonicalWalletHeadroom(ctx, platformUserID, currency)
+	if err != nil {
+		if errors.Is(err, ErrCanonicalWalletLeaseExhausted) {
+			return ErrInsufficientBalance
+		}
+		if s.circuitBreaker != nil {
+			s.circuitBreaker.OnFailure(err)
+		}
+		return ErrBillingServiceUnavailable.WithCause(err)
+	}
+	if !allowed {
+		return ErrInsufficientBalance
+	}
+	if s.circuitBreaker != nil {
+		s.circuitBreaker.OnSuccess()
+	}
 	return nil
 }
 

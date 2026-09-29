@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -108,10 +109,15 @@ func TestBillingCacheServiceChecksBalanceEligibilityAgainstCanonicalWalletInEnfo
 	// canonical wallet mechanism here is the SAME real-Redis, real-Lua-script
 	// store every other test in this task uses; only the UNRELATED
 	// dependencies use `nil`/the existing billingCacheWorkerStub.
-	newSvc := func(t *testing.T, lease CanonicalWalletLease) *BillingCacheService {
+	newSvc := func(t *testing.T, lease CanonicalWalletLease, control *canonicalWalletControlStub) *BillingCacheService {
 		t.Helper()
-		require.NoError(t, store.InstallCanonicalWalletLease(ctx, lease))
-		bridge := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeEnforce), store, &canonicalWalletControlStub{}, nil, nil, 0, nil) // control/outboxDB/outbox unused by HasCanonicalWalletHeadroom
+		if lease.LeaseID != "" {
+			require.NoError(t, store.InstallCanonicalWalletLease(ctx, lease))
+		}
+		if control == nil {
+			control = &canonicalWalletControlStub{}
+		}
+		bridge := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeEnforce), store, control, nil, nil, 0, nil) // outboxDB/outbox unused by this test
 		t.Cleanup(bridge.Close)
 		// A real bootstrap exchange rate keeps CheckBillingEligibility's
 		// downstream currency-conversion step (reached when
@@ -126,18 +132,27 @@ func TestBillingCacheServiceChecksBalanceEligibilityAgainstCanonicalWalletInEnfo
 	}
 	user := &User{ID: 1, PlatformUserID: platformUserID, BillingCurrency: "CNY"}
 
+	// Under the eligibility-bootstrap spec (2026-09-29 §2.2) an exhausted
+	// lease is no longer a bare terminal refusal: the gate first makes one
+	// bounded synchronous ensure. The fund-safety core of this leg survives
+	// — the control plane's own "no money" answer (Shortfall) is still
+	// ErrInsufficientBalance through the real entry point — and the ensure
+	// call count pins that the bootstrap actually ran (otherwise the leg
+	// would pass vacuously under the old semantics).
+	deniedControl := &canonicalWalletControlStub{leaseErr: ErrCanonicalWalletBalanceShortfall}
 	deniedSvc := newSvc(t, CanonicalWalletLease{
 		LeaseID: "lease-" + uuid.NewString(), PlatformUserID: platformUserID, Currency: "CNY",
 		BudgetUnits: 1, ConsumedUnits: 1, ExpiresAt: time.Now().UTC().Add(time.Minute), // fully consumed: RemainingUnits() == 0
-	})
+	}, deniedControl)
 	err := deniedSvc.CheckBillingEligibility(ctx, user, nil, nil, nil, "")
-	require.ErrorIs(t, err, ErrInsufficientBalance, "an exhausted canonical wallet lease must deny the request through the real CheckBillingEligibility entry point, not just the bridge directly")
+	require.ErrorIs(t, err, ErrInsufficientBalance, "an exhausted lease plus a zero-balance ensure answer must deny the request through the real CheckBillingEligibility entry point")
+	require.Equal(t, 1, deniedControl.ensureCalls, "the exhausted leg must have gone through the bootstrap ensure, not a bare refusal")
 
 	allowedUser := &User{ID: 2, PlatformUserID: "shipany-user-" + uuid.NewString(), BillingCurrency: "CNY"}
 	allowedSvc := newSvc(t, CanonicalWalletLease{
 		LeaseID: "lease-" + uuid.NewString(), PlatformUserID: allowedUser.PlatformUserID, Currency: "CNY",
 		BudgetUnits: 100_000000, ConsumedUnits: 0, ExpiresAt: time.Now().UTC().Add(time.Minute), // real headroom
-	})
+	}, nil)
 	require.NoError(t, allowedSvc.CheckBillingEligibility(ctx, allowedUser, nil, nil, nil, ""), "a lease with real headroom must admit the request through the real CheckBillingEligibility entry point")
 }
 
@@ -1051,43 +1066,302 @@ func TestCheckBalanceEligibilityEnforceBranchesThroughRealEntryPoints(t *testing
 	rdb := startCanonicalWalletTestRedis(t, ctx)
 	store := &gatewayCacheAdapterForTest{rdb: rdb}
 
-	newBridge := func() *CanonicalWalletBridge {
-		b := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeEnforce), store, &canonicalWalletControlStub{}, nil, nil, 0, nil)
+	newBridge := func(control *canonicalWalletControlStub) *CanonicalWalletBridge {
+		if control == nil {
+			control = &canonicalWalletControlStub{}
+		}
+		b := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeEnforce), store, control, nil, nil, 0, nil)
 		t.Cleanup(b.Close)
 		return b
 	}
-	cfg := &config.Config{RunMode: config.RunModeStandard}
-	cfg.Billing.ExchangeRate.BootstrapUSDToCNY = 7.2
+	newCfg := func() *config.Config {
+		cfg := &config.Config{RunMode: config.RunModeStandard}
+		cfg.Billing.ExchangeRate.BootstrapUSDToCNY = 7.2
+		return cfg
+	}
 
 	// Blank platform identity under enforce mode fails closed.
 	blankIDUser := &User{ID: 11, PlatformUserID: "   ", BillingCurrency: "CNY"}
-	blankIDSvc := NewBillingCacheService(&billingCacheWorkerStub{}, nil, nil, nil, nil, nil, cfg, nil, newBridge())
+	blankIDSvc := NewBillingCacheService(&billingCacheWorkerStub{}, nil, nil, nil, nil, nil, newCfg(), nil, newBridge(nil))
 	err := blankIDSvc.CheckBillingEligibility(ctx, blankIDUser, nil, nil, nil, "")
 	require.ErrorIs(t, err, ErrBillingServiceUnavailable, "a user without a canonical identity cannot be checked — fail closed")
 
 	// A non-CNY billing currency is rejected outright, never coerced to CNY.
 	usdUser := &User{ID: 12, PlatformUserID: "shipany-user-" + uuid.NewString(), BillingCurrency: "USD"}
-	usdSvc := NewBillingCacheService(&billingCacheWorkerStub{}, nil, nil, nil, nil, nil, cfg, nil, newBridge())
+	usdSvc := NewBillingCacheService(&billingCacheWorkerStub{}, nil, nil, nil, nil, nil, newCfg(), nil, newBridge(nil))
 	err = usdSvc.CheckBillingEligibility(ctx, usdUser, nil, nil, nil, "")
 	require.ErrorIs(t, err, ErrBillingServiceUnavailable, "cny-e8-v1 is CNY-only — reject instead of admitting under the wrong wallet")
 
-	// A user with NO lease data: genuine store error -> infrastructure
-	// classification (not the ordinary insufficient-balance denial).
-	noLeaseSvc := NewBillingCacheService(&billingCacheWorkerStub{}, nil, nil, nil, nil, nil, cfg, nil, newBridge())
-	noLeaseUser := &User{ID: 13, PlatformUserID: "shipany-user-" + uuid.NewString(), BillingCurrency: "CNY"}
-	err = noLeaseSvc.CheckBillingEligibility(ctx, noLeaseUser, nil, nil, nil, "")
-	require.ErrorIs(t, err, ErrBillingServiceUnavailable, "a missing lease fails closed as unavailable, not as insufficient balance")
+	// An absent lease is no longer a bare refusal (spec
+	// 2026-09-29-wallet-lease-enforce-eligibility-bootstrap §4 test 2): the
+	// gate first makes ONE bounded synchronous ensure, and the ensure's own
+	// answer decides — funded grant admits, zero-balance is a terminal 403,
+	// transport failure fails closed as retryable 503.
+	fundedPlatformID := "shipany-user-" + uuid.NewString()
+	funded := &canonicalWalletControlStub{lease: CanonicalWalletLease{
+		LeaseID: "lease-boot-" + uuid.NewString(), PlatformUserID: fundedPlatformID, Currency: "CNY",
+		BudgetUnits: 100_000000, ExpiresAt: time.Now().UTC().Add(time.Minute),
+	}}
+	fundedUser := &User{ID: 13, PlatformUserID: fundedPlatformID, BillingCurrency: "CNY"}
+	fundedSvc := NewBillingCacheService(&billingCacheWorkerStub{}, nil, nil, nil, nil, nil, newCfg(), nil, newBridge(funded))
+	require.NoError(t, fundedSvc.CheckBillingEligibility(ctx, fundedUser, nil, nil, nil, ""),
+		"an absent lease with a funded ensure must bootstrap and admit through the real entry point")
+	require.Equal(t, 1, funded.ensureCalls)
+	require.Equal(t, "authorize", funded.lastEnsure.Purpose, "the bootstrap is the authorization point's own ensure shape")
+	require.Equal(t, "1", funded.lastEnsure.MinHeadroom.AmountUnits, "the bootstrap asks for any non-zero headroom — the real ceiling is the authorize point's estimate")
+
+	zero := &canonicalWalletControlStub{leaseErr: ErrCanonicalWalletBalanceShortfall}
+	zeroUser := &User{ID: 14, PlatformUserID: "shipany-user-boot-zero", BillingCurrency: "CNY"}
+	zeroSvc := NewBillingCacheService(&billingCacheWorkerStub{}, nil, nil, nil, nil, nil, newCfg(), nil, newBridge(zero))
+	err = zeroSvc.CheckBillingEligibility(ctx, zeroUser, nil, nil, nil, "")
+	require.ErrorIs(t, err, ErrInsufficientBalance, "a zero-balance ensure answer is the terminal 403, not an infra failure")
+	require.Equal(t, 1, zero.ensureCalls)
+
+	transport := errors.New("canonical wallet control plane unreachable")
+	transportErr := &canonicalWalletControlStub{leaseErr: transport}
+	transportUser := &User{ID: 15, PlatformUserID: "shipany-user-boot-transport", BillingCurrency: "CNY"}
+	transportSvc := NewBillingCacheService(&billingCacheWorkerStub{}, nil, nil, nil, nil, nil, newCfg(), nil, newBridge(transportErr))
+	err = transportSvc.CheckBillingEligibility(ctx, transportUser, nil, nil, nil, "")
+	require.ErrorIs(t, err, ErrBillingServiceUnavailable, "a bootstrap transport failure fails closed — retryable 503, never admitted")
+	require.Equal(t, 1, transportErr.ensureCalls)
 
 	// The LEGACY float64 path still decides when no canonical wallet is
 	// wired at all: an empty cache balance denies, a funded one admits.
 	// (fixedBalanceCache is DI plumbing only — the reserve path above runs
 	// on the real Redis store.)
-	legacyDeny := NewBillingCacheService(&fixedBalanceCache{balance: 0}, nil, nil, nil, nil, nil, cfg, nil, nil)
-	err = legacyDeny.CheckBillingEligibility(ctx, &User{ID: 14, BillingCurrency: "CNY"}, nil, nil, nil, "")
+	legacyDeny := NewBillingCacheService(&fixedBalanceCache{balance: 0}, nil, nil, nil, nil, nil, newCfg(), nil, nil)
+	err = legacyDeny.CheckBillingEligibility(ctx, &User{ID: 16, BillingCurrency: "CNY"}, nil, nil, nil, "")
 	require.ErrorIs(t, err, ErrInsufficientBalance, "the legacy path still denies a zero balance")
 
-	legacyAllow := NewBillingCacheService(&fixedBalanceCache{balance: 100}, nil, nil, nil, nil, nil, cfg, nil, nil)
-	require.NoError(t, legacyAllow.CheckBillingEligibility(ctx, &User{ID: 15, BillingCurrency: "CNY"}, nil, nil, nil, ""))
+	legacyAllow := NewBillingCacheService(&fixedBalanceCache{balance: 100}, nil, nil, nil, nil, nil, newCfg(), nil, nil)
+	require.NoError(t, legacyAllow.CheckBillingEligibility(ctx, &User{ID: 17, BillingCurrency: "CNY"}, nil, nil, nil, ""))
+}
+
+// TestCheckBalanceEligibilityBootstrapsExpiredRetainedLease (spec
+// 2026-09-29-wallet-lease-enforce-eligibility-bootstrap §4 test 5): the
+// 2026-09-29 incident's permanent-403 shape — a lease that died of expiry
+// but is still readable through RetainUntil — must self-heal INSIDE the
+// eligibility gate: the read answers (false, nil), the gate's bootstrap
+// ensure seals + drains the finished lease and installs the renewal, the
+// re-read admits. The drained entry must carry the pre-seal consumed units
+// (§3.3 + 5-G Task 3 convergence).
+func TestCheckBalanceEligibilityBootstrapsExpiredRetainedLease(t *testing.T) {
+	ctx := context.Background()
+	rdb := startCanonicalWalletTestRedis(t, ctx)
+	store := &gatewayCacheAdapterForTest{rdb: rdb}
+	platformUserID := "shipany-user-" + uuid.NewString()
+
+	// The control plane first grants a 1 s lease with 40_000000 units
+	// already consumed — the pre-seal consumed the drain entry must report.
+	granted := CanonicalWalletLease{
+		LeaseID: "lease-" + uuid.NewString(), PlatformUserID: platformUserID, Currency: "CNY",
+		BudgetUnits: 100_000000, ConsumedUnits: 40_000000, ExpiresAt: time.Now().UTC().Add(1 * time.Second),
+	}
+	control := &canonicalWalletControlStub{lease: granted}
+	bridge := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeEnforce), store, control, nil, nil, 1800, nil)
+	t.Cleanup(bridge.Close)
+	cfg := &config.Config{RunMode: config.RunModeStandard}
+	cfg.Billing.ExchangeRate.BootstrapUSDToCNY = 7.2
+	svc := NewBillingCacheService(&billingCacheWorkerStub{}, nil, nil, nil, nil, nil, cfg, nil, bridge)
+	user := &User{ID: 31, PlatformUserID: platformUserID, BillingCurrency: "CNY"}
+
+	// Cold user: the first check bootstraps (no lease exists at all).
+	require.NoError(t, svc.CheckBillingEligibility(ctx, user, nil, nil, nil, ""), "the first request of a cold user must bootstrap a lease and admit")
+	require.Equal(t, 1, control.ensureCalls)
+
+	// Advance the REAL clock past expires_at — no fake clock reaches Redis's
+	// PEXPIREAT, so the RetainUntil retention must actually hold the hash.
+	time.Sleep(1200 * time.Millisecond)
+
+	renewal := CanonicalWalletLease{
+		LeaseID: "lease-" + uuid.NewString(), PlatformUserID: platformUserID, Currency: "CNY",
+		BudgetUnits: 100_000000, ExpiresAt: time.Now().UTC().Add(time.Minute),
+	}
+	control.lease = renewal
+
+	require.NoError(t, svc.CheckBillingEligibility(ctx, user, nil, nil, nil, ""),
+		"an expired-retained lease must be renewed synchronously by the gate's bootstrap, not strand the user in 403s")
+	require.Equal(t, 2, control.ensureCalls)
+	require.Len(t, control.lastEnsure.Drained, 1, "the renewal ensure must drain the finished lease, not wait out the grace sweep")
+	entry := control.lastEnsure.Drained[0]
+	require.Equal(t, granted.LeaseID, entry.LeaseID)
+	require.Equal(t, "40000000", entry.GatewayConsumed.AmountUnits, "the drained entry carries the pre-seal consumed units")
+}
+
+// TestCheckBillingEligibilityBootstrapIsOncePerLease (spec §4 test 6): after
+// the first bootstrap installs a covering lease, every subsequent
+// eligibility check takes the pure-read fast path — the control plane sees
+// exactly ONE ensure per lease lifecycle.
+func TestCheckBillingEligibilityBootstrapIsOncePerLease(t *testing.T) {
+	ctx := context.Background()
+	rdb := startCanonicalWalletTestRedis(t, ctx)
+	store := &gatewayCacheAdapterForTest{rdb: rdb}
+	platformUserID := "shipany-user-" + uuid.NewString()
+
+	control := &canonicalWalletControlStub{lease: CanonicalWalletLease{
+		LeaseID: "lease-" + uuid.NewString(), PlatformUserID: platformUserID, Currency: "CNY",
+		BudgetUnits: 100_000000, ExpiresAt: time.Now().UTC().Add(time.Minute),
+	}}
+	bridge := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeEnforce), store, control, nil, nil, 0, nil)
+	t.Cleanup(bridge.Close)
+	cfg := &config.Config{RunMode: config.RunModeStandard}
+	cfg.Billing.ExchangeRate.BootstrapUSDToCNY = 7.2
+	svc := NewBillingCacheService(&billingCacheWorkerStub{}, nil, nil, nil, nil, nil, cfg, nil, bridge)
+	user := &User{ID: 32, PlatformUserID: platformUserID, BillingCurrency: "CNY"}
+
+	require.NoError(t, svc.CheckBillingEligibility(ctx, user, nil, nil, nil, ""))
+	require.NoError(t, svc.CheckBillingEligibility(ctx, user, nil, nil, nil, ""))
+	require.NoError(t, svc.CheckBillingEligibility(ctx, user, nil, nil, nil, ""))
+	require.Equal(t, 1, control.ensureCalls, "only the FIRST check of a cold user pays the ensure round trip — the rest are pure reads")
+}
+
+// bootstrapBarrierControl is a one-shot control-plane double for the
+// concurrent test: both EnsureLease calls rendezvous at a barrier INSIDE the
+// control plane, so neither caller can install its grant before the other
+// has entered — the exact overlap ShipAny's per-user serialization (G4)
+// resolves as one issued + one reused.
+type bootstrapBarrierControl struct {
+	mu       sync.Mutex
+	lease    CanonicalWalletLease
+	calls    int
+	outcomes []string
+	barrier  *sync.WaitGroup
+}
+
+func (c *bootstrapBarrierControl) EnsureLease(_ context.Context, req canonicalWalletEnsureRequest) (*canonicalWalletEnsureResult, error) {
+	c.mu.Lock()
+	c.calls++
+	outcome := "reused"
+	if c.calls == 1 {
+		outcome = "issued"
+	}
+	c.outcomes = append(c.outcomes, outcome)
+	c.mu.Unlock()
+	c.barrier.Done()
+	c.barrier.Wait() // both control calls overlap; neither install has happened yet
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_ = req
+	return &canonicalWalletEnsureResult{Lease: c.lease, Outcome: outcome, ClampedBy: "none"}, nil
+}
+func (c *bootstrapBarrierControl) SubmitSettlement(context.Context, CanonicalWalletSettlementEvent) (*CanonicalWalletSettlementResult, error) {
+	return &CanonicalWalletSettlementResult{Accepted: true}, nil
+}
+
+// TestCheckBillingEligibilityBootstrapConcurrentSingleIssuance (spec §4
+// test 7): two concurrent eligibility checks on the same cold user both
+// admit, the control plane answers exactly one "issued" and one "reused" —
+// G4 (per-user serialization → single live budget) holds at the gate.
+func TestCheckBillingEligibilityBootstrapConcurrentSingleIssuance(t *testing.T) {
+	ctx := context.Background()
+	rdb := startCanonicalWalletTestRedis(t, ctx)
+	store := &gatewayCacheAdapterForTest{rdb: rdb}
+	platformUserID := "shipany-user-" + uuid.NewString()
+
+	barrier := &sync.WaitGroup{}
+	barrier.Add(2)
+	control := &bootstrapBarrierControl{
+		lease: CanonicalWalletLease{
+			LeaseID: "lease-" + uuid.NewString(), PlatformUserID: platformUserID, Currency: "CNY",
+			BudgetUnits: 100_000000, ExpiresAt: time.Now().UTC().Add(time.Minute),
+		},
+		barrier: barrier,
+	}
+	bridge := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeEnforce), store, control, nil, nil, 0, nil)
+	t.Cleanup(bridge.Close)
+	cfg := &config.Config{RunMode: config.RunModeStandard}
+	cfg.Billing.ExchangeRate.BootstrapUSDToCNY = 7.2
+	svc := NewBillingCacheService(&billingCacheWorkerStub{}, nil, nil, nil, nil, nil, cfg, nil, bridge)
+	user := &User{ID: 33, PlatformUserID: platformUserID, BillingCurrency: "CNY"}
+
+	errs := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		go func() { errs <- svc.CheckBillingEligibility(ctx, user, nil, nil, nil, "") }()
+	}
+	for i := 0; i < 2; i++ {
+		require.NoError(t, <-errs, "both concurrent cold-start checks must admit")
+	}
+	control.mu.Lock()
+	calls, outcomes := control.calls, append([]string(nil), control.outcomes...)
+	control.mu.Unlock()
+	require.Equal(t, 2, calls, "both goroutines entered the control plane before either could install")
+	require.Len(t, outcomes, 2)
+	require.ElementsMatch(t, []string{"issued", "reused"}, outcomes, "the serialized answers must be exactly one issued + one reused")
+}
+
+// TestCheckBillingEligibilityBootstrapTransportFailureFailsClosed (spec §4
+// test 8): a bootstrap transport error is ErrBillingServiceUnavailable (the
+// incident's terminal 403 becomes a retryable 503), each failed check trips
+// the breaker EXACTLY once, and the opened breaker still refuses — the
+// fund-safety assertions survive the semantic change.
+func TestCheckBillingEligibilityBootstrapTransportFailureFailsClosed(t *testing.T) {
+	ctx := context.Background()
+	rdb := startCanonicalWalletTestRedis(t, ctx)
+	store := &gatewayCacheAdapterForTest{rdb: rdb}
+
+	transport := errors.New("canonical wallet control plane unreachable")
+	control := &canonicalWalletControlStub{leaseErr: transport}
+	bridge := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeEnforce), store, control, nil, nil, 0, nil)
+	t.Cleanup(bridge.Close)
+	cfg := &config.Config{RunMode: config.RunModeStandard}
+	cfg.Billing.ExchangeRate.BootstrapUSDToCNY = 7.2
+	// Threshold 2: after ONE failed check the breaker must still be closed
+	// with failures==1 — a double OnFailure would already have opened it.
+	cfg.Billing.CircuitBreaker = config.CircuitBreakerConfig{Enabled: true, FailureThreshold: 2, ResetTimeoutSeconds: 3600}
+	svc := NewBillingCacheService(&billingCacheWorkerStub{}, nil, nil, nil, nil, nil, cfg, nil, bridge)
+	user := &User{ID: 34, PlatformUserID: "shipany-user-transport", BillingCurrency: "CNY"}
+
+	err := svc.CheckBillingEligibility(ctx, user, nil, nil, nil, "")
+	require.ErrorIs(t, err, ErrBillingServiceUnavailable, "a bootstrap transport failure fails closed as a retryable 503")
+	require.Equal(t, 1, control.ensureCalls)
+	svc.circuitBreaker.mu.Lock()
+	require.Equal(t, 1, svc.circuitBreaker.failures, "one failed check = exactly one OnFailure")
+	require.Equal(t, billingCircuitClosed, svc.circuitBreaker.state)
+	svc.circuitBreaker.mu.Unlock()
+
+	// A second failure opens the breaker; a third check is then refused AT
+	// Allow() — it must never reach the control plane again.
+	require.ErrorIs(t, svc.CheckBillingEligibility(ctx, user, nil, nil, nil, ""), ErrBillingServiceUnavailable)
+	svc.circuitBreaker.mu.Lock()
+	require.Equal(t, 2, svc.circuitBreaker.failures)
+	require.Equal(t, billingCircuitOpen, svc.circuitBreaker.state)
+	svc.circuitBreaker.mu.Unlock()
+	require.ErrorIs(t, svc.CheckBillingEligibility(ctx, user, nil, nil, nil, ""), ErrBillingServiceUnavailable, "the opened breaker still refuses — fund safety intact")
+	require.Equal(t, 2, control.ensureCalls, "the breaker-blocked check must not have reached the control plane")
+}
+
+// TestCheckBillingEligibilityBootstrapShortfallIsTerminalNoBreaker (spec §4
+// test 9): the control plane's insufficient_balance refusal is a TERMINAL
+// ErrInsufficientBalance and never touches the breaker — a wave of broke
+// users must not open the circuit for everyone.
+func TestCheckBillingEligibilityBootstrapShortfallIsTerminalNoBreaker(t *testing.T) {
+	ctx := context.Background()
+	rdb := startCanonicalWalletTestRedis(t, ctx)
+	store := &gatewayCacheAdapterForTest{rdb: rdb}
+
+	control := &canonicalWalletControlStub{leaseErr: ErrCanonicalWalletBalanceShortfall}
+	bridge := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeEnforce), store, control, nil, nil, 0, nil)
+	t.Cleanup(bridge.Close)
+	cfg := &config.Config{RunMode: config.RunModeStandard}
+	cfg.Billing.ExchangeRate.BootstrapUSDToCNY = 7.2
+	cfg.Billing.CircuitBreaker = config.CircuitBreakerConfig{Enabled: true, FailureThreshold: 1, ResetTimeoutSeconds: 3600}
+	svc := NewBillingCacheService(&billingCacheWorkerStub{}, nil, nil, nil, nil, nil, cfg, nil, bridge)
+	user := &User{ID: 35, PlatformUserID: "shipany-user-shortfall", BillingCurrency: "CNY"}
+
+	err := svc.CheckBillingEligibility(ctx, user, nil, nil, nil, "")
+	require.ErrorIs(t, err, ErrInsufficientBalance, "a zero-balance wallet is still denied — the fund-safety core of the old fail-closed test")
+	require.Equal(t, 1, control.ensureCalls)
+	svc.circuitBreaker.mu.Lock()
+	require.Equal(t, 0, svc.circuitBreaker.failures, "a shortfall is terminal, not an infrastructure failure — no breaker action")
+	require.Equal(t, billingCircuitClosed, svc.circuitBreaker.state)
+	svc.circuitBreaker.mu.Unlock()
+
+	// And it stays terminal and breaker-free on the retry.
+	require.ErrorIs(t, svc.CheckBillingEligibility(ctx, user, nil, nil, nil, ""), ErrInsufficientBalance)
+	require.Equal(t, 2, control.ensureCalls)
+	svc.circuitBreaker.mu.Lock()
+	require.Equal(t, 0, svc.circuitBreaker.failures)
+	svc.circuitBreaker.mu.Unlock()
 }
 
 // fixedBalanceCache implements the BillingCache interface with a constant
