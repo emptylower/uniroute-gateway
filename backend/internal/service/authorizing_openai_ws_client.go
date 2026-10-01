@@ -122,6 +122,9 @@ func (c *authorizingOpenAIWSClientConn) write(ctx context.Context, send func() e
 		return handle.Refusal
 	}
 	token := handle.MintWriteToken()
+	if err := handle.prepareWrite(ctx, token); err != nil {
+		return err
+	}
 	authorizationMetrics.writesAuthorized.Add(1)
 	err := send()
 	if err == nil {

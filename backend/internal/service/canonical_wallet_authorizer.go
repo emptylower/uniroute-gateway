@@ -27,9 +27,12 @@ func NewCanonicalWalletAuthorizer(cfg *config.Config, bridge *CanonicalWalletBri
 }
 
 type AuthorizeInput struct {
-	Snapshot *BillingSnapshot
-	Estimate EstimateInput
-	User     *User
+	// DurableAuthorizationID is preallocated only by the persisted media job.
+	// Its row exists before Redis can arm a hold, closing the crash window.
+	DurableAuthorizationID string
+	Snapshot               *BillingSnapshot
+	Estimate               EstimateInput
+	User                   *User
 	// FixedEstimateUnits (Phase 3.7b, redesign §13.2.1): when > 0 it REPLACES
 	// the estimation step only — Authorize skips EstimateUpperBoundUnits and
 	// uses this value as the units bound. The snapshot, identity and currency
@@ -40,8 +43,7 @@ type AuthorizeInput struct {
 	// reaches it), so the estimator — which would re-bound from the request
 	// body — is bypassed by design. Setting both Estimate and
 	// FixedEstimateUnits is a programming error: FixedEstimateUnits wins and
-	// the authorizer does not estimate. Exactly one caller: the Live window
-	// re-authorization.
+	// the authorizer does not estimate. Live window re-authorization and gateway-owned fixed media quotes use this bound.
 	FixedEstimateUnits int64
 }
 
@@ -68,12 +70,23 @@ func (a *CanonicalWalletAuthorizer) Authorize(ctx context.Context, in AuthorizeI
 	if err != nil {
 		return nil, err
 	}
+	if in.DurableAuthorizationID != "" {
+		if !strings.HasPrefix(in.DurableAuthorizationID, "auth_") || len(in.DurableAuthorizationID) != 37 {
+			return nil, errors.New("invalid durable authorization id")
+		}
+		h.ID = in.DurableAuthorizationID
+	}
 	if a == nil || mode == "" || mode == config.CanonicalWalletModeDisabled || a.bridge == nil || a.snapshots == nil {
 		return h, nil
 	}
 	authorizationMetrics.minted.Add(1)
 	enforce := mode == config.CanonicalWalletModeEnforce
 	refuse := func(reason AuthorizationRefusalReason, detail string, cause error) (*AuthorizationHandle, error) {
+		if enforce && a.bridge.outboxDB != nil && h.AttemptKind != "media" {
+			abortCtx, abortCancel := context.WithTimeout(context.Background(), a.requestTimeout())
+			_, _ = a.bridge.outboxDB.ExecContext(abortCtx, `UPDATE wallet_authorization_segment SET state='released',updated_at=now() WHERE parent_authorization_id=$1 AND state='prepared'`, h.ID)
+			abortCancel()
+		}
 		e := &AuthorizationRefusedError{Reason: reason, AuthorizationID: h.ID, Detail: detail, Cause: cause}
 		if enforce {
 			h.Refusal = e
@@ -88,6 +101,13 @@ func (a *CanonicalWalletAuthorizer) Authorize(ctx context.Context, in AuthorizeI
 		return refuse(AuthorizationRefusalSnapshotMissing, "no billing snapshot for this attempt", nil)
 	}
 	h.SnapshotID = in.Snapshot.ID
+	h.AttemptKind = "llm"
+	if in.Snapshot.Family == BillingFamilyLive {
+		h.AttemptKind = "live"
+	}
+	if in.DurableAuthorizationID != "" {
+		h.AttemptKind = "media"
+	}
 	policyVersion := in.Snapshot.Flags.USDWalletPolicyVersion
 	_, policyEnabled, policyErr := canonicalUSDWalletSnapshot(in.User, a.cfg)
 	if policyErr != nil || (policyEnabled && policyVersion == "") ||
@@ -124,6 +144,45 @@ func (a *CanonicalWalletAuthorizer) Authorize(ctx context.Context, in AuthorizeI
 	}
 	leaseCtx, cancel := context.WithTimeout(ctx, a.requestTimeout())
 	defer cancel()
+	if policyVersion != "" && a.bridge.outboxDB != nil && a.bridge.HoldsEnabled() {
+		if _, ok := a.bridge.control.(*canonicalWalletHTTPClient); ok {
+			if err = a.bridge.authorizePool(leaseCtx, h, in.User.PlatformUserID, units); err != nil {
+				reason := AuthorizationRefusalLeaseUnavailable
+				if errors.Is(err, ErrCanonicalWalletBalanceShortfall) {
+					reason = AuthorizationRefusalBalanceShortfall
+				}
+				return refuse(reason, "pool", err)
+			}
+			if h.AttemptKind != "media" {
+				if err = a.bridge.preparePoolAttempt(leaseCtx, h, in.User.PlatformUserID); err != nil {
+					return refuse(AuthorizationRefusalLeaseUnavailable, "attempt protection", err)
+				}
+			}
+			if h.AttemptKind == "llm" {
+				h.renewAfterZero = func(ctx context.Context) (*AuthorizationHandle, error) {
+					segments, e := a.bridge.authorizationSegments(ctx, h.ID)
+					if e != nil || len(segments) != len(h.Segments) {
+						return nil, &AuthorizationRefusedError{Reason: AuthorizationRefusalLeaseUnavailable, AuthorizationID: h.ID, Detail: "previous zero resolution unavailable", Cause: e}
+					}
+					for _, segment := range segments {
+						if segment.ActualUnits != 0 || segment.Remainder != nil || (segment.State != "released" && segment.State != "finished") {
+							return nil, &AuthorizationRefusedError{Reason: AuthorizationRefusalLeaseUnavailable, AuthorizationID: h.ID, Detail: "previous attempt has no reliable zero proof"}
+						}
+						if segment.State != "finished" {
+							if e = a.bridge.protectPoolAttempt(ctx, h.ID, in.User.PlatformUserID, h.SnapshotID, &segment, true); e == nil {
+								e = a.bridge.finishPoolSegment(ctx, in.User.PlatformUserID, segment)
+							}
+							if e != nil {
+								return nil, &AuthorizationRefusedError{Reason: AuthorizationRefusalLeaseUnavailable, AuthorizationID: h.ID, Detail: "previous zero pin ACK unavailable", Cause: e}
+							}
+						}
+					}
+					return a.Authorize(ctx, in)
+				}
+			}
+			return h, nil
+		}
+	}
 	lease, err := a.bridge.ensureLeaseWithPolicy(leaseCtx, in.User.PlatformUserID, currency, units, canonicalWalletLeasePurposeAuthorize, "", policyVersion)
 	if err != nil {
 		if errors.Is(err, ErrCanonicalWalletBalanceShortfall) {

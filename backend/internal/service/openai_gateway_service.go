@@ -546,7 +546,7 @@ func NewOpenAIGatewayService(
 		svc.canonicalWallet = NewCanonicalWalletBridge(cfg, walletStore, db, outbox)
 		svc.authorizer = NewCanonicalWalletAuthorizer(cfg, svc.canonicalWallet, billingSnapshots)
 	}
-	svc.liveProvisional = newLiveProvisionalStore(db)
+	svc.liveProvisional = ProvideLiveProvisionalStore(cfg, db)
 	if rateLimitService != nil {
 		rateLimitService.SetAccountRuntimeBlocker(svc)
 	}

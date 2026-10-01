@@ -20,6 +20,7 @@ const (
 	AuthorizationOutcomeNotWritten    AuthorizationOutcome = "not_written"   // error before any request byte left the process
 	AuthorizationOutcomeResult        AuthorizationOutcome = "result"        // a response was obtained
 	AuthorizationOutcomeIndeterminate AuthorizationOutcome = "indeterminate" // error after bytes left
+	AuthorizationOutcomeRejected      AuthorizationOutcome = "rejected"      // explicit unbillable provider validation/authentication rejection
 )
 
 // AuthorizationWrite is one write through the decorated port under one handle.
@@ -43,6 +44,8 @@ type AuthorizationHandle struct {
 	MintedAt       time.Time
 	Mode           string // canonical_wallet.mode at mint time
 	SnapshotID     string
+	AttemptKind    string
+	Segments       []AuthorizationSegment
 	LeaseID        string
 	EstimatedUnits int64
 	// HoldArmed/HeldUnits (Phase 3.4b, §10.4): set when Authorize armed this
@@ -65,7 +68,45 @@ type AuthorizationHandle struct {
 	// onOutcome (§10.4): installed by Authorize when a hold was armed; invoked
 	// by RecordOutcome AFTER h.mu is released — the callback does a Redis
 	// round trip and must never re-enter the handle.
-	onOutcome func(token string, outcome AuthorizationOutcome, err error)
+	beforeWrite    func(context.Context, string) error
+	onOutcome      func(token string, outcome AuthorizationOutcome, err error)
+	renewAfterZero func(context.Context) (*AuthorizationHandle, error)
+	renewMu        sync.Mutex
+	renewed        atomic.Pointer[AuthorizationHandle]
+}
+
+func (h *AuthorizationHandle) activeAttempt() *AuthorizationHandle {
+	for h != nil {
+		next := h.renewed.Load()
+		if next == nil {
+			return h
+		}
+		h = next
+	}
+	return nil
+}
+
+func (h *AuthorizationHandle) nextHTTPAttempt(ctx context.Context) (*AuthorizationHandle, error) {
+	h = h.activeAttempt()
+	h.renewMu.Lock()
+	defer h.renewMu.Unlock()
+	if next := h.renewed.Load(); next != nil {
+		return next.nextHTTPAttempt(ctx)
+	}
+	writes := h.Writes()
+	if h.renewAfterZero == nil || len(writes) == 0 {
+		return h, nil
+	}
+	outcome := writes[len(writes)-1].Outcome
+	if outcome != AuthorizationOutcomeRejected && outcome != AuthorizationOutcomeNotWritten {
+		return h, nil
+	}
+	next, err := h.renewAfterZero(ctx)
+	if err != nil {
+		return nil, err
+	}
+	h.renewed.Store(next)
+	return next, nil
 }
 
 func newAuthorizationID() (string, error) {
@@ -111,6 +152,9 @@ func (h *AuthorizationHandle) RecordOutcome(token string, outcome AuthorizationO
 	var cb func(string, AuthorizationOutcome, error)
 	for i := len(h.writes) - 1; i >= 0; i-- {
 		if h.writes[i].Token == token {
+			if h.beforeWrite != nil && h.writes[i].Outcome != AuthorizationOutcomeUnknown {
+				break
+			}
 			h.writes[i].Outcome = outcome
 			h.writes[i].EndedAt = time.Now().UTC()
 			h.writes[i].Err = err
@@ -192,13 +236,13 @@ func (h *AuthorizationHandle) Abandoned() string {
 
 // AuthorizationTokenOf / AuthorizationIDOf are the nil-safe accessors the handlers
 // use when filling the usage-recording input (spec §3.5: explicit fields).
-func AuthorizationTokenOf(h *AuthorizationHandle) string { return h.SettledToken() }
+func AuthorizationTokenOf(h *AuthorizationHandle) string { return h.activeAttempt().SettledToken() }
 
 func AuthorizationIDOf(h *AuthorizationHandle) string {
 	if h == nil {
 		return ""
 	}
-	return h.ID
+	return h.activeAttempt().ID
 }
 
 type authorizationHandleContextKey struct{}
@@ -353,4 +397,11 @@ func ResetAuthorizationMetricsForTest() {
 
 func resetAuthorizationMetricsForTest() {
 	ResetAuthorizationMetricsForTest()
+}
+
+func (h *AuthorizationHandle) prepareWrite(ctx context.Context, token string) error {
+	if h != nil && h.beforeWrite != nil {
+		return h.beforeWrite(ctx, token)
+	}
+	return nil
 }

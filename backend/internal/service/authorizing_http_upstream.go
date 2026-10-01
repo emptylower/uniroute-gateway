@@ -99,11 +99,20 @@ func (a *AuthorizingHTTPUpstream) write(req *http.Request, send func(*http.Reque
 }
 
 func (a *AuthorizingHTTPUpstream) authorizedWrite(req *http.Request, handle *AuthorizationHandle, send func(*http.Request) (*http.Response, error)) (*http.Response, error) {
+	var err error
+	handle, err = handle.nextHTTPAttempt(req.Context())
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(WithAuthorizationHandle(req.Context(), handle))
 	if handle.Refusal != nil {
 		authorizationMetrics.writesRefused.Add(1)
 		return nil, handle.Refusal
 	}
 	token := handle.MintWriteToken()
+	if err := handle.prepareWrite(req.Context(), token); err != nil {
+		return nil, err
+	}
 	authorizationMetrics.writesAuthorized.Add(1)
 	var wrote atomic.Bool
 	trace := &httptrace.ClientTrace{
@@ -121,6 +130,8 @@ func (a *AuthorizingHTTPUpstream) authorizedWrite(req *http.Request, handle *Aut
 	// reaper must cross-check the class against the error before treating not_written
 	// as "nothing left the process" (3.4b deliverable, recorded here so it is not lost).
 	switch {
+	case err == nil && resp != nil && handle.beforeWrite != nil && (resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusRequestEntityTooLarge || resp.StatusCode == http.StatusUnsupportedMediaType || resp.StatusCode == http.StatusUnprocessableEntity):
+		handle.RecordOutcome(token, AuthorizationOutcomeRejected, nil)
 	case err == nil:
 		authorizationMetrics.outcomeResult.Add(1)
 		handle.RecordOutcome(token, AuthorizationOutcomeResult, nil)

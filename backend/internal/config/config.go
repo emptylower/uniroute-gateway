@@ -74,6 +74,7 @@ type Config struct {
 	JWT                     JWTConfig                     `mapstructure:"jwt"`
 	PlatformIdentity        PlatformIdentityConfig        `mapstructure:"platform_identity"`
 	CanonicalWallet         CanonicalWalletConfig         `mapstructure:"canonical_wallet"`
+	MediaTasks              MediaTasksConfig              `mapstructure:"media_tasks"`
 	Totp                    TotpConfig                    `mapstructure:"totp"`
 	LinuxDo                 LinuxDoConnectConfig          `mapstructure:"linuxdo_connect"`
 	WeChat                  WeChatConnectConfig           `mapstructure:"wechat_connect"`
@@ -1660,6 +1661,16 @@ type CanonicalWalletConfig struct {
 	RedisPolicyCheck string `mapstructure:"redis_policy_check"`
 }
 
+// MediaTasks uses the canonical wallet exclusively. The provider credential is
+// supplied through the environment, never projected to browser API keys.
+type MediaTasksConfig struct {
+	Enabled         bool   `mapstructure:"enabled"`
+	KIEAPIKey       string `mapstructure:"kie_api_key"`
+	KIEBaseURL      string `mapstructure:"kie_base_url"`
+	PollSeconds     int    `mapstructure:"poll_seconds"`
+	DeadlineSeconds int    `mapstructure:"deadline_seconds"`
+}
+
 // TotpConfig TOTP 双因素认证配置
 type TotpConfig struct {
 	// EncryptionKey 用于加密 TOTP 密钥的 AES-256 密钥（32 字节 hex 编码）
@@ -2122,6 +2133,11 @@ func setDefaults() {
 	viper.SetDefault("canonical_wallet.billing_snapshot_mode", "record")
 	viper.SetDefault("canonical_wallet.usd_wallet_enabled", false)
 	viper.SetDefault("canonical_wallet.usd_policy_version", "")
+	viper.SetDefault("media_tasks.enabled", false)
+	viper.SetDefault("media_tasks.kie_api_key", "")
+	viper.SetDefault("media_tasks.kie_base_url", "https://api.kie.ai")
+	viper.SetDefault("media_tasks.poll_seconds", 5)
+	viper.SetDefault("media_tasks.deadline_seconds", 86400)
 	viper.SetDefault("canonical_wallet.holds", "off")
 	viper.SetDefault("canonical_wallet.orphan_grace_seconds", 900)
 	viper.SetDefault("canonical_wallet.reconciliation_read_token", "")
@@ -2723,6 +2739,20 @@ func validateRedisPolicyCheck(check string) error {
 }
 
 func (c *Config) Validate() error {
+	if c.MediaTasks.Enabled {
+		if !c.PlatformIdentity.Enabled || !c.CanonicalWallet.USDWalletEnabled || c.CanonicalWallet.Mode != CanonicalWalletModeEnforce || c.CanonicalWallet.Holds != "on" || c.CanonicalWallet.BillingSnapshotMode != "settle" || strings.TrimSpace(c.MediaTasks.KIEAPIKey) == "" {
+			return fmt.Errorf("media_tasks.enabled requires platform identity, canonical USD wallet enforce/holds/settle and a provider credential")
+		}
+	}
+	if c.MediaTasks.Enabled || strings.TrimSpace(c.MediaTasks.KIEAPIKey) != "" {
+		u, err := url.Parse(c.MediaTasks.KIEBaseURL)
+		if err != nil || u.Scheme != "https" || u.Host != "api.kie.ai" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
+			return fmt.Errorf("media_tasks.kie_base_url must be https://api.kie.ai")
+		}
+		if c.MediaTasks.PollSeconds < 1 || c.MediaTasks.PollSeconds > 60 || c.MediaTasks.DeadlineSeconds < 60 || c.MediaTasks.DeadlineSeconds > 604800 {
+			return fmt.Errorf("media_tasks poll/deadline are outside their supported bounds")
+		}
+	}
 	forwardedClientIPHeaders, err := NormalizeForwardedClientIPHeaders(c.Security.ForwardedClientIPHeaders)
 	if err != nil {
 		return fmt.Errorf("security.forwarded_client_ip_headers: %w", err)

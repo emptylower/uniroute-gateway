@@ -71,6 +71,7 @@ func ensureRedisLuaSafeInt64(values ...int64) error {
 var installCanonicalWalletLeaseScript = redis.NewScript(`
 	local incoming_consumed = tonumber(ARGV[4])
 	local incoming_expires = tonumber(ARGV[5])
+	local incoming_budget = tonumber(ARGV[6])
 	local lease_key_prefix = ARGV[7]
 	-- Phase 5-G (Task 3): the key retention deadline — expires_at plus the
 	-- caller slot TTL, ARGV[8] — keeps the hash and the current pointer
@@ -80,16 +81,19 @@ var installCanonicalWalletLeaseScript = redis.NewScript(`
 	-- decided on that field (the reserve/arm guards, leaseCovers), never on
 	-- the key TTL.
 	local retain_until = tonumber(ARGV[8])
+	if ARGV[9]=='1' and redis.call('EXISTS',KEYS[1])==0 then return redis.error_reply('canonical wallet cached lease disappeared') end
 	if redis.call('EXISTS', KEYS[1]) == 1 then
 		local current_consumed = tonumber(redis.call('HGET', KEYS[1], 'consumed_units') or '0')
 		if current_consumed > incoming_consumed then
 			incoming_consumed = current_consumed
 		end
+		incoming_budget = math.max(incoming_budget,tonumber(redis.call('HGET',KEYS[1],'budget_units') or '0'))
+		local previous_expiry=tonumber(redis.call('HGET',KEYS[1],'expires_at_ms') or ARGV[5]); incoming_expires=math.min(previous_expiry,incoming_expires)
 	end
 	redis.call('HSET', KEYS[1],
 		'lease_id', ARGV[1], 'platform_user_id', ARGV[2], 'currency', ARGV[3],
-		'budget_units', ARGV[6], 'consumed_units', incoming_consumed, 'expires_at_ms', ARGV[5])
-	redis.call('PEXPIREAT', KEYS[1], retain_until)
+		'budget_units', incoming_budget, 'consumed_units', incoming_consumed, 'expires_at_ms', incoming_expires)
+	if redis.call('HGET',KEYS[1],'durable_media')=='1' then redis.call('PERSIST',KEYS[1]) else redis.call('PEXPIREAT', KEYS[1], retain_until) end
 
 	local current_pointer_lease_id = redis.call('GET', KEYS[2])
 	local should_advance_pointer = true
@@ -127,7 +131,6 @@ var reserveCanonicalWalletLeaseScript = redis.NewScript(`
 	local released = tonumber(redis.call('HGET', KEYS[1], 'released_units') or '0')
 	local expires_at = tonumber(redis.call('HGET', KEYS[1], 'expires_at_ms') or '0')
 	if currency ~= ARGV[1] then return {2} end
-	if expires_at <= tonumber(ARGV[4]) then return {3} end
 	local existing = redis.call('GET', KEYS[2])
 	if existing ~= false then
 		if existing == stored_lease_id then
@@ -135,6 +138,8 @@ var reserveCanonicalWalletLeaseScript = redis.NewScript(`
 		end
 		return {6}
 	end
+	if redis.call('HGET',KEYS[1],'sealed')=='1' then return {3} end
+	if expires_at <= tonumber(ARGV[4]) then return {3} end
 	local amount = tonumber(ARGV[2])
 	if amount <= 0 or consumed - released + amount > budget then return {4} end
 	local updated = consumed + amount
@@ -172,7 +177,7 @@ var sealCanonicalWalletLeaseScript = redis.NewScript(`
 	local budget = tonumber(redis.call('HGET', KEYS[1], 'budget_units') or '0')
 	local consumed = tonumber(redis.call('HGET', KEYS[1], 'consumed_units') or '0')
 	local released = tonumber(redis.call('HGET', KEYS[1], 'released_units') or '0')
-	redis.call('HSET', KEYS[1], 'consumed_units', budget)
+	redis.call('HSET', KEYS[1], 'consumed_units', budget, 'sealed', '1')
 	local current = redis.call('GET', KEYS[2])
 	if current ~= false and current == ARGV[1] then
 		redis.call('DEL', KEYS[2])
@@ -192,6 +197,7 @@ var sealCanonicalWalletLeaseScript = redis.NewScript(`
 var armCanonicalWalletHoldScript = redis.NewScript(`
 	if redis.call('EXISTS', KEYS[1]) == 0 then return {1} end
 	if redis.call('HGET', KEYS[1], 'currency') ~= ARGV[1] then return {2} end
+	if redis.call('HGET',KEYS[1],'sealed')=='1' then return {3} end
 	local budget = tonumber(redis.call('HGET', KEYS[1], 'budget_units') or '0')
 	local consumed = tonumber(redis.call('HGET', KEYS[1], 'consumed_units') or '0')
 	local released = tonumber(redis.call('HGET', KEYS[1], 'released_units') or '0')
@@ -399,10 +405,10 @@ func (c *canonicalWalletRedisStore) InstallCanonicalWalletLease(ctx context.Cont
 	if strings.TrimSpace(lease.PlatformUserID) == "" || strings.TrimSpace(lease.LeaseID) == "" || lease.BudgetUnits <= 0 || lease.ExpiresAt.IsZero() {
 		return errors.New("invalid canonical wallet lease")
 	}
-	if lease.ConsumedUnits < 0 || lease.ConsumedUnits > lease.BudgetUnits {
+	if lease.ConsumedUnits < 0 || lease.ReleasedUnits < 0 || lease.ReleasedUnits > lease.ConsumedUnits || lease.ConsumedUnits-lease.ReleasedUnits > lease.BudgetUnits {
 		return errors.New("invalid canonical wallet lease consumption")
 	}
-	if err := ensureRedisLuaSafeInt64(lease.BudgetUnits, lease.ConsumedUnits); err != nil {
+	if err := ensureRedisLuaSafeInt64(lease.BudgetUnits, lease.ConsumedUnits, lease.ReleasedUnits); err != nil {
 		return err
 	}
 	currency, err := service.RequireCNYBillingCurrency(lease.Currency)
@@ -418,10 +424,14 @@ func (c *canonicalWalletRedisStore) InstallCanonicalWalletLease(ctx context.Cont
 	if retainUntil.IsZero() || retainUntil.Before(lease.ExpiresAt) {
 		retainUntil = lease.ExpiresAt
 	}
+	requireCached := "0"
+	if lease.RequireCachedLease || lease.ReleasedUnits > 0 {
+		requireCached = "1"
+	}
 	return installCanonicalWalletLeaseScript.Run(ctx, c.rdb,
 		[]string{canonicalWalletLeaseKey(lease.PlatformUserID, lease.LeaseID), canonicalWalletCurrentKey(lease.PlatformUserID)},
 		lease.LeaseID, strings.TrimSpace(lease.PlatformUserID), currency,
-		lease.ConsumedUnits, lease.ExpiresAt.UnixMilli(), lease.BudgetUnits, canonicalWalletLeaseKeyPrefix(lease.PlatformUserID), retainUntil.UnixMilli(),
+		lease.ConsumedUnits, lease.ExpiresAt.UnixMilli(), lease.BudgetUnits, canonicalWalletLeaseKeyPrefix(lease.PlatformUserID), retainUntil.UnixMilli(), requireCached,
 	).Err()
 }
 
@@ -958,13 +968,20 @@ func parseCanonicalWalletLease(values map[string]string) (*service.CanonicalWall
 	if err != nil {
 		return nil, fmt.Errorf("parse canonical wallet consumption: %w", err)
 	}
+	released := int64(0)
+	if values["released_units"] != "" {
+		released, err = strconv.ParseInt(values["released_units"], 10, 64)
+		if err != nil {
+			return nil, err
+		}
+	}
 	expiresAtMS, err := strconv.ParseInt(values["expires_at_ms"], 10, 64)
 	if err != nil {
 		return nil, fmt.Errorf("parse canonical wallet expiry: %w", err)
 	}
 	return &service.CanonicalWalletLease{
 		LeaseID: values["lease_id"], PlatformUserID: values["platform_user_id"], Currency: values["currency"],
-		BudgetUnits: budget, ConsumedUnits: consumed, ExpiresAt: time.UnixMilli(expiresAtMS).UTC(),
+		BudgetUnits: budget, ConsumedUnits: consumed, ReleasedUnits: released, Sealed: values["sealed"] == "1", ExpiresAt: time.UnixMilli(expiresAtMS).UTC(),
 	}, nil
 }
 

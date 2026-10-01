@@ -98,12 +98,15 @@ const (
 )
 
 type CanonicalWalletLease struct {
-	LeaseID        string    `json:"lease_id"`
-	PlatformUserID string    `json:"platform_user_id"`
-	Currency       string    `json:"currency"`
-	BudgetUnits    int64     `json:"budget_units"`
-	ConsumedUnits  int64     `json:"consumed_units"`
-	ExpiresAt      time.Time `json:"expires_at"`
+	RequireCachedLease bool      `json:"-"`
+	LeaseID            string    `json:"lease_id"`
+	PlatformUserID     string    `json:"platform_user_id"`
+	Currency           string    `json:"currency"`
+	BudgetUnits        int64     `json:"budget_units"`
+	ConsumedUnits      int64     `json:"consumed_units"`
+	ReleasedUnits      int64     `json:"released_units"`
+	Sealed             bool      `json:"sealed,omitempty"`
+	ExpiresAt          time.Time `json:"expires_at"`
 	// RetainUntil (Phase 5-G, Task 3): local-only retention deadline for the
 	// Redis lease hash and the current pointer — expires_at plus the caller
 	// slot TTL — so a lease that dies of expiry stays readable through the
@@ -117,7 +120,14 @@ type CanonicalWalletLease struct {
 }
 
 func (l CanonicalWalletLease) RemainingUnits() int64 {
-	remaining, err := SubUnits(l.BudgetUnits, l.ConsumedUnits)
+	if l.Sealed {
+		return 0
+	}
+	budget, err := AddUnits(l.BudgetUnits, l.ReleasedUnits)
+	if err != nil {
+		return 0
+	}
+	remaining, err := SubUnits(budget, l.ConsumedUnits)
 	if err != nil {
 		return 0
 	}
@@ -398,6 +408,8 @@ func newCanonicalWalletHTTPClient(cfg config.CanonicalWalletConfig, client *http
 // every amount a Phase 0 amount object (§9.2), no bare integer crosses the
 // wire. No idempotency key: ensure is idempotent by transaction.
 type canonicalWalletEnsureRequest struct {
+	TopUpLeaseID           string                      `json:"top_up_lease_id,omitempty"`
+	MinimumBudgetUnits     string                      `json:"minimum_budget_units,omitempty"`
 	USDWalletPolicyVersion string                      `json:"usd_wallet_policy_version,omitempty"`
 	PlatformUserID         string                      `json:"platform_user_id"`
 	Currency               string                      `json:"currency"`
@@ -1239,6 +1251,39 @@ func (b *CanonicalWalletBridge) ObserveSettlement(event CanonicalWalletSettlemen
 	if b == nil || b.cfg.Mode == config.CanonicalWalletModeDisabled {
 		return false
 	}
+	if b.outboxDB != nil && event.AuthorizationID != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(b.cfg.RequestTimeoutMS)*time.Millisecond)
+		segments, err := b.authorizationSegments(ctx, event.AuthorizationID)
+		cancel()
+		if err != nil {
+			slog.Warn("wallet authorization plan unavailable", "error", err)
+			return false
+		}
+		if len(segments) > 0 {
+			currency, e := RequireCNYBillingCurrency(event.Currency)
+			if e != nil {
+				return false
+			}
+			event.Currency = currency
+			var owner, snapshot string
+			ownerCtx, ownerCancel := context.WithTimeout(context.Background(), time.Duration(b.cfg.RequestTimeoutMS)*time.Millisecond)
+			e = b.outboxDB.QueryRowContext(ownerCtx, `SELECT platform_user_id,billing_snapshot_id FROM wallet_authorization_segment WHERE parent_authorization_id=$1 AND ordinal=0`, event.AuthorizationID).Scan(&owner, &snapshot)
+			ownerCancel()
+			if e != nil || owner != strings.TrimSpace(event.PlatformUserID) || (event.BillingSnapshotID != "" && event.BillingSnapshotID != snapshot) {
+				return false
+			}
+			event.PlatformUserID = owner
+			event.BillingSnapshotID = snapshot
+			if event.EventID == "" {
+				event.EventID = CanonicalWalletSettlementEventID(event.GatewayRequestID, event.PlatformUserID, event.Currency)
+			}
+			if event.OccurredAt.IsZero() {
+				event.OccurredAt = time.Now().UTC()
+			}
+			return b.observePoolSettlement(event, segments)
+		}
+	}
+
 	if event.AmountUnits <= 0 {
 		// §11.7: the zero-amount return is an abort point too — an armed
 		// hold whose settlement carried nothing must not wait for the reaper.
@@ -1420,6 +1465,21 @@ func (b *CanonicalWalletBridge) HasCanonicalWalletHeadroom(ctx context.Context, 
 	if b == nil || b.cfg.Mode == config.CanonicalWalletModeDisabled {
 		return true, nil
 	}
+	if b.cfg.USDWalletEnabled && b.cfg.Mode == config.CanonicalWalletModeEnforce && b.outboxDB != nil {
+		if _, ok := b.control.(*canonicalWalletHTTPClient); ok {
+			pool, err := b.fundingPool(ctx, platformUserID)
+			if err != nil {
+				return false, err
+			}
+			for _, lease := range pool {
+				if lease.RemainingUnits() > 0 {
+					return true, nil
+				}
+			}
+			return false, nil
+		}
+	}
+
 	lease, err := b.store.GetCanonicalWalletLease(ctx, platformUserID)
 	if b.cfg.Mode == config.CanonicalWalletModeShadow {
 		return true, nil
@@ -1552,7 +1612,7 @@ func (b *CanonicalWalletBridge) reapOnce(ctx context.Context, now time.Time) {
 				if err != nil || h.Class == "indeterminate" || now.Sub(h.ArmedAt) < grace {
 					continue
 				}
-				if b.liveProvisionalActive(ctx, id) {
+				if b.poolAttemptActive(ctx, id) || b.liveProvisionalActive(ctx, id) || b.mediaTaskActive(ctx, id) {
 					continue
 				}
 				if _, err := b.store.ReleaseCanonicalWalletHold(ctx, user, id, "abandoned", ""); err == nil {
@@ -2136,16 +2196,40 @@ func (b *CanonicalWalletBridge) resolveOutboxEventLease(ctx context.Context, e C
 		return nil, err
 	}
 	if errors.Is(err, ErrCanonicalWalletLeaseMissing) {
+		if e.AuthorizationID != "" && b.outboxDB != nil {
+			protected, readErr := b.protectedSettlementBinding(ctx, e)
+			if readErr != nil {
+				return nil, readErr
+			}
+			if protected {
+				return nil, errors.New("protected settlement awaits original lease recovery")
+			}
+		}
 		// Phase 3.4 (redesign §4): a MISSING bound lease recovers through
 		// prefer_lease_id instead of failing the delivery. Inside ensureLease
 		// this tries GetByID once more — a second harmless miss — then sends
 		// prefer_lease_id with no drain.
 		return b.ensureLease(ctx, e.PlatformUserID, e.Currency, e.AmountUnits, canonicalWalletLeasePurposeSettle, e.LeaseID)
 	}
+	if lease != nil && lease.Currency == e.Currency && (lease.Sealed || b.leaseExpiredAt(lease, b.clock())) && e.AuthorizationID != "" && b.outboxDB != nil {
+		protected, readErr := b.protectedSettlementBinding(ctx, e)
+		if readErr != nil {
+			return nil, readErr
+		}
+		if protected {
+			return lease, nil
+		}
+	}
 	if lease != nil && lease.Currency == e.Currency && !b.leaseExpiredAt(lease, b.clock()) {
 		return lease, nil
 	}
 	return b.ensureLease(ctx, e.PlatformUserID, e.Currency, e.AmountUnits, canonicalWalletLeasePurposeSettle, "")
+}
+
+func (b *CanonicalWalletBridge) protectedSettlementBinding(ctx context.Context, e CanonicalWalletOutboxEvent) (bool, error) {
+	var protected bool
+	err := b.outboxDB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM wallet_authorization_segment a JOIN wallet_settlement_outbox o ON o.event_id=a.event_id AND o.authorization_id=a.authorization_id AND o.billing_snapshot_id=a.billing_snapshot_id WHERE a.authorization_id=$1 AND a.platform_user_id=$2 AND a.lease_id=$3 AND a.event_id=$4 AND o.id=$5 AND a.actual_units=$6 AND o.amount_units=a.actual_units AND o.lease_id=a.lease_id AND a.actual_units>0 AND (a.kind='media' OR a.state IN ('settling','finished')))`, e.AuthorizationID, e.PlatformUserID, e.LeaseID, e.EventID, e.ID, e.AmountUnits).Scan(&protected)
+	return protected, err
 }
 
 // ensureLease (Phase 3.4, redesign §4) is cache-then-ensure. It reads the
@@ -2207,21 +2291,46 @@ func (b *CanonicalWalletBridge) ensureLeaseWithPolicy(ctx context.Context, platf
 		MinHeadroom: newCanonicalWalletAmountObject(amountUnits), RequestedBudget: newCanonicalWalletAmountObject(b.cfg.LeaseBudgetUnits), RequestedTTLSeconds: b.cfg.LeaseTTLSeconds,
 		PreferLeaseID: preferLeaseID, CallerSlotTTLSeconds: b.callerSlotTTLSeconds,
 	}
+	if amountUnits > b.cfg.LeaseBudgetUnits {
+		request.RequestedBudget = newCanonicalWalletAmountObject(amountUnits)
+	}
 	if cached != nil && !covering {
-		preSealConsumed, preSealReleased, sealErr := b.store.SealCanonicalWalletLease(ctx, platformUserID, cached.LeaseID)
-		if sealErr != nil && !errors.Is(sealErr, ErrCanonicalWalletLeaseMissing) {
-			return nil, sealErr
+		pinned, pinErr := b.mediaLeasePinned(ctx, platformUserID, cached.LeaseID)
+		if pinErr != nil {
+			return nil, pinErr
 		}
-		if sealErr == nil {
-			// §10.2: the drain identity is consumed == captured + released —
-			// gateway_released rides the wire only when releases exist, so a
-			// 3.4a-S control plane that ignores the field sees the 3.4a wire.
-			entry := canonicalWalletDrainEntry{LeaseID: cached.LeaseID, GatewayConsumed: newCanonicalWalletAmountObject(preSealConsumed)}
-			if preSealReleased > 0 {
-				released := newCanonicalWalletAmountObject(preSealReleased)
-				entry.GatewayReleased = &released
+		if policyVersion != "" && purpose == canonicalWalletLeasePurposeAuthorize && !b.leaseExpiredAt(cached, now) && !cached.Sealed {
+			// Top up the same lease for both ordinary and durable holds. Sealing
+			// an ordinary in-flight call would strand its free balance too.
+			pinned = true
+		}
+		if pinned {
+			if b.leaseExpiredAt(cached, now) || cached.Sealed {
+				return nil, ErrCanonicalWalletLeaseExpired
 			}
-			request.Drained = []canonicalWalletDrainEntry{entry}
+			target, targetErr := AddUnits(cached.BudgetUnits, amountUnits-cached.RemainingUnits())
+			if targetErr != nil {
+				return nil, targetErr
+			}
+			request.TopUpLeaseID = cached.LeaseID
+			request.MinimumBudgetUnits = strconv.FormatInt(target, 10)
+			request.PreferLeaseID = cached.LeaseID
+		} else {
+			preSealConsumed, preSealReleased, sealErr := b.store.SealCanonicalWalletLease(ctx, platformUserID, cached.LeaseID)
+			if sealErr != nil && !errors.Is(sealErr, ErrCanonicalWalletLeaseMissing) {
+				return nil, sealErr
+			}
+			if sealErr == nil {
+				// §10.2: the drain identity is consumed == captured + released —
+				// gateway_released rides the wire only when releases exist, so a
+				// 3.4a-S control plane that ignores the field sees the 3.4a wire.
+				entry := canonicalWalletDrainEntry{LeaseID: cached.LeaseID, GatewayConsumed: newCanonicalWalletAmountObject(preSealConsumed)}
+				if preSealReleased > 0 {
+					released := newCanonicalWalletAmountObject(preSealReleased)
+					entry.GatewayReleased = &released
+				}
+				request.Drained = []canonicalWalletDrainEntry{entry}
+			}
 		}
 	}
 	result, err := b.control.EnsureLease(ctx, request)
@@ -2235,6 +2344,9 @@ func (b *CanonicalWalletBridge) ensureLeaseWithPolicy(ctx context.Context, platf
 		return nil, ErrCanonicalUSDWalletPolicy
 	}
 	lease := result.Lease
+	if request.TopUpLeaseID != "" && (lease.LeaseID != cached.LeaseID || lease.BudgetUnits < cached.BudgetUnits || lease.ExpiresAt.UnixMilli() > cached.ExpiresAt.UnixMilli()) {
+		return nil, errors.New("canonical wallet top-up changed lease identity or extended expiry")
+	}
 	if b.leaseExpiredAt(&lease, now) {
 		canonicalWalletBridgeMetrics.leaseGrantExpired.Add(1)
 		return nil, fmt.Errorf("%w: lease %s expired at %s", ErrCanonicalWalletLeaseExpired, lease.LeaseID, lease.ExpiresAt.UTC().Format(time.RFC3339Nano))
@@ -2320,6 +2432,22 @@ func RequireCNYBillingCurrency(value string) (string, error) {
 func (b *CanonicalWalletBridge) releaseHoldZeroCost(ctx context.Context, platformUserID, authorizationID string) {
 	if b == nil || !b.HoldsEnabled() || platformUserID == "" || authorizationID == "" {
 		return
+	}
+	if b.outboxDB != nil {
+		segments, err := b.authorizationSegments(ctx, authorizationID)
+		if err != nil {
+			return
+		}
+		if len(segments) > 0 {
+			if segments[0].Kind != "media" {
+				_ = b.releasePoolAttempt(ctx, authorizationID, platformUserID, segments)
+				return
+			}
+			for _, segment := range segments {
+				_, _ = b.store.ReleaseCanonicalWalletHold(ctx, platformUserID, segment.AuthorizationID, "released", "zero_cost")
+			}
+			return
+		}
 	}
 	if _, err := b.store.ReleaseCanonicalWalletHold(ctx, platformUserID, authorizationID, "released", "zero_cost"); err != nil {
 		if !errors.Is(err, ErrCanonicalWalletHoldMissing) && !isHoldNotArmed(err) {

@@ -87,7 +87,10 @@ func (s *walletHoldOutcomeStore) MarkExpiredOlderThan(ctx context.Context, cutof
 	res, err := s.db.ExecContext(ctx, `
 		UPDATE wallet_hold_outcome
 		SET resolution = 'expired', resolved_at = $2
-		WHERE resolution IS NULL AND armed_at < $1`,
+		WHERE resolution IS NULL AND armed_at < $1 AND NOT EXISTS (SELECT 1 FROM wallet_authorization_segment a WHERE a.authorization_id=wallet_hold_outcome.authorization_id AND a.kind<>'media' AND a.state<>'finished') AND NOT EXISTS (
+		 SELECT 1 FROM gateway_media_task m WHERE (m.authorization_id=wallet_hold_outcome.authorization_id OR m.authorization_id IN (SELECT a.parent_authorization_id FROM wallet_authorization_segment a WHERE a.authorization_id=wallet_hold_outcome.authorization_id))
+		 AND (m.pin_state<>'finished' OR m.status NOT IN ('completed','failed'))
+		)`,
 		cutoff, at)
 	if err != nil {
 		return 0, fmt.Errorf("mark wallet hold outcomes expired: %w", err)

@@ -132,7 +132,17 @@ type WalletReconciliationLiveWindowRow struct {
 	// EventID is DERIVED (redesign §15.3 leg 3), never stored: window 1's
 	// gateway request id is the session's bare call hash, windows ≥ 2
 	// append :window:n, then CanonicalWalletSettlementEventID hashes it.
-	EventID string
+	EventID  string
+	Segments []WalletReconciliationLiveSegmentRow
+}
+
+type WalletReconciliationLiveSegmentRow struct {
+	AuthorizationID string
+	LeaseID         string
+	EventID         string
+	HeldUnits       int64
+	ActualUnits     int64
+	State           string
 }
 
 type WalletReconciliationLiveRow struct {
@@ -304,11 +314,24 @@ func (s *WalletReconciliationReadService) Summary(ctx context.Context, platformU
 			Windows:           make([]WalletReconciliationLiveWindowRow, 0, len(rec.Windows)),
 		}
 		for _, w := range rec.Windows {
-			row.Windows = append(row.Windows, WalletReconciliationLiveWindowRow{
+			window := WalletReconciliationLiveWindowRow{
 				Seq: w.WindowSeq, LeaseID: w.LeaseID, SettledUnits: w.SettledUnits, PendingUnits: w.PendingUnits,
 				OpenedAtMS: w.OpenedAtMS,
 				EventID:    LiveWindowSettlementEventID(rec.CallHash, w.WindowSeq, platformUserID, rec.BillingCurrency),
-			})
+			}
+			if s.live.db != nil {
+				segments, e := (&CanonicalWalletBridge{outboxDB: s.live.db}).authorizationSegments(ctx, w.Token)
+				if e != nil {
+					return nil, e
+				}
+				for _, segment := range segments {
+					window.Segments = append(window.Segments, WalletReconciliationLiveSegmentRow{AuthorizationID: segment.AuthorizationID, LeaseID: segment.LeaseID, EventID: segment.EventID, HeldUnits: segment.HeldUnits, ActualUnits: segment.ActualUnits, State: segment.State})
+				}
+				if len(segments) > 0 {
+					window.EventID = segments[0].EventID
+				}
+			}
+			row.Windows = append(row.Windows, window)
 		}
 		summary.Live = append(summary.Live, row)
 	}

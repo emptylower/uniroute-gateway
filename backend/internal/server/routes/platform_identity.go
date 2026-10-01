@@ -34,6 +34,21 @@ func RegisterPlatformIdentityRoutes(
 
 	resolveUser := resolveDelegatedPlatformUser(identityService, userService)
 	base := "/api/internal/v1/users/:platform_user_id"
+	if h.PlatformInference != nil {
+		inferenceRead := r.Group(base + "/inference")
+		inferenceRead.Use(middleware.RequirePlatformAssertion(cfg, service.PlatformInferenceReadScope, redisClient), resolveUser)
+		inferenceRead.GET("/catalog", h.PlatformInference.Catalog)
+		inferenceRead.POST("/quote", h.PlatformInference.Quote)
+		inferenceRead.GET("/tasks", h.PlatformInference.List)
+		inferenceRead.GET("/tasks/:task_id", h.PlatformInference.Get)
+		inferenceRead.POST("/legacy-read", h.PlatformInference.LegacyRead)
+		inferenceCreate := r.Group(base + "/inference")
+		inferenceCreate.Use(middleware.RequirePlatformAssertion(cfg, service.PlatformInferenceCreateScope, redisClient), resolveUser)
+		inferenceCreate.POST("/tasks", h.PlatformInference.Create)
+		availability := r.Group(base + "/wallet")
+		availability.Use(middleware.RequirePlatformAssertion(cfg, service.PlatformWalletAvailabilityScope, redisClient), resolveUser)
+		availability.POST("/availability", h.PlatformInference.Availability)
+	}
 
 	read := r.Group(base)
 	read.Use(middleware.RequirePlatformAssertion(cfg, service.PlatformDataReadScope, redisClient), resolveUser)

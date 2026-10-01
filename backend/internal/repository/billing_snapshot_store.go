@@ -79,6 +79,10 @@ func (s *BillingSnapshotStore) PruneUnreferencedSnapshotsOlderThan(ctx context.C
 			  AND NOT EXISTS (
 				  SELECT 1 FROM wallet_settlement_outbox o WHERE o.billing_snapshot_id = s.id
 			  )
+			  AND NOT EXISTS (
+				  SELECT 1 FROM gateway_media_task m WHERE m.billing_snapshot_id = s.id
+			  )
+              AND NOT EXISTS (SELECT 1 FROM wallet_authorization_segment a WHERE a.billing_snapshot_id = s.id)
 			ORDER BY s.id
 			LIMIT $2
 			FOR UPDATE SKIP LOCKED

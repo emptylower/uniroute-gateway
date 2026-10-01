@@ -146,7 +146,7 @@ func (s *WalletOutboxStore) ClaimPendingOutboxEvents(ctx context.Context, worker
 			LIMIT $1
 			FOR UPDATE SKIP LOCKED
 		)
-		RETURNING id, event_id, platform_user_id, lease_id, gateway_request_id, currency, amount_units, local_balance_after_units, occurred_at, attempt_count, parent_event_id, split_depth, pending_release_units, authorization_id`, limit, workerID)
+		RETURNING id, event_id, platform_user_id, lease_id, gateway_request_id, currency, amount_units, local_balance_after_units, occurred_at, attempt_count, parent_event_id, split_depth, pending_release_units, authorization_id, billing_snapshot_id`, limit, workerID)
 	if err != nil {
 		return nil, err
 	}
@@ -160,14 +160,15 @@ func (s *WalletOutboxStore) ClaimPendingOutboxEvents(ctx context.Context, worker
 		// plain string field, since "" already means "no lease id yet"
 		// everywhere else this type is used.
 		var leaseID sql.NullString
-		var parentEventID, authorizationID sql.NullString
+		var parentEventID, authorizationID, snapshotID sql.NullString
 		var pendingRelease sql.NullInt64
-		if err := rows.Scan(&e.ID, &e.EventID, &e.PlatformUserID, &leaseID, &e.GatewayRequestID, &e.Currency, &e.AmountUnits, &e.LocalBalanceAfterUnits, &e.OccurredAt, &e.AttemptCount, &parentEventID, &e.SplitDepth, &pendingRelease, &authorizationID); err != nil {
+		if err := rows.Scan(&e.ID, &e.EventID, &e.PlatformUserID, &leaseID, &e.GatewayRequestID, &e.Currency, &e.AmountUnits, &e.LocalBalanceAfterUnits, &e.OccurredAt, &e.AttemptCount, &parentEventID, &e.SplitDepth, &pendingRelease, &authorizationID, &snapshotID); err != nil {
 			return nil, err
 		}
 		e.LeaseID = leaseID.String
 		e.ParentEventID = parentEventID.String
 		e.AuthorizationID = authorizationID.String
+		e.BillingSnapshotID = snapshotID.String
 		if pendingRelease.Valid {
 			v := pendingRelease.Int64
 			e.PendingReleaseUnits = &v

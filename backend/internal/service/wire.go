@@ -690,6 +690,10 @@ func ProvideBillingCacheService(
 	return NewBillingCacheService(cache, userRepo, subRepo, apiKeyRepo, rpmCache, rateRepo, cfg, userPlatformQuotaRepo, canonicalWallet)
 }
 
+func ProvideMediaTaskService(cfg *config.Config, db *sql.DB, openAI *OpenAIGatewayService, snapshots *BillingSnapshotService, keys *PlatformAPIKeyService, apiKeys *APIKeyService, users UserRepository, upstream HTTPUpstream) (*MediaTaskService, error) {
+	return NewMediaTaskService(cfg, db, openAI.canonicalWallet, snapshots, keys, apiKeys, users, upstream)
+}
+
 // ProvideAPIKeyService wires APIKeyService and connects rate-limit cache invalidation.
 func ProvideAPIKeyService(
 	apiKeyRepo APIKeyRepository,
@@ -828,6 +832,7 @@ func ProvideGovernanceModeProvider(db *sql.DB, cfg *config.Config) GovernanceMod
 var ProviderSet = wire.NewSet(
 	NewPlatformIdentityService,
 	NewPlatformAPIKeyService,
+	ProvideMediaTaskService,
 	NewModelGovernanceInventoryService,
 	NewModelClassifier,
 	NewPublicationEvaluator,

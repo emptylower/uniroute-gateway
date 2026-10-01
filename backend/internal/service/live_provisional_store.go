@@ -7,10 +7,21 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/config"
 )
 
 type liveProvisionalStore struct {
-	db *sql.DB
+	db                    *sql.DB
+	protectWalletAttempts bool
+}
+
+func ProvideLiveProvisionalStore(cfg *config.Config, db *sql.DB) LiveProvisionalStore {
+	store := newLiveProvisionalStore(db)
+	if store != nil && cfg != nil {
+		store.(*liveProvisionalStore).protectWalletAttempts = cfg.CanonicalWallet.USDWalletEnabled
+	}
+	return store
 }
 
 func newLiveProvisionalStore(db *sql.DB) LiveProvisionalStore {
@@ -242,7 +253,43 @@ func (s *liveProvisionalStore) AdvanceLiveWindow(ctx context.Context, token stri
 		  AND jsonb_array_length(windows) = $2
 		  AND (windows->($2-1)->>'window_seq')::int = $2
 	`
-	return s.execWindowCAS(ctx, "advance live window", query, token, seq, settledUnits, string(nextJSON))
+	if !s.protectWalletAttempts {
+		return s.execWindowCAS(ctx, "advance live window", query, token, seq, settledUnits, string(nextJSON))
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	count, err := lockWalletAttempt(ctx, tx, next.Token)
+	if err != nil {
+		return err
+	}
+	if count > 0 {
+		res, err := tx.ExecContext(ctx, `UPDATE wallet_authorization_segment SET state='indeterminate',authorization_token=$2,updated_at=now() WHERE parent_authorization_id=$1 AND kind='live' AND state='held' AND authorization_token IS NULL AND platform_user_id=(SELECT platform_user_id FROM wallet_live_provisional WHERE token=$3) AND billing_snapshot_id=(SELECT billing_snapshot_id FROM wallet_live_provisional WHERE token=$3)`, next.Token, next.Token+":live-window", token)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n != int64(count) {
+			return ErrLiveWindowCASLost
+		}
+	}
+	res, err := tx.ExecContext(ctx, query, token, seq, settledUnits, string(nextJSON))
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrLiveWindowCASLost
+	}
+	return tx.Commit()
 }
 
 // execWindowCAS runs one of the two single-statement window CASes and maps

@@ -1311,6 +1311,9 @@ func (s *OpenAIGatewayService) maybeCloseLiveWindow(ctx context.Context, record 
 		return st, nil
 	}
 	if advErr := s.advanceLiveWindowSafe(ctx, st, idle); advErr != nil {
+		if errors.Is(advErr, ErrAuthorizationRefused) {
+			return st, s.hardStopLiveSession(ctx, fresh, upstream, "window_authorization_unavailable")
+		}
 		return st, nil
 	}
 	if idle {
@@ -1332,6 +1335,17 @@ func (s *OpenAIGatewayService) advanceLiveWindowSafe(ctx context.Context, st *li
 	next := *st.next
 	if err := s.liveProvisional.AdvanceLiveWindow(ctx, st.rowToken, st.seq, settled, next); err != nil {
 		liveWindowMetrics.reauthRetry.Add(1)
+		if errors.Is(err, ErrLiveWindowCASLost) && s.canonicalWallet != nil && s.canonicalWallet.outboxDB != nil {
+			segments, readErr := s.canonicalWallet.authorizationSegments(ctx, next.Token)
+			if readErr != nil {
+				return readErr
+			}
+			for _, segment := range segments {
+				if segment.State == "released" || segment.State == "finished" {
+					return &AuthorizationRefusedError{Reason: AuthorizationRefusalLeaseUnavailable, AuthorizationID: next.Token, Detail: "next Live window authorization already resolved"}
+				}
+			}
+		}
 		return err
 	}
 	st.next = nil
