@@ -271,13 +271,15 @@ func (s *OpenAIGatewayService) CreateLiveCall(
 	if !resolvedPricingIsBillable(resolved) || resolved.Mode != BillingModeToken || resolved.BasePricing == nil {
 		return nil, fmt.Errorf("%w for live model: %s", ErrModelPricingUnavailable, billingModel)
 	}
-	fx, ok := pinnedBillingSettlementSnapshot(ctx, CurrencyUSD, identity.BillingCurrency)
-	if !ok {
-		fx, err = s.exchangeRates.Snapshot(ctx, CurrencyUSD, identity.BillingCurrency)
-		if err != nil {
-			return nil, err
-		}
+	fxUser := identity.User
+	if fxUser == nil {
+		fxUser = &User{BillingCurrency: identity.BillingCurrency}
 	}
+	fx, err := resolveBillingExchangeRate(ctx, fxUser, s.exchangeRates, s.cfg)
+	if err != nil {
+		return nil, err
+	}
+
 	pricing := resolved.BasePricing
 	attestation, attestationCiphertext, err := s.prepareLiveAttestation(ctx)
 	if err != nil {

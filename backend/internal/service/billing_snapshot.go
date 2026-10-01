@@ -83,6 +83,7 @@ type BillingSnapshotMedia struct {
 
 type BillingSnapshotFlags struct {
 	SubscriptionBilling       bool   `json:"subscription_billing"`
+	USDWalletPolicyVersion    string `json:"usd_wallet_policy_version,omitempty"`
 	BillingCurrency           string `json:"billing_currency"`
 	MultiplierCurrency        string `json:"multiplier_currency"`
 	LongContextBillingEnabled bool   `json:"long_context_billing_enabled"` // OpenAI account flag; generic families ignore it
@@ -287,22 +288,23 @@ func (s *BillingSnapshotService) Freeze(ctx context.Context, in FreezeInput) (*B
 	video := resolveVideoRateMultiplier(apiKey, base)
 
 	var fx ExchangeRateSnapshot
+	var walletPolicyVersion string
 	if !isSubscription && strings.TrimSpace(in.User.BillingCurrency) != "" {
-		currency := NormalizeUserBillingCurrency(in.User.BillingCurrency)
-		if pinned, ok := pinnedBillingSettlementSnapshot(ctx, CurrencyUSD, currency); ok {
-			fx = pinned
-		} else if s.exchangeRates != nil {
-			snapshot, err := s.exchangeRates.Snapshot(ctx, CurrencyUSD, currency)
-			if err != nil {
-				// NON-FATAL. Today FX is resolved only at settlement, after the
-				// response is served (gateway_usage_billing.go:796); making it
-				// fatal here would turn an FX outage into a request-path 503 /
-				// failover loop in record mode. A zero-rate FX pins nothing
-				// (SettlementContextFromSnapshot) and settlement uses the live rate.
-				billingSnapshotMetrics.fxUnavailable.Add(1)
-			} else {
-				fx = snapshot
+		_, enabled, policyErr := canonicalUSDWalletSnapshot(in.User, s.cfg)
+		if policyErr != nil {
+			return nil, policyErr
+		}
+		snapshot, err := resolveBillingExchangeRate(ctx, in.User, s.exchangeRates, s.cfg)
+		if err != nil {
+			if enabled {
+				return nil, err // fixed USD wallets never degrade to live FX
 			}
+			billingSnapshotMetrics.fxUnavailable.Add(1)
+		} else {
+			fx = snapshot
+		}
+		if enabled {
+			walletPolicyVersion = config.CanonicalUSDWalletPolicyVersion
 		}
 	}
 
@@ -339,7 +341,7 @@ func (s *BillingSnapshotService) Freeze(ctx context.Context, in FreezeInput) (*B
 		Media:       mediaPricingFromGroup(apiKey.Group),
 		FX:          fx,
 		Flags: BillingSnapshotFlags{
-			SubscriptionBilling: isSubscription, BillingCurrency: NormalizeUserBillingCurrency(in.User.BillingCurrency), MultiplierCurrency: multiplierCurrency,
+			USDWalletPolicyVersion: walletPolicyVersion, SubscriptionBilling: isSubscription, BillingCurrency: NormalizeUserBillingCurrency(in.User.BillingCurrency), MultiplierCurrency: multiplierCurrency,
 			LongContextBillingEnabled: flagsAccount.IsOpenAILongContextBillingEnabled(), CacheTTLOverrideEnabled: in.CacheTTLOverride.Enabled, CacheTTLOverrideTarget: in.CacheTTLOverride.Target,
 			LongContextThreshold: in.LongContextThreshold, LongContextMultiplier: in.LongContextMultiplier,
 		},

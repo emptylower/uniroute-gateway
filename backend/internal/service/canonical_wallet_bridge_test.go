@@ -271,8 +271,9 @@ func (s *canonicalWalletStoreStub) ReleaseCanonicalWalletReservation(_ context.C
 }
 
 type canonicalWalletControlStub struct {
-	leaseErr error
-	lease    CanonicalWalletLease
+	policyVersion string
+	leaseErr      error
+	lease         CanonicalWalletLease
 	// Phase 3.3a: capture of the last acquire request so the authorization
 	// tests can assert exactly what ensureLease asked the control plane for.
 	// Phase 3.4 (Task 3a): the request is the v2 ensure wire; the stub
@@ -317,7 +318,7 @@ func (s *canonicalWalletControlStub) EnsureLease(_ context.Context, req canonica
 		outcome = "issued"
 	}
 	s.outcomesSeen = append(s.outcomesSeen, outcome)
-	return &canonicalWalletEnsureResult{Lease: s.lease, Outcome: outcome, ClampedBy: "none"}, nil
+	return &canonicalWalletEnsureResult{USDWalletPolicyVersion: s.policyVersion, Lease: s.lease, Outcome: outcome, ClampedBy: "none"}, nil
 }
 func (s *canonicalWalletControlStub) SubmitSettlement(context.Context, CanonicalWalletSettlementEvent) (*CanonicalWalletSettlementResult, error) {
 	return &CanonicalWalletSettlementResult{Accepted: true}, nil

@@ -1560,9 +1560,10 @@ type PlatformIdentityConfig struct {
 }
 
 const (
-	CanonicalWalletModeDisabled = "disabled"
-	CanonicalWalletModeShadow   = "shadow"
-	CanonicalWalletModeEnforce  = "enforce"
+	CanonicalWalletModeDisabled     = "disabled"
+	CanonicalWalletModeShadow       = "shadow"
+	CanonicalWalletModeEnforce      = "enforce"
+	CanonicalUSDWalletPolicyVersion = "usd-wallet-v1"
 )
 
 // CanonicalWalletConfig defines the future ShipAny-owned wallet boundary. It
@@ -1592,6 +1593,10 @@ type CanonicalWalletConfig struct {
 	// "settle" = settle from the frozen snapshot. Independent of Mode so the
 	// snapshot can be proven in shadow before any hold exists.
 	BillingSnapshotMode string `mapstructure:"billing_snapshot_mode"`
+	// USDWalletEnabled scopes the fixed nominal policy to ShipAny-linked CNY wallets.
+	// USDPolicyVersion is mandatory when enabled; it never selects market FX.
+	USDWalletEnabled bool   `mapstructure:"usd_wallet_enabled"`
+	USDPolicyVersion string `mapstructure:"usd_policy_version"`
 	// Holds (Phase 3.4b, redesign §10.1): "off" (default) = 3.4a byte-for-byte —
 	// no hold is armed, no callback fires, ObserveSettlement converts nothing and
 	// no reaper starts; "on" arms a hold at every authorization. Literal match.
@@ -2115,6 +2120,8 @@ func setDefaults() {
 	viper.SetDefault("canonical_wallet.settlement_workers", 2)
 	viper.SetDefault("canonical_wallet.enforce_ready", false)
 	viper.SetDefault("canonical_wallet.billing_snapshot_mode", "record")
+	viper.SetDefault("canonical_wallet.usd_wallet_enabled", false)
+	viper.SetDefault("canonical_wallet.usd_policy_version", "")
 	viper.SetDefault("canonical_wallet.holds", "off")
 	viper.SetDefault("canonical_wallet.orphan_grace_seconds", 900)
 	viper.SetDefault("canonical_wallet.reconciliation_read_token", "")
@@ -2687,6 +2694,23 @@ func validateBillingSnapshotMode(mode string) error {
 	}
 }
 
+// A missing version on an enabled USD wallet must never become live FX.
+func validateCanonicalUSDWalletPolicy(wallet CanonicalWalletConfig) error {
+	version := strings.TrimSpace(wallet.USDPolicyVersion)
+	if version != "" && version != CanonicalUSDWalletPolicyVersion {
+		return fmt.Errorf("canonical_wallet.usd_policy_version must be %s", CanonicalUSDWalletPolicyVersion)
+	}
+	if wallet.USDWalletEnabled {
+		if version != CanonicalUSDWalletPolicyVersion {
+			return fmt.Errorf("canonical_wallet.usd_wallet_enabled requires usd_policy_version=%s", CanonicalUSDWalletPolicyVersion)
+		}
+		if wallet.BillingSnapshotMode != "settle" || wallet.Mode != CanonicalWalletModeEnforce {
+			return fmt.Errorf("canonical_wallet.usd_wallet_enabled requires billing_snapshot_mode=settle and mode=enforce")
+		}
+	}
+	return nil
+}
+
 // validateRedisPolicyCheck is checked for EVERY canonical_wallet.mode:
 // the startup check setting must be one of enforce|warn|off.
 func validateRedisPolicyCheck(check string) error {
@@ -2706,6 +2730,9 @@ func (c *Config) Validate() error {
 	c.Security.ForwardedClientIPHeaders = forwardedClientIPHeaders
 	c.SetForwardedClientIPSettings(c.Security.TrustForwardedIPForAPIKeyACL, forwardedClientIPHeaders)
 	if err := validateBillingSnapshotMode(c.CanonicalWallet.BillingSnapshotMode); err != nil {
+		return err
+	}
+	if err := validateCanonicalUSDWalletPolicy(c.CanonicalWallet); err != nil {
 		return err
 	}
 	if err := validateRedisPolicyCheck(c.CanonicalWallet.RedisPolicyCheck); err != nil {

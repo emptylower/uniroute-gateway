@@ -88,6 +88,13 @@ func (a *CanonicalWalletAuthorizer) Authorize(ctx context.Context, in AuthorizeI
 		return refuse(AuthorizationRefusalSnapshotMissing, "no billing snapshot for this attempt", nil)
 	}
 	h.SnapshotID = in.Snapshot.ID
+	policyVersion := in.Snapshot.Flags.USDWalletPolicyVersion
+	_, policyEnabled, policyErr := canonicalUSDWalletSnapshot(in.User, a.cfg)
+	if policyErr != nil || (policyEnabled && policyVersion == "") ||
+		(policyVersion != "" && (!policyEnabled || validateCanonicalUSDWalletSnapshot(in.Snapshot.FX, policyVersion) != nil)) {
+		return refuse(AuthorizationRefusalLeaseUnavailable, "USD wallet policy", ErrCanonicalUSDWalletPolicy)
+	}
+
 	// Phase 3.7b (§13.2.1): FixedEstimateUnits > 0 replaces the estimation
 	// step ONLY — the bound is the caller's (the Live window's chunk).
 	var units int64
@@ -117,7 +124,7 @@ func (a *CanonicalWalletAuthorizer) Authorize(ctx context.Context, in AuthorizeI
 	}
 	leaseCtx, cancel := context.WithTimeout(ctx, a.requestTimeout())
 	defer cancel()
-	lease, err := a.bridge.ensureLease(leaseCtx, in.User.PlatformUserID, currency, units, canonicalWalletLeasePurposeAuthorize, "")
+	lease, err := a.bridge.ensureLeaseWithPolicy(leaseCtx, in.User.PlatformUserID, currency, units, canonicalWalletLeasePurposeAuthorize, "", policyVersion)
 	if err != nil {
 		if errors.Is(err, ErrCanonicalWalletBalanceShortfall) {
 			authorizationMetrics.balanceShortfall.Add(1)
@@ -142,7 +149,7 @@ func (a *CanonicalWalletAuthorizer) Authorize(ctx context.Context, in AuthorizeI
 		leaseID, held, _, aerr := a.bridge.store.ArmCanonicalWalletHold(leaseCtx, in.User.PlatformUserID, lease.LeaseID, currency, h.ID, units, a.bridge.graceMS(), a.bridge.clock())
 		if errors.Is(aerr, ErrCanonicalWalletLeaseExhausted) || errors.Is(aerr, ErrCanonicalWalletLeaseMissing) || errors.Is(aerr, ErrCanonicalWalletLeaseExpired) {
 			authorizationMetrics.holdArmRetried.Add(1)
-			lease, err = a.bridge.ensureLease(leaseCtx, in.User.PlatformUserID, currency, units, canonicalWalletLeasePurposeAuthorize, "")
+			lease, err = a.bridge.ensureLeaseWithPolicy(leaseCtx, in.User.PlatformUserID, currency, units, canonicalWalletLeasePurposeAuthorize, "", policyVersion)
 			if err == nil {
 				leaseID, held, _, aerr = a.bridge.store.ArmCanonicalWalletHold(leaseCtx, in.User.PlatformUserID, lease.LeaseID, currency, h.ID, units, a.bridge.graceMS(), a.bridge.clock())
 			}

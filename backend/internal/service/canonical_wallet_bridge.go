@@ -398,16 +398,17 @@ func newCanonicalWalletHTTPClient(cfg config.CanonicalWalletConfig, client *http
 // every amount a Phase 0 amount object (§9.2), no bare integer crosses the
 // wire. No idempotency key: ensure is idempotent by transaction.
 type canonicalWalletEnsureRequest struct {
-	PlatformUserID       string                      `json:"platform_user_id"`
-	Currency             string                      `json:"currency"`
-	Purpose              string                      `json:"purpose"`
-	MinHeadroom          canonicalWalletAmountObject `json:"min_headroom"`
-	RequestedBudget      canonicalWalletAmountObject `json:"requested_budget"`
-	RequestedTTLSeconds  int                         `json:"requested_ttl_seconds"`
-	PreferLeaseID        string                      `json:"prefer_lease_id,omitempty"`
-	Drained              []canonicalWalletDrainEntry `json:"drained,omitempty"` // omitempty: a nil slice is OMITTED (not null); ShipAny accepts absent, null and [] alike
-	CallerSlotTTLSeconds int                         `json:"caller_slot_ttl_seconds"`
-	GatewayAttemptID     string                      `json:"gateway_attempt_id,omitempty"`
+	USDWalletPolicyVersion string                      `json:"usd_wallet_policy_version,omitempty"`
+	PlatformUserID         string                      `json:"platform_user_id"`
+	Currency               string                      `json:"currency"`
+	Purpose                string                      `json:"purpose"`
+	MinHeadroom            canonicalWalletAmountObject `json:"min_headroom"`
+	RequestedBudget        canonicalWalletAmountObject `json:"requested_budget"`
+	RequestedTTLSeconds    int                         `json:"requested_ttl_seconds"`
+	PreferLeaseID          string                      `json:"prefer_lease_id,omitempty"`
+	Drained                []canonicalWalletDrainEntry `json:"drained,omitempty"` // omitempty: a nil slice is OMITTED (not null); ShipAny accepts absent, null and [] alike
+	CallerSlotTTLSeconds   int                         `json:"caller_slot_ttl_seconds"`
+	GatewayAttemptID       string                      `json:"gateway_attempt_id,omitempty"`
 }
 
 type canonicalWalletDrainEntry struct {
@@ -421,21 +422,22 @@ type canonicalWalletDrainEntry struct {
 // canonicalWalletEnsureWireResponse is §9.2's response: leaseWireView plus
 // headroom/outcome/clamped_by, every amount an object.
 type canonicalWalletEnsureWireResponse struct {
-	LeaseID        string                      `json:"lease_id"`
-	PlatformUserID string                      `json:"platform_user_id"`
-	Currency       string                      `json:"currency"`
-	UnitVersion    string                      `json:"unit_version"`
-	Scale          int                         `json:"scale"`
-	Budget         canonicalWalletAmountObject `json:"budget"`
-	Reserved       canonicalWalletAmountObject `json:"reserved"`
-	Captured       canonicalWalletAmountObject `json:"captured"`
-	Released       canonicalWalletAmountObject `json:"released"`
-	Headroom       canonicalWalletAmountObject `json:"headroom"`
-	CaptureSeq     int64                       `json:"capture_seq"`
-	Status         string                      `json:"status"`
-	ExpiresAt      time.Time                   `json:"expires_at"`
-	Outcome        string                      `json:"outcome"`
-	ClampedBy      string                      `json:"clamped_by"`
+	USDWalletPolicyVersion string                      `json:"usd_wallet_policy_version,omitempty"`
+	LeaseID                string                      `json:"lease_id"`
+	PlatformUserID         string                      `json:"platform_user_id"`
+	Currency               string                      `json:"currency"`
+	UnitVersion            string                      `json:"unit_version"`
+	Scale                  int                         `json:"scale"`
+	Budget                 canonicalWalletAmountObject `json:"budget"`
+	Reserved               canonicalWalletAmountObject `json:"reserved"`
+	Captured               canonicalWalletAmountObject `json:"captured"`
+	Released               canonicalWalletAmountObject `json:"released"`
+	Headroom               canonicalWalletAmountObject `json:"headroom"`
+	CaptureSeq             int64                       `json:"capture_seq"`
+	Status                 string                      `json:"status"`
+	ExpiresAt              time.Time                   `json:"expires_at"`
+	Outcome                string                      `json:"outcome"`
+	ClampedBy              string                      `json:"clamped_by"`
 }
 
 // canonicalWalletAmountObject is Phase 0's four-field amount (redesign §9.2). The
@@ -471,9 +473,10 @@ func parseCanonicalWalletAmountObject(field string, a canonicalWalletAmountObjec
 }
 
 type canonicalWalletEnsureResult struct {
-	Lease     CanonicalWalletLease
-	Outcome   string // reused | issued
-	ClampedBy string // none | cap | balance
+	USDWalletPolicyVersion string
+	Lease                  CanonicalWalletLease
+	Outcome                string // reused | issued
+	ClampedBy              string // none | cap | balance
 }
 
 // canonicalWalletStatusError (Phase 3.5, §11.5) carries every non-2xx the
@@ -540,6 +543,9 @@ func (c *canonicalWalletHTTPClient) EnsureLease(ctx context.Context, request can
 		}
 		return nil, err
 	}
+	if request.USDWalletPolicyVersion != "" && (request.USDWalletPolicyVersion != config.CanonicalUSDWalletPolicyVersion || wire.USDWalletPolicyVersion != request.USDWalletPolicyVersion) {
+		return nil, ErrCanonicalUSDWalletPolicy
+	}
 	// §9.2: every response amount is parsed by the strict parser — a parse
 	// failure is a decode-class error and takes the generic transport path.
 	budget, err := parseCanonicalWalletAmountObject("budget", wire.Budget)
@@ -582,7 +588,7 @@ func (c *canonicalWalletHTTPClient) EnsureLease(ctx context.Context, request can
 			LeaseID: wire.LeaseID, PlatformUserID: strings.TrimSpace(request.PlatformUserID), Currency: currency,
 			BudgetUnits: budget, ConsumedUnits: consumed, ExpiresAt: wire.ExpiresAt,
 		},
-		Outcome: wire.Outcome, ClampedBy: wire.ClampedBy,
+		USDWalletPolicyVersion: wire.USDWalletPolicyVersion, Outcome: wire.Outcome, ClampedBy: wire.ClampedBy,
 	}, nil
 }
 
@@ -1455,7 +1461,17 @@ func (b *CanonicalWalletBridge) EnsureCanonicalWalletLeaseForAdmission(ctx conte
 		return nil // the gate only bootstraps in enforce; a nil bridge can't
 	}
 	issuedBefore := canonicalWalletBridgeMetrics.leaseIssued.Load()
-	_, err := b.ensureLease(ctx, platformUserID, currency, 1, canonicalWalletLeasePurposeAuthorize, "")
+	fixed, enabled, err := canonicalUSDWalletSnapshot(
+		&User{PlatformUserID: platformUserID, BillingCurrency: currency},
+		&config.Config{CanonicalWallet: b.cfg},
+	)
+	policyVersion := ""
+	if enabled {
+		policyVersion = fixed.Source
+	}
+	if err == nil {
+		_, err = b.ensureLeaseWithPolicy(ctx, platformUserID, currency, 1, canonicalWalletLeasePurposeAuthorize, "", policyVersion)
+	}
 	if err != nil && errors.Is(err, ErrCanonicalWalletLeaseMissing) {
 		err = nil // nothing was installed — the caller's re-read decides
 	}
@@ -2149,6 +2165,15 @@ func (b *CanonicalWalletBridge) resolveOutboxEventLease(ctx context.Context, e C
 // under the existing monotone rule with consumed = budget − headroom_units.
 // No hold is armed here.
 func (b *CanonicalWalletBridge) ensureLease(ctx context.Context, platformUserID, currency string, amountUnits int64, purpose canonicalWalletLeasePurpose, preferLeaseID string) (*CanonicalWalletLease, error) {
+	return b.ensureLeaseWithPolicy(ctx, platformUserID, currency, amountUnits, purpose, preferLeaseID, "")
+}
+
+// USD authorization confirms the policy through the signed control plane even
+// when a pre-rollout lease is cached. Amount objects and Redis remain cny-e8-v1.
+func (b *CanonicalWalletBridge) ensureLeaseWithPolicy(ctx context.Context, platformUserID, currency string, amountUnits int64, purpose canonicalWalletLeasePurpose, preferLeaseID, policyVersion string) (*CanonicalWalletLease, error) {
+	if policyVersion != "" && policyVersion != config.CanonicalUSDWalletPolicyVersion {
+		return nil, ErrCanonicalUSDWalletPolicy
+	}
 	if b.store == nil || b.control == nil {
 		return nil, errors.New("canonical wallet bridge dependencies unavailable")
 	}
@@ -2157,7 +2182,7 @@ func (b *CanonicalWalletBridge) ensureLease(ctx context.Context, platformUserID,
 	var err error
 	if preferLeaseID != "" {
 		cached, err = b.store.GetCanonicalWalletLeaseByID(ctx, platformUserID, preferLeaseID)
-		if err == nil && cached != nil {
+		if err == nil && cached != nil && policyVersion == "" {
 			return cached, nil // explicit-id branch: the lease exists → the reserve script decides
 		}
 	} else {
@@ -2169,15 +2194,20 @@ func (b *CanonicalWalletBridge) ensureLease(ctx context.Context, platformUserID,
 	if err != nil {
 		cached = nil
 	}
-	if b.leaseCovers(cached, currency, amountUnits, now) {
+	covering := b.leaseCovers(cached, currency, amountUnits, now)
+	if covering && policyVersion == "" {
 		return cached, nil
 	}
+	if covering && preferLeaseID == "" {
+		preferLeaseID = cached.LeaseID
+	}
 	request := canonicalWalletEnsureRequest{
-		PlatformUserID: strings.TrimSpace(platformUserID), Currency: currency, Purpose: string(purpose),
+		USDWalletPolicyVersion: policyVersion,
+		PlatformUserID:         strings.TrimSpace(platformUserID), Currency: currency, Purpose: string(purpose),
 		MinHeadroom: newCanonicalWalletAmountObject(amountUnits), RequestedBudget: newCanonicalWalletAmountObject(b.cfg.LeaseBudgetUnits), RequestedTTLSeconds: b.cfg.LeaseTTLSeconds,
 		PreferLeaseID: preferLeaseID, CallerSlotTTLSeconds: b.callerSlotTTLSeconds,
 	}
-	if cached != nil {
+	if cached != nil && !covering {
 		preSealConsumed, preSealReleased, sealErr := b.store.SealCanonicalWalletLease(ctx, platformUserID, cached.LeaseID)
 		if sealErr != nil && !errors.Is(sealErr, ErrCanonicalWalletLeaseMissing) {
 			return nil, sealErr
@@ -2200,6 +2230,9 @@ func (b *CanonicalWalletBridge) ensureLease(ctx context.Context, platformUserID,
 	}
 	if result == nil {
 		return nil, ErrCanonicalWalletLeaseMissing
+	}
+	if policyVersion != "" && result.USDWalletPolicyVersion != policyVersion {
+		return nil, ErrCanonicalUSDWalletPolicy
 	}
 	lease := result.Lease
 	if b.leaseExpiredAt(&lease, now) {

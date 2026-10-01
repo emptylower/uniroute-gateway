@@ -72,7 +72,15 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	}
 
 	if account.Platform == PlatformGrok {
-		if account.IsGrokOAuth() {
+		// Third-party Grok relays (e.g. kie.ai) serve Grok chat only through an
+		// OpenAI-Responses-compatible endpoint ({base}/responses); they have no
+		// {base}/chat/completions for grok models. Honor the explicit
+		// openai_responses_mode=force_responses opt-in so apikey accounts on
+		// such relays reuse the established CC->Responses bridge. Default
+		// (unset) keeps raw Chat Completions passthrough for xAI-native hosts.
+		if account.IsGrokOAuth() ||
+			(account.Type == AccountTypeAPIKey &&
+				openai_compat.ResolveResponsesSupport(account.Extra) == openai_compat.ResponsesSupportYes) {
 			if eligible, reason := grokChatResponsesBridgeEligibility(body); eligible {
 				return s.forwardGrokChatCompletionsViaResponses(ctx, c, account, body, promptCacheKey, defaultMappedModel)
 			} else {

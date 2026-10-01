@@ -1,12 +1,13 @@
 # UniRoute Gateway + ShipAny 部署手册
 
-本文档适用于本仓库的 ShipAny 数据平面版本。ShipAny 负责账号、权限、支付、积分和 API Key 生命周期；本服务只负责模型流量、上游账号、路由、流式连接、Redis 状态和使用量记录。
+本文档适用于本仓库的 ShipAny 数据平面版本。ShipAny 负责账号、权限、支付、USD 钱包和 API Key 生命周期；本服务只负责模型流量、上游账号、路由、流式连接、Redis 状态和使用量记录。
 
 ## 重要状态
 
 - `SERVER_DATA_PLANE_ONLY=true` 会在路由注册阶段移除旧登录、用户、支付、Webhook、管理面板和嵌入前端入口。
 - ShipAny 与网关之间使用独立的短期签名，不复用登录 JWT。
-- 当前钱包桥只支持 `disabled` 和观测用 `shadow`。`enforce` 会被配置校验拒绝，不能用于正式收费授权。
+- 钱包桥支持 `disabled`、观测用 `shadow` 和有启动门禁的 `enforce`。正式收费必须启用 `enforce_ready=true`，完成租约、持久结算、对账及 Redis 策略检查。
+- USD 钱包仍使用 CNY 存储和 `cny-e8-v1` 协议；仅 ShipAny 关联且网关计费币种为 CNY 的用户使用 `usd-wallet-v1` 固定面额。网关原生 USD 用户及未关联用户保持原行为。
 - 联调时可以使用 `RUN_MODE=simple`，但它会跳过网关旧余额检查。正式收费流量必须等权威钱包的预留、结算、退款和持久重试完成后再切换。
 
 ## 1. 服务器准备
@@ -46,7 +47,7 @@ CANONICAL_WALLET_MODE=disabled
 
 `GATEWAY_CHANNEL_ROUTING_ENABLED=true` 是 ShipAny 投影 Key 按用户可访问分组自动选路的必需开关。`RUN_MODE=simple` 只用于联调，不代表收费链路已经切流。
 
-测试环境默认使用 `BILLING_EXCHANGE_RATE_BOOTSTRAP_USD_TO_CNY=7.2`，响应会标记为 `bootstrap_config`。正式上线前必须配置 `BILLING_EXCHANGE_RATE_API_KEY`，并将 bootstrap 值改为 `0`，不得把固定测试汇率当作实时汇率。
+未开启 USD 钱包的旧用户仍使用汇率服务：测试环境默认 `BILLING_EXCHANGE_RATE_BOOTSTRAP_USD_TO_CNY=7.2`，标记为 `bootstrap_config`；需要实时汇率的正式流量配置 `BILLING_EXCHANGE_RATE_API_KEY` 并将 bootstrap 值设为 `0`。USD 钱包使用独立的固定名义率 7.2，标记为 `usd-wallet-v1`，不依赖市场汇率或 bootstrap。
 
 ## 4. 构建并启动
 
@@ -185,4 +186,41 @@ docker compose \
 - 已完成压力测试、Redis 故障测试、数据库备份恢复演练。
 - ShipAny 与网关的生产密钥已独立生成并完成轮换演练。
 
-当前版本主动拒绝 `CANONICAL_WALLET_MODE=enforce`，这是安全边界，不应绕过。
+`enforce` 通过既有 `enforce_ready` 和 Redis 持久性启动门禁；不要关闭门禁来让不具备结算能力的实例启动。
+
+
+## 11. USD 钱包发布顺序（2026-10-01）
+
+2026-10-01 实测生产网关为 `api.all-model-router.app`，DNS 指向 `43.133.179.131`，SSH 别名 `sub2api-tokyo`，源码/Compose 根目录 `/opt/sub2api`，运行镜像 `uniroute-gateway:local`。这是当日证据，执行前再次确认 DNS、容器和源码提交。旧文档中的 `154.219.127.249`、`/opt/uniroute/gateway` 以及 `sub2api-tencent` 均不能据此自动作为本服务发布目标。
+
+启用配置：
+
+```env
+CANONICAL_WALLET_MODE=enforce
+CANONICAL_WALLET_ENFORCE_READY=true
+CANONICAL_WALLET_BILLING_SNAPSHOT_MODE=settle
+CANONICAL_WALLET_USD_WALLET_ENABLED=true
+CANONICAL_WALLET_USD_POLICY_VERSION=usd-wallet-v1
+```
+
+- `1 USD = 7.2 CNY = 720 credits = 720000000 cny-e8-v1 units`。这是钱包固定面额，与采购换算或实时 FX 无关；内部 credits 字段和现有资金不做金额重写。
+- 预检、Freeze、授权估价与结算冻结相同版本。启用后缺失/未知版本会拒绝启动或新授权，不回退市场 FX。已冻结的旧调用继续按原 FX 结算，历史租约分配和结算重试保持原协议。
+- 每次新的 USD 授权均通过签名 ensure 请求发送 `usd_wallet_policy_version=usd-wallet-v1`。控制平面必须验证开关和版本并在响应原样回传；缺失或不匹配回传均拒绝授权。覆盖金额的缓存租约会以 `prefer_lease_id` 确认，不能为了版本检查封存仍可用租约。
+- 活跃 Live 会话的下一窗口属于新授权。切换前停止接入新的 Live 会话并等待既有会话结束，避免旧冻结版本在新授权门禁被拒；既有窗口最终结算仍按旧快照。
+
+发布时先部署两侧对协议字段的兼容代码，保持新 USD 商品入口关闭。确认 control plane 的授权 ensure 版本回传可用后，在网关启用以上配置、从本仓源码构建、启动并验证。最后在控制平面启用 USD 商品目录与 matching policy；不能只发布前端或只改展示换算。
+
+服务器本地构建示例（密钥文件原地保留，禁止提交/覆盖）：
+
+```bash
+cd /opt/sub2api
+git fetch origin
+# 按已核对的发布提交切换源码；不直接假设远程历史与本地 main 相同。
+docker compose --env-file deploy/.env.shipany -f deploy/docker-compose.yml -f deploy/docker-compose.shipany.yml build sub2api
+docker compose --env-file deploy/.env.shipany -f deploy/docker-compose.yml -f deploy/docker-compose.shipany.yml up -d --no-build sub2api
+curl -fsS http://127.0.0.1:8080/health
+```
+
+验收至少包括：签名 ensure 匹配/不匹配版本、一次成功计费的 `exchange_rate_source=usd-wallet-v1` 与 `exchange_rate=7.2`、改变汇率服务后收费不变、旧冻结快照结算不变、首充到账 $11 与钱包 units 一致、重复通知与重复结算幂等。构建失败可用本地 `docker buildx build --platform linux/amd64 --load -t uniroute-gateway:local .` 后传输镜像；Mac 当前没有 Docker CLI 时使用服务器构建。
+
+回滚先关闭新 USD 商品和新调用入口，再恢复上一个网关镜像与对应配置。已冻结 USD 调用仍应保留能识别 `usd-wallet-v1` 的结算版本；不能在尚有未完成调用/重试时回退到不认识固定政策的二进制。此次网关策略不新增数据库 migration。

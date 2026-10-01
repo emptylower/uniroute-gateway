@@ -1023,6 +1023,10 @@ canonical_wallet:
   # settle as today; settle = settle from the frozen snapshot. Independent
   # of mode (Phase 3.2).
   billing_snapshot_mode: "record"
+  # Explicit rollout gate: only ShipAny-linked CNY wallets use fixed 7.2 units/USD.
+  # Enable with mode=enforce and billing_snapshot_mode=settle after both sides deploy.
+  usd_wallet_enabled: false
+  usd_policy_version: ""
   # "on" arms a hold at every authorization (§10); requires mode
   # shadow|enforce; literal match, fail-closed.
   holds: "off"

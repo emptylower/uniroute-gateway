@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -13,8 +14,11 @@ import (
 type billingSettlementContextKey struct{}
 
 type billingSettlementSnapshots struct {
-	mu        sync.RWMutex
-	snapshots map[string]ExchangeRateSnapshot
+	mu                  sync.RWMutex
+	snapshots           map[string]ExchangeRateSnapshot
+	frozen              bool
+	walletPolicyVersion string
+	frozenCurrency      string
 }
 
 // WithBillingSettlementContext installs a request-scoped holder. Eligibility
@@ -94,12 +98,93 @@ func NormalizeSettlementCurrencyMode(value string) string {
 	}
 }
 
+const canonicalUSDWalletNominalRate = 7.2
+
+var ErrCanonicalUSDWalletPolicy = errors.New("canonical USD wallet policy is missing or incompatible")
+
+// Canonical wallets retain CNY storage and cny-e8-v1. Only explicitly enabled,
+// ShipAny-linked CNY users have a USD face value; native USD users are unchanged.
+func canonicalUSDWalletSnapshot(user *User, cfg *config.Config) (ExchangeRateSnapshot, bool, error) {
+	if cfg == nil || !cfg.CanonicalWallet.USDWalletEnabled || user == nil ||
+		strings.TrimSpace(user.PlatformUserID) == "" || strings.ToUpper(strings.TrimSpace(user.BillingCurrency)) != CurrencyCNY {
+		return ExchangeRateSnapshot{}, false, nil
+	}
+	if strings.TrimSpace(cfg.CanonicalWallet.USDPolicyVersion) != config.CanonicalUSDWalletPolicyVersion {
+		return ExchangeRateSnapshot{}, true, ErrCanonicalUSDWalletPolicy
+	}
+	return ExchangeRateSnapshot{
+		BaseCurrency: CurrencyUSD, QuoteCurrency: CurrencyCNY, Rate: canonicalUSDWalletNominalRate,
+		Source: config.CanonicalUSDWalletPolicyVersion, AsOf: time.Now().UTC(),
+	}, true, nil
+}
+
+func validateCanonicalUSDWalletSnapshot(snapshot ExchangeRateSnapshot, version string) error {
+	if version != config.CanonicalUSDWalletPolicyVersion || snapshot.Source != version ||
+		snapshot.BaseCurrency != CurrencyUSD || snapshot.QuoteCurrency != CurrencyCNY || snapshot.Rate != canonicalUSDWalletNominalRate {
+		return ErrCanonicalUSDWalletPolicy
+	}
+	return nil
+}
+
+// Used by preflight, Freeze and Live admission. A fixed policy never falls
+// back to market FX, even when the rate service is unavailable.
+func resolveBillingExchangeRate(ctx context.Context, user *User, fx *ExchangeRateService, cfg *config.Config) (ExchangeRateSnapshot, error) {
+	fixed, enabled, err := canonicalUSDWalletSnapshot(user, cfg)
+	if err != nil {
+		return ExchangeRateSnapshot{}, err
+	}
+	currency := NormalizeUserBillingCurrency(user.BillingCurrency)
+	if pinned, ok := pinnedBillingSettlementSnapshot(ctx, CurrencyUSD, currency); ok {
+		if enabled {
+			if err := validateCanonicalUSDWalletSnapshot(pinned, fixed.Source); err != nil {
+				return ExchangeRateSnapshot{}, err
+			}
+		}
+		return pinned, nil
+	}
+	if enabled {
+		return fixed, nil
+	}
+	if fx == nil {
+		return ExchangeRateSnapshot{}, fmt.Errorf("exchange-rate service is unavailable")
+	}
+	return fx.Snapshot(ctx, CurrencyUSD, currency)
+}
+
 // ResolveCostSettlement decides the settlement currency strategy for a usage
 // record. Historically this was hard-wired to RunMode (simple => pinned USD);
 // billing.settlement.currency_mode decouples the two concerns: unset follows
 // RunMode (legacy behavior, zero change for existing deployments), fixed_usd
 // pins USD 1:1, user settles in the user's billing currency.
 func ResolveCostSettlement(ctx context.Context, cost *CostBreakdown, user *User, subscriptionBilling bool, fx *ExchangeRateService, cfg *config.Config) (CostSettlementSnapshot, error) {
+	if !subscriptionBilling {
+		if holder, _ := ctx.Value(billingSettlementContextKey{}).(*billingSettlementSnapshots); holder != nil && holder.frozen {
+			if holder.walletPolicyVersion != "" {
+				snapshot, ok := pinnedBillingSettlementSnapshot(ctx, CurrencyUSD, CurrencyCNY)
+				if !ok || validateCanonicalUSDWalletSnapshot(snapshot, holder.walletPolicyVersion) != nil {
+					return CostSettlementSnapshot{}, ErrCanonicalUSDWalletPolicy
+				}
+			}
+			// A frozen historical call retains its old FX after policy activation.
+			// Without a USD rollout, retain the legacy run-mode selection below.
+			if holder.walletPolicyVersion != "" || (cfg != nil && cfg.CanonicalWallet.USDWalletEnabled && user != nil && strings.TrimSpace(user.PlatformUserID) != "" && holder.frozenCurrency == CurrencyCNY) {
+				return settleUsageCost(ctx, cost, &User{BillingCurrency: holder.frozenCurrency}, false, fx)
+			}
+		}
+		_, enabled, err := canonicalUSDWalletSnapshot(user, cfg)
+		if err != nil {
+			return CostSettlementSnapshot{}, err
+		}
+		if enabled {
+			snapshot, err := resolveBillingExchangeRate(ctx, user, fx, cfg)
+			if err != nil {
+				return CostSettlementSnapshot{}, err
+			}
+			ctx = WithBillingSettlementContext(ctx)
+			storeBillingSettlementSnapshot(ctx, snapshot)
+			return settleUsageCost(ctx, cost, user, false, fx)
+		}
+	}
 	mode := ""
 	runMode := ""
 	if cfg != nil {
@@ -145,11 +230,11 @@ func settleUsageCost(ctx context.Context, cost *CostBreakdown, user *User, subsc
 	if !subscriptionBilling && user != nil {
 		currency = NormalizeUserBillingCurrency(user.BillingCurrency)
 	}
-	if fx == nil {
-		return CostSettlementSnapshot{}, fmt.Errorf("exchange-rate service is unavailable")
-	}
 	snapshot, ok := pinnedBillingSettlementSnapshot(ctx, CurrencyUSD, currency)
 	if !ok {
+		if fx == nil {
+			return CostSettlementSnapshot{}, fmt.Errorf("exchange-rate service is unavailable")
+		}
 		var err error
 		snapshot, err = fx.Snapshot(ctx, CurrencyUSD, currency)
 		if err != nil {

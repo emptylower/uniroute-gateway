@@ -402,3 +402,11 @@ func TestCheckQuotaDimCrossings_MultipleDims_MixedResults(t *testing.T) {
 	// None should trigger. No panic expected.
 	s.checkQuotaDimCrossings(account, dims, 50, []string{"admin@example.com"}, "TestSite")
 }
+
+func TestCheckBalanceAfterDeductionSkipsShipAnyProjectedBalance(t *testing.T) {
+	s, _ := newBalanceNotifyServiceForTest()
+	user := &User{ID: 1, PlatformUserID: "shipany-user", BillingCurrency: "CNY", BalanceNotifyEnabled: true}
+	require.False(t, s.canNotifyBalance(user), "canonical notifications must use the control-plane wallet, not native gateway balance")
+	user.PlatformUserID = ""
+	require.True(t, s.canNotifyBalance(user), "native users retain existing notifications")
+}

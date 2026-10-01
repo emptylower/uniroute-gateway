@@ -36,12 +36,12 @@ type SnapshotSettlementInput struct {
 // carries no FX and pins nothing; a zero rate (FX outage at freeze) pins
 // nothing, so settlement degrades to the live rate.
 func SettlementContextFromSnapshot(ctx context.Context, snap *BillingSnapshot) context.Context {
-	if snap == nil || snap.Flags.SubscriptionBilling || snap.FX.Rate <= 0 {
+	if snap == nil || snap.Flags.SubscriptionBilling || (snap.FX.Rate <= 0 && snap.Flags.USDWalletPolicyVersion == "") {
 		return ctx
 	}
 	// The holder literal matches WithBillingSettlementContext (:22-35); do not
 	// call that function if it reuses an existing holder.
-	ctx = context.WithValue(ctx, billingSettlementContextKey{}, &billingSettlementSnapshots{snapshots: map[string]ExchangeRateSnapshot{}})
+	ctx = context.WithValue(ctx, billingSettlementContextKey{}, &billingSettlementSnapshots{snapshots: map[string]ExchangeRateSnapshot{}, frozen: true, walletPolicyVersion: snap.Flags.USDWalletPolicyVersion, frozenCurrency: snap.FX.QuoteCurrency})
 	storeBillingSettlementSnapshot(ctx, snap.FX)
 	return ctx
 }

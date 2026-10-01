@@ -740,6 +740,20 @@ func (s *BillingCacheService) IncrementUserPlatformQuotaUsage(userID int64, plat
 // 订阅模式：检查缓存用量未超过限额（Group限额从参数传入）
 // platform 为请求的目标平台（如 "anthropic"），传空串 "" 时跳过 user × platform quota 检查。
 func (s *BillingCacheService) CheckBillingEligibility(ctx context.Context, user *User, apiKey *APIKey, group *Group, subscription *UserSubscription, platform string) error {
+	isSubscriptionMode := group != nil && group.IsSubscriptionType() && subscription != nil
+	if !isSubscriptionMode {
+		_, enabled, err := canonicalUSDWalletSnapshot(user, s.cfg)
+		if err != nil {
+			return ErrBillingServiceUnavailable.WithCause(err)
+		}
+		if enabled {
+			snapshot, err := resolveBillingExchangeRate(ctx, user, s.exchangeRates, s.cfg)
+			if err != nil {
+				return ErrBillingServiceUnavailable.WithCause(err)
+			}
+			storeBillingSettlementSnapshot(ctx, snapshot)
+		}
+	}
 	// 简易模式：跳过所有计费检查
 	if s.cfg.RunMode == config.RunModeSimple {
 		return nil
@@ -749,8 +763,6 @@ func (s *BillingCacheService) CheckBillingEligibility(ctx context.Context, user 
 	}
 
 	// 判断计费模式
-	isSubscriptionMode := group != nil && group.IsSubscriptionType() && subscription != nil
-
 	if isSubscriptionMode {
 		if err := s.checkSubscriptionEligibility(ctx, user.ID, group, subscription); err != nil {
 			return err
@@ -769,8 +781,7 @@ func (s *BillingCacheService) CheckBillingEligibility(ctx context.Context, user 
 		// Persisted users always have an explicit currency. Empty is retained only
 		// for legacy unit-test fixtures created without the Billing V2 schema.
 		if user != nil && strings.TrimSpace(user.BillingCurrency) != "" {
-			currency := NormalizeUserBillingCurrency(user.BillingCurrency)
-			snapshot, err := s.exchangeRates.Snapshot(ctx, CurrencyUSD, currency)
+			snapshot, err := resolveBillingExchangeRate(ctx, user, s.exchangeRates, s.cfg)
 			if err != nil {
 				return ErrBillingServiceUnavailable.WithCause(err)
 			}

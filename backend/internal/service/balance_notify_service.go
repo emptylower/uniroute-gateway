@@ -89,6 +89,12 @@ func (s *BalanceNotifyService) canNotifyBalance(user *User) bool {
 	if user == nil || s.emailService == nil || s.settingRepo == nil {
 		return false
 	}
+	// ShipAny owns the canonical wallet and its USD balance notifications.
+	// The gateway's native balance is a projection, not canonical headroom;
+	// formatting it with the legacy dollar email would report a false amount.
+	if strings.TrimSpace(user.PlatformUserID) != "" {
+		return false
+	}
 	return user.BalanceNotifyEnabled
 }
 

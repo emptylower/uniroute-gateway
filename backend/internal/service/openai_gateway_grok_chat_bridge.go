@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 )
@@ -527,7 +528,16 @@ func (s *OpenAIGatewayService) forwardGrokChatCompletionsViaResponses(
 	// for non-composer models, so they would be silently dropped. Route them to
 	// Responses even when no prompt-cache identity is available.
 	hasImageInput := openAIJSONValueMayContainImageInput(gjson.GetBytes(body, "messages"))
-	if !grokChatResponsesRuntimeEligible(upstreamModel, cacheIdentity) && (!hasImageInput || strings.TrimSpace(upstreamModel) != "grok-4.5") {
+	// Relay accounts opted in via openai_responses_mode=force_responses carry
+	// dash-named grok model ids (grok-4-5), not the CLI dotted grok-4.5, and
+	// single-turn Chat requests carry no reusable cache seed. An empty identity
+	// only skips prompt_cache_key injection (applyGrokResponsesCacheIdentity
+	// no-ops), so relays may bridge without one; the xAI free-tier tool route
+	// stays disabled for them below.
+	relayForceResponses := account.Type == AccountTypeAPIKey &&
+		openai_compat.ResolveResponsesSupport(account.Extra) == openai_compat.ResponsesSupportYes
+	bridgeRuntimeOK := grokChatResponsesRuntimeEligible(upstreamModel, cacheIdentity) || relayForceResponses
+	if !bridgeRuntimeOK && (!hasImageInput || strings.TrimSpace(upstreamModel) != "grok-4.5") {
 		return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel)
 	}
 
@@ -561,7 +571,9 @@ func (s *OpenAIGatewayService) forwardGrokChatCompletionsViaResponses(
 	if err != nil {
 		return nil, fmt.Errorf("patch grok responses bridge request: %w", err)
 	}
-	responsesBody, err = applyGrokResponsesCacheIdentity(responsesBody, intentBody, cacheIdentity, true)
+	// Free-tier native tool injection is an xAI OAuth mechanism; third-party
+	// relay upstreams must not receive it.
+	responsesBody, err = applyGrokResponsesCacheIdentity(responsesBody, intentBody, cacheIdentity, !relayForceResponses)
 	if err != nil {
 		return nil, fmt.Errorf("apply grok responses bridge cache identity: %w", err)
 	}
