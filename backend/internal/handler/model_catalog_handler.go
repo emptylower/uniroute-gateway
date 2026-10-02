@@ -72,15 +72,7 @@ func (h *ModelCatalogHandler) ListChannelCosts(c *gin.Context) {
 		response.BadRequest(c, "Only the text model category is supported")
 		return
 	}
-	currencyParam := strings.TrimSpace(c.Query("currency"))
-	if currencyParam == "" {
-		currencyParam = strings.TrimSpace(c.Query("display_currency"))
-	}
-	currency, err := service.NormalizeBillingCurrency(currencyParam)
-	if err != nil {
-		response.BadRequest(c, err.Error())
-		return
-	}
+	currency := service.CurrencyUSD
 	if h.settingService == nil || !h.settingService.GetAvailableChannelsRuntime(c.Request.Context()).Enabled {
 		quote, quoteErr := h.catalog.QuoteChannelCosts(c.Request.Context(), subject.UserID, time.Now(), currency)
 		if quoteErr != nil {

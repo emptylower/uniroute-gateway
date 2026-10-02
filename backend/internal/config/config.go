@@ -844,18 +844,8 @@ type ProxyProbeConfig struct {
 	InsecureSkipVerify bool `mapstructure:"insecure_skip_verify"` // 已禁用：禁止跳过 TLS 证书验证
 }
 
-type SettlementConfig struct {
-	// CurrencyMode decouples settlement currency from RunMode.
-	// "" follows RunMode (legacy: simple pins USD, standard settles in the
-	// user's billing currency), "fixed_usd" always pins USD 1:1, "user"
-	// always settles in the user's billing currency via ExchangeRateService.
-	CurrencyMode string `mapstructure:"currency_mode"`
-}
-
 type BillingConfig struct {
 	CircuitBreaker CircuitBreakerConfig `mapstructure:"circuit_breaker"`
-	ExchangeRate   ExchangeRateConfig   `mapstructure:"exchange_rate"`
-	Settlement     SettlementConfig     `mapstructure:"settlement"`
 	// MinimumBalanceReserve is the conservative preflight floor for balance billing.
 	// Requests in balance mode are rejected when the cached balance is below this
 	// amount, even if it is still positive. Set to 0 to keep the legacy balance > 0 gate.
@@ -869,20 +859,6 @@ type BillingConfig struct {
 	// UserPlatformQuotaSentinelTTLSeconds sentinel(无 limit 占位)entry 的 TTL,
 	// 显著短于 quota cache 默认 86400s 以控 Redis 内存;默认 3600=1h。
 	UserPlatformQuotaSentinelTTLSeconds int `mapstructure:"user_platform_quota_sentinel_ttl_seconds"`
-}
-
-type ExchangeRateConfig struct {
-	Provider          string  `mapstructure:"provider"`
-	ProviderURL       string  `mapstructure:"provider_url"`
-	APIKey            string  `mapstructure:"api_key"`
-	BootstrapUSDToCNY float64 `mapstructure:"bootstrap_usd_to_cny"`
-	MinUSDToCNY       float64 `mapstructure:"min_usd_to_cny"`
-	MaxUSDToCNY       float64 `mapstructure:"max_usd_to_cny"`
-	MaxAgeSeconds     int     `mapstructure:"max_age_seconds"`
-	MaxFutureSeconds  int     `mapstructure:"max_future_seconds"`
-	CacheTTLSeconds   int     `mapstructure:"cache_ttl_seconds"`
-	StaleTTLSeconds   int     `mapstructure:"stale_ttl_seconds"`
-	TimeoutSeconds    int     `mapstructure:"timeout_seconds"`
 }
 
 type CircuitBreakerConfig struct {
@@ -1594,7 +1570,7 @@ type CanonicalWalletConfig struct {
 	// "settle" = settle from the frozen snapshot. Independent of Mode so the
 	// snapshot can be proven in shadow before any hold exists.
 	BillingSnapshotMode string `mapstructure:"billing_snapshot_mode"`
-	// USDWalletEnabled scopes the fixed nominal policy to ShipAny-linked CNY wallets.
+	// USDWalletEnabled requires funding proof from the linked console USD ledger.
 	// USDPolicyVersion is mandatory when enabled; it never selects market FX.
 	USDWalletEnabled bool   `mapstructure:"usd_wallet_enabled"`
 	USDPolicyVersion string `mapstructure:"usd_policy_version"`
@@ -2101,18 +2077,6 @@ func setDefaults() {
 	viper.SetDefault("billing.circuit_breaker.reset_timeout_seconds", 30)
 	viper.SetDefault("billing.circuit_breaker.half_open_requests", 3)
 	viper.SetDefault("billing.minimum_balance_reserve", 0.000001)
-	viper.SetDefault("billing.exchange_rate.provider", "currencyapi")
-	viper.SetDefault("billing.exchange_rate.provider_url", "https://api.currencyapi.com/v3/latest")
-	viper.SetDefault("billing.exchange_rate.api_key", "")
-	viper.SetDefault("billing.exchange_rate.bootstrap_usd_to_cny", 0)
-	viper.SetDefault("billing.exchange_rate.min_usd_to_cny", 4)
-	viper.SetDefault("billing.exchange_rate.max_usd_to_cny", 12)
-	viper.SetDefault("billing.exchange_rate.max_age_seconds", 172800)
-	viper.SetDefault("billing.exchange_rate.max_future_seconds", 300)
-	viper.SetDefault("billing.exchange_rate.cache_ttl_seconds", 900)
-	viper.SetDefault("billing.exchange_rate.stale_ttl_seconds", 86400)
-	viper.SetDefault("billing.settlement.currency_mode", "")
-	viper.SetDefault("billing.exchange_rate.timeout_seconds", 2)
 	viper.SetDefault("billing.user_platform_quota_cache_ttl_seconds", 86400)
 	viper.SetDefault("billing.user_platform_quota_sentinel_ttl_seconds", 3600)
 
@@ -3259,22 +3223,6 @@ func (c *Config) Validate() error {
 	}
 	if c.Billing.MinimumBalanceReserve < 0 {
 		return fmt.Errorf("billing.minimum_balance_reserve must be non-negative")
-	}
-	if c.Billing.ExchangeRate.BootstrapUSDToCNY < 0 {
-		return fmt.Errorf("billing.exchange_rate.bootstrap_usd_to_cny must be non-negative")
-	}
-	if c.Billing.ExchangeRate.MinUSDToCNY <= 0 || c.Billing.ExchangeRate.MaxUSDToCNY <= c.Billing.ExchangeRate.MinUSDToCNY {
-		return fmt.Errorf("billing.exchange_rate USD/CNY bounds are invalid")
-	}
-	if bootstrap := c.Billing.ExchangeRate.BootstrapUSDToCNY; bootstrap > 0 &&
-		(bootstrap < c.Billing.ExchangeRate.MinUSDToCNY || bootstrap > c.Billing.ExchangeRate.MaxUSDToCNY) {
-		return fmt.Errorf("billing.exchange_rate.bootstrap_usd_to_cny must be within configured USD/CNY bounds")
-	}
-	if c.Billing.ExchangeRate.MaxAgeSeconds <= 0 || c.Billing.ExchangeRate.MaxFutureSeconds < 0 {
-		return fmt.Errorf("billing.exchange_rate timestamp limits are invalid")
-	}
-	if c.Billing.ExchangeRate.CacheTTLSeconds <= 0 || c.Billing.ExchangeRate.StaleTTLSeconds <= 0 || c.Billing.ExchangeRate.TimeoutSeconds <= 0 {
-		return fmt.Errorf("billing.exchange_rate TTL and timeout values must be positive")
 	}
 	if c.Database.MaxOpenConns <= 0 {
 		return fmt.Errorf("database.max_open_conns must be positive")

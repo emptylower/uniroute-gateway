@@ -173,7 +173,7 @@ func TestOpenAIResponsesRequiredCapability(t *testing.T) {
 }
 
 func TestResolveOpenAIMessagesMetadataSession_DoesNotDerivePromptCacheKey(t *testing.T) {
-	body := []byte(`{"model":"claude-sonnet-4-5","metadata":{"user_id":"claude-code-session"},"messages":[{"role":"user","content":"hello"}]}`)
+	body := []byte(`{"model":"claude-sonnet-4-5","max_output_tokens":32,"metadata":{"user_id":"claude-code-session"},"messages":[{"role":"user","content":"hello"}]}`)
 
 	sessionHash, promptCacheKey := resolveOpenAIMessagesMetadataSession("", "", "claude-sonnet-4-5", body)
 
@@ -212,7 +212,7 @@ func TestOpenAIHandleStreamingAwareError_NonStreaming(t *testing.T) {
 }
 
 func TestReadRequestBodyWithPrealloc(t *testing.T) {
-	payload := `{"model":"gpt-5","input":"hello"}`
+	payload := `{"model":"gpt-5","max_output_tokens":32,"input":"hello"}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(payload))
 	req.ContentLength = int64(len(payload))
 
@@ -615,7 +615,7 @@ func TestOpenAIEnsureResponsesDependencies(t *testing.T) {
 func TestResolveOpenAIMessagesDispatchMappedModel(t *testing.T) {
 	t.Run("exact_claude_model_override_wins", func(t *testing.T) {
 		apiKey := &service.APIKey{
-			Group: &service.Group{
+			Group: &service.Group{RateMultiplier: 1,
 				MessagesDispatchModelConfig: service.OpenAIMessagesDispatchModelConfig{
 					SonnetMappedModel: "gpt-5.2",
 					ExactModelMappings: map[string]string{
@@ -630,7 +630,7 @@ func TestResolveOpenAIMessagesDispatchMappedModel(t *testing.T) {
 	})
 
 	t.Run("uses_family_default_when_no_override", func(t *testing.T) {
-		apiKey := &service.APIKey{Group: &service.Group{}}
+		apiKey := &service.APIKey{Group: &service.Group{RateMultiplier: 1}}
 		require.Equal(t, "gpt-5.4", resolveOpenAIMessagesDispatchMappedModel(apiKey, "claude-opus-4-6"))
 		require.Equal(t, "gpt-5.3-codex", resolveOpenAIMessagesDispatchMappedModel(apiKey, "claude-sonnet-4-5-20250929"))
 		require.Equal(t, "gpt-5.4-mini", resolveOpenAIMessagesDispatchMappedModel(apiKey, "claude-haiku-4-5-20251001"))
@@ -639,12 +639,12 @@ func TestResolveOpenAIMessagesDispatchMappedModel(t *testing.T) {
 	t.Run("returns_empty_for_non_claude_or_missing_group", func(t *testing.T) {
 		require.Empty(t, resolveOpenAIMessagesDispatchMappedModel(nil, "claude-sonnet-4-5-20250929"))
 		require.Empty(t, resolveOpenAIMessagesDispatchMappedModel(&service.APIKey{}, "claude-sonnet-4-5-20250929"))
-		require.Empty(t, resolveOpenAIMessagesDispatchMappedModel(&service.APIKey{Group: &service.Group{}}, "gpt-5.4"))
+		require.Empty(t, resolveOpenAIMessagesDispatchMappedModel(&service.APIKey{Group: &service.Group{RateMultiplier: 1}}, "gpt-5.4"))
 	})
 
 	t.Run("grok_group_maps_claude_cli_model_to_grok_default", func(t *testing.T) {
 		apiKey := &service.APIKey{
-			Group: &service.Group{
+			Group: &service.Group{RateMultiplier: 1,
 				Platform: service.PlatformGrok,
 			},
 		}
@@ -654,7 +654,7 @@ func TestResolveOpenAIMessagesDispatchMappedModel(t *testing.T) {
 
 	t.Run("does_not_fall_back_to_group_default_mapped_model", func(t *testing.T) {
 		apiKey := &service.APIKey{
-			Group: &service.Group{
+			Group: &service.Group{RateMultiplier: 1,
 				DefaultMappedModel: "gpt-5.4",
 			},
 		}
@@ -680,13 +680,13 @@ func TestOpenAIGatewayMessagesDispatchGateAllowsGrokGroups(t *testing.T) {
 	t.Run("openai_group_without_dispatch_flag_is_rejected", func(t *testing.T) {
 		rec := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(rec)
-		c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"hi"}]}`))
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"claude-sonnet-4-5","max_output_tokens":32,"messages":[{"role":"user","content":"hi"}]}`))
 		groupID := int64(4101)
 		c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{
 			ID:      5101,
 			GroupID: &groupID,
-			User:    &service.User{ID: 6101},
-			Group: &service.Group{
+			User:    &service.User{PlatformUserID: "usd-fixture-user", ID: 6101},
+			Group: &service.Group{RateMultiplier: 1,
 				ID:                    groupID,
 				Platform:              service.PlatformOpenAI,
 				AllowMessagesDispatch: false,
@@ -705,13 +705,13 @@ func TestOpenAIGatewayMessagesDispatchGateAllowsGrokGroups(t *testing.T) {
 	t.Run("grok_group_without_dispatch_flag_reaches_gateway_dependencies", func(t *testing.T) {
 		rec := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(rec)
-		c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"grok-4.3","messages":[{"role":"user","content":"hi"}]}`))
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"grok-4.3","max_output_tokens":32,"messages":[{"role":"user","content":"hi"}]}`))
 		groupID := int64(4102)
 		c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{
 			ID:      5102,
 			GroupID: &groupID,
-			User:    &service.User{ID: 6102},
-			Group: &service.Group{
+			User:    &service.User{PlatformUserID: "usd-fixture-user", ID: 6102},
+			Group: &service.Group{RateMultiplier: 1,
 				ID:                    groupID,
 				Platform:              service.PlatformGrok,
 				AllowMessagesDispatch: false,
@@ -731,7 +731,7 @@ func TestOpenAIGatewayMessagesDispatchGateAllowsGrokGroups(t *testing.T) {
 }
 
 func TestOpenAIModelMappedBody(t *testing.T) {
-	body := []byte(`{"model":"alias","input":"hello"}`)
+	body := []byte(`{"model":"alias","max_output_tokens":32,"input":"hello"}`)
 	calls := 0
 
 	forwardBody := openAIModelMappedBody(body, true, "gpt-5.4", func(body []byte, newModel string) []byte {
@@ -745,7 +745,7 @@ func TestOpenAIModelMappedBody(t *testing.T) {
 }
 
 func TestOpenAIModelMappedBodyCache(t *testing.T) {
-	body := []byte(`{"model":"alias","input":"hello"}`)
+	body := []byte(`{"model":"alias","max_output_tokens":32,"input":"hello"}`)
 	calls := 0
 	mappedBody := newOpenAIModelMappedBodyCache(body, func(body []byte, newModel string) []byte {
 		calls++
@@ -770,7 +770,7 @@ func TestOpenAIResponses_MissingDependencies_ReturnsServiceUnavailable(t *testin
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5","stream":false}`))
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5","max_output_tokens":32,"stream":false}`))
 	c.Request.Header.Set("Content-Type", "application/json")
 
 	groupID := int64(2)
@@ -806,7 +806,7 @@ func TestOpenAIResponses_SetsClientTransportHTTP(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", strings.NewReader(`{"model":"gpt-5"}`))
+	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", strings.NewReader(`{"model":"gpt-5","max_output_tokens":32}`))
 	c.Request.Header.Set("Content-Type", "application/json")
 
 	h := &OpenAIGatewayHandler{}
@@ -822,7 +822,7 @@ func TestOpenAIResponses_RejectsMessageIDAsPreviousResponseID(t *testing.T) {
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", strings.NewReader(
-		`{"model":"gpt-5.1","stream":false,"previous_response_id":"msg_123456","input":[{"type":"input_text","text":"hello"}]}`,
+		`{"model":"gpt-5.1","max_output_tokens":32,"stream":false,"previous_response_id":"msg_123456","input":[{"type":"input_text","text":"hello"}]}`,
 	))
 	c.Request.Header.Set("Content-Type", "application/json")
 
@@ -830,7 +830,7 @@ func TestOpenAIResponses_RejectsMessageIDAsPreviousResponseID(t *testing.T) {
 	c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{
 		ID:      101,
 		GroupID: &groupID,
-		User:    &service.User{ID: 1},
+		User:    &service.User{PlatformUserID: "usd-fixture-user", ID: 1},
 	})
 	c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{
 		UserID:      1,
@@ -850,7 +850,7 @@ func TestOpenAIResponses_RejectsHTTPContinuationPreviousResponseID(t *testing.T)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", strings.NewReader(
-		`{"model":"gpt-5.1","stream":false,"previous_response_id":"resp_123456","input":[{"type":"input_text","text":"hello"}]}`,
+		`{"model":"gpt-5.1","max_output_tokens":32,"stream":false,"previous_response_id":"resp_123456","input":[{"type":"input_text","text":"hello"}]}`,
 	))
 	c.Request.Header.Set("Content-Type", "application/json")
 
@@ -858,7 +858,7 @@ func TestOpenAIResponses_RejectsHTTPContinuationPreviousResponseID(t *testing.T)
 	c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{
 		ID:      101,
 		GroupID: &groupID,
-		User:    &service.User{ID: 1},
+		User:    &service.User{PlatformUserID: "usd-fixture-user", ID: 1},
 	})
 	c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{
 		UserID:      1,
@@ -879,7 +879,7 @@ func TestOpenAIResponses_FunctionCallOutputHTTPGuidanceDoesNotSuggestPreviousRes
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", strings.NewReader(
-		`{"model":"gpt-5.1","stream":false,"input":[{"type":"function_call_output","output":"{}"}]}`,
+		`{"model":"gpt-5.1","max_output_tokens":32,"stream":false,"input":[{"type":"function_call_output","output":"{}"}]}`,
 	))
 	c.Request.Header.Set("Content-Type", "application/json")
 
@@ -887,7 +887,7 @@ func TestOpenAIResponses_FunctionCallOutputHTTPGuidanceDoesNotSuggestPreviousRes
 	c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{
 		ID:      101,
 		GroupID: &groupID,
-		User:    &service.User{ID: 1},
+		User:    &service.User{PlatformUserID: "usd-fixture-user", ID: 1},
 	})
 	c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{
 		UserID:      1,
@@ -1091,7 +1091,7 @@ func TestOpenAIResponsesWebSocket_RejectsMessageIDAsPreviousResponseID(t *testin
 
 	writeCtx, cancelWrite := context.WithTimeout(context.Background(), 3*time.Second)
 	err = clientConn.Write(writeCtx, coderws.MessageText, []byte(
-		`{"type":"response.create","model":"gpt-5.1","stream":false,"previous_response_id":"msg_abc123"}`,
+		`{"type":"response.create","model":"gpt-5.1","max_output_tokens":32,"stream":false,"previous_response_id":"msg_abc123"}`,
 	))
 	cancelWrite()
 	require.NoError(t, err)
@@ -1128,7 +1128,7 @@ func TestOpenAIResponsesWebSocket_PreviousResponseIDKindLoggedBeforeAcquireFailu
 
 	writeCtx, cancelWrite := context.WithTimeout(context.Background(), 3*time.Second)
 	err = clientConn.Write(writeCtx, coderws.MessageText, []byte(
-		`{"type":"response.create","model":"gpt-5.1","stream":false,"previous_response_id":"resp_prev_123"}`,
+		`{"type":"response.create","model":"gpt-5.1","max_output_tokens":32,"stream":false,"previous_response_id":"resp_prev_123"}`,
 	))
 	cancelWrite()
 	require.NoError(t, err)
@@ -1286,7 +1286,7 @@ func TestOpenAIResponsesWebSocket_ContentModerationBlocksFirstFrame(t *testing.T
 		Provider: "openai",
 		Model:    "gpt-5.5",
 		Protocol: service.ContentModerationProtocolOpenAIResponses,
-		Body:     []byte(`{"model":"gpt-5.5","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"bad prompt"}]}]}`),
+		Body:     []byte(`{"model":"gpt-5.5","max_output_tokens":32,"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"bad prompt"}]}]}`),
 	})
 	require.NoError(t, err)
 	require.True(t, decision.Blocked)
@@ -1315,7 +1315,7 @@ func TestOpenAIResponsesWebSocket_ContentModerationBlocksFirstFrame(t *testing.T
 	writeCtx, cancelWrite := context.WithTimeout(context.Background(), 3*time.Second)
 	err = clientConn.Write(writeCtx, coderws.MessageText, []byte(`{
 		"type":"response.create",
-		"model":"gpt-5.5",
+		"model":"gpt-5.5","max_output_tokens":32,
 		"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"bad prompt"}]}]
 	}`))
 	cancelWrite()
@@ -1345,7 +1345,7 @@ func TestOpenAIResponsesWebSocket_ContentModerationBlocksFirstFrame(t *testing.T
 
 func TestOpenAIResponsesWebSocket_PassthroughUsageLogPersistsUserAgentAndReasoningEffort(t *testing.T) {
 	got := runOpenAIResponsesWebSocketUsageLogCase(t, openAIResponsesWSUsageLogCase{
-		firstPayload: `{"type":"response.create","model":"gpt-5.4","stream":false,"reasoning":{"effort":"HIGH"}}`,
+		firstPayload: `{"type":"response.create","model":"gpt-5.4","max_output_tokens":32,"stream":false,"reasoning":{"effort":"HIGH"}}`,
 		userAgent:    testStringPtr("codex_cli_rs/0.125.0 test"),
 	})
 
@@ -1358,7 +1358,7 @@ func TestOpenAIResponsesWebSocket_PassthroughUsageLogPersistsUserAgentAndReasoni
 
 func TestOpenAIResponsesWebSocket_PassthroughUsageLogInfersReasoningFromInitialRequestModel(t *testing.T) {
 	got := runOpenAIResponsesWebSocketUsageLogCase(t, openAIResponsesWSUsageLogCase{
-		firstPayload: `{"type":"response.create","model":"gpt-5.4-xhigh","stream":false}`,
+		firstPayload: `{"type":"response.create","model":"gpt-5.4-xhigh","max_output_tokens":32,"stream":false}`,
 		userAgent:    testStringPtr("codex_cli_rs/0.125.0 mapped"),
 		channelMapping: map[string]string{
 			"gpt-5.4-xhigh": "gpt-5.4",
@@ -1374,7 +1374,7 @@ func TestOpenAIResponsesWebSocket_PassthroughUsageLogInfersReasoningFromInitialR
 
 func TestOpenAIResponsesWebSocket_PassthroughUsageLogLeavesUserAgentNilWhenMissing(t *testing.T) {
 	got := runOpenAIResponsesWebSocketUsageLogCase(t, openAIResponsesWSUsageLogCase{
-		firstPayload: `{"type":"response.create","model":"gpt-5.4","stream":false,"reasoning":{"effort":"medium"}}`,
+		firstPayload: `{"type":"response.create","model":"gpt-5.4","max_output_tokens":32,"stream":false,"reasoning":{"effort":"medium"}}`,
 		userAgent:    testStringPtr(""),
 	})
 
@@ -1385,8 +1385,8 @@ func TestOpenAIResponsesWebSocket_PassthroughUsageLogLeavesUserAgentNilWhenMissi
 
 func TestOpenAIResponsesWebSocket_PassthroughTracksModelPerTurn(t *testing.T) {
 	got := runOpenAIResponsesWebSocketUsageLogCase(t, openAIResponsesWSUsageLogCase{
-		firstPayload:  `{"type":"response.create","model":"sol","stream":false}`,
-		secondPayload: `{"type":"response.create","model":"terra","stream":false}`,
+		firstPayload:  `{"type":"response.create","model":"sol","max_output_tokens":32,"stream":false}`,
+		secondPayload: `{"type":"response.create","model":"terra","max_output_tokens":32,"stream":false}`,
 		channelMapping: map[string]string{
 			"sol":   "sol-channel",
 			"terra": "terra-channel",
@@ -1426,8 +1426,10 @@ func TestOpenAIResponsesWebSocket_PassthroughTracksModelPerTurn(t *testing.T) {
 
 func TestOpenAIResponsesWebSocket_UnchangedChannelTargetOutsideAccountMappingKeysRemainsValid(t *testing.T) {
 	got := runOpenAIResponsesWebSocketUsageLogCase(t, openAIResponsesWSUsageLogCase{
-		firstPayload:  `{"type":"response.create","model":"public-alias","stream":false}`,
-		secondPayload: `{"type":"response.create","stream":false}`,
+		firstPayload: `{"type":"response.create","model":"public-alias","max_output_tokens":32,"stream":false}`,
+		// The turn still omits "model"; max_output_tokens keeps it within the
+		// wallet's bounded estimate (the fallback price has no model maximum).
+		secondPayload: `{"type":"response.create","max_output_tokens":32,"stream":false}`,
 		channelMapping: map[string]string{
 			"public-alias": "gpt-5.6-sol",
 		},
@@ -1454,8 +1456,8 @@ func TestOpenAIResponsesWebSocket_UnchangedChannelTargetOutsideAccountMappingKey
 
 func TestOpenAIResponsesWebSocket_PassthroughKeepsTurnMappingSnapshot(t *testing.T) {
 	got := runOpenAIResponsesWebSocketUsageLogCase(t, openAIResponsesWSUsageLogCase{
-		firstPayload:  `{"type":"response.create","model":"sol","stream":false}`,
-		secondPayload: `{"type":"response.create","model":"sol","stream":false}`,
+		firstPayload:  `{"type":"response.create","model":"sol","max_output_tokens":32,"stream":false}`,
+		secondPayload: `{"type":"response.create","model":"sol","max_output_tokens":32,"stream":false}`,
 		channelMapping: map[string]string{
 			"sol": "gpt-5.6-sol",
 		},
@@ -1496,8 +1498,8 @@ func TestOpenAIResponsesWebSocket_PassthroughKeepsTurnMappingSnapshot(t *testing
 
 func TestOpenAIResponsesWebSocket_CtxPoolAppliesPerTurnMappingAndPreservesRequestedModel(t *testing.T) {
 	got := runOpenAIResponsesWebSocketUsageLogCase(t, openAIResponsesWSUsageLogCase{
-		firstPayload:       `{"type":"response.create","model":"gpt-5.6-sol","stream":false}`,
-		secondPayload:      `{"type":"response.create","model":"gpt-5.6-terra","stream":false}`,
+		firstPayload:       `{"type":"response.create","model":"gpt-5.6-sol","max_output_tokens":32,"stream":false}`,
+		secondPayload:      `{"type":"response.create","model":"gpt-5.6-terra","max_output_tokens":32,"stream":false}`,
 		ingressMode:        service.OpenAIWSIngressModeCtxPool,
 		billingModelSource: service.BillingModelSourceRequested,
 		channelMapping: map[string]string{
@@ -1634,9 +1636,9 @@ func TestOpenAIHandler_GjsonExtraction(t *testing.T) {
 		wantModel  string
 		wantStream bool
 	}{
-		{"正常提取", `{"model":"gpt-4","stream":true,"input":"hello"}`, "gpt-4", true},
-		{"stream false", `{"model":"gpt-4","stream":false}`, "gpt-4", false},
-		{"无 stream 字段", `{"model":"gpt-4"}`, "gpt-4", false},
+		{"正常提取", `{"model":"gpt-4","max_output_tokens":32,"stream":true,"input":"hello"}`, "gpt-4", true},
+		{"stream false", `{"model":"gpt-4","max_output_tokens":32,"stream":false}`, "gpt-4", false},
+		{"无 stream 字段", `{"model":"gpt-4","max_output_tokens":32}`, "gpt-4", false},
 		{"model 缺失", `{"stream":true}`, "", true},
 	}
 	for _, tt := range tests {
@@ -1672,14 +1674,14 @@ func TestOpenAIHandler_GjsonValidation(t *testing.T) {
 	require.NotEqual(t, gjson.String, modelResult2.Type)
 
 	// stream 为 string → 类型既不是 True 也不是 False，应被拒绝
-	body3 := []byte(`{"model":"gpt-4","stream":"true"}`)
+	body3 := []byte(`{"model":"gpt-4","max_output_tokens":32,"stream":"true"}`)
 	streamResult := gjson.GetBytes(body3, "stream")
 	require.True(t, streamResult.Exists())
 	require.NotEqual(t, gjson.True, streamResult.Type)
 	require.NotEqual(t, gjson.False, streamResult.Type)
 
 	// stream 为 int → 同上
-	body4 := []byte(`{"model":"gpt-4","stream":1}`)
+	body4 := []byte(`{"model":"gpt-4","max_output_tokens":32,"stream":1}`)
 	streamResult2 := gjson.GetBytes(body4, "stream")
 	require.True(t, streamResult2.Exists())
 	require.NotEqual(t, gjson.True, streamResult2.Type)
@@ -1689,7 +1691,7 @@ func TestOpenAIHandler_GjsonValidation(t *testing.T) {
 // TestOpenAIHandler_InstructionsInjection 验证 instructions 的 gjson/sjson 注入逻辑
 func TestOpenAIHandler_InstructionsInjection(t *testing.T) {
 	// 测试 1：无 instructions → 注入
-	body := []byte(`{"model":"gpt-4"}`)
+	body := []byte(`{"model":"gpt-4","max_output_tokens":32}`)
 	existing := gjson.GetBytes(body, "instructions").String()
 	require.Empty(t, existing)
 	newBody, err := sjson.SetBytes(body, "instructions", "test instruction")
@@ -1697,18 +1699,18 @@ func TestOpenAIHandler_InstructionsInjection(t *testing.T) {
 	require.Equal(t, "test instruction", gjson.GetBytes(newBody, "instructions").String())
 
 	// 测试 2：已有 instructions → 不覆盖
-	body2 := []byte(`{"model":"gpt-4","instructions":"existing"}`)
+	body2 := []byte(`{"model":"gpt-4","max_output_tokens":32,"instructions":"existing"}`)
 	existing2 := gjson.GetBytes(body2, "instructions").String()
 	require.Equal(t, "existing", existing2)
 
 	// 测试 3：空白 instructions → 注入
-	body3 := []byte(`{"model":"gpt-4","instructions":"   "}`)
+	body3 := []byte(`{"model":"gpt-4","max_output_tokens":32,"instructions":"   "}`)
 	existing3 := strings.TrimSpace(gjson.GetBytes(body3, "instructions").String())
 	require.Empty(t, existing3)
 
 	// 测试 4：sjson.SetBytes 返回错误时不应 panic
 	// 正常 JSON 不会产生 sjson 错误，验证返回值被正确处理
-	validBody := []byte(`{"model":"gpt-4"}`)
+	validBody := []byte(`{"model":"gpt-4","max_output_tokens":32}`)
 	result, setErr := sjson.SetBytes(validBody, "instructions", "hello")
 	require.NoError(t, setErr)
 	require.True(t, gjson.ValidBytes(result))
@@ -1740,7 +1742,7 @@ func newOpenAIWSHandlerTestServer(t *testing.T, h *OpenAIGatewayHandler, subject
 	apiKey := &service.APIKey{
 		ID:      101,
 		GroupID: &groupID,
-		User:    &service.User{ID: subject.UserID},
+		User:    &service.User{PlatformUserID: "usd-fixture-user", ID: subject.UserID},
 	}
 	router := gin.New()
 	router.Use(func(c *gin.Context) {
@@ -1969,15 +1971,17 @@ func TestOpenAIResponses_APIKeyPassthroughPool5xxRetriesThenExhaustsMaxSwitches(
 	upstream := &openAIHTTPPassthroughFailoverUpstream{}
 	billingCacheSvc := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil, nil)
 	t.Cleanup(billingCacheSvc.Stop)
-	gatewaySvc := service.NewOpenAIGatewayService(
-		accountRepo,
+	usdFixtureCache1, usdFixtureSnapshots1 := newUSDHandlerTestWallet(t, cfg, service.NewBillingService(cfg, nil))
+	gatewaySvc := service.NewOpenAIGatewayService(accountRepo,
 		nil,
 		nil,
 		nil,
 		nil,
 		nil,
+		usdFixtureCache1,
+		cfg,
 		nil,
-		cfg, nil, nil,
+		nil,
 		nil,
 		nil,
 		service.NewBillingService(cfg, nil),
@@ -1992,7 +1996,7 @@ func TestOpenAIResponses_APIKeyPassthroughPool5xxRetriesThenExhaustsMaxSwitches(
 		nil,
 		nil,
 		nil,
-		nil)
+		usdFixtureSnapshots1)
 	h := NewOpenAIGatewayHandler(
 		gatewaySvc,
 		service.NewConcurrencyService(nil),
@@ -2007,12 +2011,12 @@ func TestOpenAIResponses_APIKeyPassthroughPool5xxRetriesThenExhaustsMaxSwitches(
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
-	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", strings.NewReader(`{"model":"gpt-5.2","input":"hello","stream":false}`))
+	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", strings.NewReader(`{"model":"gpt-5.2","max_output_tokens":32,"input":"hello","stream":false}`))
 	c.Request.Header.Set("Content-Type", "application/json")
 	c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{
 		ID: 1803, GroupID: &groupID,
-		User:  &service.User{ID: 1703, Status: service.StatusActive},
-		Group: &service.Group{ID: groupID, Platform: service.PlatformOpenAI, Status: service.StatusActive},
+		User:  &service.User{PlatformUserID: "usd-fixture-user", ID: 1703, Status: service.StatusActive},
+		Group: &service.Group{RateMultiplier: 1, ID: groupID, Platform: service.PlatformOpenAI, Status: service.StatusActive},
 	})
 	c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: 1703, Concurrency: 0})
 
@@ -2065,7 +2069,7 @@ func TestOpenAIResponsesWebSocket_FailoverOnUpstreamUsageLimitEvent(t *testing.T
 		}
 
 		writeCtx, cancelWrite := context.WithTimeout(r.Context(), 3*time.Second)
-		_ = conn.Write(writeCtx, coderws.MessageText, []byte(`{"type":"response.completed","response":{"id":"resp_ws_failover_ok","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":1}}}`))
+		_ = conn.Write(writeCtx, coderws.MessageText, []byte(`{"type":"response.completed","response":{"id":"resp_ws_failover_ok","model":"gpt-5.1","max_output_tokens":32,"usage":{"input_tokens":1,"output_tokens":1}}}`))
 		cancelWrite()
 		_ = conn.Close(coderws.StatusNormalClosure, "done")
 	}))
@@ -2128,15 +2132,17 @@ func TestOpenAIResponsesWebSocket_FailoverOnUpstreamUsageLimitEvent(t *testing.T
 	accountRepo := &openAIWSFailoverHandlerAccountRepoStub{accounts: accounts}
 	rateLimitSvc := service.NewRateLimitService(accountRepo, nil, cfg, nil, nil)
 	billingCacheSvc := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil, nil)
-	gatewaySvc := service.NewOpenAIGatewayService(
-		accountRepo,
+	usdFixtureCache2, usdFixtureSnapshots2 := newUSDHandlerTestWallet(t, cfg, service.NewBillingService(cfg, nil))
+	gatewaySvc := service.NewOpenAIGatewayService(accountRepo,
 		nil,
 		nil,
 		nil,
 		nil,
 		nil,
+		usdFixtureCache2,
+		cfg,
 		nil,
-		cfg, nil, nil,
+		nil,
 		nil,
 		nil,
 		service.NewBillingService(cfg, nil),
@@ -2151,7 +2157,7 @@ func TestOpenAIResponsesWebSocket_FailoverOnUpstreamUsageLimitEvent(t *testing.T
 		nil,
 		nil,
 		nil,
-		nil)
+		usdFixtureSnapshots2)
 
 	cache := &concurrencyCacheMock{
 		acquireUserSlotFn: func(ctx context.Context, userID int64, maxConcurrency int, requestID string) (bool, error) {
@@ -2172,8 +2178,8 @@ func TestOpenAIResponsesWebSocket_FailoverOnUpstreamUsageLimitEvent(t *testing.T
 	apiKey := &service.APIKey{
 		ID:      1802,
 		GroupID: &groupID,
-		User:    &service.User{ID: 1702, Status: service.StatusActive},
-		Group:   &service.Group{ID: groupID, Platform: service.PlatformOpenAI, Status: service.StatusActive},
+		User:    &service.User{PlatformUserID: "usd-fixture-user", ID: 1702, Status: service.StatusActive},
+		Group:   &service.Group{RateMultiplier: 1, ID: groupID, Platform: service.PlatformOpenAI, Status: service.StatusActive},
 	}
 	router := gin.New()
 	router.Use(func(c *gin.Context) {
@@ -2196,7 +2202,7 @@ func TestOpenAIResponsesWebSocket_FailoverOnUpstreamUsageLimitEvent(t *testing.T
 	defer func() { _ = clientConn.CloseNow() }()
 
 	writeCtx, cancelWrite := context.WithTimeout(context.Background(), 3*time.Second)
-	err = clientConn.Write(writeCtx, coderws.MessageText, []byte(`{"type":"response.create","model":"gpt-5.1","stream":false}`))
+	err = clientConn.Write(writeCtx, coderws.MessageText, []byte(`{"type":"response.create","model":"gpt-5.1","max_output_tokens":32,"stream":false}`))
 	cancelWrite()
 	require.NoError(t, err)
 
@@ -2266,9 +2272,9 @@ func TestOpenAIResponsesWebSocket_FirstOutputTimeoutWithoutDownstreamReusesClien
 		}
 
 		for _, event := range []string{
-			`{"type":"response.created","response":{"id":"resp_ws_timeout_b","model":"gpt-5.1"}}`,
+			`{"type":"response.created","response":{"id":"resp_ws_timeout_b","model":"gpt-5.1","max_output_tokens":32}}`,
 			`{"type":"response.output_text.delta","response_id":"resp_ws_timeout_b","delta":"recovered"}`,
-			`{"type":"response.completed","response":{"id":"resp_ws_timeout_b","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":1}}}`,
+			`{"type":"response.completed","response":{"id":"resp_ws_timeout_b","model":"gpt-5.1","max_output_tokens":32,"usage":{"input_tokens":1,"output_tokens":1}}}`,
 		} {
 			writeCtx, cancelWrite := context.WithTimeout(r.Context(), 3*time.Second)
 			writeErr := conn.Write(writeCtx, coderws.MessageText, []byte(event))
@@ -2336,11 +2342,32 @@ func TestOpenAIResponsesWebSocket_FirstOutputTimeoutWithoutDownstreamReusesClien
 	accountRepo := &openAIWSFailoverHandlerAccountRepoStub{accounts: accounts}
 	rateLimitSvc := service.NewRateLimitService(accountRepo, nil, cfg, nil, nil)
 	billingCacheSvc := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil, nil)
-	gatewaySvc := service.NewOpenAIGatewayService(
-		accountRepo, nil, nil, nil, nil, nil, nil, cfg, nil, nil, nil, nil,
-		service.NewBillingService(cfg, nil), rateLimitSvc, billingCacheSvc,
-		nil, &service.DeferredService{}, nil, nil, nil, nil, nil, nil, nil,
-		nil)
+	usdFixtureCache3, usdFixtureSnapshots3 := newUSDHandlerTestWallet(t, cfg, service.NewBillingService(cfg, nil))
+	gatewaySvc := service.NewOpenAIGatewayService(accountRepo,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		usdFixtureCache3,
+		cfg,
+		nil,
+		nil,
+		nil,
+		nil,
+		service.NewBillingService(cfg, nil),
+		rateLimitSvc,
+		billingCacheSvc,
+		nil,
+		&service.DeferredService{},
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		usdFixtureSnapshots3)
 	cache := &concurrencyCacheMock{
 		acquireUserSlotFn: func(context.Context, int64, int, string) (bool, error) { return true, nil },
 		acquireAccountSlotFn: func(context.Context, int64, int, string) (bool, error) {
@@ -2358,8 +2385,8 @@ func TestOpenAIResponsesWebSocket_FirstOutputTimeoutWithoutDownstreamReusesClien
 	apiKey := &service.APIKey{
 		ID:      1812,
 		GroupID: &groupID,
-		User:    &service.User{ID: 1712, Status: service.StatusActive},
-		Group:   &service.Group{ID: groupID, Platform: service.PlatformOpenAI, Status: service.StatusActive},
+		User:    &service.User{PlatformUserID: "usd-fixture-user", ID: 1712, Status: service.StatusActive},
+		Group:   &service.Group{RateMultiplier: 1, ID: groupID, Platform: service.PlatformOpenAI, Status: service.StatusActive},
 	}
 	handlerDone := make(chan struct{})
 	router := gin.New()
@@ -2386,7 +2413,7 @@ func TestOpenAIResponsesWebSocket_FirstOutputTimeoutWithoutDownstreamReusesClien
 	defer func() { _ = clientConn.CloseNow() }()
 
 	writeCtx, cancelWrite := context.WithTimeout(context.Background(), 3*time.Second)
-	err = clientConn.Write(writeCtx, coderws.MessageText, []byte(`{"type":"response.create","model":"gpt-5.1","stream":false}`))
+	err = clientConn.Write(writeCtx, coderws.MessageText, []byte(`{"type":"response.create","model":"gpt-5.1","max_output_tokens":32,"stream":false}`))
 	cancelWrite()
 	require.NoError(t, err)
 
@@ -2540,15 +2567,17 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 	}
 
 	billingCacheSvc := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil, nil)
-	gatewaySvc := service.NewOpenAIGatewayService(
-		accountRepo,
+	usdFixtureCache4, usdFixtureSnapshots4 := newUSDHandlerTestWallet(t, cfg, service.NewBillingService(cfg, nil))
+	gatewaySvc := service.NewOpenAIGatewayService(accountRepo,
 		usageRepo,
 		nil,
 		nil,
 		nil,
 		nil,
+		usdFixtureCache4,
+		cfg,
 		nil,
-		cfg, nil, nil,
+		nil,
 		nil,
 		nil,
 		service.NewBillingService(cfg, nil),
@@ -2562,8 +2591,8 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 		channelSvc,
 		nil,
 		nil,
-		nil, // userPlatformQuotaRepo
-		nil)
+		nil,
+		usdFixtureSnapshots4)
 
 	cache := &concurrencyCacheMock{
 		acquireUserSlotFn: func(ctx context.Context, userID int64, maxConcurrency int, requestID string) (bool, error) {
@@ -2583,7 +2612,7 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 	apiKey := &service.APIKey{
 		ID:      1801,
 		GroupID: &groupID,
-		User: &service.User{
+		User: &service.User{PlatformUserID: "usd-fixture-user",
 			ID:              1701,
 			Status:          service.StatusActive,
 			BillingCurrency: service.CurrencyUSD,

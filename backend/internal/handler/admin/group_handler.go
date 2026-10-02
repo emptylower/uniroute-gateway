@@ -51,10 +51,6 @@ func (f *optionalLimitField) UnmarshalJSON(data []byte) error {
 	}
 
 	var number float64
-	if err := json.Unmarshal(trimmed, &number); err == nil {
-		f.value = &number
-		return nil
-	}
 
 	var text string
 	if err := json.Unmarshal(trimmed, &text); err == nil {
@@ -96,17 +92,16 @@ func NewGroupHandler(adminService service.AdminService, dashboardService *servic
 
 // CreateGroupRequest represents create group request
 type CreateGroupRequest struct {
-	Name              string             `json:"name" binding:"required"`
-	Description       string             `json:"description"`
-	Platform          string             `json:"platform" binding:"omitempty,oneof=anthropic openai gemini antigravity grok composite deepseek glm kimi qwen longcat bytedance minimax"`
-	RateMultiplier    float64            `json:"rate_multiplier"`
-	RateMultiplierCNY *float64           `json:"rate_multiplier_cny"`
-	RateMultiplierUSD *float64           `json:"rate_multiplier_usd"`
-	IsExclusive       bool               `json:"is_exclusive"`
-	SubscriptionType  string             `json:"subscription_type" binding:"omitempty,oneof=standard subscription"`
-	DailyLimitUSD     optionalLimitField `json:"daily_limit_usd"`
-	WeeklyLimitUSD    optionalLimitField `json:"weekly_limit_usd"`
-	MonthlyLimitUSD   optionalLimitField `json:"monthly_limit_usd"`
+	Name           string  `json:"name" binding:"required"`
+	Description    string  `json:"description"`
+	Platform       string  `json:"platform" binding:"omitempty,oneof=anthropic openai gemini antigravity grok composite deepseek glm kimi qwen longcat bytedance minimax"`
+	RateMultiplier float64 `json:"rate_multiplier"`
+
+	IsExclusive      bool               `json:"is_exclusive"`
+	SubscriptionType string             `json:"subscription_type" binding:"omitempty,oneof=standard subscription"`
+	DailyLimitUSD    optionalLimitField `json:"daily_limit_usd"`
+	WeeklyLimitUSD   optionalLimitField `json:"weekly_limit_usd"`
+	MonthlyLimitUSD  optionalLimitField `json:"monthly_limit_usd"`
 	// 图片生成计费配置（antigravity 和 gemini 平台使用，负数表示清除配置）
 	AllowImageGeneration            bool     `json:"allow_image_generation"`
 	AllowBatchImageGeneration       bool     `json:"allow_batch_image_generation"`
@@ -120,13 +115,13 @@ type CreateGroupRequest struct {
 	PeakStart                       string   `json:"peak_start"`
 	PeakEnd                         string   `json:"peak_end"`
 	PeakRateMultiplier              *float64 `json:"peak_rate_multiplier"`
-	ImagePrice1K                    *float64 `json:"image_price_1k"`
-	ImagePrice2K                    *float64 `json:"image_price_2k"`
-	ImagePrice4K                    *float64 `json:"image_price_4k"`
-	VideoPrice480P                  *float64 `json:"video_price_480p"`
-	VideoPrice720P                  *float64 `json:"video_price_720p"`
-	VideoPrice1080P                 *float64 `json:"video_price_1080p"`
-	WebSearchPricePerCall           *float64 `json:"web_search_price_per_call"`
+	ImagePrice1K                    *float64 `json:"image_price_1k_usd,string"`
+	ImagePrice2K                    *float64 `json:"image_price_2k_usd,string"`
+	ImagePrice4K                    *float64 `json:"image_price_4k_usd,string"`
+	VideoPrice480P                  *float64 `json:"video_price_480p_usd,string"`
+	VideoPrice720P                  *float64 `json:"video_price_720p_usd,string"`
+	VideoPrice1080P                 *float64 `json:"video_price_1080p_usd,string"`
+	WebSearchPricePerCall           *float64 `json:"web_search_price_per_call_usd,string"`
 	ClaudeCodeOnly                  bool     `json:"claude_code_only"`
 	FallbackGroupID                 *int64   `json:"fallback_group_id"`
 	FallbackGroupIDOnInvalidRequest *int64   `json:"fallback_group_id_on_invalid_request"`
@@ -156,18 +151,17 @@ type CreateGroupRequest struct {
 
 // UpdateGroupRequest represents update group request
 type UpdateGroupRequest struct {
-	Name              string             `json:"name"`
-	Description       *string            `json:"description"`
-	Platform          string             `json:"platform" binding:"omitempty,oneof=anthropic openai gemini antigravity grok composite deepseek glm kimi qwen longcat bytedance minimax"`
-	RateMultiplier    *float64           `json:"rate_multiplier"`
-	RateMultiplierCNY *float64           `json:"rate_multiplier_cny"`
-	RateMultiplierUSD *float64           `json:"rate_multiplier_usd"`
-	IsExclusive       *bool              `json:"is_exclusive"`
-	Status            string             `json:"status" binding:"omitempty,oneof=active inactive"`
-	SubscriptionType  string             `json:"subscription_type" binding:"omitempty,oneof=standard subscription"`
-	DailyLimitUSD     optionalLimitField `json:"daily_limit_usd"`
-	WeeklyLimitUSD    optionalLimitField `json:"weekly_limit_usd"`
-	MonthlyLimitUSD   optionalLimitField `json:"monthly_limit_usd"`
+	Name           string   `json:"name"`
+	Description    *string  `json:"description"`
+	Platform       string   `json:"platform" binding:"omitempty,oneof=anthropic openai gemini antigravity grok composite deepseek glm kimi qwen longcat bytedance minimax"`
+	RateMultiplier *float64 `json:"rate_multiplier"`
+
+	IsExclusive      *bool              `json:"is_exclusive"`
+	Status           string             `json:"status" binding:"omitempty,oneof=active inactive"`
+	SubscriptionType string             `json:"subscription_type" binding:"omitempty,oneof=standard subscription"`
+	DailyLimitUSD    optionalLimitField `json:"daily_limit_usd"`
+	WeeklyLimitUSD   optionalLimitField `json:"weekly_limit_usd"`
+	MonthlyLimitUSD  optionalLimitField `json:"monthly_limit_usd"`
 	// 图片生成计费配置（antigravity 和 gemini 平台使用，负数表示清除配置）
 	AllowImageGeneration            *bool    `json:"allow_image_generation"`
 	AllowBatchImageGeneration       *bool    `json:"allow_batch_image_generation"`
@@ -181,13 +175,13 @@ type UpdateGroupRequest struct {
 	PeakStart                       *string  `json:"peak_start"`
 	PeakEnd                         *string  `json:"peak_end"`
 	PeakRateMultiplier              *float64 `json:"peak_rate_multiplier"`
-	ImagePrice1K                    *float64 `json:"image_price_1k"`
-	ImagePrice2K                    *float64 `json:"image_price_2k"`
-	ImagePrice4K                    *float64 `json:"image_price_4k"`
-	VideoPrice480P                  *float64 `json:"video_price_480p"`
-	VideoPrice720P                  *float64 `json:"video_price_720p"`
-	VideoPrice1080P                 *float64 `json:"video_price_1080p"`
-	WebSearchPricePerCall           *float64 `json:"web_search_price_per_call"`
+	ImagePrice1K                    *float64 `json:"image_price_1k_usd,string"`
+	ImagePrice2K                    *float64 `json:"image_price_2k_usd,string"`
+	ImagePrice4K                    *float64 `json:"image_price_4k_usd,string"`
+	VideoPrice480P                  *float64 `json:"video_price_480p_usd,string"`
+	VideoPrice720P                  *float64 `json:"video_price_720p_usd,string"`
+	VideoPrice1080P                 *float64 `json:"video_price_1080p_usd,string"`
+	WebSearchPricePerCall           *float64 `json:"web_search_price_per_call_usd,string"`
 	ClaudeCodeOnly                  *bool    `json:"claude_code_only"`
 	FallbackGroupID                 *int64   `json:"fallback_group_id"`
 	FallbackGroupIDOnInvalidRequest *int64   `json:"fallback_group_id_on_invalid_request"`
@@ -289,7 +283,7 @@ func (h *GroupHandler) CreateCompositeRoute(c *gin.Context) {
 		return
 	}
 	var req CompositeRouteRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := response.BindUSDJSON(c, &req); err != nil {
 		response.BadRequest(c, "Invalid request body: "+err.Error())
 		return
 	}
@@ -313,7 +307,7 @@ func (h *GroupHandler) UpdateCompositeRoute(c *gin.Context) {
 		return
 	}
 	var req CompositeRouteRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := response.BindUSDJSON(c, &req); err != nil {
 		response.BadRequest(c, "Invalid request body: "+err.Error())
 		return
 	}
@@ -351,7 +345,7 @@ func (h *GroupHandler) PreviewCompositeRoute(c *gin.Context) {
 		return
 	}
 	var req CompositeRoutePreviewRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := response.BindUSDJSON(c, &req); err != nil {
 		response.BadRequest(c, "Invalid request body: "+err.Error())
 		return
 	}
@@ -469,7 +463,7 @@ func (h *GroupHandler) GetModelsListCandidates(c *gin.Context) {
 // POST /api/v1/admin/groups
 func (h *GroupHandler) Create(c *gin.Context) {
 	var req CreateGroupRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := response.BindUSDJSON(c, &req); err != nil {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
@@ -484,8 +478,6 @@ func (h *GroupHandler) Create(c *gin.Context) {
 		Description:                     req.Description,
 		Platform:                        req.Platform,
 		RateMultiplier:                  req.RateMultiplier,
-		RateMultiplierCNY:               req.RateMultiplierCNY,
-		RateMultiplierUSD:               req.RateMultiplierUSD,
 		IsExclusive:                     req.IsExclusive,
 		SubscriptionType:                req.SubscriptionType,
 		DailyLimitUSD:                   req.DailyLimitUSD.ToServiceInput(),
@@ -594,7 +586,7 @@ func (h *GroupHandler) Update(c *gin.Context) {
 	}
 
 	var req UpdateGroupRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := response.BindUSDJSON(c, &req); err != nil {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
@@ -604,8 +596,6 @@ func (h *GroupHandler) Update(c *gin.Context) {
 		Description:                     req.Description,
 		Platform:                        req.Platform,
 		RateMultiplier:                  req.RateMultiplier,
-		RateMultiplierCNY:               req.RateMultiplierCNY,
-		RateMultiplierUSD:               req.RateMultiplierUSD,
 		IsExclusive:                     req.IsExclusive,
 		Status:                          req.Status,
 		SubscriptionType:                req.SubscriptionType,
@@ -799,7 +789,7 @@ func (h *GroupHandler) BatchSetGroupRateMultipliers(c *gin.Context) {
 	}
 
 	var req BatchSetGroupRateMultipliersRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := response.BindUSDJSON(c, &req); err != nil {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
@@ -827,7 +817,7 @@ func (h *GroupHandler) BatchSetGroupRPMOverrides(c *gin.Context) {
 	}
 
 	var req BatchSetGroupRPMOverridesRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := response.BindUSDJSON(c, &req); err != nil {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
@@ -869,7 +859,7 @@ type UpdateSortOrderRequest struct {
 // PUT /api/v1/admin/groups/sort-order
 func (h *GroupHandler) UpdateSortOrder(c *gin.Context) {
 	var req UpdateSortOrderRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := response.BindUSDJSON(c, &req); err != nil {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}

@@ -150,13 +150,13 @@ func TestChannelRoutingSelector_AutomaticModeUsesAllCurrentChannels(t *testing.T
 	require.Equal(t, []int64{3, 2, 1}, []int64{updated[0].Group.ID, updated[1].Group.ID, updated[2].Group.ID})
 }
 
-func TestChannelRoutingSelector_UsesSettlementCurrencyMultiplier(t *testing.T) {
+func TestChannelRoutingSelector_UsesSingleMultiplierAcrossLegacyCurrencies(t *testing.T) {
 	now := time.Date(2026, time.August, 12, 12, 0, 0, 0, time.Local)
 	cnyCheap, cnyExpensive := 0.2, 0.8
 	usdExpensive, usdCheap := 0.9, 0.1
 	access := &channelRoutingAccessFake{groups: []Group{
-		{ID: 1, Platform: PlatformOpenAI, RateMultiplier: 1, RateMultiplierCNY: &cnyCheap, RateMultiplierUSD: &usdExpensive, Status: StatusActive},
-		{ID: 2, Platform: PlatformOpenAI, RateMultiplier: 1, RateMultiplierCNY: &cnyExpensive, RateMultiplierUSD: &usdCheap, Status: StatusActive},
+		{ID: 1, Platform: PlatformOpenAI, RateMultiplier: cnyCheap, RateMultiplierCNY: &cnyCheap, RateMultiplierUSD: &usdExpensive, Status: StatusActive},
+		{ID: 2, Platform: PlatformOpenAI, RateMultiplier: cnyExpensive, RateMultiplierCNY: &cnyExpensive, RateMultiplierUSD: &usdCheap, Status: StatusActive},
 	}}
 	selector := NewChannelRoutingSelector(&channelRoutingCatalogFake{}, access, channelRoutingConfig(true, 3))
 	key := &APIKey{UserID: 42, RoutingMode: APIKeyRoutingModeAutoChannels, User: &User{BillingCurrency: CurrencyCNY}}
@@ -168,7 +168,7 @@ func TestChannelRoutingSelector_UsesSettlementCurrencyMultiplier(t *testing.T) {
 	key.User.BillingCurrency = CurrencyUSD
 	usdCandidates, err := selector.Candidates(context.Background(), key, "gpt-5.6-sol", ChannelRoutingFamilyOpenAI, now)
 	require.NoError(t, err)
-	require.Equal(t, []int64{2, 1}, []int64{usdCandidates[0].Group.ID, usdCandidates[1].Group.ID})
+	require.Equal(t, []int64{1, 2}, []int64{usdCandidates[0].Group.ID, usdCandidates[1].Group.ID})
 }
 
 func TestChannelRoutingSelector_ExcludesUserDisabledGroups(t *testing.T) {

@@ -10,7 +10,7 @@ import (
 )
 
 const mediaPricingVersion = "kie-playground-v1"
-const mediaUnitsPerUSD int64 = 720000000
+const mediaUnitsPerUSD int64 = 100000000
 
 type MediaParamOption struct {
 	Value string `json:"value"`
@@ -22,22 +22,22 @@ type MediaParam struct {
 	OptionTiers map[string]string  `json:"optionTiers,omitempty"`
 }
 type MediaModel struct {
-	Slug           string             `json:"slug"`
-	ModelID        string             `json:"modelId"`
-	Name           string             `json:"name"`
-	Provider       string             `json:"provider"`
-	MediaKind      string             `json:"mediaKind"`
-	Unit           string             `json:"unit"`
-	PriceUSD       float64            `json:"priceUsd"`
-	OptionPriceUSD map[string]float64 `json:"optionPriceUsd"`
-	Param          MediaParam         `json:"param"`
+	Slug           string            `json:"slug"`
+	ModelID        string            `json:"modelId"`
+	Name           string            `json:"name"`
+	Provider       string            `json:"provider"`
+	MediaKind      string            `json:"mediaKind"`
+	Unit           string            `json:"unit"`
+	PriceUSD       string            `json:"price_usd"`
+	OptionPriceUSD map[string]string `json:"option_price_usd"`
+	Param          MediaParam        `json:"param"`
 	prices         map[string]int64
 }
 
 // Prices are exact ten-thousandths of USD per unit. Only verified provider
 // inputs are exposed; browser fields cannot change model price or quantity.
 func mediaModel(id, name, provider, kind, param string, price int64, options ...string) MediaModel {
-	m := MediaModel{Slug: strings.ReplaceAll(id, "/", "-"), ModelID: id, Name: name, Provider: provider, MediaKind: kind, Param: MediaParam{Kind: param}, prices: map[string]int64{}, OptionPriceUSD: map[string]float64{}}
+	m := MediaModel{Slug: strings.ReplaceAll(id, "/", "-"), ModelID: id, Name: name, Provider: provider, MediaKind: kind, Param: MediaParam{Kind: param}, prices: map[string]int64{}, OptionPriceUSD: map[string]string{}}
 	m.Unit = "per_image"
 	if kind == "video" {
 		m.Unit = "per_second"
@@ -45,7 +45,7 @@ func mediaModel(id, name, provider, kind, param string, price int64, options ...
 	if kind == "music" {
 		m.Unit = "per_track"
 	}
-	m.PriceUSD = float64(price) / 10000
+	m.PriceUSD = mediaUSD(price * (mediaUnitsPerUSD / 10000))
 	for _, option := range options {
 		label := option
 		if param == "duration" {
@@ -53,7 +53,7 @@ func mediaModel(id, name, provider, kind, param string, price int64, options ...
 		}
 		m.Param.Options = append(m.Param.Options, MediaParamOption{option, label})
 		m.prices[option] = price
-		m.OptionPriceUSD[option] = float64(price) / 10000
+		m.OptionPriceUSD[option] = mediaUSD(price * (mediaUnitsPerUSD / 10000))
 	}
 	return m
 }
@@ -80,7 +80,7 @@ func MediaTaskCatalog() []MediaModel {
 	}
 
 	models[5].prices["2K:1:1"] = 1200
-	models[5].OptionPriceUSD["2K:1:1"] = 0.12
+	models[5].OptionPriceUSD["2K:1:1"] = "0.12"
 	return models
 }
 
@@ -119,7 +119,7 @@ func resolveMediaQuote(model, option string) (MediaModel, string, int64, error) 
 	return MediaModel{}, "", 0, infraerrors.BadRequest("UNKNOWN_MODEL", "unknown media model")
 }
 func mediaUSD(units int64) string {
-	return fmt.Sprintf("%.4f", float64(units)/float64(mediaUnitsPerUSD))
+	return strings.TrimRight(strings.TrimRight(fmt.Sprintf("%d.%08d", units/mediaUnitsPerUSD, units%mediaUnitsPerUSD), "0"), ".")
 }
 func mediaQuote(model, option string) (MediaQuote, error) {
 	m, o, units, err := resolveMediaQuote(model, option)

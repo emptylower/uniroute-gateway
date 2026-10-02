@@ -542,6 +542,48 @@ func (_u *UsageLogUpdate) AddActualCost(v float64) *UsageLogUpdate {
 	return _u
 }
 
+// SetActualCostUsd sets the "actual_cost_usd" field.
+func (_u *UsageLogUpdate) SetActualCostUsd(v float64) *UsageLogUpdate {
+	_u.mutation.ResetActualCostUsd()
+	_u.mutation.SetActualCostUsd(v)
+	return _u
+}
+
+// SetNillableActualCostUsd sets the "actual_cost_usd" field if the given value is not nil.
+func (_u *UsageLogUpdate) SetNillableActualCostUsd(v *float64) *UsageLogUpdate {
+	if v != nil {
+		_u.SetActualCostUsd(*v)
+	}
+	return _u
+}
+
+// AddActualCostUsd adds value to the "actual_cost_usd" field.
+func (_u *UsageLogUpdate) AddActualCostUsd(v float64) *UsageLogUpdate {
+	_u.mutation.AddActualCostUsd(v)
+	return _u
+}
+
+// SetBaseCostUsd sets the "base_cost_usd" field.
+func (_u *UsageLogUpdate) SetBaseCostUsd(v float64) *UsageLogUpdate {
+	_u.mutation.ResetBaseCostUsd()
+	_u.mutation.SetBaseCostUsd(v)
+	return _u
+}
+
+// SetNillableBaseCostUsd sets the "base_cost_usd" field if the given value is not nil.
+func (_u *UsageLogUpdate) SetNillableBaseCostUsd(v *float64) *UsageLogUpdate {
+	if v != nil {
+		_u.SetBaseCostUsd(*v)
+	}
+	return _u
+}
+
+// AddBaseCostUsd adds value to the "base_cost_usd" field.
+func (_u *UsageLogUpdate) AddBaseCostUsd(v float64) *UsageLogUpdate {
+	_u.mutation.AddBaseCostUsd(v)
+	return _u
+}
+
 // SetSourceCurrency sets the "source_currency" field.
 func (_u *UsageLogUpdate) SetSourceCurrency(v string) *UsageLogUpdate {
 	_u.mutation.SetSourceCurrency(v)
@@ -1404,6 +1446,18 @@ func (_u *UsageLogUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if value, ok := _u.mutation.AddedActualCost(); ok {
 		_spec.AddField(usagelog.FieldActualCost, field.TypeFloat64, value)
 	}
+	if value, ok := _u.mutation.ActualCostUsd(); ok {
+		_spec.SetField(usagelog.FieldActualCostUsd, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedActualCostUsd(); ok {
+		_spec.AddField(usagelog.FieldActualCostUsd, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.BaseCostUsd(); ok {
+		_spec.SetField(usagelog.FieldBaseCostUsd, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedBaseCostUsd(); ok {
+		_spec.AddField(usagelog.FieldBaseCostUsd, field.TypeFloat64, value)
+	}
 	if value, ok := _u.mutation.SourceCurrency(); ok {
 		_spec.SetField(usagelog.FieldSourceCurrency, field.TypeString, value)
 	}
@@ -2231,6 +2285,48 @@ func (_u *UsageLogUpdateOne) SetNillableActualCost(v *float64) *UsageLogUpdateOn
 // AddActualCost adds value to the "actual_cost" field.
 func (_u *UsageLogUpdateOne) AddActualCost(v float64) *UsageLogUpdateOne {
 	_u.mutation.AddActualCost(v)
+	return _u
+}
+
+// SetActualCostUsd sets the "actual_cost_usd" field.
+func (_u *UsageLogUpdateOne) SetActualCostUsd(v float64) *UsageLogUpdateOne {
+	_u.mutation.ResetActualCostUsd()
+	_u.mutation.SetActualCostUsd(v)
+	return _u
+}
+
+// SetNillableActualCostUsd sets the "actual_cost_usd" field if the given value is not nil.
+func (_u *UsageLogUpdateOne) SetNillableActualCostUsd(v *float64) *UsageLogUpdateOne {
+	if v != nil {
+		_u.SetActualCostUsd(*v)
+	}
+	return _u
+}
+
+// AddActualCostUsd adds value to the "actual_cost_usd" field.
+func (_u *UsageLogUpdateOne) AddActualCostUsd(v float64) *UsageLogUpdateOne {
+	_u.mutation.AddActualCostUsd(v)
+	return _u
+}
+
+// SetBaseCostUsd sets the "base_cost_usd" field.
+func (_u *UsageLogUpdateOne) SetBaseCostUsd(v float64) *UsageLogUpdateOne {
+	_u.mutation.ResetBaseCostUsd()
+	_u.mutation.SetBaseCostUsd(v)
+	return _u
+}
+
+// SetNillableBaseCostUsd sets the "base_cost_usd" field if the given value is not nil.
+func (_u *UsageLogUpdateOne) SetNillableBaseCostUsd(v *float64) *UsageLogUpdateOne {
+	if v != nil {
+		_u.SetBaseCostUsd(*v)
+	}
+	return _u
+}
+
+// AddBaseCostUsd adds value to the "base_cost_usd" field.
+func (_u *UsageLogUpdateOne) AddBaseCostUsd(v float64) *UsageLogUpdateOne {
+	_u.mutation.AddBaseCostUsd(v)
 	return _u
 }
 
@@ -3125,6 +3221,18 @@ func (_u *UsageLogUpdateOne) sqlSave(ctx context.Context) (_node *UsageLog, err 
 	}
 	if value, ok := _u.mutation.AddedActualCost(); ok {
 		_spec.AddField(usagelog.FieldActualCost, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.ActualCostUsd(); ok {
+		_spec.SetField(usagelog.FieldActualCostUsd, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedActualCostUsd(); ok {
+		_spec.AddField(usagelog.FieldActualCostUsd, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.BaseCostUsd(); ok {
+		_spec.SetField(usagelog.FieldBaseCostUsd, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedBaseCostUsd(); ok {
+		_spec.AddField(usagelog.FieldBaseCostUsd, field.TypeFloat64, value)
 	}
 	if value, ok := _u.mutation.SourceCurrency(); ok {
 		_spec.SetField(usagelog.FieldSourceCurrency, field.TypeString, value)

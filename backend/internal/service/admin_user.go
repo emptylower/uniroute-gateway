@@ -118,11 +118,11 @@ func normalizeUserRole(role, fallback string) (string, error) {
 }
 
 func (s *adminServiceImpl) CreateUser(ctx context.Context, input *CreateUserInput) (*User, error) {
+	// The native gateway wallet is retired (finalize rejects any non-zero
+	// balance); funds are granted in the console USD ledger instead.
 	balance := 0.0
-	if input.Balance != nil {
-		balance = *input.Balance
-	} else if s.settingService != nil {
-		balance = s.settingService.GetDefaultBalance(ctx)
+	if input.Balance != nil && *input.Balance != 0 {
+		return nil, infraerrors.BadRequest("NATIVE_BALANCE_RETIRED", "native gateway balance is retired; grant USD in the console wallet")
 	}
 
 	// 角色可由管理员在创建时指定(admin/user);未提供时默认 user。
@@ -222,7 +222,7 @@ func (s *adminServiceImpl) UpdateUser(ctx context.Context, id int64, input *Upda
 	oldRole := user.Role
 	oldRPMLimit := user.RPMLimit
 	oldAllowedGroups := append([]int64(nil), user.AllowedGroups...)
-	oldBillingCurrency := NormalizeUserBillingCurrency(user.BillingCurrency)
+	oldBillingCurrency := NormalizeHistoricalBillingCurrency(user.BillingCurrency)
 
 	if input.Email != "" {
 		user.Email = input.Email
@@ -295,9 +295,9 @@ func (s *adminServiceImpl) UpdateUser(ctx context.Context, id int64, input *Upda
 		logger.LegacyPrintf("service.admin", "audit: user role changed actor_admin_id=%d target_user_id=%d old_role=%s new_role=%s",
 			input.ActorAdminID, user.ID, oldRole, user.Role)
 	}
-	if NormalizeUserBillingCurrency(user.BillingCurrency) != oldBillingCurrency {
+	if NormalizeHistoricalBillingCurrency(user.BillingCurrency) != oldBillingCurrency {
 		logger.LegacyPrintf("service.admin", "audit: user billing currency changed actor_admin_id=%d target_user_id=%d old_currency=%s new_currency=%s",
-			input.ActorAdminID, user.ID, oldBillingCurrency, NormalizeUserBillingCurrency(user.BillingCurrency))
+			input.ActorAdminID, user.ID, oldBillingCurrency, NormalizeHistoricalBillingCurrency(user.BillingCurrency))
 	}
 
 	// 同步用户专属分组倍率
@@ -310,7 +310,7 @@ func (s *adminServiceImpl) UpdateUser(ctx context.Context, id int64, input *Upda
 	if s.authCacheInvalidator != nil {
 		// RPMLimit 直接参与 billing_cache_service.checkRPM 的三级级联，
 		// allowed_groups 参与 API Key 专属分组授权判断；不失效缓存会让修改在一个 L2 TTL 内失去效果。
-		if user.Concurrency != oldConcurrency || user.Status != oldStatus || user.Role != oldRole || user.RPMLimit != oldRPMLimit || NormalizeUserBillingCurrency(user.BillingCurrency) != oldBillingCurrency || !sameInt64Set(user.AllowedGroups, oldAllowedGroups) {
+		if user.Concurrency != oldConcurrency || user.Status != oldStatus || user.Role != oldRole || user.RPMLimit != oldRPMLimit || NormalizeHistoricalBillingCurrency(user.BillingCurrency) != oldBillingCurrency || !sameInt64Set(user.AllowedGroups, oldAllowedGroups) {
 			s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, user.ID)
 		}
 	}
@@ -552,7 +552,7 @@ func (s *adminServiceImpl) UpdateUserBalance(ctx context.Context, userID int64, 
 			Code:     code,
 			Type:     AdjustmentTypeAdminBalance,
 			Value:    balanceDiff,
-			Currency: NormalizeUserBillingCurrency(user.BillingCurrency),
+			Currency: NormalizeHistoricalBillingCurrency(user.BillingCurrency),
 			Status:   StatusUsed,
 			UsedBy:   &user.ID,
 			Notes:    notes,
@@ -611,7 +611,7 @@ func (s *adminServiceImpl) applyAdminBalanceAdjustment(ctx context.Context, user
 		return 0, fmt.Errorf("commit admin balance transaction: %w", err)
 	}
 	user.Balance = newBalance
-	user.BillingCurrency = NormalizeUserBillingCurrency(locked.BillingCurrency)
+	user.BillingCurrency = NormalizeHistoricalBillingCurrency(locked.BillingCurrency)
 	return delta, nil
 }
 
@@ -1327,7 +1327,7 @@ func (s *adminServiceImpl) GenerateRedeemCodes(ctx context.Context, input *Gener
 			Code:      codeValue,
 			Type:      input.Type,
 			Value:     input.Value,
-			Currency:  NormalizeUserBillingCurrency(input.Currency),
+			Currency:  NormalizeHistoricalBillingCurrency(input.Currency),
 			Status:    StatusUnused,
 			ExpiresAt: input.ExpiresAt,
 		}

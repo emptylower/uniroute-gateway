@@ -75,6 +75,10 @@ type UsageLog struct {
 	TotalCost float64 `json:"total_cost,omitempty"`
 	// ActualCost holds the value of the "actual_cost" field.
 	ActualCost float64 `json:"actual_cost,omitempty"`
+	// ActualCostUsd holds the value of the "actual_cost_usd" field.
+	ActualCostUsd float64 `json:"actual_cost_usd,omitempty"`
+	// BaseCostUsd holds the value of the "base_cost_usd" field.
+	BaseCostUsd float64 `json:"base_cost_usd,omitempty"`
 	// SourceCurrency holds the value of the "source_currency" field.
 	SourceCurrency string `json:"source_currency,omitempty"`
 	// SettlementCurrency holds the value of the "settlement_currency" field.
@@ -218,7 +222,7 @@ func (*UsageLog) scanValues(columns []string) ([]any, error) {
 			values[i] = new([]byte)
 		case usagelog.FieldLongContextBillingApplied, usagelog.FieldStream, usagelog.FieldCacheTTLOverridden:
 			values[i] = new(sql.NullBool)
-		case usagelog.FieldInputCost, usagelog.FieldOutputCost, usagelog.FieldCacheCreationCost, usagelog.FieldCacheReadCost, usagelog.FieldTotalCost, usagelog.FieldActualCost, usagelog.FieldExchangeRate, usagelog.FieldSourceCost, usagelog.FieldBaseCost, usagelog.FieldRateMultiplier, usagelog.FieldAccountRateMultiplier:
+		case usagelog.FieldInputCost, usagelog.FieldOutputCost, usagelog.FieldCacheCreationCost, usagelog.FieldCacheReadCost, usagelog.FieldTotalCost, usagelog.FieldActualCost, usagelog.FieldActualCostUsd, usagelog.FieldBaseCostUsd, usagelog.FieldExchangeRate, usagelog.FieldSourceCost, usagelog.FieldBaseCost, usagelog.FieldRateMultiplier, usagelog.FieldAccountRateMultiplier:
 			values[i] = new(sql.NullFloat64)
 		case usagelog.FieldID, usagelog.FieldUserID, usagelog.FieldAPIKeyID, usagelog.FieldAccountID, usagelog.FieldChannelID, usagelog.FieldGroupID, usagelog.FieldSubscriptionID, usagelog.FieldInputTokens, usagelog.FieldOutputTokens, usagelog.FieldCacheCreationTokens, usagelog.FieldCacheReadTokens, usagelog.FieldCacheCreation5mTokens, usagelog.FieldCacheCreation1hTokens, usagelog.FieldBillingType, usagelog.FieldDurationMs, usagelog.FieldFirstTokenMs, usagelog.FieldImageCount, usagelog.FieldVideoCount, usagelog.FieldVideoDurationSeconds:
 			values[i] = new(sql.NullInt64)
@@ -411,6 +415,18 @@ func (_m *UsageLog) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field actual_cost", values[i])
 			} else if value.Valid {
 				_m.ActualCost = value.Float64
+			}
+		case usagelog.FieldActualCostUsd:
+			if value, ok := values[i].(*sql.NullFloat64); !ok {
+				return fmt.Errorf("unexpected type %T for field actual_cost_usd", values[i])
+			} else if value.Valid {
+				_m.ActualCostUsd = value.Float64
+			}
+		case usagelog.FieldBaseCostUsd:
+			if value, ok := values[i].(*sql.NullFloat64); !ok {
+				return fmt.Errorf("unexpected type %T for field base_cost_usd", values[i])
+			} else if value.Valid {
+				_m.BaseCostUsd = value.Float64
 			}
 		case usagelog.FieldSourceCurrency:
 			if value, ok := values[i].(*sql.NullString); !ok {
@@ -751,6 +767,12 @@ func (_m *UsageLog) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("actual_cost=")
 	builder.WriteString(fmt.Sprintf("%v", _m.ActualCost))
+	builder.WriteString(", ")
+	builder.WriteString("actual_cost_usd=")
+	builder.WriteString(fmt.Sprintf("%v", _m.ActualCostUsd))
+	builder.WriteString(", ")
+	builder.WriteString("base_cost_usd=")
+	builder.WriteString(fmt.Sprintf("%v", _m.BaseCostUsd))
 	builder.WriteString(", ")
 	builder.WriteString("source_currency=")
 	builder.WriteString(_m.SourceCurrency)

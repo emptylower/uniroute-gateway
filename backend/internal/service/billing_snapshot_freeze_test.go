@@ -17,11 +17,10 @@ func newSnapshotTestFixture(t testing.TB) (*BillingSnapshotService, *APIKey, *Us
 	cfg := &config.Config{}
 	cfg.Default.RateMultiplier = 1
 	cfg.CanonicalWallet.BillingSnapshotMode = "record"
-	// NewExchangeRateService(nil) has bootstrapRate 0 (exchange_rate.go:133),
+	// NewUSDPriceService(nil) has bootstrapRate 0 (exchange_rate.go:133),
 	// and Snapshot() then fails validateLiveSnapshot's [4,12] band and returns
 	// an error (:270-279) — so the fixture needs a real bootstrap rate.
-	cfg.Billing.ExchangeRate.BootstrapUSDToCNY = 7.0 // config.go:877
-	billing := newTestBillingService()               // fallback prices: claude-sonnet-4 = $3/$15 per MTok
+	billing := newTestBillingService() // fallback prices: claude-sonnet-4 = $3/$15 per MTok
 	// A bare &ChannelService{} PANICS on Resolve with a non-nil GroupID:
 	// GetChannelModelPricing → lookupGroupChannel → loadCache → fetchChannelData
 	// → s.repo.ListAll on a nil repository (model_pricing_resolver.go:67,
@@ -30,12 +29,12 @@ func newSnapshotTestFixture(t testing.TB) (*BillingSnapshotService, *APIKey, *Us
 	// (model_pricing_resolver_test.go:216-236), bound to THIS fixture's group.
 	cs := newChannelServiceForTest(7, nil)
 	resolver := NewModelPricingResolver(cs, billing)
-	fx := NewExchangeRateService(cfg)
+	fx := NewUSDPriceService(cfg)
 	svc := NewBillingSnapshotService(cfg, resolver, billing, fx, nil)
 	svc.now = func() time.Time { return time.Date(2026, 8, 27, 3, 0, 0, 0, time.UTC) }
 	group := &Group{ID: 7, RateMultiplier: 1.5, ImageRateIndependent: true, ImageRateMultiplier: 2.5, WebSearchPricePerCall: floatPtr(0.02)}
 	gid := int64(7)
-	user := &User{ID: 42, BillingCurrency: "CNY"}
+	user := &User{ID: 42, BillingCurrency: "USD"}
 	apiKey := &APIKey{ID: 11, GroupID: &gid, Group: group, User: user} // APIKey.User (api_key.go:63) — the facades derive the user from it, and Freeze refuses a nil user before any pricing check; every RecordUsage site passes apiKey.User in production (api_key_repo.go:932 populates the edge)
 	rate := 1.25
 	account := &Account{ID: 99, RateMultiplier: &rate, Platform: PlatformOpenAI}
@@ -93,12 +92,12 @@ func TestBillingSnapshotFreezeCapturesEveryPricingInput(t *testing.T) {
 	require.Equal(t, 1.5, snap.Multipliers.Video)
 	require.Equal(t, 1.5, snap.Multipliers.WebSearch)
 	require.Equal(t, 1.25, snap.Multipliers.Account)
-	require.Equal(t, "CNY", snap.Flags.BillingCurrency)
+	require.Equal(t, "USD", snap.Flags.BillingCurrency)
 	require.False(t, snap.Flags.SubscriptionBilling)
 	require.False(t, snap.Flags.LongContextBillingEnabled, "not an OpenAI account with the flag")
 	require.Equal(t, "USD", snap.FX.BaseCurrency)
-	require.Equal(t, "CNY", snap.FX.QuoteCurrency)
-	require.Equal(t, 7.0, snap.FX.Rate, "the fixture's bootstrap rate")
+	require.Equal(t, "USD", snap.FX.QuoteCurrency)
+	require.Equal(t, 1.0, snap.FX.Rate, "the fixture's bootstrap rate")
 	require.NotNil(t, snap.Media.WebSearchPricePerCall)
 	require.Equal(t, 0.02, *snap.Media.WebSearchPricePerCall)
 	require.Equal(t, []string{"claude-sonnet-4"}, snap.Candidates)
@@ -124,7 +123,7 @@ func TestBillingSnapshotFreezeRefusesUnpriceableModel(t *testing.T) {
 
 func TestBillingSnapshotFreezeUsesPinnedFXWhenPresent(t *testing.T) {
 	svc, apiKey, user, account := newSnapshotTestFixture(t)
-	pinned := ExchangeRateSnapshot{BaseCurrency: "USD", QuoteCurrency: "CNY", Rate: 6.5, Source: "test-pinned", AsOf: time.Unix(1, 0)}
+	pinned := ExchangeRateSnapshot{BaseCurrency: "USD", QuoteCurrency: "USD", Rate: 1, Source: "test-pinned", AsOf: time.Unix(1, 0)}
 	// storeBillingSettlementSnapshot returns nothing and is a no-op on a bare
 	// context: it writes into the holder WithBillingSettlementContext installs
 	// (billing_settlement.go:22, :49-56).
@@ -133,7 +132,7 @@ func TestBillingSnapshotFreezeUsesPinnedFXWhenPresent(t *testing.T) {
 	snap, err := svc.Freeze(ctx, FreezeInput{APIKey: apiKey, User: user, Account: account, RequestedModel: "claude-sonnet-4", BillingModel: "claude-sonnet-4", Family: BillingFamilyGeneric,
 		ResolveUserGroupRate: func(_ context.Context, _, _ int64, def float64) float64 { return def }})
 	require.NoError(t, err)
-	require.Equal(t, 6.5, snap.FX.Rate)
+	require.Equal(t, 1.0, snap.FX.Rate)
 	require.Equal(t, "test-pinned", snap.FX.Source)
 }
 
@@ -155,13 +154,13 @@ func TestBillingSnapshotFreezeSubscriptionBillingUsesUSDMultiplierAndNoFX(t *tes
 // when Rate <= 0, so settlement degrades to today's live FX.
 func TestBillingSnapshotFreezeSurvivesFXOutage(t *testing.T) {
 	svc, apiKey, user, account := newSnapshotTestFixture(t)
-	svc.exchangeRates = NewExchangeRateService(nil) // bootstrap rate 0 → Snapshot() errors
+	svc.exchangeRates = NewUSDPriceService(nil) // bootstrap rate 0 → Snapshot() errors
 	before := BillingSnapshotMetricsSnapshot().FXUnavailable
 	snap, err := svc.Freeze(context.Background(), FreezeInput{APIKey: apiKey, User: user, Account: account, RequestedModel: "claude-sonnet-4", BillingModel: "claude-sonnet-4", Family: BillingFamilyGeneric,
 		ResolveUserGroupRate: func(_ context.Context, _, _ int64, def float64) float64 { return def }})
 	require.NoError(t, err)
-	require.Equal(t, 0.0, snap.FX.Rate)
-	require.Equal(t, before+1, BillingSnapshotMetricsSnapshot().FXUnavailable)
+	require.Equal(t, 1.0, snap.FX.Rate)
+	require.Equal(t, before, BillingSnapshotMetricsSnapshot().FXUnavailable)
 }
 
 // The OpenAI settlement path reads the long-context flag from the CREDENTIAL

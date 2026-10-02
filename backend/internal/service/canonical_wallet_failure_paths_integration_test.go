@@ -34,7 +34,7 @@ func TestObserveSettlementSurfacesRealInsertFailures(t *testing.T) {
 
 	event := CanonicalWalletSettlementEvent{
 		GatewayRequestID: "req-drop-" + uuid.NewString(), PlatformUserID: "shipany-user-" + uuid.NewString(),
-		Currency: "CNY", AmountUnits: 1_000000,
+		Currency: "USD", AmountUnits: 1_000000,
 	}
 	bridge.ObserveSettlement(event) // succeeds — row durably present
 	pending, err := outbox.ClaimPendingOutboxEvents(ctx, "probe", 10)
@@ -78,7 +78,7 @@ func TestDeliverOutboxEventRealFailurePaths(t *testing.T) {
 
 		bridge.ObserveSettlement(CanonicalWalletSettlementEvent{
 			GatewayRequestID: "req-acq-fail", PlatformUserID: "shipany-user-" + uuid.NewString(),
-			Currency: "CNY", AmountUnits: 30_000000,
+			Currency: "USD", AmountUnits: 30_000000,
 		})
 		e := claimOnlyRow(t, ctx, outbox, bridge.workerID)
 
@@ -101,7 +101,7 @@ func TestDeliverOutboxEventRealFailurePaths(t *testing.T) {
 		controlPlane := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var req canonicalWalletEnsureRequest
 			_ = json.NewDecoder(r.Body).Decode(&req)
-			_, _ = w.Write([]byte(`{"data":{"lease_id":"lease-tiny","platform_user_id":"` + req.PlatformUserID + `","currency":"CNY","unit_version":"cny-e8-v1","scale":8,"budget":{"amount_units":"100","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"reserved":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"captured":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"released":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"headroom":{"amount_units":"100","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"capture_seq":0,"status":"active","expires_at":"2030-01-01T00:00:00Z","outcome":"issued","clamped_by":"none"}}`))
+			_, _ = w.Write([]byte(`{"data":{"lease_id":"lease-tiny","platform_user_id":"` + req.PlatformUserID + `","currency":"USD","unit_version":"usd-e8-v1","scale":8,"budget":{"amount_units":"100","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"reserved":{"amount_units":"0","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"captured":{"amount_units":"0","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"released":{"amount_units":"0","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"headroom":{"amount_units":"100","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"capture_seq":0,"status":"active","expires_at":"2030-01-01T00:00:00Z","outcome":"issued","clamped_by":"none"}}`))
 		}))
 		defer controlPlane.Close()
 		cfg := canonicalWalletTestConfig(config.CanonicalWalletModeEnforce)
@@ -111,7 +111,7 @@ func TestDeliverOutboxEventRealFailurePaths(t *testing.T) {
 
 		bridge.ObserveSettlement(CanonicalWalletSettlementEvent{
 			GatewayRequestID: "req-res-fail", PlatformUserID: platformUserID,
-			Currency: "CNY", AmountUnits: 30_000000,
+			Currency: "USD", AmountUnits: 30_000000,
 		})
 		e := claimOnlyRow(t, ctx, outbox, bridge.workerID)
 
@@ -160,7 +160,7 @@ func TestDeliverOutboxEventRealFailurePaths(t *testing.T) {
 			case "/api/internal/v2/wallet/leases/ensure":
 				var req canonicalWalletEnsureRequest
 				_ = json.NewDecoder(r.Body).Decode(&req)
-				_, _ = w.Write([]byte(`{"data":{"lease_id":"lease-refuse","platform_user_id":"` + req.PlatformUserID + `","currency":"CNY","unit_version":"cny-e8-v1","scale":8,"budget":{"amount_units":"500000000","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"reserved":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"captured":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"released":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"headroom":{"amount_units":"500000000","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"capture_seq":0,"status":"active","expires_at":"2030-01-01T00:00:00Z","outcome":"issued","clamped_by":"none"}}`))
+				_, _ = w.Write([]byte(`{"data":{"lease_id":"lease-refuse","platform_user_id":"` + req.PlatformUserID + `","currency":"USD","unit_version":"usd-e8-v1","scale":8,"budget":{"amount_units":"500000000","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"reserved":{"amount_units":"0","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"captured":{"amount_units":"0","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"released":{"amount_units":"0","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"headroom":{"amount_units":"500000000","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"capture_seq":0,"status":"active","expires_at":"2030-01-01T00:00:00Z","outcome":"issued","clamped_by":"none"}}`))
 			case "/api/internal/v2/wallet/settlements":
 				refused = true
 				_, _ = w.Write([]byte(`{"data":{"accepted":false,"duplicate":false}}`))
@@ -176,7 +176,7 @@ func TestDeliverOutboxEventRealFailurePaths(t *testing.T) {
 
 		bridge.ObserveSettlement(CanonicalWalletSettlementEvent{
 			GatewayRequestID: "req-submit-fail", PlatformUserID: platformUserID,
-			Currency: "CNY", AmountUnits: 30_000000,
+			Currency: "USD", AmountUnits: 30_000000,
 		})
 		e := claimOnlyRow(t, ctx, outbox, bridge.workerID)
 
@@ -197,7 +197,7 @@ func TestEnsureLeaseAndDoJSONRemainingRealPaths(t *testing.T) {
 	cfg.ControlPlaneURL, cfg.Secret = "http://127.0.0.1:1", strings.Repeat("s", 32)
 	client := newCanonicalWalletHTTPClient(cfg, nil)
 	_, err := client.EnsureLease(ctx, canonicalWalletEnsureRequest{
-		PlatformUserID: "user-1", Currency: "CNY", Purpose: "authorize", MinHeadroom: newCanonicalWalletAmountObject(1), RequestedBudget: newCanonicalWalletAmountObject(1), RequestedTTLSeconds: 60, CallerSlotTTLSeconds: 1800,
+		PlatformUserID: "user-1", Currency: "USD", Purpose: "authorize", MinHeadroom: newCanonicalWalletAmountObject(1), RequestedBudget: newCanonicalWalletAmountObject(1), RequestedTTLSeconds: 60, CallerSlotTTLSeconds: 1800,
 	})
 	require.Error(t, err)
 
@@ -206,14 +206,14 @@ func TestEnsureLeaseAndDoJSONRemainingRealPaths(t *testing.T) {
 	// the new wire: a wire figure beyond int64's range must be REJECTED (the
 	// strict amount-object parser fails), never accepted or wrapped.
 	overflowServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"data":{"lease_id":"l","platform_user_id":"user-1","currency":"CNY","unit_version":"cny-e8-v1","scale":8,"budget":{"amount_units":"92233720368547758080","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"reserved":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"captured":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"released":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"headroom":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"expires_at":"2030-01-01T00:00:00Z","status":"active","outcome":"issued"}}`))
+		_, _ = w.Write([]byte(`{"data":{"lease_id":"l","platform_user_id":"user-1","currency":"USD","unit_version":"usd-e8-v1","scale":8,"budget":{"amount_units":"92233720368547758080","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"reserved":{"amount_units":"0","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"captured":{"amount_units":"0","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"released":{"amount_units":"0","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"headroom":{"amount_units":"0","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"expires_at":"2030-01-01T00:00:00Z","status":"active","outcome":"issued"}}`))
 	}))
 	defer overflowServer.Close()
 	cfg2 := canonicalWalletTestConfig(config.CanonicalWalletModeShadow)
 	cfg2.ControlPlaneURL, cfg2.Secret = overflowServer.URL, strings.Repeat("s", 32)
 	client2 := newCanonicalWalletHTTPClient(cfg2, overflowServer.Client())
 	_, err = client2.EnsureLease(ctx, canonicalWalletEnsureRequest{
-		PlatformUserID: "user-1", Currency: "CNY", Purpose: "authorize", MinHeadroom: newCanonicalWalletAmountObject(1), RequestedBudget: newCanonicalWalletAmountObject(1), RequestedTTLSeconds: 60, CallerSlotTTLSeconds: 1800,
+		PlatformUserID: "user-1", Currency: "USD", Purpose: "authorize", MinHeadroom: newCanonicalWalletAmountObject(1), RequestedBudget: newCanonicalWalletAmountObject(1), RequestedTTLSeconds: 60, CallerSlotTTLSeconds: 1800,
 	})
 	require.Error(t, err, "a wire budget beyond int64's range must be rejected, not accepted")
 
@@ -249,19 +249,19 @@ func TestObserveSettlementAndCheckAndReserveGuardBranches(t *testing.T) {
 
 	// Disabled mode and zero/negative amounts return before any effect.
 	disabled := &CanonicalWalletBridge{cfg: canonicalWalletTestConfig(config.CanonicalWalletModeDisabled), outboxDB: db, outbox: outbox}
-	disabled.ObserveSettlement(CanonicalWalletSettlementEvent{GatewayRequestID: "r", PlatformUserID: "u", Currency: "CNY", AmountUnits: 1})
+	disabled.ObserveSettlement(CanonicalWalletSettlementEvent{GatewayRequestID: "r", PlatformUserID: "u", Currency: "USD", AmountUnits: 1})
 	enabled := &CanonicalWalletBridge{cfg: canonicalWalletTestConfig(config.CanonicalWalletModeEnforce), store: &canonicalWalletStoreStub{}, control: &canonicalWalletControlStub{}, outboxDB: db, outbox: outbox, workerID: "w-guards"}
-	enabled.ObserveSettlement(CanonicalWalletSettlementEvent{GatewayRequestID: "r", PlatformUserID: "u", Currency: "CNY", AmountUnits: 0})
-	enabled.ObserveSettlement(CanonicalWalletSettlementEvent{GatewayRequestID: "r", PlatformUserID: "u", Currency: "CNY", AmountUnits: -5})
+	enabled.ObserveSettlement(CanonicalWalletSettlementEvent{GatewayRequestID: "r", PlatformUserID: "u", Currency: "USD", AmountUnits: 0})
+	enabled.ObserveSettlement(CanonicalWalletSettlementEvent{GatewayRequestID: "r", PlatformUserID: "u", Currency: "USD", AmountUnits: -5})
 
 	// A blank platform user id is counted and dropped before any write.
 	beforeMissing := CanonicalWalletBridgeStats()["missing_platform_user_id"]
-	enabled.ObserveSettlement(CanonicalWalletSettlementEvent{GatewayRequestID: "r", PlatformUserID: "   ", Currency: "CNY", AmountUnits: 1})
+	enabled.ObserveSettlement(CanonicalWalletSettlementEvent{GatewayRequestID: "r", PlatformUserID: "   ", Currency: "USD", AmountUnits: 1})
 	require.Greater(t, CanonicalWalletBridgeStats()["missing_platform_user_id"], beforeMissing)
 
 	// An outbox without its DB half is refused at the guard.
 	halfWired := &CanonicalWalletBridge{cfg: canonicalWalletTestConfig(config.CanonicalWalletModeEnforce), outbox: outbox}
-	halfWired.ObserveSettlement(CanonicalWalletSettlementEvent{GatewayRequestID: "r", PlatformUserID: "u", Currency: "CNY", AmountUnits: 1})
+	halfWired.ObserveSettlement(CanonicalWalletSettlementEvent{GatewayRequestID: "r", PlatformUserID: "u", Currency: "USD", AmountUnits: 1})
 
 	// Nothing above may have written a row.
 	rows, err := outbox.ClaimPendingOutboxEvents(ctx, "guard-probe", 10)
@@ -287,7 +287,7 @@ func TestObserveSettlementAndCheckAndReserveGuardBranches(t *testing.T) {
 	require.NoError(t, closedDB.Close())
 	beforeDropped := CanonicalWalletBridgeStats()["queue_dropped"]
 	bridgeClosed.ObserveSettlement(CanonicalWalletSettlementEvent{
-		GatewayRequestID: "req-closed-db", PlatformUserID: "shipany-user-closed", Currency: "CNY", AmountUnits: 1,
+		GatewayRequestID: "req-closed-db", PlatformUserID: "shipany-user-closed", Currency: "USD", AmountUnits: 1,
 	})
 	require.Greater(t, CanonicalWalletBridgeStats()["queue_dropped"], beforeDropped,
 		"a failed BEGIN is counted in queue_dropped like every other durability loss")

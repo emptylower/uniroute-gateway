@@ -43,6 +43,7 @@ func RegisterPlatformIdentityRoutes(
 		inferenceRead.GET("/tasks/:task_id", h.PlatformInference.Get)
 		inferenceRead.POST("/legacy-read", h.PlatformInference.LegacyRead)
 		inferenceCreate := r.Group(base + "/inference")
+		inferenceCreate.Use(middleware.USDLedgerMaintenance())
 		inferenceCreate.Use(middleware.RequirePlatformAssertion(cfg, service.PlatformInferenceCreateScope, redisClient), resolveUser)
 		inferenceCreate.POST("/tasks", h.PlatformInference.Create)
 		availability := r.Group(base + "/wallet")

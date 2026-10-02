@@ -14,7 +14,7 @@ import (
 	"github.com/dgraph-io/ristretto"
 )
 
-const apiKeyAuthSnapshotVersion = 20 // v20: include User.PlatformUserID (canonical wallet identity)
+const apiKeyAuthSnapshotVersion = 21 // v20: include User.PlatformUserID (canonical wallet identity)
 
 type apiKeyAuthCacheConfig struct {
 	l1Size        int
@@ -389,8 +389,6 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 			Status:                          apiKey.Group.Status,
 			SubscriptionType:                apiKey.Group.SubscriptionType,
 			RateMultiplier:                  apiKey.Group.RateMultiplier,
-			RateMultiplierCNY:               apiKey.Group.RateMultiplierCNY,
-			RateMultiplierUSD:               apiKey.Group.RateMultiplierUSD,
 			DailyLimitUSD:                   apiKey.Group.DailyLimitUSD,
 			WeeklyLimitUSD:                  apiKey.Group.WeeklyLimitUSD,
 			MonthlyLimitUSD:                 apiKey.Group.MonthlyLimitUSD,
@@ -482,8 +480,6 @@ func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapsho
 			Hydrated:                        true,
 			SubscriptionType:                snapshot.Group.SubscriptionType,
 			RateMultiplier:                  snapshot.Group.RateMultiplier,
-			RateMultiplierCNY:               snapshot.Group.RateMultiplierCNY,
-			RateMultiplierUSD:               snapshot.Group.RateMultiplierUSD,
 			DailyLimitUSD:                   snapshot.Group.DailyLimitUSD,
 			WeeklyLimitUSD:                  snapshot.Group.WeeklyLimitUSD,
 			MonthlyLimitUSD:                 snapshot.Group.MonthlyLimitUSD,

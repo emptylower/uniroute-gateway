@@ -492,7 +492,7 @@ func TestCanonicalWalletObserveSettlementIsDurableAndGetsDelivered(t *testing.T)
 
 	event := CanonicalWalletSettlementEvent{
 		GatewayRequestID: "req-" + uuid.NewString(), PlatformUserID: "shipany-user-" + uuid.NewString(),
-		Currency: "CNY", AmountUnits: 5_000000,
+		Currency: "USD", AmountUnits: 5_000000,
 	}
 	bridge.ObserveSettlement(event)
 

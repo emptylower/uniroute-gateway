@@ -185,6 +185,16 @@ func ActualCost(v float64) predicate.UsageLog {
 	return predicate.UsageLog(sql.FieldEQ(FieldActualCost, v))
 }
 
+// ActualCostUsd applies equality check predicate on the "actual_cost_usd" field. It's identical to ActualCostUsdEQ.
+func ActualCostUsd(v float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldActualCostUsd, v))
+}
+
+// BaseCostUsd applies equality check predicate on the "base_cost_usd" field. It's identical to BaseCostUsdEQ.
+func BaseCostUsd(v float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldBaseCostUsd, v))
+}
+
 // SourceCurrency applies equality check predicate on the "source_currency" field. It's identical to SourceCurrencyEQ.
 func SourceCurrency(v string) predicate.UsageLog {
 	return predicate.UsageLog(sql.FieldEQ(FieldSourceCurrency, v))
@@ -1548,6 +1558,86 @@ func ActualCostLT(v float64) predicate.UsageLog {
 // ActualCostLTE applies the LTE predicate on the "actual_cost" field.
 func ActualCostLTE(v float64) predicate.UsageLog {
 	return predicate.UsageLog(sql.FieldLTE(FieldActualCost, v))
+}
+
+// ActualCostUsdEQ applies the EQ predicate on the "actual_cost_usd" field.
+func ActualCostUsdEQ(v float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldActualCostUsd, v))
+}
+
+// ActualCostUsdNEQ applies the NEQ predicate on the "actual_cost_usd" field.
+func ActualCostUsdNEQ(v float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNEQ(FieldActualCostUsd, v))
+}
+
+// ActualCostUsdIn applies the In predicate on the "actual_cost_usd" field.
+func ActualCostUsdIn(vs ...float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldIn(FieldActualCostUsd, vs...))
+}
+
+// ActualCostUsdNotIn applies the NotIn predicate on the "actual_cost_usd" field.
+func ActualCostUsdNotIn(vs ...float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNotIn(FieldActualCostUsd, vs...))
+}
+
+// ActualCostUsdGT applies the GT predicate on the "actual_cost_usd" field.
+func ActualCostUsdGT(v float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGT(FieldActualCostUsd, v))
+}
+
+// ActualCostUsdGTE applies the GTE predicate on the "actual_cost_usd" field.
+func ActualCostUsdGTE(v float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGTE(FieldActualCostUsd, v))
+}
+
+// ActualCostUsdLT applies the LT predicate on the "actual_cost_usd" field.
+func ActualCostUsdLT(v float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLT(FieldActualCostUsd, v))
+}
+
+// ActualCostUsdLTE applies the LTE predicate on the "actual_cost_usd" field.
+func ActualCostUsdLTE(v float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLTE(FieldActualCostUsd, v))
+}
+
+// BaseCostUsdEQ applies the EQ predicate on the "base_cost_usd" field.
+func BaseCostUsdEQ(v float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldBaseCostUsd, v))
+}
+
+// BaseCostUsdNEQ applies the NEQ predicate on the "base_cost_usd" field.
+func BaseCostUsdNEQ(v float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNEQ(FieldBaseCostUsd, v))
+}
+
+// BaseCostUsdIn applies the In predicate on the "base_cost_usd" field.
+func BaseCostUsdIn(vs ...float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldIn(FieldBaseCostUsd, vs...))
+}
+
+// BaseCostUsdNotIn applies the NotIn predicate on the "base_cost_usd" field.
+func BaseCostUsdNotIn(vs ...float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNotIn(FieldBaseCostUsd, vs...))
+}
+
+// BaseCostUsdGT applies the GT predicate on the "base_cost_usd" field.
+func BaseCostUsdGT(v float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGT(FieldBaseCostUsd, v))
+}
+
+// BaseCostUsdGTE applies the GTE predicate on the "base_cost_usd" field.
+func BaseCostUsdGTE(v float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGTE(FieldBaseCostUsd, v))
+}
+
+// BaseCostUsdLT applies the LT predicate on the "base_cost_usd" field.
+func BaseCostUsdLT(v float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLT(FieldBaseCostUsd, v))
+}
+
+// BaseCostUsdLTE applies the LTE predicate on the "base_cost_usd" field.
+func BaseCostUsdLTE(v float64) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLTE(FieldBaseCostUsd, v))
 }
 
 // SourceCurrencyEQ applies the EQ predicate on the "source_currency" field.

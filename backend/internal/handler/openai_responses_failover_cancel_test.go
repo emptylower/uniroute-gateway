@@ -78,15 +78,17 @@ func newOpenAIResponsesFailoverTestHandler(t *testing.T, upstream service.HTTPUp
 	accountRepo := openAIImagesFailoverAccountRepo{accounts: accounts}
 	cfg := &config.Config{RunMode: config.RunModeSimple}
 	pricing := service.NewBillingService(cfg, nil)
-	gatewayService := service.NewOpenAIGatewayService(
-		accountRepo,
+	usdFixtureCache1, usdFixtureSnapshots1 := newUSDHandlerTestWallet(t, cfg, pricing)
+	gatewayService := service.NewOpenAIGatewayService(accountRepo,
 		nil,
 		nil,
 		nil,
 		nil,
 		nil,
+		usdFixtureCache1,
+		cfg,
 		nil,
-		cfg, nil, nil,
+		nil,
 		nil,
 		nil,
 		pricing,
@@ -101,7 +103,7 @@ func newOpenAIResponsesFailoverTestHandler(t *testing.T, upstream service.HTTPUp
 		nil,
 		nil,
 		nil,
-		nil)
+		usdFixtureSnapshots1)
 	billingService := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil, nil)
 	t.Cleanup(billingService.Stop)
 	concurrencyService := service.NewConcurrencyService(nil)
@@ -123,7 +125,7 @@ func newOpenAIResponsesFailoverTestHandler(t *testing.T, upstream service.HTTPUp
 func newOpenAIResponsesFailoverTestContext(t *testing.T, ctx context.Context) (*gin.Context, *httptest.ResponseRecorder) {
 	t.Helper()
 	groupID := int64(3131)
-	body := []byte(`{"model":"gpt-5.1","stream":false,"input":"hello"}`)
+	body := []byte(`{"model":"gpt-5.1","max_output_tokens":32,"stream":false,"input":"hello"}`)
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
 	if ctx != nil {
 		req = req.WithContext(ctx)
@@ -135,11 +137,11 @@ func newOpenAIResponsesFailoverTestContext(t *testing.T, ctx context.Context) (*
 	c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{
 		ID:      99,
 		GroupID: &groupID,
-		Group: &service.Group{
+		Group: &service.Group{RateMultiplier: 1,
 			ID:       groupID,
 			Platform: service.PlatformOpenAI,
 		},
-		User: &service.User{ID: 100},
+		User: &service.User{PlatformUserID: "usd-fixture-user", ID: 100},
 	})
 	c.Set(string(middleware2.ContextKeyUser), middleware2.AuthSubject{UserID: 100, Concurrency: 0})
 	return c, rec

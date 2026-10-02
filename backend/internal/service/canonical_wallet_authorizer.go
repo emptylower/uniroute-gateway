@@ -76,7 +76,12 @@ func (a *CanonicalWalletAuthorizer) Authorize(ctx context.Context, in AuthorizeI
 		}
 		h.ID = in.DurableAuthorizationID
 	}
-	if a == nil || mode == "" || mode == config.CanonicalWalletModeDisabled || a.bridge == nil || a.snapshots == nil {
+	if a == nil || a.bridge == nil || a.snapshots == nil {
+		refused := &AuthorizationRefusedError{Reason: AuthorizationRefusalLeaseUnavailable, AuthorizationID: h.ID, Detail: "USD wallet authorization dependencies unavailable"}
+		h.Refusal = refused
+		return h, refused
+	}
+	if mode == "" || mode == config.CanonicalWalletModeDisabled {
 		return h, nil
 	}
 	authorizationMetrics.minted.Add(1)
@@ -134,14 +139,15 @@ func (a *CanonicalWalletAuthorizer) Authorize(ctx context.Context, in AuthorizeI
 		authorizationMetrics.identityMissing.Add(1)
 		return refuse(AuthorizationRefusalIdentityMissing, "no platform user id", nil)
 	}
-	currency := strings.ToUpper(strings.TrimSpace(in.User.BillingCurrency))
-	if currency == "" {
-		currency = "CNY"
+	// ObserveSettlement rejects any raw non-USD currency, so a user admitted
+	// here with one would be served and never charged. Refuse before any hold.
+	if raw := strings.TrimSpace(in.User.BillingCurrency); raw != "" {
+		if _, err := RequireUSDBillingCurrency(raw); err != nil {
+			authorizationMetrics.currencyUnsupported.Add(1)
+			return refuse(AuthorizationRefusalCurrency, "billing currency "+raw, err)
+		}
 	}
-	if currency != "CNY" {
-		authorizationMetrics.currencyUnsupported.Add(1)
-		return refuse(AuthorizationRefusalCurrency, "billing currency "+currency, nil)
-	}
+	currency := CurrencyUSD
 	leaseCtx, cancel := context.WithTimeout(ctx, a.requestTimeout())
 	defer cancel()
 	if policyVersion != "" && a.bridge.outboxDB != nil && a.bridge.HoldsEnabled() {

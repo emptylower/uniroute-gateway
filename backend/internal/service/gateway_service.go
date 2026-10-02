@@ -714,7 +714,7 @@ type GatewayService struct {
 	tlsFPProfileService   *TLSFingerprintProfileService
 	balanceNotifyService  *BalanceNotifyService
 	userPlatformQuotaRepo UserPlatformQuotaRepository
-	exchangeRates         *ExchangeRateService
+	exchangeRates         *USDPriceService
 	canonicalWallet       *CanonicalWalletBridge
 	authorizer            *CanonicalWalletAuthorizer
 	publicationStore      ModelAuthorizationStore
@@ -885,7 +885,7 @@ func NewGatewayService(
 		compositeResolver:     compositeResolver,
 		balanceNotifyService:  balanceNotifyService,
 		userPlatformQuotaRepo: userPlatformQuotaRepo,
-		exchangeRates:         NewExchangeRateService(cfg),
+		exchangeRates:         NewUSDPriceService(cfg),
 	}
 	if walletStore, ok := requireCanonicalWalletStore(cfg, cache, "NewGatewayService"); ok {
 		svc.canonicalWallet = NewCanonicalWalletBridge(cfg, walletStore, db, outbox)

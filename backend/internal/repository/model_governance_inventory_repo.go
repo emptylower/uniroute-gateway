@@ -401,7 +401,7 @@ usage_rows AS (
                          ELSE COALESCE(NULLIF(g.platform, ''), a.platform) END) AS platform,
 	       ul.group_id, ul.channel_id,
            COALESCE(NULLIF(ul.upstream_model, ''), ul.model) AS upstream_model_id,
-           ul.api_key_id, ul.actual_cost, ul.settlement_currency, ul.created_at
+           ul.api_key_id, ul.actual_cost_usd, 'USD'::text AS settlement_currency, ul.created_at
     FROM usage_logs ul
     JOIN accounts a ON a.id = ul.account_id
 	LEFT JOIN groups g ON g.id = ul.group_id
@@ -416,13 +416,13 @@ usage_summary AS (
     SELECT account_id, platform, group_id, channel_id, upstream_model_id,
            COUNT(*) FILTER (WHERE created_at >= $1)::bigint AS requests_7d,
            COUNT(*)::bigint AS requests_30d,
-           COALESCE(SUM(actual_cost) FILTER (WHERE created_at >= $1), 0) AS revenue_7d,
-           COALESCE(SUM(actual_cost), 0) AS revenue_30d,
+           COALESCE(SUM(actual_cost_usd) FILTER (WHERE created_at >= $1), 0) AS revenue_7d,
+           COALESCE(SUM(actual_cost_usd), 0) AS revenue_30d,
            MIN(settlement_currency) AS billing_currency,
            COUNT(DISTINCT api_key_id) FILTER (WHERE created_at >= $1)::bigint AS api_keys_7d,
            COUNT(DISTINCT api_key_id)::bigint AS api_keys_30d,
            COUNT(DISTINCT settlement_currency)::int AS currency_count,
-           COUNT(*) FILTER (WHERE actual_cost < 0)::int AS negative_revenue_count
+           COUNT(*) FILTER (WHERE actual_cost_usd < 0)::int AS negative_revenue_count
     FROM usage_rows
     GROUP BY account_id, platform, group_id, channel_id, upstream_model_id
 )
@@ -431,7 +431,7 @@ SELECT k.account_id, k.group_id, k.channel_id, k.platform, k.upstream_model_id,
                 CASE WHEN k.platform IN ('anthropic', 'openai', 'gemini', 'grok') THEN 'unknown' ELSE 'ignored' END) AS classification,
        COALESCE(us.requests_7d, 0), COALESCE(us.requests_30d, 0),
        COALESCE(us.revenue_7d, 0), COALESCE(us.revenue_30d, 0),
-       COALESCE(us.billing_currency, 'CNY') AS billing_currency,
+       COALESCE(us.billing_currency, 'USD') AS billing_currency,
        COALESCE(us.api_keys_7d, 0), COALESCE(us.api_keys_30d, 0),
        COALESCE(us.currency_count, 0), COALESCE(us.negative_revenue_count, 0)
 FROM inventory_keys k

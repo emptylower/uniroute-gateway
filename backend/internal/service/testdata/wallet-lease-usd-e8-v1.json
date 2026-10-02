@@ -1,0 +1,54 @@
+{
+  "unit_version": "usd-e8-v1",
+  "currency": "USD",
+  "scale": 8,
+  "cases": [
+    {
+      "name": "zero",
+      "amount_units": "0",
+      "note": "no-op amount; must never appear as a real settlement, but must not error either"
+    },
+    {
+      "name": "one_unit",
+      "amount_units": "1",
+      "note": "smallest representable amount, 10^-8 USD"
+    },
+    {
+      "name": "one_usd",
+      "amount_units": "100000000",
+      "note": "1 USD = 100,000,000 units; no credit conversion layer exists"
+    },
+    {
+      "name": "cheap_model_single_token_order_of_magnitude",
+      "amount_units": "500",
+      "note": "order-of-magnitude reference only, not a real price: illustrates that even a very cheap per-token cost is comfortably non-zero at this scale (contrast with the old micros unit, where the same cost rounded to under 1)"
+    },
+    {
+      "name": "single_account_realistic_cap",
+      "amount_units": "100000000000000",
+      "note": "1,000,000 USD per account — used to prove per-account BIGINT has enormous headroom (int64 max is ~92,233,720,368 USD at this scale)"
+    },
+    {
+      "name": "aggregate_overflow_threshold_per_account",
+      "amount_units": "9223372036855",
+      "note": "CORRECTED during the round of review that hardened this document — the original value here (922337203685) was arithmetically wrong by roughly 10x and did not actually overflow when multiplied out. int64 max is 9,223,372,036,854,775,807. This value times 1,000,000 accounts = 9,223,372,036,855,000,000, which is just past that ceiling — verify this arithmetic yourself before trusting it again if you ever change either number. This is the fixture the Phase 4 reconciliation-query test uses on the SQLite/D1 path specifically to prove a SQL-level cross-account SUM overflows there (Postgres/MySQL do not overflow the same way — see the Global Constraints note above); the fix standardized across all three dialects is 'aggregate in application code with bigint', chosen because SQLite/D1 has no safe native alternative, not because every engine shares the same weakness."
+    },
+    {
+      "name": "exceeds_number_max_safe_integer",
+      "amount_units": "1000000000001000000",
+      "note": "ADDED during round 13 of the review that hardened Phase 1, VALUE CORRECTED during round 14 — the original value here (10000000000000000) is past Number.MAX_SAFE_INTEGER (9,007,199,254,740,991) but happens to still be exactly representable as an IEEE-754 double (verified: BigInt(Number(10000000000000000n)) === 10000000000000000n), so it could not actually have caught the class of bug it was added for. This value is a genuine counterexample instead — verified directly: BigInt(Number(1000000000001000000n)) === 1000000000000999936n, a real loss of 64 units. Chosen to also be a whole multiple of 1,000,000 (so it converts cleanly through unitsToCredits() like every other case here) and comfortably below int64 max (~9,223,372,036,854,775,807), so this is a JS-number-precision boundary specifically, not an overflow boundary (see aggregate_overflow_threshold_per_account for that one). Exists to exercise the MySQL supportBigNumbers/bigNumberStrings gap Phase 1's Task 1 Step 9 fixed in src/core/db/mysql.ts, and any other place a *_units value might silently round-trip through a JS number instead of staying a bigint/string end to end. If you ever change this value, re-verify BigInt(Number(newValue)) !== BigInt(newValue) before trusting it — a value can look large enough and still round-trip losslessly, as this fixture's own history just demonstrated."
+    },
+    {
+      "name": "repricing_pair_a",
+      "request_id": "req_fixture_repricing_0001",
+      "amount_units": "12000000",
+      "note": "first computed cost for a request"
+    },
+    {
+      "name": "repricing_pair_b",
+      "request_id": "req_fixture_repricing_0001",
+      "amount_units": "12500000",
+      "note": "same request_id, corrected cost after a pricing fix — the settlement idempotency key derived from request_id must be IDENTICAL for pair_a and pair_b; only the payload differs, which Phase 2's conflict-detection step must reject rather than silently double-apply"
+    }
+  ]
+}

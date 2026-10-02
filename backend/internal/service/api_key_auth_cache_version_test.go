@@ -117,13 +117,10 @@ func TestAPIKeyService_AuthSnapshotPreservesBillingCurrencyAndCurrencyRates(t *t
 		t.Fatalf("expected version %d, got %d", apiKeyAuthSnapshotVersion, snapshot.Version)
 	}
 	restored := svc.snapshotToAPIKey("key", snapshot)
-	if restored.User.BillingCurrency != CurrencyCNY {
+	if restored.User.BillingCurrency != CurrencyUSD {
 		t.Fatalf("expected CNY billing currency, got %q", restored.User.BillingCurrency)
 	}
-	if got := restored.Group.RateMultiplierForCurrency(CurrencyCNY); got != cny {
-		t.Fatalf("expected CNY multiplier %v, got %v", cny, got)
-	}
-	if got := restored.Group.RateMultiplierForCurrency(CurrencyUSD); got != usd {
-		t.Fatalf("expected USD multiplier %v, got %v", usd, got)
+	if got := restored.Group.EffectiveRateMultiplier(); got != 1 {
+		t.Fatalf("expected unified multiplier 1, got %v", got)
 	}
 }

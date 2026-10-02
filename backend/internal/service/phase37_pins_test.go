@@ -294,7 +294,7 @@ func p37SettledUnits(t *testing.T, svc *BillingSnapshotService, snap *BillingSna
 	t.Helper()
 	_, err := ResolveCostSettlement(SettlementContextFromSnapshot(context.Background(), snap), cost, &User{BillingCurrency: "CNY"}, false, svc.exchangeRates, svc.cfg)
 	require.NoError(t, err)
-	units, err := canonicalWalletUnitsFromCNY(cost.ActualCost)
+	units, err := canonicalWalletUnitsFromUSD(cost.ActualCost)
 	require.NoError(t, err)
 	return units
 }

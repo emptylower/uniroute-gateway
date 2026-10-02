@@ -1050,7 +1050,7 @@ func TestCreateOIDCOAuthAccountCreatesUserBindsIdentityAndConsumesSession(t *tes
 	require.NotNil(t, storedSession.ConsumedAt)
 }
 
-func TestCreateOIDCOAuthAccountAppliesPromoCodeFromPendingSession(t *testing.T) {
+func TestCreateOIDCOAuthAccountRetiresNativePromoFunding(t *testing.T) {
 	promoRepo := newOAuthPendingFlowPromoRepoStub("WELCOME2024", 25)
 	emailCache := &oauthPendingFlowEmailCacheStub{
 		verificationCodes: map[string]*service.VerificationCodeData{
@@ -1096,12 +1096,11 @@ func TestCreateOIDCOAuthAccountAppliesPromoCodeFromPendingSession(t *testing.T) 
 	handler.CreateOIDCOAuthAccount(ginCtx)
 
 	require.Equal(t, http.StatusOK, recorder.Code)
-	require.Equal(t, []string{"WELCOME2024"}, promoRepo.applyCalls)
+	require.Empty(t, promoRepo.applyCalls)
 	createdUser, err := client.User.Query().Where(dbuser.EmailEQ("promo@example.com")).Only(ctx)
 	require.NoError(t, err)
-	require.Equal(t, 25.0, createdUser.Balance)
-	require.Len(t, promoRepo.usages, 1)
-	require.Equal(t, createdUser.ID, promoRepo.usages[0].UserID)
+	require.Zero(t, createdUser.Balance)
+	require.Empty(t, promoRepo.usages)
 }
 
 func TestCreateOIDCOAuthAccountWithoutPromoCodeDoesNotApplyPromo(t *testing.T) {
@@ -2035,7 +2034,8 @@ func TestBindOIDCOAuthLoginAppliesFirstBindGrantOnce(t *testing.T) {
 
 	storedUser, err := client.User.Get(ctx, existingUser.ID)
 	require.NoError(t, err)
-	require.Equal(t, 17.5, storedUser.Balance)
+	// The provider default balance is no longer written to the retired native wallet.
+	require.Equal(t, 5.0, storedUser.Balance)
 	require.Equal(t, 5, storedUser.Concurrency)
 	require.Zero(t, storedUser.TotalRecharged)
 	require.Len(t, defaultSubAssigner.calls, 1)
@@ -2077,7 +2077,8 @@ func TestBindOIDCOAuthLoginAppliesFirstBindGrantOnce(t *testing.T) {
 
 	storedUser, err = client.User.Get(ctx, existingUser.ID)
 	require.NoError(t, err)
-	require.Equal(t, 17.5, storedUser.Balance)
+	// The provider default balance is no longer written to the retired native wallet.
+	require.Equal(t, 5.0, storedUser.Balance)
 	require.Equal(t, 5, storedUser.Concurrency)
 	require.Zero(t, storedUser.TotalRecharged)
 	require.Len(t, defaultSubAssigner.calls, 1)
@@ -2317,7 +2318,8 @@ func TestLogin2FACompletesPendingOAuthBindAndConsumesSession(t *testing.T) {
 
 	storedUser, err := client.User.Get(ctx, existingUser.ID)
 	require.NoError(t, err)
-	require.Equal(t, 9.5, storedUser.Balance)
+	// The provider default balance is no longer written to the retired native wallet.
+	require.Equal(t, 1.5, storedUser.Balance)
 	require.Equal(t, 6, storedUser.Concurrency)
 	require.Equal(t, 1, countProviderGrantRecords(t, client, existingUser.ID, "oidc", "first_bind"))
 	require.Empty(t, defaultSubAssigner.calls)

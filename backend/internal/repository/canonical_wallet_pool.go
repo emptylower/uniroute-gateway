@@ -19,7 +19,7 @@ var armCanonicalWalletPoolScript = redis.NewScript(`
    duplicates=duplicates+1
   else
    if redis.call('EXISTS',lease)==0 then return {1} end
-   if redis.call('HGET',lease,'currency')~='CNY' then return {2} end
+   if redis.call('HGET',lease,'currency')~='USD' then return {2} end
    if redis.call('HGET',lease,'sealed')=='1' or tonumber(redis.call('HGET',lease,'expires_at_ms') or '0')<=now then return {3} end
    local budget=tonumber(redis.call('HGET',lease,'budget_units') or '0');local consumed=tonumber(redis.call('HGET',lease,'consumed_units') or '0');local released=tonumber(redis.call('HGET',lease,'released_units') or '0')
    if units<=0 or consumed-released+units>budget or consumed+units>9007199254740991 then return {4} end

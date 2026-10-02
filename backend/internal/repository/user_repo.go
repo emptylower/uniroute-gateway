@@ -272,7 +272,7 @@ func (r *userRepository) Update(ctx context.Context, userIn *service.User) error
 		return translatePersistenceError(err, service.ErrUserNotFound, nil)
 	}
 	oldEmail := existing.Email
-	currencyChanged := service.NormalizeUserBillingCurrency(existing.BillingCurrency) != service.NormalizeUserBillingCurrency(userIn.BillingCurrency)
+	currencyChanged := service.NormalizeHistoricalBillingCurrency(existing.BillingCurrency) != service.NormalizeHistoricalBillingCurrency(userIn.BillingCurrency)
 	if service.BillingCurrencyUpdateRequested(ctx) && currencyChanged {
 		if existing.Balance != 0 || existing.FrozenBalance != 0 {
 			return infraerrors.BadRequest("BILLING_CURRENCY_BALANCE_NOT_EMPTY", "billing currency can only be changed when balance and frozen balance are zero")
@@ -311,7 +311,7 @@ func (r *userRepository) Update(ctx context.Context, userIn *service.User) error
 		SetBalanceNotifyExtraEmails(marshalExtraEmails(userIn.BalanceNotifyExtraEmails)).
 		SetRpmLimit(userIn.RPMLimit)
 	if service.BillingCurrencyUpdateRequested(ctx) {
-		updateOp = updateOp.SetBillingCurrency(service.NormalizeUserBillingCurrency(userIn.BillingCurrency))
+		updateOp = updateOp.SetBillingCurrency(service.NormalizeHistoricalBillingCurrency(userIn.BillingCurrency))
 	}
 	if userIn.SignupSource != "" {
 		updateOp = updateOp.SetSignupSource(userIn.SignupSource)

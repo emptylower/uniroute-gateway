@@ -47,11 +47,7 @@ func newGatewayRecordUsageServiceForTest(usageRepo UsageLogRepository, userRepo 
 		nil,
 		nil, // userPlatformQuotaRepo
 	)
-	svc.exchangeRates = &ExchangeRateService{
-		bootstrapRate: 1, ttl: time.Minute, staleTTL: time.Hour,
-		minUSDToCNY: 0.5, maxUSDToCNY: 2, maxAge: time.Hour, maxFuture: time.Minute,
-		cache: make(map[string]ExchangeRateSnapshot),
-	}
+	svc.exchangeRates = &USDPriceService{}
 	return svc
 }
 
@@ -117,7 +113,7 @@ func TestGatewayServiceRecordUsage_BillingUsesDetachedContext(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, 1, usageRepo.calls)
-	require.Equal(t, 1, userRepo.deductCalls)
+	require.Zero(t, userRepo.deductCalls, "canonical USD wallet is the only debit ledger")
 	require.NoError(t, userRepo.lastCtxErr)
 	require.Equal(t, 1, quotaSvc.quotaCalls)
 	require.NoError(t, quotaSvc.lastQuotaCtxErr)
@@ -540,7 +536,7 @@ func TestGatewayServiceRecordUsage_PeakRateAffectsTokenModeImageOutputTokens(t *
 	require.InDelta(t, textInput+textOutput+imageOutput, usageRepo.lastLog.TotalCost, 1e-12)
 	require.InDelta(t, imageOutput, usageRepo.lastLog.ImageOutputCost, 1e-12)
 	require.InDelta(t, expectedActual, usageRepo.lastLog.ActualCost, 1e-12)
-	require.InDelta(t, expectedActual, userRepo.lastAmount, 1e-12)
+	require.Zero(t, userRepo.lastAmount, "native balance must never be debited")
 }
 
 func TestGatewayServiceRecordUsage_UsageLogWriteErrorDoesNotSkipBilling(t *testing.T) {
@@ -571,7 +567,7 @@ func TestGatewayServiceRecordUsage_UsageLogWriteErrorDoesNotSkipBilling(t *testi
 
 	require.NoError(t, err)
 	require.Equal(t, 1, usageRepo.calls)
-	require.Equal(t, 1, userRepo.deductCalls)
+	require.Zero(t, userRepo.deductCalls, "canonical USD wallet is the only debit ledger")
 	require.Equal(t, 1, quotaSvc.quotaCalls)
 }
 
@@ -608,7 +604,7 @@ func TestGatewayServiceRecordUsageWithLongContext_BillingUsesDetachedContext(t *
 
 	require.NoError(t, err)
 	require.Equal(t, 1, usageRepo.calls)
-	require.Equal(t, 1, userRepo.deductCalls)
+	require.Zero(t, userRepo.deductCalls, "canonical USD wallet is the only debit ledger")
 	require.NoError(t, userRepo.lastCtxErr)
 	require.Equal(t, 1, quotaSvc.quotaCalls)
 	require.NoError(t, quotaSvc.lastQuotaCtxErr)
@@ -806,12 +802,10 @@ func TestGatewayServiceRecordUsage_ReasoningEffortNil(t *testing.T) {
 	require.Nil(t, usageRepo.lastLog.ReasoningEffort)
 }
 
-func TestGatewayServiceRecordUsage_UserCurrencyModeSettlesInCNY(t *testing.T) {
+func TestGatewayServiceRecordUsage_USDOnlyIgnoresLegacyUserCurrency(t *testing.T) {
 	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
 	svc := newGatewayRecordUsageServiceForTest(usageRepo, &openAIRecordUsageUserRepoStub{}, &openAIRecordUsageSubRepoStub{})
-	svc.cfg.Billing.Settlement.CurrencyMode = SettlementCurrencyModeUser
-	svc.cfg.Billing.ExchangeRate.BootstrapUSDToCNY = 7.2
-	svc.exchangeRates = NewExchangeRateService(svc.cfg)
+	svc.exchangeRates = NewUSDPriceService(svc.cfg)
 
 	err := svc.RecordUsage(context.Background(), &RecordUsageInput{
 		Result: &ForwardResult{
@@ -828,21 +822,20 @@ func TestGatewayServiceRecordUsage_UserCurrencyModeSettlesInCNY(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, usageRepo.lastLog)
 	require.Equal(t, CurrencyUSD, usageRepo.lastLog.SourceCurrency)
-	require.Equal(t, CurrencyCNY, usageRepo.lastLog.SettlementCurrency)
-	require.InDelta(t, 7.2, usageRepo.lastLog.ExchangeRate, 1e-12)
-	require.Equal(t, "bootstrap_config", usageRepo.lastLog.ExchangeRateSource)
+	require.Equal(t, CurrencyUSD, usageRepo.lastLog.SettlementCurrency)
+	require.InDelta(t, 1, usageRepo.lastLog.ExchangeRate, 1e-12)
+	require.Equal(t, "usd-e8-v1", usageRepo.lastLog.ExchangeRateSource)
 	require.Greater(t, usageRepo.lastLog.SourceCost, 0.0)
 	// actual = source × FX rate × effective multiplier (default rate multiplier 1.1)
-	require.InDelta(t, usageRepo.lastLog.SourceCost*7.2*1.1, usageRepo.lastLog.ActualCost, 1e-9)
+	require.InDelta(t, usageRepo.lastLog.SourceCost*1.1, usageRepo.lastLog.ActualCost, 1e-9)
 }
 
-func TestGatewayServiceRecordUsage_UserCurrencyModeWithoutRateFailsClosed(t *testing.T) {
+func TestGatewayServiceRecordUsage_USDOnlyDoesNotDependOnExchangeRates(t *testing.T) {
 	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
 	userRepo := &openAIRecordUsageUserRepoStub{}
 	svc := newGatewayRecordUsageServiceForTest(usageRepo, userRepo, &openAIRecordUsageSubRepoStub{})
-	svc.cfg.Billing.Settlement.CurrencyMode = SettlementCurrencyModeUser
 	// bootstrap 0 + no provider → no obtainable USD/CNY rate
-	svc.exchangeRates = NewExchangeRateService(&config.Config{})
+	svc.exchangeRates = NewUSDPriceService(&config.Config{})
 
 	err := svc.RecordUsage(context.Background(), &RecordUsageInput{
 		Result: &ForwardResult{
@@ -856,7 +849,7 @@ func TestGatewayServiceRecordUsage_UserCurrencyModeWithoutRateFailsClosed(t *tes
 		Account: &Account{ID: 701},
 	})
 
-	require.Error(t, err)
-	require.Equal(t, 0, usageRepo.calls)
+	require.NoError(t, err)
+	require.Equal(t, 1, usageRepo.calls)
 	require.Equal(t, 0, userRepo.deductCalls)
 }

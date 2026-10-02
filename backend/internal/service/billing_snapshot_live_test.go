@@ -25,7 +25,7 @@ func TestLiveSnapshotMultiplierMatchesLiveRecordDerivation(t *testing.T) {
 	snap, err := svc.Freeze(context.Background(), FreezeInput{APIKey: apiKey, User: user, Account: account, RequestedModel: "claude-sonnet-4", BillingModel: "claude-sonnet-4", Family: BillingFamilyLive,
 		ResolveUserGroupRate: func(_ context.Context, _, _ int64, def float64) float64 { return def }})
 	require.NoError(t, err)
-	groupRate := apiKey.Group.RateMultiplierForCurrency(NormalizeUserBillingCurrency(user.BillingCurrency))
+	groupRate := apiKey.Group.EffectiveRateMultiplier()
 	want := groupRate * apiKey.Group.PeakMultiplierAt(svc.now())
 	require.Equal(t, 3.0, apiKey.Group.PeakMultiplierAt(svc.now()), "the peak factor must be in force, or this test has no teeth")
 	require.Equal(t, want, snap.Multipliers.Text)

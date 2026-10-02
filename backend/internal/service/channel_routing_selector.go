@@ -234,25 +234,15 @@ func (s *ChannelRoutingSelector) legacy(apiKey *APIKey) ([]ChannelRoutingCandida
 	if apiKey == nil || apiKey.Group == nil || apiKey.GroupID == nil {
 		return nil, ErrNoChannelRoutingCandidate
 	}
-	rate := apiKey.Group.RateMultiplierForCurrency(channelRoutingCurrency(apiKey, *apiKey.Group))
+	rate := apiKey.Group.EffectiveRateMultiplier()
 	return []ChannelRoutingCandidate{{
 		Group:               *apiKey.Group,
 		EffectiveMultiplier: rate * apiKey.Group.PeakMultiplierAt(time.Now()),
 	}}, nil
 }
 
-func channelRoutingCurrency(apiKey *APIKey, group Group) string {
-	if group.IsSubscriptionType() {
-		return CurrencyUSD
-	}
-	if apiKey != nil && apiKey.User != nil {
-		return NormalizeUserBillingCurrency(apiKey.User.BillingCurrency)
-	}
-	return CurrencyCNY
-}
-
 func channelRoutingRate(apiKey *APIKey, group Group, overrides map[int64]float64) float64 {
-	rate := group.RateMultiplierForCurrency(channelRoutingCurrency(apiKey, group))
+	rate := group.EffectiveRateMultiplier()
 	if override, ok := overrides[group.ID]; ok {
 		return override
 	}

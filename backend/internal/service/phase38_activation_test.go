@@ -375,16 +375,15 @@ func e2eCatalogPricing(t *testing.T) *PricingService {
 
 // e2eSnapshotFixture is NewSnapshotTestFixtureForTest's shape with the real
 // catalog behind the billing service (see e2eCatalogPricing).
-func e2eSnapshotFixture(t *testing.T) (*BillingSnapshotService, *APIKey, *User, *Account, *BillingService, *ModelPricingResolver, *ExchangeRateService) {
+func e2eSnapshotFixture(t *testing.T) (*BillingSnapshotService, *APIKey, *User, *Account, *BillingService, *ModelPricingResolver, *USDPriceService) {
 	t.Helper()
 	cfg := &config.Config{}
 	cfg.Default.RateMultiplier = 1
 	cfg.CanonicalWallet.BillingSnapshotMode = "record"
-	cfg.Billing.ExchangeRate.BootstrapUSDToCNY = 7.0
 	billing := NewBillingService(&config.Config{}, e2eCatalogPricing(t))
 	cs := NewChannelService(&LiveRestartChannelRepoStub{}, nil, nil, nil)
 	resolver := NewModelPricingResolver(cs, billing)
-	fx := NewExchangeRateService(cfg)
+	fx := NewUSDPriceService(cfg)
 	svc := NewBillingSnapshotService(cfg, resolver, billing, fx, nil)
 	svc.now = func() time.Time { return time.Date(2026, 8, 27, 3, 0, 0, 0, time.UTC) }
 	group := &Group{ID: 7, RateMultiplier: 1.5, ImageRateIndependent: true, ImageRateMultiplier: 2.5}
@@ -774,11 +773,10 @@ func newE2EServiceFixture(t *testing.T, mode, holds, surface, platformUser strin
 	snapCfg := &config.Config{}
 	snapCfg.Default.RateMultiplier = 1
 	snapCfg.CanonicalWallet.BillingSnapshotMode = "record"
-	snapCfg.Billing.ExchangeRate.BootstrapUSDToCNY = 7.0
 	billing := NewBillingService(&config.Config{}, e2eCatalogPricing(t))
 	cs := NewChannelService(&LiveRestartChannelRepoStub{}, nil, nil, nil)
 	resolver := NewModelPricingResolver(cs, billing)
-	fx := NewExchangeRateService(snapCfg)
+	fx := NewUSDPriceService(snapCfg)
 	snapshots := NewBillingSnapshotService(snapCfg, resolver, billing, fx, NewBillingSnapshotStoreForTest(t, db))
 
 	group := &Group{ID: 7, RateMultiplier: 1.5, ImageRateIndependent: true, ImageRateMultiplier: 2.5}
@@ -1226,7 +1224,7 @@ func (f *e2eServiceFixture) unitsPerOutputToken(t *testing.T, callHash string) f
 	t.Helper()
 	rec, err := f.liveStore.GetLiveCall(context.Background(), callHash)
 	require.NoError(t, err)
-	return rec.OutputPricePerToken * rec.ExchangeRate * rec.RateMultiplier * float64(canonicalWalletUnitsPerCNY)
+	return rec.OutputPricePerToken * rec.ExchangeRate * rec.RateMultiplier * float64(canonicalWalletUnitsPerUSD)
 }
 
 func (f *e2eServiceFixture) pumpUsage(responseID string, inputTokens, outputTokens int) {

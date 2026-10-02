@@ -8,13 +8,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
+	"github.com/stretchr/testify/require"
 )
 
 type fakeReuseAccountRepo struct {
 	accounts map[int64]*Account
-	nextID int64
+	nextID   int64
 }
 
 func newFakeReuseAccountRepo() *fakeReuseAccountRepo {
@@ -33,11 +33,22 @@ func (f *fakeReuseAccountRepo) GetByID(ctx context.Context, id int64) (*Account,
 	}
 	return nil, ErrAccountNotFound
 }
-func (f *fakeReuseAccountRepo) GetByIDs(ctx context.Context, ids []int64) ([]*Account, error) { return nil, nil }
-func (f *fakeReuseAccountRepo) ExistsByID(ctx context.Context, id int64) (bool, error) { _, ok := f.accounts[id]; return ok, nil }
-func (f *fakeReuseAccountRepo) GetByCRSAccountID(ctx context.Context, crsAccountID string) (*Account, error) { return nil, nil }
-func (f *fakeReuseAccountRepo) FindByExtraField(ctx context.Context, key string, value any) ([]Account, error) { return nil, nil }
-func (f *fakeReuseAccountRepo) ListCRSAccountIDs(ctx context.Context) (map[string]int64, error) { return nil, nil }
+func (f *fakeReuseAccountRepo) GetByIDs(ctx context.Context, ids []int64) ([]*Account, error) {
+	return nil, nil
+}
+func (f *fakeReuseAccountRepo) ExistsByID(ctx context.Context, id int64) (bool, error) {
+	_, ok := f.accounts[id]
+	return ok, nil
+}
+func (f *fakeReuseAccountRepo) GetByCRSAccountID(ctx context.Context, crsAccountID string) (*Account, error) {
+	return nil, nil
+}
+func (f *fakeReuseAccountRepo) FindByExtraField(ctx context.Context, key string, value any) ([]Account, error) {
+	return nil, nil
+}
+func (f *fakeReuseAccountRepo) ListCRSAccountIDs(ctx context.Context) (map[string]int64, error) {
+	return nil, nil
+}
 func (f *fakeReuseAccountRepo) Update(ctx context.Context, acc *Account) error {
 	if _, ok := f.accounts[acc.ID]; !ok {
 		return ErrAccountNotFound
@@ -46,45 +57,112 @@ func (f *fakeReuseAccountRepo) Update(ctx context.Context, acc *Account) error {
 	f.accounts[acc.ID] = &cp
 	return nil
 }
-func (f *fakeReuseAccountRepo) Delete(ctx context.Context, id int64) error { delete(f.accounts, id); return nil }
-func (f *fakeReuseAccountRepo) List(ctx context.Context, params pagination.PaginationParams) ([]Account, *pagination.PaginationResult, error) { return nil, nil, nil }
-func (f *fakeReuseAccountRepo) ListWithFilters(ctx context.Context, params pagination.PaginationParams, platform, accountType, status, search string, groupID int64, privacyMode string) ([]Account, *pagination.PaginationResult, error) { return nil, nil, nil }
-func (f *fakeReuseAccountRepo) ListAllWithFilters(ctx context.Context, platform, accountType, status, search string, groupID int64, privacyMode string) ([]Account, error) { return nil, nil }
-func (f *fakeReuseAccountRepo) ListByGroup(ctx context.Context, groupID int64) ([]Account, error) { return nil, nil }
+func (f *fakeReuseAccountRepo) Delete(ctx context.Context, id int64) error {
+	delete(f.accounts, id)
+	return nil
+}
+func (f *fakeReuseAccountRepo) List(ctx context.Context, params pagination.PaginationParams) ([]Account, *pagination.PaginationResult, error) {
+	return nil, nil, nil
+}
+func (f *fakeReuseAccountRepo) ListWithFilters(ctx context.Context, params pagination.PaginationParams, platform, accountType, status, search string, groupID int64, privacyMode string) ([]Account, *pagination.PaginationResult, error) {
+	return nil, nil, nil
+}
+func (f *fakeReuseAccountRepo) ListAllWithFilters(ctx context.Context, platform, accountType, status, search string, groupID int64, privacyMode string) ([]Account, error) {
+	return nil, nil
+}
+func (f *fakeReuseAccountRepo) ListByGroup(ctx context.Context, groupID int64) ([]Account, error) {
+	return nil, nil
+}
 func (f *fakeReuseAccountRepo) ListActive(ctx context.Context) ([]Account, error) { return nil, nil }
-func (f *fakeReuseAccountRepo) ListByPlatform(ctx context.Context, platform string) ([]Account, error) { return nil, nil }
+func (f *fakeReuseAccountRepo) ListByPlatform(ctx context.Context, platform string) ([]Account, error) {
+	return nil, nil
+}
 func (f *fakeReuseAccountRepo) UpdateLastUsed(ctx context.Context, id int64) error { return nil }
-func (f *fakeReuseAccountRepo) BatchUpdateLastUsed(ctx context.Context, updates map[int64]time.Time) error { return nil }
-func (f *fakeReuseAccountRepo) SetError(ctx context.Context, id int64, errorMsg string) error { return nil }
+func (f *fakeReuseAccountRepo) BatchUpdateLastUsed(ctx context.Context, updates map[int64]time.Time) error {
+	return nil
+}
+func (f *fakeReuseAccountRepo) SetError(ctx context.Context, id int64, errorMsg string) error {
+	return nil
+}
 func (f *fakeReuseAccountRepo) ClearError(ctx context.Context, id int64) error { return nil }
-func (f *fakeReuseAccountRepo) SetSchedulable(ctx context.Context, id int64, schedulable bool) error { return nil }
-func (f *fakeReuseAccountRepo) AutoPauseExpiredAccounts(ctx context.Context, now time.Time) (int64, error) { return 0, nil }
-func (f *fakeReuseAccountRepo) BindGroups(ctx context.Context, accountID int64, groupIDs []int64) error { return nil }
-func (f *fakeReuseAccountRepo) ListSchedulable(ctx context.Context) ([]Account, error) { return nil, nil }
-func (f *fakeReuseAccountRepo) ListSchedulableByGroupID(ctx context.Context, groupID int64) ([]Account, error) { return nil, nil }
-func (f *fakeReuseAccountRepo) ListSchedulableByPlatform(ctx context.Context, platform string) ([]Account, error) { return nil, nil }
-func (f *fakeReuseAccountRepo) ListSchedulableByGroupIDAndPlatform(ctx context.Context, groupID int64, platform string) ([]Account, error) { return nil, nil }
-func (f *fakeReuseAccountRepo) ListSchedulableByPlatforms(ctx context.Context, platforms []string) ([]Account, error) { return nil, nil }
-func (f *fakeReuseAccountRepo) ListSchedulableByGroupIDAndPlatforms(ctx context.Context, groupID int64, platforms []string) ([]Account, error) { return nil, nil }
-func (f *fakeReuseAccountRepo) ListSchedulableUngroupedByPlatform(ctx context.Context, platform string) ([]Account, error) { return nil, nil }
-func (f *fakeReuseAccountRepo) ListSchedulableUngroupedByPlatforms(ctx context.Context, platforms []string) ([]Account, error) { return nil, nil }
-func (f *fakeReuseAccountRepo) ListModelAvailabilityCandidates(ctx context.Context, groupID *int64, platforms []string, includeGrouped bool) ([]Account, error) { return nil, nil }
-func (f *fakeReuseAccountRepo) SetRateLimited(ctx context.Context, id int64, resetAt time.Time) error { return nil }
-func (f *fakeReuseAccountRepo) SetModelRateLimit(ctx context.Context, id int64, scope string, resetAt time.Time, reason ...string) error { return nil }
-func (f *fakeReuseAccountRepo) SetOverloaded(ctx context.Context, id int64, until time.Time) error { return nil }
-func (f *fakeReuseAccountRepo) SetTempUnschedulable(ctx context.Context, id int64, until time.Time, reason string) error { return nil }
-func (f *fakeReuseAccountRepo) ClearTempUnschedulable(ctx context.Context, id int64) error { return nil }
+func (f *fakeReuseAccountRepo) SetSchedulable(ctx context.Context, id int64, schedulable bool) error {
+	return nil
+}
+func (f *fakeReuseAccountRepo) AutoPauseExpiredAccounts(ctx context.Context, now time.Time) (int64, error) {
+	return 0, nil
+}
+func (f *fakeReuseAccountRepo) BindGroups(ctx context.Context, accountID int64, groupIDs []int64) error {
+	return nil
+}
+func (f *fakeReuseAccountRepo) ListSchedulable(ctx context.Context) ([]Account, error) {
+	return nil, nil
+}
+func (f *fakeReuseAccountRepo) ListSchedulableByGroupID(ctx context.Context, groupID int64) ([]Account, error) {
+	return nil, nil
+}
+func (f *fakeReuseAccountRepo) ListSchedulableByPlatform(ctx context.Context, platform string) ([]Account, error) {
+	return nil, nil
+}
+func (f *fakeReuseAccountRepo) ListSchedulableByGroupIDAndPlatform(ctx context.Context, groupID int64, platform string) ([]Account, error) {
+	return nil, nil
+}
+func (f *fakeReuseAccountRepo) ListSchedulableByPlatforms(ctx context.Context, platforms []string) ([]Account, error) {
+	return nil, nil
+}
+func (f *fakeReuseAccountRepo) ListSchedulableByGroupIDAndPlatforms(ctx context.Context, groupID int64, platforms []string) ([]Account, error) {
+	return nil, nil
+}
+func (f *fakeReuseAccountRepo) ListSchedulableUngroupedByPlatform(ctx context.Context, platform string) ([]Account, error) {
+	return nil, nil
+}
+func (f *fakeReuseAccountRepo) ListSchedulableUngroupedByPlatforms(ctx context.Context, platforms []string) ([]Account, error) {
+	return nil, nil
+}
+func (f *fakeReuseAccountRepo) ListModelAvailabilityCandidates(ctx context.Context, groupID *int64, platforms []string, includeGrouped bool) ([]Account, error) {
+	return nil, nil
+}
+func (f *fakeReuseAccountRepo) SetRateLimited(ctx context.Context, id int64, resetAt time.Time) error {
+	return nil
+}
+func (f *fakeReuseAccountRepo) SetModelRateLimit(ctx context.Context, id int64, scope string, resetAt time.Time, reason ...string) error {
+	return nil
+}
+func (f *fakeReuseAccountRepo) SetOverloaded(ctx context.Context, id int64, until time.Time) error {
+	return nil
+}
+func (f *fakeReuseAccountRepo) SetTempUnschedulable(ctx context.Context, id int64, until time.Time, reason string) error {
+	return nil
+}
+func (f *fakeReuseAccountRepo) ClearTempUnschedulable(ctx context.Context, id int64) error {
+	return nil
+}
 func (f *fakeReuseAccountRepo) ClearRateLimit(ctx context.Context, id int64) error { return nil }
-func (f *fakeReuseAccountRepo) ClearAntigravityQuotaScopes(ctx context.Context, id int64) error { return nil }
+func (f *fakeReuseAccountRepo) ClearAntigravityQuotaScopes(ctx context.Context, id int64) error {
+	return nil
+}
 func (f *fakeReuseAccountRepo) ClearModelRateLimits(ctx context.Context, id int64) error { return nil }
-func (f *fakeReuseAccountRepo) UpdateSessionWindow(ctx context.Context, id int64, start, end *time.Time, status string) error { return nil }
-func (f *fakeReuseAccountRepo) UpdateSessionWindowEnd(ctx context.Context, id int64, end time.Time) error { return nil }
-func (f *fakeReuseAccountRepo) UpdateExtra(ctx context.Context, id int64, updates map[string]any) error { return nil }
-func (f *fakeReuseAccountRepo) BulkUpdate(ctx context.Context, ids []int64, updates AccountBulkUpdate) (int64, error) { return 0, nil }
-func (f *fakeReuseAccountRepo) IncrementQuotaUsed(ctx context.Context, id int64, amount float64) error { return nil }
+func (f *fakeReuseAccountRepo) UpdateSessionWindow(ctx context.Context, id int64, start, end *time.Time, status string) error {
+	return nil
+}
+func (f *fakeReuseAccountRepo) UpdateSessionWindowEnd(ctx context.Context, id int64, end time.Time) error {
+	return nil
+}
+func (f *fakeReuseAccountRepo) UpdateExtra(ctx context.Context, id int64, updates map[string]any) error {
+	return nil
+}
+func (f *fakeReuseAccountRepo) BulkUpdate(ctx context.Context, ids []int64, updates AccountBulkUpdate) (int64, error) {
+	return 0, nil
+}
+func (f *fakeReuseAccountRepo) IncrementQuotaUsed(ctx context.Context, id int64, amount float64) error {
+	return nil
+}
 func (f *fakeReuseAccountRepo) ResetQuotaUsed(ctx context.Context, id int64) error { return nil }
-func (f *fakeReuseAccountRepo) RevertProxyFallback(ctx context.Context, accountID int64) error { return nil }
-func (f *fakeReuseAccountRepo) ListShadowsByParent(ctx context.Context, parentID int64) ([]*Account, error) { return nil, nil }
+func (f *fakeReuseAccountRepo) RevertProxyFallback(ctx context.Context, accountID int64) error {
+	return nil
+}
+func (f *fakeReuseAccountRepo) ListShadowsByParent(ctx context.Context, parentID int64) ([]*Account, error) {
+	return nil, nil
+}
 
 type fakeReuseRepo struct {
 	scopes map[string]int64

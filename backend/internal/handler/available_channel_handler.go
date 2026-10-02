@@ -70,13 +70,13 @@ type userAvailableGroup struct {
 // userSupportedModelPricing 用户可见的定价字段白名单。
 type userSupportedModelPricing struct {
 	BillingMode      string                   `json:"billing_mode"`
-	InputPrice       *float64                 `json:"input_price"`
-	OutputPrice      *float64                 `json:"output_price"`
-	CacheWritePrice  *float64                 `json:"cache_write_price"`
-	CacheReadPrice   *float64                 `json:"cache_read_price"`
-	ImageInputPrice  *float64                 `json:"image_input_price"`
-	ImageOutputPrice *float64                 `json:"image_output_price"`
-	PerRequestPrice  *float64                 `json:"per_request_price"`
+	InputPrice       *float64                 `json:"input_price_usd,string"`
+	OutputPrice      *float64                 `json:"output_price_usd,string"`
+	CacheWritePrice  *float64                 `json:"cache_write_price_usd,string"`
+	CacheReadPrice   *float64                 `json:"cache_read_price_usd,string"`
+	ImageInputPrice  *float64                 `json:"image_input_price_usd,string"`
+	ImageOutputPrice *float64                 `json:"image_output_price_usd,string"`
+	PerRequestPrice  *float64                 `json:"per_request_price_usd,string"`
 	Intervals        []userPricingIntervalDTO `json:"intervals"`
 }
 
@@ -85,11 +85,11 @@ type userPricingIntervalDTO struct {
 	MinTokens       int      `json:"min_tokens"`
 	MaxTokens       *int     `json:"max_tokens"`
 	TierLabel       string   `json:"tier_label,omitempty"`
-	InputPrice      *float64 `json:"input_price"`
-	OutputPrice     *float64 `json:"output_price"`
-	CacheWritePrice *float64 `json:"cache_write_price"`
-	CacheReadPrice  *float64 `json:"cache_read_price"`
-	PerRequestPrice *float64 `json:"per_request_price"`
+	InputPrice      *float64 `json:"input_price_usd,string"`
+	OutputPrice     *float64 `json:"output_price_usd,string"`
+	CacheWritePrice *float64 `json:"cache_write_price_usd,string"`
+	CacheReadPrice  *float64 `json:"cache_read_price_usd,string"`
+	PerRequestPrice *float64 `json:"per_request_price_usd,string"`
 }
 
 // userSupportedModel 用户可见的支持模型条目。

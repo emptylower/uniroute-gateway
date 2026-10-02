@@ -462,17 +462,17 @@ type canonicalWalletAmountObject struct {
 }
 
 func newCanonicalWalletAmountObject(units int64) canonicalWalletAmountObject {
-	return canonicalWalletAmountObject{AmountUnits: strconv.FormatInt(units, 10), Currency: "CNY", Scale: 8, UnitVersion: "cny-e8-v1"}
+	return canonicalWalletAmountObject{AmountUnits: strconv.FormatInt(units, 10), Currency: "USD", Scale: 8, UnitVersion: "usd-e8-v1"}
 }
 
 var canonicalWalletDecimalUnitsPattern = regexp.MustCompile(`^(0|[1-9][0-9]{0,18})$`)
 
 // parseCanonicalWalletAmountObject is strict on every field: decimal string only (no sign,
-// no leading zero, ≤ 19 digits — ShipAny's units.ts:53-85 twin), CNY, scale 8,
-// cny-e8-v1, and a value int64 can hold.
+// no leading zero, ≤ 19 digits — ShipAny's units.ts:53-85 twin), USD, scale 8,
+// usd-e8-v1, and a value int64 can hold.
 func parseCanonicalWalletAmountObject(field string, a canonicalWalletAmountObject) (int64, error) {
-	if a.Currency != "CNY" || a.Scale != 8 || a.UnitVersion != "cny-e8-v1" {
-		return 0, fmt.Errorf("%s: not a cny-e8-v1 amount object", field)
+	if a.Currency != "USD" || a.Scale != 8 || a.UnitVersion != "usd-e8-v1" {
+		return 0, fmt.Errorf("%s: not a usd-e8-v1 amount object", field)
 	}
 	if !canonicalWalletDecimalUnitsPattern.MatchString(a.AmountUnits) {
 		return 0, fmt.Errorf("%s.amount_units: not a decimal integer string", field)
@@ -537,7 +537,7 @@ func classifyControlPlaneError(err error) (terminalReason string, ok bool) {
 }
 
 func (c *canonicalWalletHTTPClient) EnsureLease(ctx context.Context, request canonicalWalletEnsureRequest) (*canonicalWalletEnsureResult, error) {
-	if _, err := RequireCNYBillingCurrency(request.Currency); err != nil {
+	if _, err := RequireUSDBillingCurrency(request.Currency); err != nil {
 		return nil, fmt.Errorf("requested an unsupported currency: %w", err)
 	}
 	var wire canonicalWalletEnsureWireResponse
@@ -583,7 +583,7 @@ func (c *canonicalWalletHTTPClient) EnsureLease(ctx context.Context, request can
 	if strings.TrimSpace(wire.LeaseID) == "" || strings.TrimSpace(wire.PlatformUserID) != strings.TrimSpace(request.PlatformUserID) || budget <= 0 || headroom > budget || wire.ExpiresAt.IsZero() || wire.Status != "active" || (wire.Outcome != "reused" && wire.Outcome != "issued") {
 		return nil, errors.New("control plane returned an invalid canonical wallet lease")
 	}
-	currency, err := RequireCNYBillingCurrency(wire.Currency)
+	currency, err := RequireUSDBillingCurrency(wire.Currency)
 	if err != nil {
 		return nil, fmt.Errorf("control plane returned an unsupported currency: %w", err)
 	}
@@ -1260,7 +1260,7 @@ func (b *CanonicalWalletBridge) ObserveSettlement(event CanonicalWalletSettlemen
 			return false
 		}
 		if len(segments) > 0 {
-			currency, e := RequireCNYBillingCurrency(event.Currency)
+			currency, e := RequireUSDBillingCurrency(event.Currency)
 			if e != nil {
 				return false
 			}
@@ -1306,7 +1306,7 @@ func (b *CanonicalWalletBridge) ObserveSettlement(event CanonicalWalletSettlemen
 		canonicalWalletBridgeMetrics.missingPlatformID.Add(1)
 		return false
 	}
-	currency, err := RequireCNYBillingCurrency(event.Currency)
+	currency, err := RequireUSDBillingCurrency(event.Currency)
 	if err != nil {
 		canonicalWalletBridgeMetrics.unsupportedCurrency.Add(1)
 		return false
@@ -2253,7 +2253,7 @@ func (b *CanonicalWalletBridge) ensureLease(ctx context.Context, platformUserID,
 }
 
 // USD authorization confirms the policy through the signed control plane even
-// when a pre-rollout lease is cached. Amount objects and Redis remain cny-e8-v1.
+// when a pre-rollout lease is cached. Amount objects and Redis remain usd-e8-v1.
 func (b *CanonicalWalletBridge) ensureLeaseWithPolicy(ctx context.Context, platformUserID, currency string, amountUnits int64, purpose canonicalWalletLeasePurpose, preferLeaseID, policyVersion string) (*CanonicalWalletLease, error) {
 	if policyVersion != "" && policyVersion != config.CanonicalUSDWalletPolicyVersion {
 		return nil, ErrCanonicalUSDWalletPolicy
@@ -2391,36 +2391,36 @@ func CanonicalWalletSettlementEventID(requestID, platformUserID, currency string
 	return "gwusg_" + hex.EncodeToString(sum[:])
 }
 
-// canonicalWalletUnitsFromCNY converts a CNY float64 to cny-e8-v1 units
-// (1 CNY = 100,000,000 units — canonicalWalletUnitsPerCNY from
+// canonicalWalletUnitsFromUSD converts a USD float64 to usd-e8-v1 units
+// (1 USD = 100,000,000 units — canonicalWalletUnitsPerUSD from
 // canonical_wallet_units.go; do NOT redeclare it here). Rejects non-finite
 // and negative inputs, and rejects any scaled value at or beyond int64's
 // ceiling BEFORE converting — a bare int64(...) cast of an out-of-range
 // float64 is implementation-defined behavior in Go, not a panic.
-func canonicalWalletUnitsFromCNY(amount float64) (int64, error) {
+func canonicalWalletUnitsFromUSD(amount float64) (int64, error) {
 	if amount < 0 || math.IsNaN(amount) || math.IsInf(amount, 0) {
 		return 0, errors.New("canonical wallet amount must be a finite, non-negative number")
 	}
-	scaled := amount * canonicalWalletUnitsPerCNY
+	scaled := amount * canonicalWalletUnitsPerUSD
 	if scaled >= math.MaxInt64 {
 		return 0, ErrCanonicalWalletUnitsOverflow
 	}
 	return int64(math.Round(scaled)), nil
 }
 
-// RequireCNYBillingCurrency is the STRICT counterpart to
+// RequireUSDBillingCurrency is the STRICT counterpart to
 // NormalizeUserBillingCurrency, exported so other packages (repository,
 // same as CanonicalWalletLeaseStore's other cross-package uses) and other
 // call sites in this package can reject an invalid currency outright
-// instead of silently treating it as CNY. NormalizeUserBillingCurrency
-// coerces ANY unrecognized value to CNY (confirmed by reading currency.go's
+// instead of silently treating it as USD. NormalizeUserBillingCurrency
+// coerces ANY unrecognized value to USD (confirmed by reading currency.go's
 // normalizeBillingCurrencyOrDefault), so a check performed AFTER that
 // coercion can never observe an invalid currency — every genuine
 // admission/reservation/settlement boundary must reject BEFORE coercing.
-func RequireCNYBillingCurrency(value string) (string, error) {
+func RequireUSDBillingCurrency(value string) (string, error) {
 	normalized := strings.ToUpper(strings.TrimSpace(value))
-	if normalized != CurrencyCNY {
-		return "", fmt.Errorf("cny-e8-v1 requires CNY, got %q", value)
+	if normalized != CurrencyUSD {
+		return "", fmt.Errorf("usd-e8-v1 requires USD, got %q", value)
 	}
 	return normalized, nil
 }
@@ -2481,7 +2481,7 @@ func observeCanonicalWalletSettlement(bridge *CanonicalWalletBridge, requestID s
 	if subscriptionBilling || !billingApplied || cost.ActualCost <= 0 {
 		return releaseZeroCost()
 	}
-	amountUnits, err := canonicalWalletUnitsFromCNY(cost.ActualCost)
+	amountUnits, err := canonicalWalletUnitsFromUSD(cost.ActualCost)
 	if err != nil || amountUnits <= 0 {
 		return releaseZeroCost()
 	}
@@ -2489,15 +2489,15 @@ func observeCanonicalWalletSettlement(bridge *CanonicalWalletBridge, requestID s
 	if billingResult != nil && billingResult.NewBalance != nil {
 		localBalance = *billingResult.NewBalance
 	}
-	localBalanceAfterUnits, balanceErr := canonicalWalletUnitsFromCNY(localBalance)
+	localBalanceAfterUnits, balanceErr := canonicalWalletUnitsFromUSD(localBalance)
 	var localBalanceAfterPtr *int64
 	if balanceErr == nil {
 		localBalanceAfterPtr = &localBalanceAfterUnits
 	}
 	// Pass the raw BillingCurrency through and let ObserveSettlement's own
-	// RequireCNYBillingCurrency be the single authoritative boundary —
-	// coercing here first would force every value to "CNY" before that
-	// check ever runs, so it could never reject a real non-CNY user.
+	// RequireUSDBillingCurrency be the single authoritative boundary —
+	// coercing here first would force every value to "USD" before that
+	// check ever runs, so it could never reject a real non-USD user.
 	return bridge.ObserveSettlement(CanonicalWalletSettlementEvent{
 		GatewayRequestID: requestID, PlatformUserID: user.PlatformUserID, Currency: user.BillingCurrency,
 		AmountUnits: amountUnits, LocalBalanceAfterUnits: localBalanceAfterPtr, OccurredAt: time.Now().UTC(),

@@ -144,7 +144,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	balanceNotifyService := service.ProvideBalanceNotifyService(emailService, settingRepository, accountRepository, notificationEmailService)
 	modelAuthorizationStore := repository.NewModelPublicationRepository(db)
 	governanceModeProvider := service.ProvideGovernanceModeProvider(db, configConfig)
-	exchangeRateService := service.NewExchangeRateService(configConfig)
+	exchangeRateService := service.NewUSDPriceService(configConfig)
 	billingSnapshotStore := repository.ProvideBillingSnapshotStore(db)
 	billingSnapshotService := service.NewBillingSnapshotService(configConfig, modelPricingResolver, billingService, exchangeRateService, billingSnapshotStore)
 	gatewayService := service.ProvideGatewayService(accountRepository, groupRepository, usageLogRepository, usageBillingRepository, userRepository, userSubscriptionRepository, userGroupRateRepository, gatewayCache, configConfig, db, canonicalWalletOutboxStore, schedulerSnapshotService, concurrencyService, billingService, rateLimitService, billingCacheService, identityService, httpUpstream, deferredService, claudeTokenProvider, sessionLimitCache, rpmCache, digestSessionStore, settingService, tlsFingerprintProfileService, channelService, modelPricingResolver, compositeRouteResolver, balanceNotifyService, serviceUserPlatformQuotaRepository, modelAuthorizationStore, governanceModeProvider, billingSnapshotService)

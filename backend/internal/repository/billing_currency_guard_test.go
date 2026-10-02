@@ -18,7 +18,10 @@ func TestUserRepositoryProfileUpdateDoesNotOverwriteCurrentBillingCurrency(t *te
 		Email: "stale-currency@example.com", Username: "before", PasswordHash: "hash",
 		Role: service.RoleUser, Status: service.StatusActive, BillingCurrency: service.CurrencyCNY,
 	}
+	user.BillingCurrency = service.CurrencyUSD
 	require.NoError(t, repo.Create(ctx, user))
+	require.NoError(t, client.User.UpdateOneID(user.ID).SetBillingCurrency(service.CurrencyCNY).Exec(ctx))
+	user.BillingCurrency = service.CurrencyCNY
 	stale, err := repo.GetByID(ctx, user.ID)
 	require.NoError(t, err)
 	require.NoError(t, client.User.UpdateOneID(user.ID).SetBillingCurrency(service.CurrencyUSD).Exec(ctx))
@@ -38,7 +41,10 @@ func TestUserRepositoryExplicitCurrencyChangeRechecksLockedBalance(t *testing.T)
 		Email: "currency-balance-guard@example.com", Username: "guard", PasswordHash: "hash",
 		Role: service.RoleUser, Status: service.StatusActive, BillingCurrency: service.CurrencyCNY,
 	}
+	user.BillingCurrency = service.CurrencyUSD
 	require.NoError(t, repo.Create(ctx, user))
+	require.NoError(t, client.User.UpdateOneID(user.ID).SetBillingCurrency(service.CurrencyCNY).Exec(ctx))
+	user.BillingCurrency = service.CurrencyCNY
 	stale, err := repo.GetByID(ctx, user.ID)
 	require.NoError(t, err)
 	require.NoError(t, client.User.UpdateOneID(user.ID).AddBalance(5).Exec(ctx))
@@ -59,7 +65,10 @@ func TestUserRepositoryExplicitCurrencyChangeRejectsPendingBalanceOrder(t *testi
 		Email: "currency-order-guard@example.com", Username: "guard", PasswordHash: "hash",
 		Role: service.RoleUser, Status: service.StatusActive, BillingCurrency: service.CurrencyCNY,
 	}
+	user.BillingCurrency = service.CurrencyUSD
 	require.NoError(t, repo.Create(ctx, user))
+	require.NoError(t, client.User.UpdateOneID(user.ID).SetBillingCurrency(service.CurrencyCNY).Exec(ctx))
+	user.BillingCurrency = service.CurrencyCNY
 	_, err := client.PaymentOrder.Create().
 		SetUserID(user.ID).SetUserEmail(user.Email).SetUserName(user.Username).
 		SetAmount(10).SetPayAmount(10).SetFeeRate(0).SetRechargeCode("PENDING-CURRENCY-GUARD").
@@ -84,7 +93,10 @@ func TestUserRepositoryExplicitCurrencyChangeRejectsRefundInProgress(t *testing.
 		Email: "currency-refund-guard@example.com", Username: "guard", PasswordHash: "hash",
 		Role: service.RoleUser, Status: service.StatusActive, BillingCurrency: service.CurrencyCNY,
 	}
+	user.BillingCurrency = service.CurrencyUSD
 	require.NoError(t, repo.Create(ctx, user))
+	require.NoError(t, client.User.UpdateOneID(user.ID).SetBillingCurrency(service.CurrencyCNY).Exec(ctx))
+	user.BillingCurrency = service.CurrencyCNY
 	_, err := client.PaymentOrder.Create().
 		SetUserID(user.ID).SetUserEmail(user.Email).SetUserName(user.Username).
 		SetAmount(10).SetPayAmount(10).SetFeeRate(0).SetRechargeCode("REFUNDING-CURRENCY-GUARD").
@@ -108,7 +120,10 @@ func TestRedeemAndPromoWalletLocksAreSQLiteCompatible(t *testing.T) {
 		Email: "sqlite-wallet-locks@example.com", Username: "wallet", PasswordHash: "hash",
 		Role: service.RoleUser, Status: service.StatusActive, BillingCurrency: service.CurrencyCNY,
 	}
+	user.BillingCurrency = service.CurrencyUSD
 	require.NoError(t, repo.Create(ctx, user))
+	require.NoError(t, client.User.UpdateOneID(user.ID).SetBillingCurrency(service.CurrencyCNY).Exec(ctx))
+	user.BillingCurrency = service.CurrencyCNY
 
 	redeemRepo := NewRedeemCodeRepository(client)
 	redeemSvc := service.NewRedeemService(redeemRepo, repo, nil, nil, nil, client, nil, nil)

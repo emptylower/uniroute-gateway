@@ -117,18 +117,23 @@ func TestOpenAIGatewayHandlerImages_ServerErrorFailsOverAndReturnsClearErrorWhen
 	accountRepo := openAIImagesFailoverAccountRepo{accounts: accounts}
 	upstream := &openAIImagesFailoverHTTPUpstream{}
 	cfg := &config.Config{RunMode: config.RunModeSimple}
-	gatewayService := service.NewOpenAIGatewayService(
-		accountRepo,
+	pricing := service.NewPricingService(cfg, nil)
+	pricing.SetModelPricingForTest("gpt-image-2", &service.LiteLLMModelPricing{InputCostPerToken: 0.000001, OutputCostPerToken: 0.000002, MaxOutputTokens: 4096, MaxInputTokens: 128000})
+	billing := service.NewBillingService(cfg, pricing)
+	usdFixtureCache1, usdFixtureSnapshots1 := newUSDHandlerTestWallet(t, cfg, billing)
+	gatewayService := service.NewOpenAIGatewayService(accountRepo,
 		nil,
 		nil,
 		nil,
 		nil,
 		nil,
+		usdFixtureCache1,
+		cfg,
 		nil,
-		cfg, nil, nil,
 		nil,
 		nil,
 		nil,
+		billing,
 		nil,
 		nil,
 		upstream,
@@ -140,7 +145,7 @@ func TestOpenAIGatewayHandlerImages_ServerErrorFailsOverAndReturnsClearErrorWhen
 		nil,
 		nil,
 		nil,
-		nil)
+		usdFixtureSnapshots1)
 	billingService := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil, nil)
 	t.Cleanup(billingService.Stop)
 	concurrencyService := service.NewConcurrencyService(nil)
@@ -157,7 +162,7 @@ func TestOpenAIGatewayHandlerImages_ServerErrorFailsOverAndReturnsClearErrorWhen
 	)
 	handler.maxAccountSwitches = 10
 
-	body := []byte(`{"model":"gpt-image-2","prompt":"draw a cat","quality":"high","size":"1536x1024"}`)
+	body := []byte(`{"model":"gpt-image-2","max_output_tokens":32,"prompt":"draw a cat","quality":"high","size":"1536x1024"}`)
 	core, observedLogs := observer.New(zap.DebugLevel)
 	requestCtx := logger.IntoContext(context.Background(), zap.New(core))
 	req := httptest.NewRequest(http.MethodPost, "/v1/images/generations", bytes.NewReader(body)).WithContext(requestCtx)
@@ -168,11 +173,11 @@ func TestOpenAIGatewayHandlerImages_ServerErrorFailsOverAndReturnsClearErrorWhen
 	c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{
 		ID:      99,
 		GroupID: &groupID,
-		Group: &service.Group{
+		Group: &service.Group{RateMultiplier: 1,
 			ID:                   groupID,
 			AllowImageGeneration: true,
 		},
-		User: &service.User{ID: 100},
+		User: &service.User{PlatformUserID: "usd-fixture-user", ID: 100},
 	})
 	c.Set(string(middleware2.ContextKeyUser), middleware2.AuthSubject{UserID: 100, Concurrency: 0})
 

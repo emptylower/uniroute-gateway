@@ -46759,6 +46759,10 @@ type UsageLogMutation struct {
 	addtotal_cost                *float64
 	actual_cost                  *float64
 	addactual_cost               *float64
+	actual_cost_usd              *float64
+	addactual_cost_usd           *float64
+	base_cost_usd                *float64
+	addbase_cost_usd             *float64
 	source_currency              *string
 	settlement_currency          *string
 	exchange_rate                *float64
@@ -48224,6 +48228,118 @@ func (m *UsageLogMutation) AddedActualCost() (r float64, exists bool) {
 func (m *UsageLogMutation) ResetActualCost() {
 	m.actual_cost = nil
 	m.addactual_cost = nil
+}
+
+// SetActualCostUsd sets the "actual_cost_usd" field.
+func (m *UsageLogMutation) SetActualCostUsd(f float64) {
+	m.actual_cost_usd = &f
+	m.addactual_cost_usd = nil
+}
+
+// ActualCostUsd returns the value of the "actual_cost_usd" field in the mutation.
+func (m *UsageLogMutation) ActualCostUsd() (r float64, exists bool) {
+	v := m.actual_cost_usd
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldActualCostUsd returns the old "actual_cost_usd" field's value of the UsageLog entity.
+// If the UsageLog object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UsageLogMutation) OldActualCostUsd(ctx context.Context) (v float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldActualCostUsd is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldActualCostUsd requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldActualCostUsd: %w", err)
+	}
+	return oldValue.ActualCostUsd, nil
+}
+
+// AddActualCostUsd adds f to the "actual_cost_usd" field.
+func (m *UsageLogMutation) AddActualCostUsd(f float64) {
+	if m.addactual_cost_usd != nil {
+		*m.addactual_cost_usd += f
+	} else {
+		m.addactual_cost_usd = &f
+	}
+}
+
+// AddedActualCostUsd returns the value that was added to the "actual_cost_usd" field in this mutation.
+func (m *UsageLogMutation) AddedActualCostUsd() (r float64, exists bool) {
+	v := m.addactual_cost_usd
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetActualCostUsd resets all changes to the "actual_cost_usd" field.
+func (m *UsageLogMutation) ResetActualCostUsd() {
+	m.actual_cost_usd = nil
+	m.addactual_cost_usd = nil
+}
+
+// SetBaseCostUsd sets the "base_cost_usd" field.
+func (m *UsageLogMutation) SetBaseCostUsd(f float64) {
+	m.base_cost_usd = &f
+	m.addbase_cost_usd = nil
+}
+
+// BaseCostUsd returns the value of the "base_cost_usd" field in the mutation.
+func (m *UsageLogMutation) BaseCostUsd() (r float64, exists bool) {
+	v := m.base_cost_usd
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldBaseCostUsd returns the old "base_cost_usd" field's value of the UsageLog entity.
+// If the UsageLog object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UsageLogMutation) OldBaseCostUsd(ctx context.Context) (v float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldBaseCostUsd is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldBaseCostUsd requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldBaseCostUsd: %w", err)
+	}
+	return oldValue.BaseCostUsd, nil
+}
+
+// AddBaseCostUsd adds f to the "base_cost_usd" field.
+func (m *UsageLogMutation) AddBaseCostUsd(f float64) {
+	if m.addbase_cost_usd != nil {
+		*m.addbase_cost_usd += f
+	} else {
+		m.addbase_cost_usd = &f
+	}
+}
+
+// AddedBaseCostUsd returns the value that was added to the "base_cost_usd" field in this mutation.
+func (m *UsageLogMutation) AddedBaseCostUsd() (r float64, exists bool) {
+	v := m.addbase_cost_usd
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetBaseCostUsd resets all changes to the "base_cost_usd" field.
+func (m *UsageLogMutation) ResetBaseCostUsd() {
+	m.base_cost_usd = nil
+	m.addbase_cost_usd = nil
 }
 
 // SetSourceCurrency sets the "source_currency" field.
@@ -49809,7 +49925,7 @@ func (m *UsageLogMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *UsageLogMutation) Fields() []string {
-	fields := make([]string, 0, 54)
+	fields := make([]string, 0, 56)
 	if m.user != nil {
 		fields = append(fields, usagelog.FieldUserID)
 	}
@@ -49887,6 +50003,12 @@ func (m *UsageLogMutation) Fields() []string {
 	}
 	if m.actual_cost != nil {
 		fields = append(fields, usagelog.FieldActualCost)
+	}
+	if m.actual_cost_usd != nil {
+		fields = append(fields, usagelog.FieldActualCostUsd)
+	}
+	if m.base_cost_usd != nil {
+		fields = append(fields, usagelog.FieldBaseCostUsd)
 	}
 	if m.source_currency != nil {
 		fields = append(fields, usagelog.FieldSourceCurrency)
@@ -50032,6 +50154,10 @@ func (m *UsageLogMutation) Field(name string) (ent.Value, bool) {
 		return m.TotalCost()
 	case usagelog.FieldActualCost:
 		return m.ActualCost()
+	case usagelog.FieldActualCostUsd:
+		return m.ActualCostUsd()
+	case usagelog.FieldBaseCostUsd:
+		return m.BaseCostUsd()
 	case usagelog.FieldSourceCurrency:
 		return m.SourceCurrency()
 	case usagelog.FieldSettlementCurrency:
@@ -50149,6 +50275,10 @@ func (m *UsageLogMutation) OldField(ctx context.Context, name string) (ent.Value
 		return m.OldTotalCost(ctx)
 	case usagelog.FieldActualCost:
 		return m.OldActualCost(ctx)
+	case usagelog.FieldActualCostUsd:
+		return m.OldActualCostUsd(ctx)
+	case usagelog.FieldBaseCostUsd:
+		return m.OldBaseCostUsd(ctx)
 	case usagelog.FieldSourceCurrency:
 		return m.OldSourceCurrency(ctx)
 	case usagelog.FieldSettlementCurrency:
@@ -50396,6 +50526,20 @@ func (m *UsageLogMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetActualCost(v)
 		return nil
+	case usagelog.FieldActualCostUsd:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetActualCostUsd(v)
+		return nil
+	case usagelog.FieldBaseCostUsd:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetBaseCostUsd(v)
+		return nil
 	case usagelog.FieldSourceCurrency:
 		v, ok := value.(string)
 		if !ok {
@@ -50639,6 +50783,12 @@ func (m *UsageLogMutation) AddedFields() []string {
 	if m.addactual_cost != nil {
 		fields = append(fields, usagelog.FieldActualCost)
 	}
+	if m.addactual_cost_usd != nil {
+		fields = append(fields, usagelog.FieldActualCostUsd)
+	}
+	if m.addbase_cost_usd != nil {
+		fields = append(fields, usagelog.FieldBaseCostUsd)
+	}
 	if m.addexchange_rate != nil {
 		fields = append(fields, usagelog.FieldExchangeRate)
 	}
@@ -50706,6 +50856,10 @@ func (m *UsageLogMutation) AddedField(name string) (ent.Value, bool) {
 		return m.AddedTotalCost()
 	case usagelog.FieldActualCost:
 		return m.AddedActualCost()
+	case usagelog.FieldActualCostUsd:
+		return m.AddedActualCostUsd()
+	case usagelog.FieldBaseCostUsd:
+		return m.AddedBaseCostUsd()
 	case usagelog.FieldExchangeRate:
 		return m.AddedExchangeRate()
 	case usagelog.FieldSourceCost:
@@ -50827,6 +50981,20 @@ func (m *UsageLogMutation) AddField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.AddActualCost(v)
+		return nil
+	case usagelog.FieldActualCostUsd:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddActualCostUsd(v)
+		return nil
+	case usagelog.FieldBaseCostUsd:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddBaseCostUsd(v)
 		return nil
 	case usagelog.FieldExchangeRate:
 		v, ok := value.(float64)
@@ -51150,6 +51318,12 @@ func (m *UsageLogMutation) ResetField(name string) error {
 		return nil
 	case usagelog.FieldActualCost:
 		m.ResetActualCost()
+		return nil
+	case usagelog.FieldActualCostUsd:
+		m.ResetActualCostUsd()
+		return nil
+	case usagelog.FieldBaseCostUsd:
+		m.ResetBaseCostUsd()
 		return nil
 	case usagelog.FieldSourceCurrency:
 		m.ResetSourceCurrency()

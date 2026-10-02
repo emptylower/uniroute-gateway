@@ -666,7 +666,7 @@ func (s *PaymentService) refundWallet(ctx context.Context, order *dbent.PaymentO
 	} else {
 		return nil, errors.New("refund wallet repository is unavailable")
 	}
-	if NormalizeUserBillingCurrency(wallet.BillingCurrency) != PaymentOrderCurrency(order) {
+	if strings.ToUpper(strings.TrimSpace(wallet.BillingCurrency)) != PaymentOrderCurrency(order) {
 		return nil, infraerrors.Conflict("REFUND_CURRENCY_MISMATCH", "refund order currency does not match wallet currency")
 	}
 	return wallet, nil
@@ -693,7 +693,7 @@ func (s *PaymentService) mutateRefundBalance(ctx context.Context, order *dbent.P
 		if err != nil {
 			return err
 		}
-		if NormalizeUserBillingCurrency(wallet.BillingCurrency) != PaymentOrderCurrency(order) {
+		if strings.ToUpper(strings.TrimSpace(wallet.BillingCurrency)) != PaymentOrderCurrency(order) {
 			return infraerrors.Conflict("REFUND_CURRENCY_MISMATCH", "refund order currency does not match wallet currency")
 		}
 		if _, err := tx.Client().User.UpdateOneID(order.UserID).AddBalance(delta).Save(txCtx); err != nil {

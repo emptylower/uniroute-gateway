@@ -20,7 +20,7 @@ type walletLeaseFixture struct {
 
 func loadWalletLeaseFixture(t *testing.T) walletLeaseFixture {
 	t.Helper()
-	raw, err := os.ReadFile("testdata/wallet-lease-cny-e8-v1.json")
+	raw, err := os.ReadFile("testdata/wallet-lease-usd-e8-v1.json")
 	require.NoError(t, err, "copy the shared fixture into testdata/ per this task's Step 5 before running this test")
 	var fixture walletLeaseFixture
 	require.NoError(t, json.Unmarshal(raw, &fixture))
@@ -45,22 +45,22 @@ func TestCanonicalWalletUnitsMatchesSharedFixtureRealisticCap(t *testing.T) {
 	_, err := fmt.Sscan(capCase.AmountUnits, &expectedUnits)
 	require.NoError(t, err)
 
-	// 1,000,000 CNY at this fixture's scale — confirm CreditsToUnits agrees
+	// 1,000,000 USD at this fixture's scale — confirm CreditsToUnits agrees
 	// with the SAME boundary value ShipAny's lease.test.ts already asserts
 	// against, closing the "referenced but not consumed" gap.
-	units, err := CreditsToUnits(expectedUnits / canonicalWalletUnitsPerCredit)
+	units, err := MulUnits(expectedUnits/canonicalWalletUnitsPerUSD, canonicalWalletUnitsPerUSD)
 	require.NoError(t, err)
 	require.Equal(t, expectedUnits, units)
 }
 
 func TestCanonicalWalletUnitsMatchesSharedFixtureOneCredit(t *testing.T) {
 	fixture := loadWalletLeaseFixture(t)
-	oneCreditCase := findFixtureCase(t, fixture, "one_credit")
+	oneCreditCase := findFixtureCase(t, fixture, "one_usd")
 	var expectedUnits int64
 	_, err := fmt.Sscan(oneCreditCase.AmountUnits, &expectedUnits)
 	require.NoError(t, err)
 
-	units, err := CreditsToUnits(1)
+	units, err := MulUnits(1, canonicalWalletUnitsPerUSD)
 	require.NoError(t, err)
 	require.Equal(t, expectedUnits, units, "1 ShipAny credit must equal the fixture's frozen one_credit amount_units exactly")
 }
