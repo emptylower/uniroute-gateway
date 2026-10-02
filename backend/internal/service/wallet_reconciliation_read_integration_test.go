@@ -41,6 +41,7 @@ func startWalletReconciliationTestPostgres(t testing.TB, ctx context.Context) *s
 		_, err = db.ExecContext(ctx, string(sqlContent))
 		require.NoError(t, err)
 	}
+	createWalletMediaTaskTableForTest(t, ctx, db) // see its comment: 217 itself needs users/api_keys
 	return db
 }
 
