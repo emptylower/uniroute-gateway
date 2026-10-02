@@ -2,9 +2,11 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/google/uuid"
 	"log/slog"
 	"net/http"
@@ -85,7 +87,26 @@ func (s *MediaTaskService) process(ctx context.Context, r *mediaTaskRecord) erro
 		}
 		handle, err := s.mediaAuthorization(ctx, r, snap, user)
 		if err != nil {
-			return s.failUnsubmitted(ctx, r, "AUTHORIZATION_REFUSED")
+			code, reason := "AUTHORIZATION_REFUSED", "authorization_unavailable"
+			refused, typed := AsAuthorizationRefused(err)
+			if typed {
+				switch refused.Reason {
+				case AuthorizationRefusalUnmarkedWrite, AuthorizationRefusalSnapshotMissing,
+					AuthorizationRefusalEstimateFailed, AuthorizationRefusalIdentityMissing,
+					AuthorizationRefusalCurrency, AuthorizationRefusalBalanceShortfall,
+					AuthorizationRefusalLeaseCapReached, AuthorizationRefusalLeaseUnavailable,
+					AuthorizationRefusalLiveStoreUnavailable:
+					reason = string(refused.Reason)
+				}
+			}
+			if errors.Is(err, ErrCanonicalWalletBalanceShortfall) || (typed && refused.Reason == AuthorizationRefusalBalanceShortfall) {
+				code, reason = "INSUFFICIENT_BALANCE", string(AuthorizationRefusalBalanceShortfall)
+			}
+			// Log only an opaque task reference and a bounded reason, never the
+			// cause (which can contain wallet identifiers or HTTP response bodies).
+			taskRef := fmt.Sprintf("%x", sha256.Sum256([]byte(r.ID)))[:12]
+			slog.Warn("media authorization refused", "task_ref", taskRef, "reason", reason)
+			return s.failUnsubmitted(ctx, r, code)
 		}
 
 		if err = s.store.checkpoint(ctx, r); err != nil {
@@ -288,6 +309,9 @@ func (s *MediaTaskService) failUnsubmitted(ctx context.Context, r *mediaTaskReco
 
 	r.ErrorCode = code
 	r.ErrorMessage = "The request could not be authorized."
+	if code == "INSUFFICIENT_BALANCE" {
+		r.ErrorMessage = "Insufficient USD balance. Top up in the console and retry."
+	}
 	zero := int64(0)
 	r.ActualUnits = &zero
 	if r.HeldUnits > 0 {
