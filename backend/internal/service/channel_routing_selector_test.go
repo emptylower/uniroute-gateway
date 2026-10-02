@@ -29,10 +29,15 @@ type channelRoutingAccessFake struct {
 
 type groupRoutingPreferencesFake struct {
 	disabled []int64
+	models   map[string]string
 }
 
 func (f *groupRoutingPreferencesFake) GetUserDisabledGroupIDs(context.Context, int64) ([]int64, error) {
 	return append([]int64(nil), f.disabled...), nil
+}
+
+func (f *groupRoutingPreferencesFake) GetUserModelChannelPreference(_ context.Context, _ int64, modelID string) (string, error) {
+	return f.models[modelID], nil
 }
 
 func (f *channelRoutingAccessFake) GetAvailableGroups(context.Context, int64) ([]Group, error) {
@@ -275,10 +280,11 @@ func TestIsChannelRoutingEndpoint(t *testing.T) {
 	for _, path := range []string{
 		"/responses", "/v1/responses", "/responses/compact", "/backend-api/codex/responses",
 		"/chat/completions", "/v1/chat/completions",
+		"/messages", "/v1/messages", "/v1beta/models/gemini-test:generateContent", "/antigravity/v1beta/models/gemini-test:streamGenerateContent",
 	} {
 		require.True(t, IsChannelRoutingEndpoint(path), path)
 	}
-	for _, path := range []string{"/v1/messages", "/v1/models", "/v1/images/generations"} {
+	for _, path := range []string{"/v1/models", "/v1/images/generations", "/v1beta/models", "/v1beta/models/gemini-test:countTokens"} {
 		require.False(t, IsChannelRoutingEndpoint(path), path)
 	}
 }

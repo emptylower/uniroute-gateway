@@ -153,7 +153,7 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 	for candidateIndex, candidate := range candidates {
 		candidateStartedAt := time.Now()
 		routedKey := candidate.Apply(apiKey)
-		applyRoutedCandidateContext(c, routedKey)
+		applyRoutedCandidateContext(c, routedKey, reqModel)
 		requestCtx = c.Request.Context()
 		channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(requestCtx, routedKey.GroupID, reqModel)
 		billingModel := reqModel

@@ -103,3 +103,25 @@ func TestAutomaticChannelRoutingMigrationExtendsConstraint(t *testing.T) {
 		require.Contains(t, sql, fragment)
 	}
 }
+
+func TestModelChannelPreferenceRepositoryScopesReadsAndSingleRowUpsert(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	repo := NewChannelPreferenceRepository(db)
+	mock.ExpectExec(`(?s)INSERT INTO user_model_channel_preferences.*ON CONFLICT \(user_id, model_id\) DO UPDATE.*channel = EXCLUDED.channel`).WithArgs(int64(42), "claude-a", "official").WillReturnResult(sqlmock.NewResult(1, 1))
+	require.NoError(t, repo.UpsertUserModelChannelPreference(context.Background(), 42, "claude-a", "official"))
+	mock.ExpectQuery(`SELECT channel FROM user_model_channel_preferences WHERE user_id = \$1 AND model_id = \$2`).WithArgs(int64(42), "claude-a").WillReturnRows(sqlmock.NewRows([]string{"channel"}).AddRow("official"))
+	choice, err := repo.GetUserModelChannelPreference(context.Background(), 42, "claude-a")
+	require.NoError(t, err)
+	require.Equal(t, "official", choice)
+	mock.ExpectQuery(`SELECT channel FROM user_model_channel_preferences WHERE user_id = \$1 AND model_id = \$2`).WithArgs(int64(43), "claude-a").WillReturnRows(sqlmock.NewRows([]string{"channel"}))
+	choice, err = repo.GetUserModelChannelPreference(context.Background(), 43, "claude-a")
+	require.NoError(t, err)
+	require.Empty(t, choice)
+	mock.ExpectQuery(`SELECT model_id, channel FROM user_model_channel_preferences WHERE user_id = \$1 ORDER BY model_id`).WithArgs(int64(42)).WillReturnRows(sqlmock.NewRows([]string{"model_id", "channel"}).AddRow("claude-a", "official").AddRow("claude-b", "cloud-vendor"))
+	choices, err := repo.GetUserModelChannelPreferences(context.Background(), 42)
+	require.NoError(t, err)
+	require.Equal(t, map[string]string{"claude-a": "official", "claude-b": "cloud-vendor"}, choices)
+	require.NoError(t, mock.ExpectationsWereMet())
+}

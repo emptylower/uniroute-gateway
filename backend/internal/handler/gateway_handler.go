@@ -101,6 +101,9 @@ func routedCandidateSubscription(
 	if anchor != nil && anchor.GroupID == routedKey.Group.ID {
 		return anchor, nil
 	}
+	if apiKeyService == nil {
+		return nil, service.ErrSubscriptionInvalid
+	}
 	return apiKeyService.GetActiveSubscriptionForGroup(ctx, routedKey.UserID, routedKey.Group.ID)
 }
 
@@ -112,7 +115,7 @@ func isRecoverableChannelBillingError(err error) bool {
 		errors.Is(err, service.ErrGroupRPMExceeded)
 }
 
-func applyRoutedCandidateContext(c *gin.Context, routedKey *service.APIKey) context.Context {
+func applyRoutedCandidateContext(c *gin.Context, routedKey *service.APIKey, model string) context.Context {
 	if c == nil || c.Request == nil || routedKey == nil || routedKey.Group == nil || !service.IsChannelRoutingMode(routedKey.RoutingMode) {
 		if c == nil || c.Request == nil {
 			return context.Background()
@@ -123,6 +126,8 @@ func applyRoutedCandidateContext(c *gin.Context, routedKey *service.APIKey) cont
 	ctx = context.WithValue(ctx, ctxkey.Group, routedKey.Group)
 	if routedKey.Group.Platform != service.PlatformComposite {
 		ctx = service.WithResolvedTargetPlatform(ctx, routedKey.Group.Platform)
+	} else if target, ok := service.DetectModelPlatform(model); ok {
+		ctx = service.WithResolvedTargetPlatform(ctx, target)
 	}
 	c.Request = c.Request.WithContext(ctx)
 	c.Set(string(middleware2.ContextKeyAPIKey), routedKey)
@@ -239,6 +244,11 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 	body = parsedReq.Body.Bytes()
 	reqModel := parsedReq.Model
 	reqStream := parsedReq.Stream
+	apiKey, err = bindFirstModelChannel(c, h.channelRoutingSelector, h.apiKeyService, apiKey, reqModel, service.ChannelRoutingFamilyAnthropic, h.gatewayService)
+	if err != nil {
+		h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "No available channel for this model")
+		return
+	}
 	ensureCompositeTargetPlatform(c, apiKey, reqModel)
 	reqLog = reqLog.With(zap.String("model", reqModel), zap.Bool("stream", reqStream))
 
@@ -999,6 +1009,10 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 							return
 						}
 						fallbackAPIKey := cloneAPIKeyWithGroup(apiKey, fallbackGroup)
+						if err := modelChannelGroupAllowed(c.Request.Context(), h.channelRoutingSelector, apiKey, reqModel, service.ChannelRoutingFamilyAnthropic, fallbackGroup.ID); err != nil {
+							_ = h.antigravityGatewayService.WriteMappedClaudeError(c, account, promptTooLongErr.StatusCode, promptTooLongErr.RequestID, promptTooLongErr.Body)
+							return
+						}
 						if err := h.billingCacheService.CheckBillingEligibility(c.Request.Context(), fallbackAPIKey.User, fallbackAPIKey, fallbackGroup, nil, service.PlatformFromAPIKey(fallbackAPIKey)); err != nil {
 							status, code, message, retryAfter := billingErrorDetails(err)
 							if retryAfter > 0 {
@@ -1010,6 +1024,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 						// 兜底重试按"直接请求兜底分组"处理：清除强制平台，允许按分组平台调度
 						ctx := context.WithValue(c.Request.Context(), ctxkey.ForcePlatform, "")
 						c.Request = c.Request.WithContext(ctx)
+						applyRoutedCandidateContext(c, fallbackAPIKey, reqModel)
 						currentAPIKey = fallbackAPIKey
 						currentSubscription = nil
 						fallbackUsed = true

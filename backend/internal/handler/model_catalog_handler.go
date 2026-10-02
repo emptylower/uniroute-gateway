@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"strings"
 	"time"
 
@@ -10,16 +11,27 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+type modelCatalogReader interface {
+	ListText(context.Context, int64, time.Time) ([]service.TextModelCatalogItem, error)
+	QuoteChannelCosts(context.Context, int64, time.Time, string) (service.ChannelCostQuote, error)
+}
+
 type ModelCatalogHandler struct {
-	catalog        *service.ModelCatalogService
+	catalog        modelCatalogReader
 	settingService *service.SettingService
+	preferences    *service.ChannelPreferenceService
 }
 
 func NewModelCatalogHandler(
 	catalog *service.ModelCatalogService,
 	settingService *service.SettingService,
+	preferences *service.ChannelPreferenceService,
 ) *ModelCatalogHandler {
-	return &ModelCatalogHandler{catalog: catalog, settingService: settingService}
+	h := &ModelCatalogHandler{settingService: settingService, preferences: preferences}
+	if catalog != nil {
+		h.catalog = catalog
+	}
+	return h
 }
 
 // List returns a channel-neutral model catalog for the authenticated user.

@@ -9,6 +9,7 @@ import (
 )
 
 type channelPreferenceRepoFake struct {
+	modelPreferences map[int64]map[string]string
 	defaults         []int64
 	disabledGroups   []int64
 	replacedKeyID    int64
@@ -19,6 +20,29 @@ type channelPreferenceRepoFake struct {
 	replacedDisabled []int64
 	apiKeyChannelIDs []int64
 	getKeyChannels   int
+}
+
+func (f *channelPreferenceRepoFake) GetUserModelChannelPreferences(_ context.Context, userID int64) (map[string]string, error) {
+	result := make(map[string]string)
+	for model, channel := range f.modelPreferences[userID] {
+		result[model] = channel
+	}
+	return result, nil
+}
+
+func (f *channelPreferenceRepoFake) GetUserModelChannelPreference(_ context.Context, userID int64, modelID string) (string, error) {
+	return f.modelPreferences[userID][modelID], nil
+}
+
+func (f *channelPreferenceRepoFake) UpsertUserModelChannelPreference(_ context.Context, userID int64, modelID, channel string) error {
+	if f.modelPreferences == nil {
+		f.modelPreferences = make(map[int64]map[string]string)
+	}
+	if f.modelPreferences[userID] == nil {
+		f.modelPreferences[userID] = make(map[string]string)
+	}
+	f.modelPreferences[userID][modelID] = channel
+	return nil
 }
 
 func (f *channelPreferenceRepoFake) GetAPIKeyChannelIDs(context.Context, int64, int64) ([]int64, error) {

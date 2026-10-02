@@ -432,7 +432,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	for candidateIndex, candidate := range candidates {
 		candidateStartedAt := time.Now()
 		routedKey := candidate.Apply(apiKey)
-		applyRoutedCandidateContext(c, routedKey)
+		applyRoutedCandidateContext(c, routedKey, reqModel)
 		if imageIntent && !service.GroupAllowsImageGeneration(routedKey.Group) {
 			imagePermissionFiltered = true
 			lastChannelErr = service.ErrNoChannelRoutingCandidate
@@ -1008,13 +1008,6 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		zap.Any("group_id", apiKey.GroupID),
 	)
 
-	// 检查分组是否允许 /v1/messages 调度
-	if !allowOpenAICompatibleMessagesDispatch(apiKey) {
-		h.anthropicErrorResponse(c, http.StatusForbidden, "permission_error",
-			"This group does not allow /v1/messages dispatch")
-		return
-	}
-
 	if !h.ensureResponsesDependencies(c, reqLog) {
 		return
 	}
@@ -1045,6 +1038,15 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		return
 	}
 	reqModel := modelResult.String()
+	apiKey, err = bindFirstModelChannel(c, h.channelRoutingSelector, h.apiKeyService, apiKey, reqModel, service.ChannelRoutingFamilyOpenAI, h.gatewayService)
+	if err != nil {
+		h.anthropicErrorResponse(c, http.StatusServiceUnavailable, "api_error", "No available channel for this model")
+		return
+	}
+	if !allowOpenAICompatibleMessagesDispatch(apiKey) {
+		h.anthropicErrorResponse(c, http.StatusForbidden, "permission_error", "This group does not allow /v1/messages dispatch")
+		return
+	}
 	ensureCompositeTargetPlatform(c, apiKey, reqModel)
 	if !openAICompatibleTextTargetAllowed(c, apiKey, reqModel) {
 		h.anthropicErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "Model is not supported by this OpenAI-compatible endpoint for composite groups")
@@ -1709,6 +1711,11 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "model is required in first response.create payload")
 		return
 	}
+	apiKey, err = bindFirstModelChannel(c, h.channelRoutingSelector, h.apiKeyService, apiKey, reqModel, service.ChannelRoutingFamilyOpenAI, h.gatewayService)
+	if err != nil {
+		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "No available channel for this model")
+		return
+	}
 	ensureCompositeTargetPlatform(c, apiKey, reqModel)
 	ctx = c.Request.Context()
 	if apiKey.Group != nil && apiKey.Group.Platform == service.PlatformComposite {
@@ -2053,6 +2060,12 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				model := strings.TrimSpace(originalModel)
 				if model == "" {
 					model = reqModel
+				}
+				if apiKey.GroupID == nil {
+					return "", service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "Reconnect to select the model channel", nil)
+				}
+				if err := modelChannelGroupAllowed(ctx, h.channelRoutingSelector, apiKey, model, service.ChannelRoutingFamilyOpenAI, *apiKey.GroupID); err != nil {
+					return "", service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "Model channel changed; reconnect to continue", err)
 				}
 				mapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(ctx, apiKey.GroupID, model)
 				mappedModelUnchanged := false

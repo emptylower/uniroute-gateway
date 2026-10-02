@@ -48,6 +48,41 @@ func TestGoogleAPIKeyAuthRejectsOversizedCredentialsBeforeLookup(t *testing.T) {
 	require.Equal(t, IngressRejectInvalidAPIKey, reason)
 }
 
+func TestGoogleModelChannelRoutingDefersAnchorGroupButPreservesAuthentication(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, test := range []struct {
+		name, path, keyStatus, userStatus string
+		enabled                           bool
+		status                            int
+	}{
+		{"generation dynamic", "/v1beta/models/gemini-a:generateContent", service.StatusActive, service.StatusActive, true, 200},
+		{"stream dynamic", "/v1beta/models/gemini-a:streamGenerateContent", service.StatusActive, service.StatusActive, true, 200},
+		{"feature off", "/v1beta/models/gemini-a:generateContent", service.StatusActive, service.StatusActive, false, 403},
+		{"metadata stays legacy", "/v1beta/models", service.StatusActive, service.StatusActive, true, 403},
+		{"disabled key", "/v1beta/models/gemini-a:generateContent", service.StatusDisabled, service.StatusActive, true, 401},
+		{"inactive owner", "/v1beta/models/gemini-a:generateContent", service.StatusActive, service.StatusDisabled, true, 401},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := &config.Config{RunMode: config.RunModeStandard}
+			cfg.Gateway.ChannelRoutingEnabled = test.enabled
+			key := &service.APIKey{ID: 1, UserID: 7, Key: "test-key", Status: test.keyStatus, RoutingMode: service.APIKeyRoutingModeAutoChannels, User: &service.User{ID: 7, Status: test.userStatus}, GroupID: new(int64)}
+			*key.GroupID = 999 // deleted compatibility anchor, never the selected billing group
+			keys := service.NewAPIKeyService(fakeAPIKeyRepo{getByKey: func(context.Context, string) (*service.APIKey, error) { clone := *key; return &clone, nil }}, nil, nil, nil, nil, nil, cfg)
+			r := gin.New()
+			r.Use(APIKeyAuthWithSubscriptionGoogle(keys, nil, cfg))
+			r.POST(test.path, func(c *gin.Context) {
+				require.Nil(t, c.Request.Context().Value(ctxkey.Group))
+				c.Status(http.StatusOK)
+			})
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPost, test.path, nil)
+			request.Header.Set("x-goog-api-key", key.Key)
+			r.ServeHTTP(recorder, request)
+			require.Equal(t, test.status, recorder.Code, recorder.Body.String())
+		})
+	}
+}
+
 func TestGoogleAPIKeyAuthMarksLookupBulkheadRejection(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	repo := fakeAPIKeyRepo{getByKey: func(context.Context, string) (*service.APIKey, error) {

@@ -328,7 +328,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	paymentWebhookHandler := handler.NewPaymentWebhookHandler(paymentService, registry)
 	availableChannelHandler := handler.NewAvailableChannelHandler(channelService, apiKeyService, settingService)
 	modelCatalogService := service.ProvideModelCatalogService(channelService, channelRoutingSelector, modelPricingResolver, accountRepository, exchangeRateService, modelAuthorizationStore, configConfig)
-	modelCatalogHandler := handler.NewModelCatalogHandler(modelCatalogService, settingService)
+	modelCatalogHandler := handler.NewModelCatalogHandler(modelCatalogService, settingService, channelPreferenceService)
 	imageTaskStore := repository.NewImageTaskStore(redisClient)
 	imageTaskService := service.ProvideImageTaskService(imageTaskStore, imageStorageSettingService)
 	asyncImageHandler := handler.NewAsyncImageHandler(imageTaskService, openAIGatewayHandler)

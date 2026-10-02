@@ -4,7 +4,10 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
+
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 )
 
 type ChannelPreferenceRepository interface {
@@ -14,6 +17,28 @@ type ChannelPreferenceRepository interface {
 	ReplaceUserDefaultChannels(ctx context.Context, userID int64, channelIDs []int64) error
 	GetUserDisabledGroupIDs(ctx context.Context, userID int64) ([]int64, error)
 	ReplaceUserDisabledGroups(ctx context.Context, userID int64, groupIDs []int64) error
+	GetUserModelChannelPreferences(ctx context.Context, userID int64) (map[string]string, error)
+	GetUserModelChannelPreference(ctx context.Context, userID int64, modelID string) (string, error)
+	UpsertUserModelChannelPreference(ctx context.Context, userID int64, modelID, channel string) error
+}
+
+const (
+	ModelChannelOfficial    = "official"
+	ModelChannelCloudVendor = "cloud-vendor"
+)
+
+func NormalizeModelChannelPreference(modelID, channel string) (string, error) {
+	model := modelCatalogKey(modelID)
+	if model == "" || len(model) > 200 || (channel != ModelChannelOfficial && channel != ModelChannelCloudVendor) {
+		return "", infraerrors.BadRequest("INVALID_MODEL_CHANNEL_PREFERENCE", "invalid model or channel")
+	}
+	for i, c := range model {
+		alphanumeric := (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+		if !alphanumeric && (i == 0 || !strings.ContainsRune("._:/-", c)) {
+			return "", infraerrors.BadRequest("INVALID_MODEL_CHANNEL_PREFERENCE", "invalid model ID")
+		}
+	}
+	return model, nil
 }
 
 type ChannelPreferences struct {
@@ -274,6 +299,30 @@ func (s *ChannelPreferenceService) SetDefaults(ctx context.Context, userID int64
 
 func (s *ChannelPreferenceService) GetUserDisabledGroupIDs(ctx context.Context, userID int64) ([]int64, error) {
 	return s.repo.GetUserDisabledGroupIDs(ctx, userID)
+}
+
+func (s *ChannelPreferenceService) GetUserModelChannelPreferences(ctx context.Context, userID int64) (map[string]string, error) {
+	return s.repo.GetUserModelChannelPreferences(ctx, userID)
+}
+
+func (s *ChannelPreferenceService) GetUserModelChannelPreference(ctx context.Context, userID int64, modelID string) (string, error) {
+	return s.repo.GetUserModelChannelPreference(ctx, userID, modelCatalogKey(modelID))
+}
+
+// The caller validates current catalogue availability before saving. A single
+// row upsert preserves other models, including concurrent writes from tabs.
+func (s *ChannelPreferenceService) SetUserModelChannelPreference(ctx context.Context, userID int64, modelID, channel string) (string, error) {
+	model, err := NormalizeModelChannelPreference(modelID, channel)
+	if err != nil {
+		return "", err
+	}
+	if err := s.repo.UpsertUserModelChannelPreference(ctx, userID, model, channel); err != nil {
+		return "", err
+	}
+	if s.invalidator != nil {
+		s.invalidator.InvalidateAuthCacheByUserID(ctx, userID)
+	}
+	return model, nil
 }
 
 func (s *ChannelPreferenceService) SetUserDisabledGroupIDs(ctx context.Context, userID int64, groupIDs []int64) ([]int64, error) {

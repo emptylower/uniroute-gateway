@@ -149,7 +149,7 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 	for candidateIndex, candidate := range candidates {
 		candidateStartedAt := time.Now()
 		routedKey := candidate.Apply(apiKey)
-		applyRoutedCandidateContext(c, routedKey)
+		applyRoutedCandidateContext(c, routedKey, reqModel)
 		channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), routedKey.GroupID, reqModel)
 		billingModel := reqModel
 		if channelMapping.Mapped {

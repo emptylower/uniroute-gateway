@@ -73,6 +73,7 @@ type ChannelRoutingAccess interface {
 
 type GroupRoutingPreferences interface {
 	GetUserDisabledGroupIDs(ctx context.Context, userID int64) ([]int64, error)
+	GetUserModelChannelPreference(ctx context.Context, userID int64, modelID string) (string, error)
 }
 
 type ChannelRoutingSelector struct {
@@ -129,6 +130,15 @@ func ChannelRoutingFamilyForPlatform(platform string) string {
 	}
 }
 
+func channelRoutingGroupFamily(platform, model string) string {
+	if platform == PlatformComposite {
+		if target, ok := DetectModelPlatform(model); ok {
+			return ChannelRoutingFamilyForPlatform(target)
+		}
+	}
+	return ChannelRoutingFamilyForPlatform(platform)
+}
+
 func channelRoutingFamilyForModel(model string) (string, bool) {
 	name := strings.ToLower(strings.TrimSpace(model))
 	switch {
@@ -154,6 +164,13 @@ func channelRoutingFamilyForModel(model string) (string, bool) {
 
 func IsChannelRoutingEndpoint(path string) bool {
 	path = "/" + strings.Trim(strings.TrimSpace(path), "/")
+	if path == "/messages" || path == "/v1/messages" {
+		return true
+	}
+	if (strings.HasPrefix(path, "/v1beta/models/") || strings.HasPrefix(path, "/antigravity/v1beta/models/")) &&
+		(strings.HasSuffix(path, ":generateContent") || strings.HasSuffix(path, ":streamGenerateContent")) {
+		return true
+	}
 	return path == "/responses" || strings.HasPrefix(path, "/responses/") ||
 		path == "/v1/responses" || strings.HasPrefix(path, "/v1/responses/") ||
 		path == "/backend-api/codex/responses" || strings.HasPrefix(path, "/backend-api/codex/responses/") ||
@@ -162,6 +179,10 @@ func IsChannelRoutingEndpoint(path string) bool {
 
 func (s *ChannelRoutingSelector) enabled() bool {
 	return s != nil && s.cfg != nil && s.cfg.Gateway.ChannelRoutingEnabled
+}
+
+func (s *ChannelRoutingSelector) UsesChannelRouting(apiKey *APIKey) bool {
+	return s.enabled() && apiKey != nil && IsChannelRoutingMode(apiKey.RoutingMode)
 }
 
 func (s *ChannelRoutingSelector) maxCandidates() int {
@@ -239,6 +260,16 @@ func channelRoutingRate(apiKey *APIKey, group Group, overrides map[int64]float64
 }
 
 func (s *ChannelRoutingSelector) Candidates(ctx context.Context, apiKey *APIKey, model, handlerFamily string, now time.Time) ([]ChannelRoutingCandidate, error) {
+	return s.candidates(ctx, apiKey, model, handlerFamily, now, true)
+}
+
+// AllowedCandidates keeps every authorized group for an established session or
+// configured fallback. Candidate ranking limits apply only to new routing.
+func (s *ChannelRoutingSelector) AllowedCandidates(ctx context.Context, apiKey *APIKey, model, handlerFamily string, now time.Time) ([]ChannelRoutingCandidate, error) {
+	return s.candidates(ctx, apiKey, model, handlerFamily, now, false)
+}
+
+func (s *ChannelRoutingSelector) candidates(ctx context.Context, apiKey *APIKey, model, handlerFamily string, now time.Time, limit bool) ([]ChannelRoutingCandidate, error) {
 	if !s.enabled() || apiKey == nil || !IsChannelRoutingMode(apiKey.RoutingMode) {
 		return s.legacy(apiKey)
 	}
@@ -252,7 +283,15 @@ func (s *ChannelRoutingSelector) Candidates(ctx context.Context, apiKey *APIKey,
 		selectedSet[id] = struct{}{}
 	}
 	disabledGroupIDs := make(map[int64]struct{})
+	modelPreference := ""
 	if s.groupPreferences != nil {
+		var err error
+		if strings.TrimSpace(model) != "" {
+			modelPreference, err = s.groupPreferences.GetUserModelChannelPreference(ctx, apiKey.UserID, modelCatalogKey(model))
+			if err != nil {
+				return nil, err
+			}
+		}
 		disabled, err := s.groupPreferences.GetUserDisabledGroupIDs(ctx, apiKey.UserID)
 		if err != nil {
 			return nil, err
@@ -275,7 +314,7 @@ func (s *ChannelRoutingSelector) Candidates(ctx context.Context, apiKey *APIKey,
 		return nil, err
 	}
 	if automatic {
-		return s.automaticCandidates(ctx, apiKey, groups, rates, disabledGroupIDs, model, handlerFamily, now)
+		return s.automaticCandidates(ctx, apiKey, groups, rates, disabledGroupIDs, modelPreference, model, handlerFamily, now, limit)
 	}
 	channels, err := s.channels.ListAvailable(ctx)
 	if err != nil {
@@ -292,10 +331,11 @@ func (s *ChannelRoutingSelector) Candidates(ctx context.Context, apiKey *APIKey,
 		}
 		for _, ref := range channel.Groups {
 			group, ok := groupByID[ref.ID]
-			if !ok || ChannelRoutingFamilyForPlatform(group.Platform) != handlerFamily {
+			if !ok || channelRoutingGroupFamily(group.Platform, model) != handlerFamily || !groupServesModel(group.Platform, model) {
 				continue
 			}
-			if _, disabled := disabledGroupIDs[group.ID]; disabled {
+			rate := channelRoutingRate(apiKey, group, rates) * group.PeakMultiplierAt(now)
+			if !modelChannelAllowsGroup(modelPreference, disabledGroupIDs, group.ID, rate) {
 				continue
 			}
 			if group.ClaudeCodeOnly || s.channels.IsModelRestricted(ctx, group.ID, model) {
@@ -304,11 +344,10 @@ func (s *ChannelRoutingSelector) Candidates(ctx context.Context, apiKey *APIKey,
 			if !s.isModelEligibleForChannel(ctx, channel.ID, model) {
 				continue
 			}
-			rate := channelRoutingRate(apiKey, group, rates)
 			candidates = append(candidates, ChannelRoutingCandidate{
 				ChannelID:           channel.ID,
 				Group:               group,
-				EffectiveMultiplier: rate * group.PeakMultiplierAt(now),
+				EffectiveMultiplier: rate,
 			})
 		}
 	}
@@ -330,10 +369,24 @@ func (s *ChannelRoutingSelector) Candidates(ctx context.Context, apiKey *APIKey,
 		}
 		return candidates[i].Group.ID < candidates[j].Group.ID
 	})
-	if max := s.maxCandidates(); len(candidates) > max {
+	if max := s.maxCandidates(); limit && len(candidates) > max {
 		candidates = candidates[:max]
 	}
 	return candidates, nil
+}
+
+func modelChannelAllowsGroup(choice string, disabled map[int64]struct{}, groupID int64, multiplier float64) bool {
+	switch choice {
+	case ModelChannelOfficial:
+		return multiplier >= 1
+	case ModelChannelCloudVendor:
+		// Preserve cheapest-first routing with official fallbacks, overriding
+		// the legacy defaults only for the specifically selected model.
+		return true
+	default:
+		_, blocked := disabled[groupID]
+		return !blocked
+	}
 }
 
 // automaticCandidates treats every currently accessible routing group as a
@@ -346,9 +399,11 @@ func (s *ChannelRoutingSelector) automaticCandidates(
 	groups []Group,
 	rates map[int64]float64,
 	disabledGroupIDs map[int64]struct{},
+	modelPreference string,
 	model string,
 	handlerFamily string,
 	now time.Time,
+	limit bool,
 ) ([]ChannelRoutingCandidate, error) {
 	channelByGroup := make(map[int64]int64)
 	if s.channels != nil {
@@ -371,10 +426,11 @@ func (s *ChannelRoutingSelector) automaticCandidates(
 	candidates := make([]ChannelRoutingCandidate, 0, len(groups))
 	for i := range groups {
 		group := groups[i]
-		if ChannelRoutingFamilyForPlatform(group.Platform) != handlerFamily {
+		if channelRoutingGroupFamily(group.Platform, model) != handlerFamily || !groupServesModel(group.Platform, model) {
 			continue
 		}
-		if _, disabled := disabledGroupIDs[group.ID]; disabled {
+		rate := channelRoutingRate(apiKey, group, rates) * group.PeakMultiplierAt(now)
+		if !modelChannelAllowsGroup(modelPreference, disabledGroupIDs, group.ID, rate) {
 			continue
 		}
 		if group.ClaudeCodeOnly || (s.channels != nil && s.channels.IsModelRestricted(ctx, group.ID, model)) {
@@ -383,11 +439,10 @@ func (s *ChannelRoutingSelector) automaticCandidates(
 		if !s.isModelEligibleForChannel(ctx, channelByGroup[group.ID], model) {
 			continue
 		}
-		rate := channelRoutingRate(apiKey, group, rates)
 		candidates = append(candidates, ChannelRoutingCandidate{
 			ChannelID:           channelByGroup[group.ID],
 			Group:               group,
-			EffectiveMultiplier: rate * group.PeakMultiplierAt(now),
+			EffectiveMultiplier: rate,
 		})
 	}
 	if len(candidates) == 0 {
@@ -405,7 +460,7 @@ func (s *ChannelRoutingSelector) automaticCandidates(
 		}
 		return candidates[i].Group.ID < candidates[j].Group.ID
 	})
-	if max := s.maxCandidates(); len(candidates) > max {
+	if max := s.maxCandidates(); limit && len(candidates) > max {
 		candidates = candidates[:max]
 	}
 	return candidates, nil

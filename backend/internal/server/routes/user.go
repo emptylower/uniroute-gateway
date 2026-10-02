@@ -98,6 +98,8 @@ func RegisterUserRoutes(
 		user.PUT("/channel-preferences", h.APIKey.PutDefaultChannelPreferences)
 		user.GET("/group-preferences", h.APIKey.GetGroupPreferences)
 		user.PUT("/group-preferences", h.APIKey.PutGroupPreferences)
+		user.GET("/model-channel-preferences", h.ModelCatalog.GetModelChannelPreferences)
+		user.PUT("/model-channel-preferences", h.ModelCatalog.PutModelChannelPreferences)
 
 		// 使用记录（聚合统计属重查询，叠加更严格的按用户限流）
 		usage := authenticated.Group("/usage")

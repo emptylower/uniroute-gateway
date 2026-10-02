@@ -156,18 +156,23 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 		zap.Any("group_id", apiKey.GroupID),
 	)
 
-	// 检查平台：优先使用强制平台（/antigravity 路由，中间件已设置 request.Context），否则要求 gemini 分组
-	if !middleware.HasForcePlatform(c) {
-		if effectiveAPIKeyPlatform(c, apiKey) != service.PlatformGemini {
-			googleError(c, http.StatusBadRequest, "API key group platform is not gemini")
-			return
-		}
-	}
-
 	modelName, action, err := parseGeminiModelAction(strings.TrimPrefix(c.Param("modelAction"), "/"))
 	if err != nil {
 		googleError(c, http.StatusNotFound, err.Error())
 		return
+	}
+	apiKey, err = bindFirstModelChannel(c, h.channelRoutingSelector, h.apiKeyService, apiKey, modelName, service.ChannelRoutingFamilyAnthropic, h.gatewayService)
+	if err != nil {
+		googleError(c, http.StatusServiceUnavailable, "No available channel for this model")
+		return
+	}
+	ensureCompositeTargetPlatform(c, apiKey, modelName)
+	if !middleware.HasForcePlatform(c) {
+		platform := effectiveAPIKeyPlatform(c, apiKey)
+		if platform != service.PlatformGemini && platform != service.PlatformAntigravity {
+			googleError(c, http.StatusBadRequest, "API key group cannot serve Gemini models")
+			return
+		}
 	}
 	if resolvedModel, ok := service.ResolvedUpstreamModelFromContext(c.Request.Context()); ok && strings.TrimSpace(resolvedModel) != "" {
 		modelName = strings.TrimSpace(resolvedModel)

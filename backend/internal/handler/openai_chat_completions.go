@@ -133,7 +133,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 	for candidateIndex, candidate := range candidates {
 		candidateStartedAt := time.Now()
 		routedKey := candidate.Apply(apiKey)
-		applyRoutedCandidateContext(c, routedKey)
+		applyRoutedCandidateContext(c, routedKey, reqModel)
 		candidateSubscription, err := routedCandidateSubscription(c.Request.Context(), h.apiKeyService, routedKey, subscription)
 		if err != nil {
 			h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "server_error", "Unable to validate channel subscription", streamStarted)

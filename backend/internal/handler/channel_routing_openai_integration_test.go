@@ -83,6 +83,18 @@ func (r channelRoutingAccountRepo) ListSchedulableByPlatform(_ context.Context, 
 	return r.forGroup(0, platform), nil
 }
 
+func (r channelRoutingAccountRepo) ListModelAvailabilityCandidates(_ context.Context, groupID *int64, platforms []string, _ bool) ([]service.Account, error) {
+	var id int64
+	if groupID != nil {
+		id = *groupID
+	}
+	var accounts []service.Account
+	for _, platform := range platforms {
+		accounts = append(accounts, r.forGroup(id, platform)...)
+	}
+	return accounts, nil
+}
+
 func (r channelRoutingAccountRepo) ListSchedulableUngroupedByPlatform(_ context.Context, platform string) ([]service.Account, error) {
 	return r.forGroup(0, platform), nil
 }

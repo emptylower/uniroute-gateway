@@ -113,7 +113,8 @@ func APIKeyAuthWithSubscriptionGoogle(apiKeyService *service.APIKeyService, subs
 			abortWithGoogleError(c, 401, "User account is not active")
 			return
 		}
-		if code, message, ok := validateAPIKeyGroupAvailable(apiKey); !ok {
+		dynamicChannelRouting := cfg.Gateway.ChannelRoutingEnabled && service.IsChannelRoutingMode(apiKey.RoutingMode) && service.IsChannelRoutingEndpoint(c.Request.URL.Path)
+		if code, message, ok := validateAPIKeyGroupAvailable(apiKey); !dynamicChannelRouting && !ok {
 			service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonAPIKeyGroupUnavailable)
 			if code == "GROUP_DELETED" {
 				MarkIngressRejected(c, IngressRejectGroupDeleted)
@@ -124,7 +125,7 @@ func APIKeyAuthWithSubscriptionGoogle(apiKeyService *service.APIKeyService, subs
 			return
 		}
 		// 专属分组授权校验：用户对该专属分组的授权被撤销后应拒绝（与主中间件一致，防止越权）。
-		if !validateAPIKeyGroupAllowed(apiKey) {
+		if !dynamicChannelRouting && !validateAPIKeyGroupAllowed(apiKey) {
 			service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonAPIKeyGroupUnavailable)
 			MarkIngressRejected(c, IngressRejectGroupNotAllowed)
 			abortWithGoogleError(c, 403, "API Key 所属专属分组不再允许当前用户使用")
@@ -141,7 +142,9 @@ func APIKeyAuthWithSubscriptionGoogle(apiKeyService *service.APIKeyService, subs
 				Concurrency: apiKey.User.Concurrency,
 			})
 			c.Set(string(ContextKeyUserRole), apiKey.User.Role)
-			setGroupContext(c, apiKey.Group)
+			if !dynamicChannelRouting {
+				setGroupContext(c, apiKey.Group)
+			}
 			_ = apiKeyService.TouchLastUsed(c.Request.Context(), apiKey.ID)
 			c.Next()
 			return
@@ -167,7 +170,7 @@ func APIKeyAuthWithSubscriptionGoogle(apiKeyService *service.APIKeyService, subs
 			return
 		}
 
-		isSubscriptionType := apiKey.Group != nil && apiKey.Group.IsSubscriptionType()
+		isSubscriptionType := !dynamicChannelRouting && apiKey.Group != nil && apiKey.Group.IsSubscriptionType()
 		if isSubscriptionType && subscriptionService != nil {
 			subscription, err := subscriptionService.GetActiveSubscription(
 				c.Request.Context(),
@@ -201,7 +204,7 @@ func APIKeyAuthWithSubscriptionGoogle(apiKeyService *service.APIKeyService, subs
 			}
 
 			c.Set(string(ContextKeySubscription), subscription)
-		} else {
+		} else if !dynamicChannelRouting {
 			if apiKeyBalanceBelowAuthThreshold(apiKey.User.Balance, cfg) {
 				abortWithGoogleError(c, 403, "Insufficient account balance")
 				return
@@ -214,7 +217,9 @@ func APIKeyAuthWithSubscriptionGoogle(apiKeyService *service.APIKeyService, subs
 			Concurrency: apiKey.User.Concurrency,
 		})
 		c.Set(string(ContextKeyUserRole), apiKey.User.Role)
-		setGroupContext(c, apiKey.Group)
+		if !dynamicChannelRouting {
+			setGroupContext(c, apiKey.Group)
+		}
 		_ = apiKeyService.TouchLastUsed(c.Request.Context(), apiKey.ID)
 		c.Next()
 	}

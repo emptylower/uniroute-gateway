@@ -20,7 +20,7 @@ func TestListChannelCostsAcceptsCurrencyAndDisplayCurrencyAlias(t *testing.T) {
 	cfg.Billing.ExchangeRate.BootstrapUSDToCNY = 7.2
 	fx := service.NewExchangeRateService(cfg)
 	catalog := service.NewModelCatalogService(nil, nil, nil, nil, fx)
-	handler := NewModelCatalogHandler(catalog, nil)
+	handler := NewModelCatalogHandler(catalog, nil, nil)
 
 	tests := []struct {
 		name       string
@@ -68,7 +68,7 @@ func TestListChannelCostsAcceptsCurrencyAndDisplayCurrencyAlias(t *testing.T) {
 
 func TestListChannelCostsRejectsUnsupportedCurrency(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	handler := NewModelCatalogHandler(nil, nil)
+	handler := NewModelCatalogHandler(nil, nil, nil)
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/v1/models/channel-costs?currency=EUR", nil)

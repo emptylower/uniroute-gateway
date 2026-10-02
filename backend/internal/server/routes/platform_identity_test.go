@@ -450,6 +450,8 @@ func TestPlatformIdentityRouteContractIsExplicitAllowlist(t *testing.T) {
 		"GET /api/internal/v1/users/:platform_user_id/usage",
 		"GET /api/internal/v1/users/:platform_user_id/channel-preferences",
 		"PUT /api/internal/v1/users/:platform_user_id/channel-preferences",
+		"GET /api/internal/v1/users/:platform_user_id/model-channel-preferences",
+		"PUT /api/internal/v1/users/:platform_user_id/model-channel-preferences",
 		"POST /api/internal/v1/users/:platform_user_id/keys",
 		"POST /api/internal/v1/users/:platform_user_id/keys/:platform_key_id/revoke",
 		"GET /api/internal/v1/gateway-admin/:platform_user_id/accounts",

@@ -59,6 +59,7 @@ func RegisterPlatformIdentityRoutes(
 	read.GET("/models/channel-costs", h.ModelCatalog.ListChannelCosts)
 	read.GET("/channel-preferences", h.APIKey.GetDefaultChannelPreferences)
 	read.GET("/group-preferences", h.APIKey.GetGroupPreferences)
+	read.GET("/model-channel-preferences", h.ModelCatalog.GetModelChannelPreferences)
 	read.GET("/usage", h.Usage.List)
 	read.GET("/usage/errors", h.Usage.ListErrors)
 	read.GET("/usage/errors/:id", h.Usage.GetErrorDetail)
@@ -73,6 +74,7 @@ func RegisterPlatformIdentityRoutes(
 	preferences.Use(middleware.RequirePlatformAssertion(cfg, service.PlatformPreferencesWriteScope, redisClient), resolveUser, gin.HandlerFunc(auditLog))
 	preferences.PUT("/channel-preferences", h.APIKey.PutDefaultChannelPreferences)
 	preferences.PUT("/group-preferences", h.APIKey.PutGroupPreferences)
+	preferences.PUT("/model-channel-preferences", h.ModelCatalog.PutModelChannelPreferences)
 
 	if h.PlatformAPIKey != nil {
 		keys := r.Group(base)
