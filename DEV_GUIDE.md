@@ -34,43 +34,58 @@
 ### 开发工具
 
 ```bash
-# golangci-lint v2.7
-go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.7
+# golangci-lint v2.9（与 CI 一致）
+go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.9.0
 
-# pnpm (前端包管理)
-npm install -g pnpm
+# pnpm 9（前端包管理，与 CI 一致）
+npm install -g pnpm@9
 ```
 
 ## 三、CI/CD 流水线
 
+**GitHub 是唯一的真相源**：代码以 GitHub `main` 为准，部署从 GitHub 拉取。CI 红灯不合并。
+
 ### GitHub Actions Workflows
 
-| Workflow | 触发条件 | 检查内容 |
-|----------|----------|----------|
-| **backend-ci.yml** | push, pull_request | 单元测试 + 集成测试 + golangci-lint v2.7 |
-| **security-scan.yml** | push, pull_request, 每周一 | govulncheck + gosec + pnpm audit |
-| **release.yml** | tag `v*` | 构建发布（PR 不触发） |
+| Workflow | 触发条件 | 检查内容 | 是否阻塞合并 |
+|----------|----------|----------|--------------|
+| **backend-ci.yml** `shell` | push, pull_request | deploy 脚本测试（macos-15） | 是 |
+| **backend-ci.yml** `test` | push, pull_request | 后端单元测试 + 集成测试 | 是 |
+| **backend-ci.yml** `golangci-lint` | push, pull_request | golangci-lint v2.9，**只拦新增问题**（`only-new-issues`） | 是 |
+| **backend-ci.yml** `frontend` | push, pull_request | `make test-frontend`（lint + typecheck + 关键 vitest） | 是 |
+| **security-scan.yml** | push, pull_request, 每周一 | govulncheck + pnpm audit | **否，只告警** |
+| **release.yml** | tag `v*` | 构建发布（PR 不触发） | - |
 
 ### CI 要求
 
-- Go 版本必须是 **1.25.7**
+- Go 版本必须是 **1.26.5**（`go.mod` 与各 workflow 里的 `grep go1.26.5` 同步升级）
 - 前端使用 `pnpm install --frozen-lockfile`，必须提交 `pnpm-lock.yaml`
+- 历史遗留的 lint 问题已作为基线保留；**新改动不得引入新的 lint 问题**，不要为了过 CI 关掉 `only-new-issues`
+- 安全扫描失败只产生警告注解和运行摘要，不会让 CI 变红；看到警告请在合适时机升级依赖或登记 `.github/audit-exceptions.yml`（必须带 `expires_on`）
 
-### 本地测试命令
+### 本地复现 CI（提交前跑一遍）
 
 ```bash
 # 后端单元测试
 cd backend && go test -tags=unit ./...
 
-# 后端集成测试
+# 后端集成测试（需要 Docker；本机没有 Docker 时以 CI 为准）
 cd backend && go test -tags=integration ./...
 
 # 代码质量检查
-cd backend && golangci-lint run ./...
+# 必须用 Go 1.26.5 工具链：golangci-lint 2.9 读不懂 Go 1.27 的导出数据，会报
+# "could not import os ... export data version 4 is greater than maximum supported version 2"
+cd backend && GOTOOLCHAIN=go1.26.5 golangci-lint run ./...
 
-# 前端依赖安装（必须用 pnpm）
-cd frontend && pnpm install
+# 前端（必须用 pnpm）
+cd frontend && pnpm install --frozen-lockfile && cd .. && make test-frontend
 ```
+
+### 修 CI 红灯的原则
+
+- 先判断是**测试过时**还是**代码有 bug**，不要为了变绿直接放宽断言。
+- 涉及权限、计费、钱包结算的测试，改断言必须说明原因并经人确认。
+- 本机 Go 版本比 CI 新时，用 `GOTOOLCHAIN=go1.26.5` 对齐，避免"本地过、CI 挂"。
 
 ## 四、常见坑点 & 解决方案
 
@@ -238,7 +253,7 @@ git add ent/       # 生成的文件也要提交
 
 - [ ] `go test -tags=unit ./...` 通过
 - [ ] `go test -tags=integration ./...` 通过
-- [ ] `golangci-lint run ./...` 无新增问题
+- [ ] `GOTOOLCHAIN=go1.26.5 golangci-lint run ./...` 无新增问题
 - [ ] `pnpm-lock.yaml` 已同步（如果改了 package.json）
 - [ ] 所有 test stub 补全新接口方法（如果改了 interface）
 - [ ] Ent 生成的代码已提交（如果改了 schema）
