@@ -2,6 +2,7 @@ name: CI
 
 on:
   push:
+    branches: [main] # feature branches are covered by their pull_request run
   pull_request:
 
 permissions:
