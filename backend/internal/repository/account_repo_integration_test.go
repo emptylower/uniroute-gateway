@@ -140,11 +140,15 @@ func (s *AccountRepoSuite) SetupTest() {
 	tx := testEntTx(s.T())
 	s.client = tx.Client()
 	s.repo = newAccountRepositoryWithSQL(s.client, tx, nil)
+	s.dropSeededMediaProvider(tx)
+}
 
-	// Migration 217 seeds the managed KIE provider account. The list/count tests below
-	// assert exact totals against an otherwise empty table, so drop the seed inside this
-	// test's transaction (it is rolled back at cleanup; the provider row references it
-	// with ON DELETE RESTRICT and goes first).
+// dropSeededMediaProvider removes the managed KIE provider account that migration 217
+// seeds. The list/count tests assert exact totals against an otherwise empty table, so it
+// is dropped inside the test's own transaction (rolled back at cleanup). The provider row
+// references the account with ON DELETE RESTRICT, so it goes first. Tests that open
+// their own transaction must call this too.
+func (s *AccountRepoSuite) dropSeededMediaProvider(tx *dbent.Tx) {
 	_, err := tx.ExecContext(s.ctx, `DELETE FROM gateway_media_provider`)
 	s.Require().NoError(err, "remove seeded media provider binding")
 	_, err = tx.ExecContext(s.ctx, `DELETE FROM accounts WHERE extra->>'gateway_media_provider' = 'kie'`)
@@ -611,6 +615,7 @@ func (s *AccountRepoSuite) TestListWithFilters() {
 			client := tx.Client()
 			repo := newAccountRepositoryWithSQL(client, tx, nil)
 			ctx := context.Background()
+			s.dropSeededMediaProvider(tx)
 
 			tt.setup(client)
 

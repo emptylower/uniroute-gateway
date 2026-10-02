@@ -38,6 +38,7 @@ func TestUsageBillingRepositoryApply_DeduplicatesBalanceBilling(t *testing.T) {
 
 	requestID := uuid.NewString()
 	cmd := &service.UsageBillingCommand{
+		SettlementCurrency:  service.CurrencyCNY, // currency is required: an unknown one fails closed
 		RequestID:           requestID,
 		APIKeyID:            apiKey.ID,
 		UserID:              user.ID,
@@ -146,18 +147,20 @@ func TestUsageBillingRepositoryApply_RequestFingerprintConflict(t *testing.T) {
 
 	requestID := uuid.NewString()
 	_, err := repo.Apply(ctx, &service.UsageBillingCommand{
-		RequestID:   requestID,
-		APIKeyID:    apiKey.ID,
-		UserID:      user.ID,
-		BalanceCost: 1.25,
+		SettlementCurrency: service.CurrencyCNY, // currency is required: an unknown one fails closed
+		RequestID:          requestID,
+		APIKeyID:           apiKey.ID,
+		UserID:             user.ID,
+		BalanceCost:        1.25,
 	})
 	require.NoError(t, err)
 
 	_, err = repo.Apply(ctx, &service.UsageBillingCommand{
-		RequestID:   requestID,
-		APIKeyID:    apiKey.ID,
-		UserID:      user.ID,
-		BalanceCost: 2.50,
+		SettlementCurrency: service.CurrencyCNY, // currency is required: an unknown one fails closed
+		RequestID:          requestID,
+		APIKeyID:           apiKey.ID,
+		UserID:             user.ID,
+		BalanceCost:        2.50,
 	})
 	require.ErrorIs(t, err, service.ErrUsageBillingRequestConflict)
 }
@@ -339,10 +342,11 @@ func TestUsageBillingRepositoryApply_DeduplicatesAgainstArchivedKey(t *testing.T
 
 	requestID := uuid.NewString()
 	cmd := &service.UsageBillingCommand{
-		RequestID:   requestID,
-		APIKeyID:    apiKey.ID,
-		UserID:      user.ID,
-		BalanceCost: 1.25,
+		SettlementCurrency: service.CurrencyCNY, // currency is required: an unknown one fails closed
+		RequestID:          requestID,
+		APIKeyID:           apiKey.ID,
+		UserID:             user.ID,
+		BalanceCost:        1.25,
 	}
 
 	result1, err := repo.Apply(ctx, cmd)

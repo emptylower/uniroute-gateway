@@ -469,7 +469,7 @@ func TestMigrationsRunner_ModelGovernanceFoundationExactChecks(t *testing.T) {
 	requireCheckValues(t, tx, "model_observation_events", "chk_model_observation_events_classification", []string{"approved", "cross_provider", "discovered", "ignored", "unknown"})
 	requireCheckValues(t, tx, "model_observation_events", "chk_model_observation_events_presence", []string{"missing", "present"})
 	requireCheckValues(t, tx, "model_inventory_items", "chk_model_inventory_items_classification", []string{"approved", "cross_provider", "discovered", "ignored", "unknown"})
-	requireCheckValues(t, tx, "usage_logs", "chk_usage_logs_governance_target_platform", []string{"anthropic", "antigravity", "gemini", "grok", "openai"})
+	requireCheckValues(t, tx, "usage_logs", "chk_usage_logs_governance_target_platform", []string{"anthropic", "antigravity", "bytedance", "deepseek", "gemini", "glm", "grok", "kimi", "longcat", "minimax", "openai", "qwen"})
 }
 
 func TestMigrationsRunner_ModelGovernanceFoundationPreservesEventsWhenAccountDeleted(t *testing.T) {
