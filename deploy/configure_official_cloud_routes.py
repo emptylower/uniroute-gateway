@@ -127,6 +127,7 @@ def transaction_sql(mode, expected=None, rollback_ids=None):
     block = f"""DO $operation$
  DECLARE t jsonb; src groups%ROWTYPE; dst groups%ROWTYPE;
    column_names text; expressions text; column_info record; new_id bigint;
+   shared_account_id bigint; account_payload text;
    created_ids jsonb := '[]'::jsonb; before_digest text;
  BEGIN
    before_digest:=md5(({SNAPSHOT})::text);
@@ -167,6 +168,18 @@ def transaction_sql(mode, expected=None, rollback_ids=None):
      created_ids:=created_ids||jsonb_build_array(new_id);
    END LOOP;
    {clone_validation(False)}
+   -- Refresh account snapshots explicitly, including platforms outside the
+   -- scheduler's canonical platform rebuild list. Also repair existing clones.
+   FOR shared_account_id IN SELECT DISTINCT ag.account_id FROM account_groups ag
+     WHERE ag.group_id IN ({SOURCE_IDS}) ORDER BY ag.account_id LOOP
+     SELECT '{{"group_ids":['||string_agg(ag.group_id::text,',' ORDER BY ag.group_id)||']}}'
+       INTO account_payload FROM account_groups ag WHERE ag.account_id=shared_account_id;
+     INSERT INTO scheduler_outbox(event_type,account_id,group_id,payload,dedup_key)
+       VALUES ('account_changed',shared_account_id,NULL,account_payload::jsonb,
+         'scheduler_outbox:'||encode(sha256(convert_to('account_changed','UTF8')||decode('00','hex')||
+           convert_to(shared_account_id::text,'UTF8')||decode('0000','hex')||convert_to(account_payload,'UTF8')),'hex'))
+       ON CONFLICT (dedup_key) WHERE dedup_key IS NOT NULL DO NOTHING;
+   END LOOP;
 """
     elif mode == "rollback":
         for target_id in rollback_ids or []:
