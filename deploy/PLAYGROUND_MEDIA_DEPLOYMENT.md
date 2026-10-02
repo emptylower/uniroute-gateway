@@ -93,3 +93,44 @@ idempotent settlement, while new reservations still reject expired/sealed leases
 
 The architecture note is `docs/playground-media-gateway.md`; the repository's
 `docs/*` ignore rule requires explicit inclusion of this reviewed release document.
+
+## Production Compose invocation
+
+The production release uses a separate private `deploy/.env.unified-gateway`
+(mode 600) and `deploy/docker-compose.unified-gateway.yml`. Compose's `--env-file`
+loads interpolation values; it does not inject new variables unless the service
+override explicitly maps them. The reviewed override maps all five
+`MEDIA_TASKS_*` variables and selects the verified release image. Preserve the
+existing `.env.shipany`, both original Compose files and image assets.
+
+Every subsequent gateway restart must include both environment files and all
+three Compose files:
+
+```sh
+cd /opt/sub2api
+docker compose --project-name deploy \
+  --env-file deploy/.env.shipany \
+  --env-file deploy/.env.unified-gateway \
+  -f deploy/docker-compose.yml \
+  -f deploy/docker-compose.shipany.yml \
+  -f deploy/docker-compose.unified-gateway.yml \
+  up -d --no-build --no-deps sub2api
+```
+
+First cut over with `MEDIA_TASKS_ENABLED=false`, verify the new schema and signed
+catalog/quote/availability behavior, then change only that flag to `true` after
+the rollout coordinator's second approval. A feature disable retains the same
+recovery-capable image, provider credential and original wallet policy. Never
+print a rendered Compose configuration: it contains secrets.
+
+The 2026-10-02 production binary was built from clean source commit
+`430bf5c808f052c133dfbc34e4f64c7af02f0e6a`; its SHA256 is
+`a8f1c4b3d2a59f5a872c5c7d65e07c016ae69e48e5751c604fc5d8b448dc8e83`.
+The release image `uniroute-gateway:unified-430bf5c80` has ID
+`sha256:b49260a8a464b072d8c3aa3b200d27b8f8ad1204ad7ce14b77931b290828bf82`.
+It retains the prior image's entrypoint, health check, configuration and resource
+layers. Fresh backups and private release results are under
+`/opt/uniroute-backups/20261002-unified-gateway/` (directory 700, files 600).
+Both cutovers passed health, image/policy and financial baseline checks; no paid
+generation was performed. Independent signed endpoint acceptance is recorded
+separately in the release verification document.
