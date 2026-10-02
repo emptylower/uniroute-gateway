@@ -35,7 +35,9 @@ jobs:
       - name: Unit tests
         working-directory: backend
         run: make test-unit
+      # Run even when the unit step failed so one run reports both signals.
       - name: Integration tests
+        if: ${{ !cancelled() }}
         working-directory: backend
         run: make test-integration
 
