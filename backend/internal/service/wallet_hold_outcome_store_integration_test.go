@@ -34,10 +34,13 @@ func startWalletHoldOutcomeTestPostgres(t testing.TB, ctx context.Context) *sql.
 	db := SharedTestPostgresDBForTest(t)
 	for _, migration := range []string{
 		"208_wallet_settlement_outbox.sql",
+		"209_wallet_billing_snapshot.sql", // 218's foreign-key target
 		"212_wallet_outbox_dead_letter_reason.sql",
 		"213_wallet_hold_outcome.sql",
 		"214_wallet_outbox_split_and_authorization.sql",
 		"215_wallet_reconciliation_indexes.sql",
+		"218_wallet_authorization_segments.sql", // the hold-outcome store reads it
+		"219_wallet_attempt_protection.sql",
 	} {
 		sqlContent, err := os.ReadFile(filepath.Join("..", "..", "migrations", migration))
 		require.NoError(t, err)
