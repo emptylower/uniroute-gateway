@@ -1890,6 +1890,13 @@
     "note": "egress-capable import; actual wallet classification hangs on the write site / client"
   },
   {
+    "file": "internal/service/canonical_wallet_attempt.go",
+    "kind": "import",
+    "detail": "net",
+    "annotation": "non-billable",
+    "note": "egress-capable import; only net.OpError/DNSError error classification, no client constructed"
+  },
+  {
     "file": "internal/service/canonical_wallet_bridge.go",
     "kind": "construct",
     "detail": "newCanonicalWalletHTTPClient: \u0026http.Client{}",
@@ -1902,6 +1909,13 @@
     "detail": "net/http",
     "annotation": "non-billable",
     "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/canonical_wallet_pool.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; http method/status constants only, the request goes through the canonical wallet control-plane client"
   },
   {
     "file": "internal/service/catalog_http_client.go",
@@ -2259,6 +2273,27 @@
     "detail": "net/http",
     "annotation": "non-billable",
     "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/media_provider_kie.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; requests go through the injected HTTPUpstream, billable/non-billable is carried at the write site (createTask handle, recordInfo NonBillableMediaFetch)"
+  },
+  {
+    "file": "internal/service/media_provider_kie.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "egress-capable import; requests go through the injected HTTPUpstream, billable/non-billable is carried at the write site (createTask handle, recordInfo NonBillableMediaFetch)"
+  },
+  {
+    "file": "internal/service/media_task_worker.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "egress-capable import; http method/status constants only, the request goes through the canonical wallet control-plane client"
   },
   {
     "file": "internal/service/model_not_found_error.go",

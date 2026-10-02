@@ -663,6 +663,17 @@ func TestResolveOpenAIMessagesDispatchMappedModel(t *testing.T) {
 	})
 }
 
+// newMessagesDispatchGateHandler returns a handler whose dependencies are non-nil, so
+// Messages gets past ensureResponsesDependencies and reaches the /v1/messages dispatch gate.
+func newMessagesDispatchGateHandler() *OpenAIGatewayHandler {
+	return &OpenAIGatewayHandler{
+		gatewayService:      &service.OpenAIGatewayService{},
+		billingCacheService: &service.BillingCacheService{},
+		apiKeyService:       &service.APIKeyService{},
+		concurrencyHelper:   &ConcurrencyHelper{concurrencyService: &service.ConcurrencyService{}},
+	}
+}
+
 func TestOpenAIGatewayMessagesDispatchGateAllowsGrokGroups(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -683,7 +694,7 @@ func TestOpenAIGatewayMessagesDispatchGateAllowsGrokGroups(t *testing.T) {
 		})
 		c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: 6101, Concurrency: 1})
 
-		h := &OpenAIGatewayHandler{}
+		h := newMessagesDispatchGateHandler()
 		h.Messages(c)
 
 		require.Equal(t, http.StatusForbidden, rec.Code)
@@ -708,11 +719,13 @@ func TestOpenAIGatewayMessagesDispatchGateAllowsGrokGroups(t *testing.T) {
 		})
 		c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: 6102, Concurrency: 1})
 
-		h := &OpenAIGatewayHandler{}
+		h := newMessagesDispatchGateHandler()
 		h.Messages(c)
 
-		require.Equal(t, http.StatusServiceUnavailable, rec.Code)
-		require.Equal(t, "api_error", gjson.GetBytes(rec.Body.Bytes(), "error.type").String())
+		// Grok is exempt from the dispatch flag: the request must get past the gate. Whatever
+		// stops it afterwards is a zero-value dependency, never a permission error.
+		require.NotEqual(t, http.StatusForbidden, rec.Code)
+		require.NotEqual(t, "permission_error", gjson.GetBytes(rec.Body.Bytes(), "error.type").String())
 		require.NotContains(t, rec.Body.String(), "This group does not allow /v1/messages dispatch")
 	})
 }

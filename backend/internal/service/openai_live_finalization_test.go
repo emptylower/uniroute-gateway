@@ -91,6 +91,14 @@ func newLiveFinalizationWithOutboxFixture(t *testing.T, mode string) (*liveAuthT
 // settled windows [a1, a2, 0] finalizes under :window:3's event id, settling
 // exactly units(total) − a1 − a2 with windows[2]'s authorization, and
 // completes with seq = 3.
+// expectNoAuthorizationSegments models a Live call that has no pool/media authorization
+// segments: ObserveSettlement reads wallet_authorization_segment first, and an empty result
+// leaves the call on the plain single-lease settlement path.
+func expectNoAuthorizationSegments(mock sqlmock.Sqlmock) {
+	mock.ExpectQuery(`FROM wallet_authorization_segment WHERE parent_authorization_id`).
+		WillReturnRows(sqlmock.NewRows([]string{"authorization_id", "lease_id", "held_units", "lease_basis", "event_id", "actual_units", "pin_state", "kind", "state", "settlement_payload", "remainder_payload"}))
+}
+
 func TestTryFinalizeLiveCallSettlesTheLastWindow(t *testing.T) {
 	f, rec, mock := newLiveFinalizationWithOutboxFixture(t, config.CanonicalWalletModeShadow)
 
@@ -119,6 +127,7 @@ func TestTryFinalizeLiveCallSettlesTheLastWindow(t *testing.T) {
 		observedEvent = event
 		observedCount.Add(1)
 	}
+	expectNoAuthorizationSegments(mock)
 	mock.ExpectBegin()
 	mock.ExpectCommit()
 
@@ -235,6 +244,7 @@ func TestTryFinalizeLiveCallTransitionsProvisionalToFinalizedWhenEnqueueSucceeds
 		observedCount.Add(1)
 	}
 
+	expectNoAuthorizationSegments(mock)
 	mock.ExpectBegin()
 	mock.ExpectCommit()
 
@@ -283,6 +293,7 @@ func TestTryFinalizeLiveCallEnqueueFailsReleasesClaimAndRetryObservesAgain(t *te
 	}
 
 	// 1. First attempt: enqueue fails (BeginTx/Commit fails or rollback)
+	expectNoAuthorizationSegments(mock)
 	mock.ExpectBegin()
 	mock.ExpectRollback()
 	failingOutbox := &outboxStoreStub{insertErr: errors.New("outbox insert failed")}
@@ -303,6 +314,7 @@ func TestTryFinalizeLiveCallEnqueueFailsReleasesClaimAndRetryObservesAgain(t *te
 	// 2. Retry: enqueue succeeds -> row transitions to finalized, retry observed again
 	_ = f.liveStore.SaveLiveCall(context.Background(), rec, time.Hour)
 	f.svc.canonicalWallet.outbox = &outboxStoreStub{}
+	expectNoAuthorizationSegments(mock)
 	mock.ExpectBegin()
 	mock.ExpectCommit()
 
@@ -328,6 +340,7 @@ func TestTryFinalizeLiveCallCompleteFailsKeepsFinalizingAndRetryRefusesClaim(t *
 	}
 
 	// 1. First attempt: enqueue commits, but CompleteFinalization in store fails
+	expectNoAuthorizationSegments(mock)
 	mock.ExpectBegin()
 	mock.ExpectCommit()
 	f.provStore.completeErr = errors.New("complete finalization db timeout")
@@ -352,6 +365,7 @@ func TestTryFinalizeLiveCallCompleteFailsKeepsFinalizingAndRetryRefusesClaim(t *
 
 func TestTryFinalizeLiveCallClaimProtectsConcurrentFinalize(t *testing.T) {
 	f, rec, mock := newLiveFinalizationWithOutboxFixture(t, config.CanonicalWalletModeShadow)
+	expectNoAuthorizationSegments(mock)
 	mock.ExpectBegin()
 	mock.ExpectCommit()
 
