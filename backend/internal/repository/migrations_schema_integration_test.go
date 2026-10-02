@@ -460,7 +460,8 @@ func TestMigrationsRunner_ModelPublicationEligibilityTriggerScopedToIdentityUpda
 func TestMigrationsRunner_ModelGovernanceFoundationExactChecks(t *testing.T) {
 	tx := testTx(t)
 
-	requireCheckValues(t, tx, "model_registry", "chk_model_registry_provider", []string{"anthropic", "gemini", "grok", "openai"})
+	// Widened by migration 207 (vendor platform providers).
+	requireCheckValues(t, tx, "model_registry", "chk_model_registry_provider", []string{"anthropic", "bytedance", "deepseek", "gemini", "glm", "grok", "kimi", "longcat", "minimax", "openai", "qwen"})
 	requireCheckValues(t, tx, "model_registry", "chk_model_registry_modality", []string{"audio", "embedding", "image", "other", "text", "video"})
 	requireCheckValues(t, tx, "model_registry", "chk_model_registry_lifecycle", []string{"active", "deprecated", "retired"})
 	requireCheckValues(t, tx, "model_observations", "chk_model_observations_classification", []string{"approved", "cross_provider", "discovered", "ignored", "unknown"})

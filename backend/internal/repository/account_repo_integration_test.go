@@ -140,6 +140,15 @@ func (s *AccountRepoSuite) SetupTest() {
 	tx := testEntTx(s.T())
 	s.client = tx.Client()
 	s.repo = newAccountRepositoryWithSQL(s.client, tx, nil)
+
+	// Migration 217 seeds the managed KIE provider account. The list/count tests below
+	// assert exact totals against an otherwise empty table, so drop the seed inside this
+	// test's transaction (it is rolled back at cleanup; the provider row references it
+	// with ON DELETE RESTRICT and goes first).
+	_, err := tx.ExecContext(s.ctx, `DELETE FROM gateway_media_provider`)
+	s.Require().NoError(err, "remove seeded media provider binding")
+	_, err = tx.ExecContext(s.ctx, `DELETE FROM accounts WHERE extra->>'gateway_media_provider' = 'kie'`)
+	s.Require().NoError(err, "remove seeded media provider account")
 }
 
 func TestAccountRepoSuite(t *testing.T) {
