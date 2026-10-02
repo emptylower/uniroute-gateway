@@ -82,7 +82,56 @@ func startCanonicalWalletTestPostgres(t *testing.T, ctx context.Context) *sql.DB
 	require.NoError(t, err)
 	_, err = db.ExecContext(ctx, `CREATE INDEX idx_wallet_authorization_segment_pending ON wallet_authorization_segment (updated_at) WHERE state <> 'finished'`)
 	require.NoError(t, err)
+	createWalletMediaTaskTableForTest(t, ctx, db)
 	return db
+}
+
+// createWalletMediaTaskTableForTest mirrors migration 217's gateway_media_task without its
+// foreign keys (users, api_keys, wallet_billing_snapshot are not in these throwaway
+// databases). The hold-outcome and reaper paths ask EXISTS(SELECT 1 FROM gateway_media_task
+// ...) before they resolve a hold, and fail closed when the table is missing, so the wallet
+// harnesses need it present (empty) even though they never create a media task. Keep it in
+// lockstep with 217.
+func createWalletMediaTaskTableForTest(t testing.TB, ctx context.Context, db *sql.DB) {
+	t.Helper()
+	_, err := db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS gateway_media_task (
+			id TEXT PRIMARY KEY,
+			user_id BIGINT NOT NULL,
+			platform_user_id TEXT NOT NULL,
+			api_key_id BIGINT NOT NULL,
+			idempotency_key TEXT NOT NULL,
+			request_hash TEXT NOT NULL,
+			model TEXT NOT NULL,
+			media_type TEXT NOT NULL CHECK (media_type IN ('image','video','music')),
+			option TEXT NOT NULL,
+			prompt TEXT NOT NULL,
+			request_payload JSONB NOT NULL,
+			billing_snapshot_id TEXT NOT NULL,
+			quoted_units BIGINT NOT NULL CHECK (quoted_units > 0),
+			authorization_id TEXT NOT NULL UNIQUE,
+			lease_id TEXT,
+			lease_basis JSONB,
+			held_units BIGINT NOT NULL DEFAULT 0 CHECK (held_units >= 0),
+			actual_units BIGINT CHECK (actual_units >= 0 AND actual_units <= held_units),
+			settlement_event_id TEXT NOT NULL UNIQUE,
+			authorization_token TEXT,
+			provider_task_id TEXT UNIQUE,
+			status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','authorizing','submitting','processing','settling','releasing','completed','failed','indeterminate')),
+			pin_state TEXT NOT NULL DEFAULT 'none' CHECK (pin_state IN ('none','active','finished')),
+			result JSONB NOT NULL DEFAULT '{"urls":[]}'::jsonb,
+			error_code TEXT,
+			error_message TEXT,
+			claimed_by TEXT,
+			claim_until TIMESTAMPTZ,
+			next_poll_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+			deadline_at TIMESTAMPTZ NOT NULL,
+			settled_at TIMESTAMPTZ,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+			UNIQUE (user_id, idempotency_key)
+		)`)
+	require.NoError(t, err)
 }
 
 // outboxStoreForTest implements CanonicalWalletOutboxStore directly against
