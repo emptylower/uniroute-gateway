@@ -82,7 +82,7 @@ func TestGetMyPlatformQuotas_D14_LazyZeroForExpiredWindow(t *testing.T) {
 
 	// 解析 response，验证过期 daily 的 usage_usd=0 且 window_resets_at=null
 	body := w.Body.String()
-	if !strings.Contains(body, `"daily_usage_usd":0`) {
+	if !strings.Contains(body, `"daily_usage_usd":"0"`) {
 		t.Errorf("expected daily_usage_usd:0 in body, got: %s", body)
 	}
 	if !strings.Contains(body, `"daily_window_resets_at":null`) {

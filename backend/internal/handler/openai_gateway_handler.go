@@ -2062,9 +2062,10 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 					model = reqModel
 				}
 				if apiKey.GroupID == nil {
-					return "", service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "Reconnect to select the model channel", nil)
-				}
-				if err := modelChannelGroupAllowed(ctx, h.channelRoutingSelector, apiKey, model, service.ChannelRoutingFamilyOpenAI, *apiKey.GroupID); err != nil {
+					if service.IsChannelRoutingMode(apiKey.RoutingMode) {
+						return "", service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "Reconnect to select the model channel", nil)
+					}
+				} else if err := modelChannelGroupAllowed(ctx, h.channelRoutingSelector, apiKey, model, service.ChannelRoutingFamilyOpenAI, *apiKey.GroupID); err != nil {
 					return "", service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "Model channel changed; reconnect to continue", err)
 				}
 				mapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(ctx, apiKey.GroupID, model)

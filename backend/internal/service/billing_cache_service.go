@@ -115,7 +115,7 @@ type BillingCacheService struct {
 	cfg                   *config.Config
 	circuitBreaker        *billingCircuitBreaker
 	userPlatformQuotaRepo UserPlatformQuotaRepository
-	exchangeRates         *ExchangeRateService
+	exchangeRates         *USDPriceService
 	canonicalWallet       *CanonicalWalletBridge
 
 	cacheWriteChan     chan cacheWriteTask
@@ -153,7 +153,7 @@ func NewBillingCacheService(
 		userGroupRateRepo:     userGroupRateRepo,
 		cfg:                   cfg,
 		userPlatformQuotaRepo: userPlatformQuotaRepo,
-		exchangeRates:         NewExchangeRateService(cfg),
+		exchangeRates:         NewUSDPriceService(cfg),
 		canonicalWallet:       canonicalWallet,
 	}
 	svc.circuitBreaker = newBillingCircuitBreaker(cfg.Billing.CircuitBreaker)
@@ -928,13 +928,7 @@ func (s *BillingCacheService) checkBalanceEligibility(ctx context.Context, user 
 			// can't identify.
 			return ErrBillingServiceUnavailable
 		}
-		currency := strings.ToUpper(strings.TrimSpace(user.BillingCurrency))
-		if currency != CurrencyCNY {
-			// cny-e8-v1 is CNY-only by definition; coercing here would
-			// silently admit a request under the WRONG currency's wallet.
-			canonicalWalletBridgeMetrics.unsupportedCurrency.Add(1)
-			return ErrBillingServiceUnavailable
-		}
+		currency := CurrencyUSD
 		allowed, err := s.canonicalWallet.HasCanonicalWalletHeadroom(ctx, platformUserID, currency)
 		if err != nil && errors.Is(err, ErrCanonicalWalletLeaseMissing) {
 			// The bootstrap window (spec §2.2 leg 2): no lease data exists

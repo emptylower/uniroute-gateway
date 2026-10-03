@@ -127,7 +127,7 @@ func (s *PromoService) ApplyPromoCode(ctx context.Context, userID int64, code st
 	if err != nil {
 		return fmt.Errorf("lock promo wallet: %w", err)
 	}
-	if NormalizeUserBillingCurrency(promoUser.BillingCurrency) != NormalizeUserBillingCurrency(promoCode.Currency) {
+	if strings.ToUpper(strings.TrimSpace(promoUser.BillingCurrency)) != NormalizeHistoricalBillingCurrency(promoCode.Currency) {
 		return ErrPromoCurrencyMismatch
 	}
 
@@ -201,7 +201,7 @@ func (s *PromoService) Create(ctx context.Context, input *CreatePromoCodeInput) 
 	promoCode := &PromoCode{
 		Code:        strings.ToUpper(code),
 		BonusAmount: input.BonusAmount,
-		Currency:    NormalizeUserBillingCurrency(input.Currency),
+		Currency:    NormalizeHistoricalBillingCurrency(input.Currency),
 		MaxUses:     input.MaxUses,
 		UsedCount:   0,
 		Status:      PromoCodeStatusActive,

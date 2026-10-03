@@ -41,7 +41,10 @@ func TestModelGovernanceInventoryHandlerReturnsInventory(t *testing.T) {
 	require.NoError(t, err)
 	var items []service.InventoryItem
 	require.NoError(t, json.Unmarshal(encoded, &items))
+	want[0].BillingCurrency = ""
 	require.Equal(t, want, items)
+	require.Contains(t, string(encoded), `"revenue_7d_usd":"0"`)
+	require.NotContains(t, string(encoded), "billing_currency")
 	require.Equal(t, service.PlatformOpenAI, items[0].TargetPlatform)
 }
 

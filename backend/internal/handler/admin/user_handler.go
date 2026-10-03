@@ -64,7 +64,7 @@ type CreateUserRequest struct {
 	Username        string   `json:"username"`
 	Notes           string   `json:"notes"`
 	Role            string   `json:"role" binding:"omitempty,oneof=admin user"`
-	BillingCurrency string   `json:"billing_currency" binding:"omitempty,oneof=CNY USD"`
+	BillingCurrency string   `json:"-"`
 	Balance         *float64 `json:"balance"`
 	Concurrency     int      `json:"concurrency"`
 	RPMLimit        int      `json:"rpm_limit"`
@@ -79,7 +79,7 @@ type UpdateUserRequest struct {
 	Username        *string  `json:"username"`
 	Notes           *string  `json:"notes"`
 	Role            string   `json:"role" binding:"omitempty,oneof=admin user"`
-	BillingCurrency *string  `json:"billing_currency" binding:"omitempty,oneof=CNY USD"`
+	BillingCurrency *string  `json:"-"`
 	Balance         *float64 `json:"balance"`
 	Concurrency     *int     `json:"concurrency"`
 	RPMLimit        *int     `json:"rpm_limit"`
@@ -240,7 +240,7 @@ func (h *UserHandler) BindAuthIdentity(c *gin.Context) {
 	}
 
 	var req BindUserAuthIdentityRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := response.BindUSDJSON(c, &req); err != nil {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
@@ -273,7 +273,7 @@ func (h *UserHandler) BindAuthIdentity(c *gin.Context) {
 // POST /api/v1/admin/users
 func (h *UserHandler) Create(c *gin.Context) {
 	var req CreateUserRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := response.BindUSDJSON(c, &req); err != nil {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
@@ -315,7 +315,7 @@ func (h *UserHandler) Update(c *gin.Context) {
 	}
 
 	var req UpdateUserRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := response.BindUSDJSON(c, &req); err != nil {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
@@ -410,7 +410,7 @@ func (h *UserHandler) UpdateBalance(c *gin.Context) {
 	}
 
 	var req UpdateBalanceRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := response.BindUSDJSON(c, &req); err != nil {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
@@ -534,7 +534,7 @@ func (h *UserHandler) ReplaceGroup(c *gin.Context) {
 	}
 
 	var req ReplaceGroupRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := response.BindUSDJSON(c, &req); err != nil {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
@@ -579,7 +579,7 @@ type BatchUpdateConcurrencyRequest struct {
 
 func (h *UserHandler) BatchUpdateConcurrency(c *gin.Context) {
 	var req BatchUpdateConcurrencyRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := response.BindUSDJSON(c, &req); err != nil {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
@@ -639,7 +639,7 @@ type BatchUpdateLimitsRequest struct {
 
 func (h *UserHandler) BatchUpdateLimits(c *gin.Context) {
 	var req BatchUpdateLimitsRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := response.BindUSDJSON(c, &req); err != nil {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
@@ -734,9 +734,9 @@ type UpdateUserPlatformQuotasRequest struct {
 // PlatformQuotaInput 单平台限额输入；limit 字段为 nil 表示不限制。
 type PlatformQuotaInput struct {
 	Platform        string   `json:"platform" binding:"required"`
-	DailyLimitUSD   *float64 `json:"daily_limit_usd"`
-	WeeklyLimitUSD  *float64 `json:"weekly_limit_usd"`
-	MonthlyLimitUSD *float64 `json:"monthly_limit_usd"`
+	DailyLimitUSD   *float64 `json:"daily_limit_usd,string"`
+	WeeklyLimitUSD  *float64 `json:"weekly_limit_usd,string"`
+	MonthlyLimitUSD *float64 `json:"monthly_limit_usd,string"`
 }
 
 // platform 合法性由 service.IsAllowedQuotaPlatform / service.AllowedQuotaPlatforms 统一判断（单一源）。
@@ -756,7 +756,7 @@ func (h *UserHandler) UpdateUserPlatformQuotas(c *gin.Context) {
 	}
 
 	var req UpdateUserPlatformQuotasRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := response.BindUSDJSON(c, &req); err != nil {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
@@ -932,7 +932,7 @@ func (h *UserHandler) ResetUserPlatformQuotaWindow(c *gin.Context) {
 	}
 
 	var req ResetUserPlatformQuotaWindowRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := response.BindUSDJSON(c, &req); err != nil {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}

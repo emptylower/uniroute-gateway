@@ -93,7 +93,7 @@ type BatchImagePublicService struct {
 	BillingRepo       UsageBillingRepository
 	AuthCache         APIKeyAuthCacheInvalidator
 	Config            *config.Config
-	ExchangeRates     *ExchangeRateService
+	ExchangeRates     *USDPriceService
 }
 
 type BatchImagePricingSnapshot struct {
@@ -200,7 +200,7 @@ func NewBatchImagePublicService(repo BatchImageRepository, accountRepo AccountRe
 		BillingRepo:       billingRepo,
 		AuthCache:         authCache,
 		Config:            cfg,
-		ExchangeRates:     NewExchangeRateService(cfg),
+		ExchangeRates:     NewUSDPriceService(cfg),
 	}
 }
 
@@ -1030,7 +1030,7 @@ func (s *BatchImagePublicService) resolvePricingSnapshot(ctx context.Context, ow
 		if !group.AllowBatchImageGeneration {
 			return nil, ErrBatchImageGroupDisabled
 		}
-		groupDefaultMultiplier := group.RateMultiplierForCurrency(currency)
+		groupDefaultMultiplier := group.EffectiveRateMultiplier()
 		if groupDefaultMultiplier < 0 {
 			groupDefaultMultiplier = 0
 		}

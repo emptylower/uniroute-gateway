@@ -99,7 +99,6 @@ func newWSAuthTestHarness(t *testing.T, mode string, ingressMode string) *wsAuth
 	cfg := &config.Config{}
 	cfg.RunMode = config.RunModeSimple
 	cfg.Default.RateMultiplier = 1
-	cfg.Billing.ExchangeRate.BootstrapUSDToCNY = 7.0
 	cfg.CanonicalWallet.BillingSnapshotMode = "record"
 	cfg.Security.URLAllowlist.Enabled = false
 	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
@@ -122,13 +121,13 @@ func newWSAuthTestHarness(t *testing.T, mode string, ingressMode string) *wsAuth
 	})
 	billingSvc := service.NewBillingService(cfg, pricingSvc)
 	resolver := service.NewModelPricingResolver(nil, billingSvc)
-	fx := service.NewExchangeRateService(cfg)
+	fx := service.NewUSDPriceService(cfg)
 	snapshots := service.NewBillingSnapshotService(cfg, resolver, billingSvc, fx, nil)
 	leaseStore := &stubWalletLeaseStore{
 		lease: &service.CanonicalWalletLease{
 			LeaseID:        "lease_ws_auth_test",
 			PlatformUserID: "user_1801",
-			Currency:       "CNY",
+			Currency:       "USD",
 			BudgetUnits:    1_000_000_000,
 			ConsumedUnits:  0,
 			ExpiresAt:      time.Now().Add(time.Hour),
@@ -196,7 +195,7 @@ func newWSAuthTestHarness(t *testing.T, mode string, ingressMode string) *wsAuth
 			ID:              1801,
 			PlatformUserID:  "user_1801",
 			Status:          service.StatusActive,
-			BillingCurrency: "CNY",
+			BillingCurrency: "USD",
 		},
 	}
 
@@ -536,7 +535,7 @@ func TestWSAuthorization_RefusalCloses4402WithoutReportingAccountFailure(t *test
 			ID:              1802,
 			PlatformUserID:  "user_1802",
 			Status:          service.StatusActive,
-			BillingCurrency: "CNY",
+			BillingCurrency: "USD",
 		},
 		Group: &service.Group{
 			ID:       groupID,

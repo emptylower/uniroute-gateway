@@ -118,7 +118,7 @@ func (b *CanonicalWalletBridge) fundingPool(ctx context.Context, user string) ([
 	leases := []CanonicalWalletLease{}
 	seen := map[string]bool{}
 	for _, wire := range response.Leases {
-		if wire.PlatformUserID != user || wire.LeaseID == "" || seen[wire.LeaseID] || wire.UnitVersion != CanonicalWalletUnitVersion || wire.Scale != 8 || wire.Currency != "CNY" || wire.Policy != config.CanonicalUSDWalletPolicyVersion {
+		if wire.PlatformUserID != user || wire.LeaseID == "" || seen[wire.LeaseID] || wire.UnitVersion != CanonicalWalletUnitVersion || wire.Scale != 8 || wire.Currency != "USD" || wire.Policy != config.CanonicalUSDWalletPolicyVersion {
 			return nil, ErrCanonicalUSDWalletPolicy
 		}
 		seen[wire.LeaseID] = true
@@ -137,7 +137,7 @@ func (b *CanonicalWalletBridge) fundingPool(ctx context.Context, user string) ([
 		if err != nil {
 			return nil, err
 		}
-		if cached.Currency != "CNY" || cached.PlatformUserID != user || cached.BudgetUnits > budget || cached.ConsumedUnits-cached.ReleasedUnits < captured {
+		if cached.Currency != "USD" || cached.PlatformUserID != user || cached.BudgetUnits > budget || cached.ConsumedUnits-cached.ReleasedUnits < captured {
 			return nil, errors.New("wallet pool cache basis mismatch")
 		}
 		// Signed top-ups can raise budget, but never replace any raw C/R or holds.
@@ -204,7 +204,7 @@ func (b *CanonicalWalletBridge) authorizePool(ctx context.Context, h *Authorizat
 			if b.cfg.LeaseBudgetUnits > budget {
 				budget = b.cfg.LeaseBudgetUnits
 			}
-			request := canonicalWalletEnsureRequest{PlatformUserID: user, Currency: "CNY", Purpose: "authorize", USDWalletPolicyVersion: config.CanonicalUSDWalletPolicyVersion, MinHeadroom: newCanonicalWalletAmountObject(units), RequestedBudget: newCanonicalWalletAmountObject(budget), RequestedTTLSeconds: b.cfg.LeaseTTLSeconds, CallerSlotTTLSeconds: b.callerSlotTTLSeconds}
+			request := canonicalWalletEnsureRequest{PlatformUserID: user, Currency: "USD", Purpose: "authorize", USDWalletPolicyVersion: config.CanonicalUSDWalletPolicyVersion, MinHeadroom: newCanonicalWalletAmountObject(units), RequestedBudget: newCanonicalWalletAmountObject(budget), RequestedTTLSeconds: b.cfg.LeaseTTLSeconds, CallerSlotTTLSeconds: b.callerSlotTTLSeconds}
 			var result *canonicalWalletEnsureResult
 			result, err = b.control.EnsureLease(ctx, request)
 			if err == nil {
@@ -225,7 +225,7 @@ func (b *CanonicalWalletBridge) authorizePool(ctx context.Context, h *Authorizat
 			if e != nil {
 				return e
 			}
-			request := canonicalWalletEnsureRequest{PlatformUserID: user, Currency: "CNY", Purpose: "authorize", USDWalletPolicyVersion: config.CanonicalUSDWalletPolicyVersion, TopUpLeaseID: target.LeaseID, PreferLeaseID: target.LeaseID, MinimumBudgetUnits: strconv.FormatInt(minimum, 10), MinHeadroom: newCanonicalWalletAmountObject(minHeadroom), RequestedBudget: newCanonicalWalletAmountObject(minimum), RequestedTTLSeconds: b.cfg.LeaseTTLSeconds, CallerSlotTTLSeconds: b.callerSlotTTLSeconds}
+			request := canonicalWalletEnsureRequest{PlatformUserID: user, Currency: "USD", Purpose: "authorize", USDWalletPolicyVersion: config.CanonicalUSDWalletPolicyVersion, TopUpLeaseID: target.LeaseID, PreferLeaseID: target.LeaseID, MinimumBudgetUnits: strconv.FormatInt(minimum, 10), MinHeadroom: newCanonicalWalletAmountObject(minHeadroom), RequestedBudget: newCanonicalWalletAmountObject(minimum), RequestedTTLSeconds: b.cfg.LeaseTTLSeconds, CallerSlotTTLSeconds: b.callerSlotTTLSeconds}
 			var result *canonicalWalletEnsureResult
 			result, err = b.control.EnsureLease(ctx, request)
 			if err == nil {
@@ -261,7 +261,7 @@ func (b *CanonicalWalletBridge) authorizePool(ctx context.Context, h *Authorizat
 				return err
 			}
 		}
-		segments = append(segments, AuthorizationSegment{AuthorizationID: auth, LeaseID: l.LeaseID, HeldUnits: free, Basis: l, PinState: "none", Kind: h.AttemptKind, State: "prepared", EventID: CanonicalWalletSettlementEventID(h.ID+":"+auth, user, "CNY")})
+		segments = append(segments, AuthorizationSegment{AuthorizationID: auth, LeaseID: l.LeaseID, HeldUnits: free, Basis: l, PinState: "none", Kind: h.AttemptKind, State: "prepared", EventID: CanonicalWalletSettlementEventID(h.ID+":"+auth, user, "USD")})
 		remaining -= free
 		if remaining == 0 {
 			break

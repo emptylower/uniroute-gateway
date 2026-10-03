@@ -150,7 +150,8 @@ func TestAuthServiceBindEmailIdentity_UpdatesEmailAndAppliesFirstBindDefaults(t 
 	storedUser, err := client.User.Get(ctx, user.ID)
 	require.NoError(t, err)
 	require.Equal(t, "newemail@example.com", storedUser.Email)
-	require.Equal(t, 11.0, storedUser.Balance)
+	// The provider default balance is no longer written to the retired native wallet.
+	require.Equal(t, 2.5, storedUser.Balance)
 	require.Equal(t, 5, storedUser.Concurrency)
 	require.True(t, svc.CheckPassword("new-password", storedUser.PasswordHash))
 

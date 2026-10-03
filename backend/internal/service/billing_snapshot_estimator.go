@@ -10,7 +10,7 @@ import (
 )
 
 // Phase 3.2 — the conservative upper-bound estimator (spec §2.0, §8).
-// A pure function over (snapshot, EstimateInput) returning cny-e8-v1 units,
+// A pure function over (snapshot, EstimateInput) returning usd-e8-v1 units,
 // rounded UP, overflow-checked, failing closed on anything it cannot bound.
 // 3.3 wires it to authorization; here it is built and proven.
 
@@ -310,23 +310,13 @@ func worstPerRequestResolved(resolved *ResolvedPricing) *ResolvedPricing {
 	return &c
 }
 
-// unitsRoundUp converts a USD cost to cny-e8-v1 units through the snapshot's
-// FX, rounding UP — a bound never rounds toward zero — and fails closed when
-// there is no rate to convert with (a CNY user whose freeze saw an FX outage:
-// treating USD as CNY would under-bound ~7×). Subscription billing has no FX.
+// unitsRoundUp converts native USD to e8 units, rounding up and rejecting overflow.
 func unitsRoundUp(costUSD float64, snap *BillingSnapshot) (int64, error) {
 	if costUSD <= 0 {
 		return 0, nil
 	}
-	rate := snap.FX.Rate
-	if snap.Flags.SubscriptionBilling {
-		rate = 1
-	}
-	if rate <= 0 {
-		return 0, ErrEstimateUnbounded
-	}
-	units := math.Ceil(costUSD * rate * canonicalWalletUnitsPerCNY) // canonical_wallet_units.go:11 — the constant canonicalWalletUnitsFromCNY uses; never redeclare 1e8
-	if math.IsNaN(units) || math.IsInf(units, 0) || units > float64(math.MaxInt64) {
+	units := math.Ceil(costUSD * canonicalWalletUnitsPerUSD)
+	if math.IsNaN(units) || math.IsInf(units, 0) || units >= float64(math.MaxInt64) {
 		return 0, errors.New("billing estimate overflows int64")
 	}
 	return int64(units), nil

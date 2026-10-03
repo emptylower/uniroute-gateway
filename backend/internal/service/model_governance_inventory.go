@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"encoding/json"
+	"math/big"
 	"slices"
 	"sort"
 	"strings"
@@ -22,11 +24,24 @@ type InventoryItem struct {
 	Classification          string `json:"classification"`
 	Requests7d              int64  `json:"requests_7d"`
 	Requests30d             int64  `json:"requests_30d"`
-	Revenue7dBillingMicros  int64  `json:"revenue_7d_billing_micros"`
-	Revenue30dBillingMicros int64  `json:"revenue_30d_billing_micros"`
-	BillingCurrency         string `json:"billing_currency"`
+	Revenue7dBillingMicros  int64  `json:"-"`
+	Revenue30dBillingMicros int64  `json:"-"`
+	BillingCurrency         string `json:"-"`
 	AffectedAPIKeys7d       int64  `json:"affected_api_keys_7d"`
 	AffectedAPIKeys30d      int64  `json:"affected_api_keys_30d"`
+}
+
+func (item InventoryItem) MarshalJSON() ([]byte, error) {
+	type inventoryAlias InventoryItem
+	decimal := func(micros int64) string {
+		value := new(big.Rat).SetFrac(big.NewInt(micros), big.NewInt(1000000)).FloatString(6)
+		return strings.TrimRight(strings.TrimRight(value, "0"), ".")
+	}
+	return json.Marshal(struct {
+		inventoryAlias
+		Revenue7dUSD  string `json:"revenue_7d_usd"`
+		Revenue30dUSD string `json:"revenue_30d_usd"`
+	}{inventoryAlias(item), decimal(item.Revenue7dBillingMicros), decimal(item.Revenue30dBillingMicros)})
 }
 
 type ModelGovernanceInventoryRepository interface {

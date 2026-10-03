@@ -793,8 +793,10 @@ func TestSettingService_LoadForwardedClientIPSettingsWriteFailureUsesComputedMod
 		trustedProxiesSet bool
 		wantEnabled       bool
 	}{
-		{name: "compatibility migration remains effective", wantEnabled: true},
-		{name: "explicit proxy policy remains secure", trustedProxiesSet: true, wantEnabled: false},
+		// The legacy "trust forwarded IP when no trusted proxy is configured" compatibility
+		// migration was removed (ead49dfd2): a stored false stays false whatever the proxy policy.
+		{name: "stored false stays secure without proxy policy", wantEnabled: false},
+		{name: "stored false stays secure with explicit proxy policy", trustedProxiesSet: true, wantEnabled: false},
 	}
 
 	for _, test := range tests {

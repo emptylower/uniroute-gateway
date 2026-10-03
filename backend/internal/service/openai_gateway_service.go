@@ -421,7 +421,7 @@ type OpenAIGatewayService struct {
 	balanceNotifyService  *BalanceNotifyService
 	settingService        *SettingService
 	userPlatformQuotaRepo UserPlatformQuotaRepository
-	exchangeRates         *ExchangeRateService
+	exchangeRates         *USDPriceService
 	canonicalWallet       *CanonicalWalletBridge
 	authorizer            *CanonicalWalletAuthorizer
 	liveProvisional       LiveProvisionalStore
@@ -534,7 +534,7 @@ func NewOpenAIGatewayService(
 		balanceNotifyService:  balanceNotifyService,
 		settingService:        settingService,
 		userPlatformQuotaRepo: userPlatformQuotaRepo,
-		exchangeRates:         NewExchangeRateService(cfg),
+		exchangeRates:         NewUSDPriceService(cfg),
 		liveAttestation:       liveattestation.NewProvider(),
 		liveAttestationCipher: newLiveAttestationCipher(cfg),
 		responseHeaderFilter:  compileResponseHeaderFilter(cfg),

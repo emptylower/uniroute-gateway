@@ -19,20 +19,20 @@ func TestCanonicalWalletOldLeaseReservationSurvivesNewLeaseIssuance(t *testing.T
 	now := time.Now().UTC().Truncate(time.Millisecond)
 
 	oldLease := service.CanonicalWalletLease{
-		LeaseID: "lease-" + uuid.NewString(), PlatformUserID: platformUserID, Currency: "CNY",
-		BudgetUnits: 500_00000000, ExpiresAt: now.Add(2 * time.Minute), // 500 CNY, 2 min TTL
+		LeaseID: "lease-" + uuid.NewString(), PlatformUserID: platformUserID, Currency: "USD",
+		BudgetUnits: 500_00000000, ExpiresAt: now.Add(2 * time.Minute), // 500 USD, 2 min TTL
 	}
 	require.NoError(t, store.InstallCanonicalWalletLease(ctx, oldLease))
 
 	// An in-flight request reserves against the old lease before it's replaced.
-	inFlight, err := store.ReserveCanonicalWalletLease(ctx, platformUserID, oldLease.LeaseID, "CNY", "event-inflight-1", 12_000000, now)
+	inFlight, err := store.ReserveCanonicalWalletLease(ctx, platformUserID, oldLease.LeaseID, "USD", "event-inflight-1", 12_000000, now)
 	require.NoError(t, err)
 	require.False(t, inFlight.Duplicate)
 
 	// The renewal watermark fires and a fresh, larger lease is issued for the
 	// same user before the in-flight request settles.
 	newLease := service.CanonicalWalletLease{
-		LeaseID: "lease-" + uuid.NewString(), PlatformUserID: platformUserID, Currency: "CNY",
+		LeaseID: "lease-" + uuid.NewString(), PlatformUserID: platformUserID, Currency: "USD",
 		BudgetUnits: 1000_00000000, ExpiresAt: now.Add(10 * time.Minute),
 	}
 	require.NoError(t, store.InstallCanonicalWalletLease(ctx, newLease))
@@ -46,7 +46,7 @@ func TestCanonicalWalletOldLeaseReservationSurvivesNewLeaseIssuance(t *testing.T
 	// first attempt) must still resolve against the OLD lease it was
 	// actually reserved against, not the new current one, and must be
 	// recognized as a duplicate rather than reserving a second time.
-	retry, err := store.ReserveCanonicalWalletLease(ctx, platformUserID, oldLease.LeaseID, "CNY", "event-inflight-1", 12_000000, now)
+	retry, err := store.ReserveCanonicalWalletLease(ctx, platformUserID, oldLease.LeaseID, "USD", "event-inflight-1", 12_000000, now)
 	require.NoError(t, err)
 	require.True(t, retry.Duplicate)
 	require.Equal(t, oldLease.LeaseID, retry.Lease.LeaseID)
@@ -66,14 +66,14 @@ func TestCanonicalWalletNewReservationAgainstExpiredOldLeaseFails(t *testing.T) 
 	now := time.Now().UTC().Truncate(time.Millisecond)
 
 	oldLease := service.CanonicalWalletLease{
-		LeaseID: "lease-" + uuid.NewString(), PlatformUserID: platformUserID, Currency: "CNY",
+		LeaseID: "lease-" + uuid.NewString(), PlatformUserID: platformUserID, Currency: "USD",
 		BudgetUnits: 100_00000000, ExpiresAt: now.Add(1 * time.Second),
 	}
 	require.NoError(t, store.InstallCanonicalWalletLease(ctx, oldLease))
 
 	// A genuinely NEW request (never reserved before) must never be allowed
 	// to target an already-expired lease, even if it somehow knows the ID.
-	_, err := store.ReserveCanonicalWalletLease(ctx, platformUserID, oldLease.LeaseID, "CNY", "event-new-after-expiry", 1_000000, now.Add(2*time.Second))
+	_, err := store.ReserveCanonicalWalletLease(ctx, platformUserID, oldLease.LeaseID, "USD", "event-new-after-expiry", 1_000000, now.Add(2*time.Second))
 	require.ErrorIs(t, err, service.ErrCanonicalWalletLeaseExpired)
 }
 
@@ -88,7 +88,7 @@ func TestCanonicalWalletRedisSafeIntegerGuardHoldsAgainstRealRedis(t *testing.T)
 	ctx := context.Background()
 	store := NewGatewayCache(integrationRedis).(service.CanonicalWalletLeaseStore)
 	tooLarge := service.CanonicalWalletLease{
-		LeaseID: "lease-" + uuid.NewString(), PlatformUserID: "shipany-user-" + uuid.NewString(), Currency: "CNY",
+		LeaseID: "lease-" + uuid.NewString(), PlatformUserID: "shipany-user-" + uuid.NewString(), Currency: "USD",
 		BudgetUnits: 1_000_000_000_001_000_000, ExpiresAt: time.Now().UTC().Add(time.Minute), // Phase 0 fixture's exceeds_number_max_safe_integer case
 	}
 	require.Error(t, store.InstallCanonicalWalletLease(ctx, tooLarge))
@@ -109,14 +109,14 @@ func TestCanonicalWalletReservationAgainstRetainedExpiredLeaseIsRefused(t *testi
 	now := time.Now().UTC().Truncate(time.Millisecond)
 
 	lease := service.CanonicalWalletLease{
-		LeaseID: "lease-" + uuid.NewString(), PlatformUserID: platformUserID, Currency: "CNY",
+		LeaseID: "lease-" + uuid.NewString(), PlatformUserID: platformUserID, Currency: "USD",
 		BudgetUnits: 100_000000, ExpiresAt: now.Add(1 * time.Second), RetainUntil: now.Add(1800 * time.Second),
 	}
 	require.NoError(t, store.InstallCanonicalWalletLease(ctx, lease))
 
 	time.Sleep(1200 * time.Millisecond) // the real clock passes expires_at; the key is retained
 
-	_, err := store.ReserveCanonicalWalletLease(ctx, platformUserID, lease.LeaseID, "CNY", "event-retained-expired-1", 1_000000, time.Now().UTC())
+	_, err := store.ReserveCanonicalWalletLease(ctx, platformUserID, lease.LeaseID, "USD", "event-retained-expired-1", 1_000000, time.Now().UTC())
 	require.ErrorIs(t, err, service.ErrCanonicalWalletLeaseExpired, "a retained-but-expired lease must never be reservable — liveness is expires_at_ms, never the key TTL")
 }
 
@@ -134,13 +134,13 @@ func TestCanonicalWalletConvertInsideRetentionKeepsTheMarkerAliveWithTheLease(t 
 	now := time.Now().UTC().Truncate(time.Millisecond)
 
 	lease := service.CanonicalWalletLease{
-		LeaseID: "lease-" + uuid.NewString(), PlatformUserID: platformUserID, Currency: "CNY",
+		LeaseID: "lease-" + uuid.NewString(), PlatformUserID: platformUserID, Currency: "USD",
 		BudgetUnits: 100_000000, ExpiresAt: now.Add(1 * time.Second), RetainUntil: now.Add(1800 * time.Second),
 	}
 	require.NoError(t, store.InstallCanonicalWalletLease(ctx, lease))
 
 	authorizationID := "auth-" + uuid.NewString()
-	_, held, duplicate, err := store.ArmCanonicalWalletHold(ctx, platformUserID, lease.LeaseID, "CNY", authorizationID, 10_000000, 1_800_000, now)
+	_, held, duplicate, err := store.ArmCanonicalWalletHold(ctx, platformUserID, lease.LeaseID, "USD", authorizationID, 10_000000, 1_800_000, now)
 	require.NoError(t, err)
 	require.False(t, duplicate)
 	require.Equal(t, int64(10_000000), held)

@@ -55,7 +55,7 @@ type liveWindowShared struct {
 	account     *Account
 	resolver    *ModelPricingResolver
 	billing     *BillingService
-	fx          *ExchangeRateService
+	fx          *USDPriceService
 	fixtureSeq  atomic.Int64
 	callSeq     atomic.Int64
 }
@@ -87,7 +87,6 @@ func newLiveWindowShared(t *testing.T) *liveWindowShared {
 	snapCfg := &config.Config{}
 	snapCfg.Default.RateMultiplier = 1
 	snapCfg.CanonicalWallet.BillingSnapshotMode = "record"
-	snapCfg.Billing.ExchangeRate.BootstrapUSDToCNY = 7.0
 	snapService := NewBillingSnapshotService(snapCfg, resolver, billing, fx, NewBillingSnapshotStoreForTest(t, db))
 
 	account.Platform = PlatformOpenAI
@@ -360,13 +359,13 @@ func (f *liveWindowFixture) fund(units int64) {
 // Usage pumping. The units formula (recorded per the plan): one output token
 // prices to OutputPricePerToken × ExchangeRate × RateMultiplier × 1e8 units
 // (the same arithmetic liveUsageUnits runs: sourceCost × fx × rate →
-// canonicalWalletUnitsFromCNY, units per CNY = 1e8).
+// canonicalWalletUnitsFromUSD, units per CNY = 1e8).
 // ---------------------------------------------------------------------------
 
 func (f *liveWindowFixture) unitsPerOutputToken(t *testing.T, callHash string) float64 {
 	t.Helper()
 	rec := f.recordByHash(t, callHash)
-	return rec.OutputPricePerToken * rec.ExchangeRate * rec.RateMultiplier * float64(canonicalWalletUnitsPerCNY)
+	return rec.OutputPricePerToken * rec.ExchangeRate * rec.RateMultiplier * float64(canonicalWalletUnitsPerUSD)
 }
 
 func (f *liveWindowFixture) unitsForTokens(t *testing.T, rec *LiveCallRecord, input, output, cacheRead int) int64 {
@@ -376,7 +375,7 @@ func (f *liveWindowFixture) unitsForTokens(t *testing.T, rec *LiveCallRecord, in
 		inputTokens = 0
 	}
 	source := float64(inputTokens)*rec.InputPricePerToken + float64(output)*rec.OutputPricePerToken + float64(cacheRead)*rec.CacheReadPricePerToken
-	units, err := canonicalWalletUnitsFromCNY(source * rec.ExchangeRate * rec.RateMultiplier)
+	units, err := canonicalWalletUnitsFromUSD(source * rec.ExchangeRate * rec.RateMultiplier)
 	require.NoError(t, err)
 	return units
 }
@@ -1241,9 +1240,10 @@ func TestPhase37bLiveClockSeam(t *testing.T) {
 // driven) time sites. With a fixture whose liveClock is advanced by one hour,
 // driving a session far enough to write a provisional record, a settlement,
 // and a heartbeat proves that:
-//   1. wallet_live_provisional.created_at (openai_live.go:390)
-//   2. the controller heartbeat (openai_live.go:1030)
-//   3. the settlement's occurred_at (openai_live.go:1608)
+//  1. wallet_live_provisional.created_at (openai_live.go:390)
+//  2. the controller heartbeat (openai_live.go:1030)
+//  3. the settlement's occurred_at (openai_live.go:1608)
+//
 // all remain within a few seconds of wall-clock time.Now(), NOT of the
 // advanced fake clock (+1 hour).
 //

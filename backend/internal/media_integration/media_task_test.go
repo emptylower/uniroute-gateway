@@ -143,7 +143,7 @@ type testControl struct {
 }
 
 func amount(n int64) map[string]any {
-	return map[string]any{"amount_units": strconv.FormatInt(n, 10), "currency": "CNY", "scale": 8, "unit_version": "cny-e8-v1"}
+	return map[string]any{"amount_units": strconv.FormatInt(n, 10), "currency": "USD", "scale": 8, "unit_version": "usd-e8-v1"}
 }
 func units(v any) int64 {
 	m, _ := v.(map[string]any)
@@ -172,7 +172,7 @@ func (c *testControl) wire(id, user string) map[string]any {
 	if l := c.lease(id); l != nil {
 		budget, captured, expiry = l.budget, l.captured, l.expires
 	}
-	return map[string]any{"lease_id": id, "platform_user_id": user, "currency": "CNY", "unit_version": "cny-e8-v1", "scale": 8, "budget": amount(budget), "reserved": amount(0), "captured": amount(captured), "released": amount(0), "headroom": amount(budget - captured), "capture_seq": len(c.events), "status": "active", "expires_at": expiry, "outcome": "reused", "usd_wallet_policy_version": "usd-wallet-v1", "drained_at": nil}
+	return map[string]any{"lease_id": id, "platform_user_id": user, "currency": "USD", "unit_version": "usd-e8-v1", "scale": 8, "budget": amount(budget), "reserved": amount(0), "captured": amount(captured), "released": amount(0), "headroom": amount(budget - captured), "capture_seq": len(c.events), "status": "active", "expires_at": expiry, "outcome": "reused", "usd_wallet_policy_version": "usd-wallet-v1", "drained_at": nil}
 }
 func (c *testControl) handler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
@@ -373,7 +373,7 @@ func newMediaFixture(t *testing.T) *mediaFixture {
 	f.cfg.CanonicalWallet = config.CanonicalWalletConfig{Mode: "enforce", Holds: "on", EnforceReady: true, BillingSnapshotMode: "settle", USDWalletEnabled: true, USDPolicyVersion: "usd-wallet-v1", ControlPlaneURL: control.URL, Issuer: "sub2api-gateway", Audience: "shipany-control-plane", Secret: strings.Repeat("s", 32), Version: "v1", RequestTimeoutMS: 1000, LeaseTTLSeconds: 300, LeaseBudgetUnits: 500000000, ExpirySkewMarginMS: 10, OrphanGraceSeconds: 2, OrphanSweepIntervalSeconds: 1, OrphanSweepBatch: 100, ReceivableRedriveIntervalSeconds: 3600, ReceivableRedriveMaxAttempts: 3, RetentionDays: 45}
 	f.cfg.MediaTasks = config.MediaTasksConfig{Enabled: true, KIEAPIKey: "isolated-test-key", KIEBaseURL: f.upstream.URL, PollSeconds: 1, DeadlineSeconds: 86400}
 	f.cfg.Gateway.ConcurrencySlotTTLMinutes = 30
-	require.NoError(t, db.QueryRow(`INSERT INTO users(email,password_hash,platform_user_id,billing_currency,status,balance) VALUES('media@example.test','test','media-user','CNY','active',999) RETURNING id`).Scan(&f.userID))
+	require.NoError(t, db.QueryRow(`INSERT INTO users(email,password_hash,platform_user_id,billing_currency,status,balance) VALUES('media@example.test','test','media-user','USD','active',999) RETURNING id`).Scan(&f.userID))
 	f.users = &mediaUsers{db: db}
 	f.apiKeys = service.NewAPIKeyService(&mediaKeys{db: db}, f.users, nil, nil, nil, nil, f.cfg)
 	f.keys = service.NewPlatformAPIKeyService(&mediaProjection{db}, f.apiKeys)
@@ -495,7 +495,7 @@ func TestExternalMediaDefiniteFailureReleasesOnce(t *testing.T) {
 	require.Zero(t, outbox)
 	lease, err := repository.NewGatewayCache(f.rdb).(service.CanonicalWalletLeaseStore).GetCanonicalWalletLeaseByID(context.Background(), "media-user", "lease-test")
 	require.NoError(t, err)
-	require.Equal(t, int64(19656000), lease.ReleasedUnits)
+	require.Equal(t, int64(2730000), lease.ReleasedUnits)
 	require.Equal(t, lease.BudgetUnits, lease.RemainingUnits())
 	f.create(t, "failure", "google/nano-banana", "1:1")
 	require.Equal(t, int64(1), f.creates.Load())
@@ -569,7 +569,7 @@ func (f *mediaFixture) poolFunds(t *testing.T, a, b, direct int64) {
 	f.control.mu.Unlock()
 	wallet := repository.NewGatewayCache(f.rdb).(service.CanonicalWalletLeaseStore)
 	for _, lease := range f.control.pool {
-		require.NoError(t, wallet.InstallCanonicalWalletLease(context.Background(), service.CanonicalWalletLease{LeaseID: lease.id, PlatformUserID: "media-user", Currency: "CNY", BudgetUnits: lease.budget, ExpiresAt: lease.expires}))
+		require.NoError(t, wallet.InstallCanonicalWalletLease(context.Background(), service.CanonicalWalletLease{LeaseID: lease.id, PlatformUserID: "media-user", Currency: "USD", BudgetUnits: lease.budget, ExpiresAt: lease.expires}))
 	}
 }
 func (f *mediaFixture) authorize(t *testing.T, units int64, family service.BillingFamily) (*service.AuthorizationHandle, *service.BillingSnapshot) {
@@ -600,7 +600,7 @@ func TestExternalPoolMixedLeasesAndDirectFundsReallySpend(t *testing.T) {
 			require.Equal(t, int64(720000000), f.control.unleased)
 			require.Len(t, f.control.pins, 2)
 			f.control.mu.Unlock()
-			require.True(t, f.bridge.ObserveSettlement(service.CanonicalWalletSettlementEvent{GatewayRequestID: "pool-spend", PlatformUserID: "media-user", Currency: "CNY", AmountUnits: 9 * 720000000, AuthorizationID: h.ID, BillingSnapshotID: snap.ID}))
+			require.True(t, f.bridge.ObserveSettlement(service.CanonicalWalletSettlementEvent{GatewayRequestID: "pool-spend", PlatformUserID: "media-user", Currency: "USD", AmountUnits: 9 * 720000000, AuthorizationID: h.ID, BillingSnapshotID: snap.ID}))
 			f.svc = f.newService(t)
 			require.Eventually(t, func() bool {
 				var n int
@@ -616,7 +616,7 @@ func TestExternalPoolMixedLeasesAndDirectFundsReallySpend(t *testing.T) {
 }
 func TestExternalMediaSegmentsSingleProviderSingleUsageAndAtomicOutbox(t *testing.T) {
 	f := newMediaFixture(t)
-	f.poolFunds(t, 10000000, 10000000, 0)
+	f.poolFunds(t, 2000000, 2000000, 0)
 	task := f.create(t, "segmented", "google/nano-banana", "1:1")
 	f.wait(t, task.TaskID, "charged")
 	require.Equal(t, int64(1), f.creates.Load())
@@ -632,7 +632,7 @@ func TestExternalPoolActualCostFIFOReleasesUnusedSegments(t *testing.T) {
 	f := newMediaFixture(t)
 	f.poolFunds(t, 4*720000000, 4*720000000, 0)
 	h, snap := f.authorize(t, 8*720000000, service.BillingFamilyOpenAI)
-	require.True(t, f.bridge.ObserveSettlement(service.CanonicalWalletSettlementEvent{GatewayRequestID: "lower-actual", PlatformUserID: "media-user", Currency: "CNY", AmountUnits: 3 * 720000000, AuthorizationID: h.ID, BillingSnapshotID: snap.ID}))
+	require.True(t, f.bridge.ObserveSettlement(service.CanonicalWalletSettlementEvent{GatewayRequestID: "lower-actual", PlatformUserID: "media-user", Currency: "USD", AmountUnits: 3 * 720000000, AuthorizationID: h.ID, BillingSnapshotID: snap.ID}))
 	f.svc = f.newService(t)
 	require.Eventually(t, func() bool {
 		var n int
@@ -684,7 +684,7 @@ func TestExternalPoolUnknownRetainsEverySegmentAcrossExpiryFlushAndRestart(t *te
 
 func TestExternalMediaTerminalTransactionRollsBackEverySegment(t *testing.T) {
 	f := newMediaFixture(t)
-	f.poolFunds(t, 10000000, 10000000, 0)
+	f.poolFunds(t, 2000000, 2000000, 0)
 	_, err := f.db.Exec(`CREATE FUNCTION reject_media_second() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.lease_id='lease-b' THEN RAISE EXCEPTION 'isolated terminal transaction fault'; END IF; RETURN NEW; END $$; CREATE TRIGGER reject_media_second BEFORE INSERT ON wallet_settlement_outbox FOR EACH ROW EXECUTE FUNCTION reject_media_second()`)
 	require.NoError(t, err)
 	task := f.create(t, "tx-rollback", "google/nano-banana", "1:1")
@@ -746,7 +746,7 @@ func TestExternalPoolAvailabilityExactRawCountersAndCapturedDedup(t *testing.T) 
 	f := newMediaFixture(t)
 	f.poolFunds(t, 720000000, 720000000, 0)
 	h, _ := f.authorize(t, 1080000000, service.BillingFamilyOpenAI)
-	input := service.WalletAvailabilityInput{UnitVersion: "cny-e8-v1", USDPolicyVersion: "usd-wallet-v1", CapturedEventIDs: []string{}}
+	input := service.WalletAvailabilityInput{UnitVersion: "usd-e8-v1", USDPolicyVersion: "usd-wallet-v1", CapturedEventIDs: []string{}}
 	for _, l := range f.control.pool {
 		input.Leases = append(input.Leases, service.WalletAvailabilityLeaseInput{LeaseID: l.id, BudgetUnits: strconv.FormatInt(l.budget, 10), CapturedUnits: "0", ReleasedUnits: "0", ReservedUnits: "0", Status: "active", ExpiresAt: l.expires})
 	}
@@ -858,7 +858,7 @@ func TestExternalPoolConcurrentLLMAndMediaNeverOverspend(t *testing.T) {
 	f.svc = f.newService(t)
 	h, authErr := service.NewCanonicalWalletAuthorizer(f.cfg, f.bridge, f.snapshots).Authorize(context.Background(), service.AuthorizeInput{Snapshot: snapshot, User: user, FixedEstimateUnits: 19656000})
 	if authErr == nil {
-		require.True(t, f.bridge.ObserveSettlement(service.CanonicalWalletSettlementEvent{GatewayRequestID: "competing-llm", PlatformUserID: "media-user", Currency: "CNY", AmountUnits: 19656000, AuthorizationID: h.ID, BillingSnapshotID: snapshot.ID}))
+		require.True(t, f.bridge.ObserveSettlement(service.CanonicalWalletSettlementEvent{GatewayRequestID: "competing-llm", PlatformUserID: "media-user", Currency: "USD", AmountUnits: 19656000, AuthorizationID: h.ID, BillingSnapshotID: snapshot.ID}))
 	}
 	require.Eventually(t, func() bool {
 		v, e := f.svc.Get(context.Background(), f.userID, task.TaskID)
@@ -981,7 +981,7 @@ func TestExternalPoolRecoveryRotatesPastThirtyTwoUnknownGroups(t *testing.T) {
 		require.NoError(t, err)
 	}
 	h, snap := f.authorize(t, 1000000, service.BillingFamilyOpenAI)
-	require.True(t, f.bridge.ObserveSettlement(service.CanonicalWalletSettlementEvent{GatewayRequestID: "after-thirty-two", PlatformUserID: "media-user", Currency: "CNY", AmountUnits: 1000000, AuthorizationID: h.ID, BillingSnapshotID: snap.ID}))
+	require.True(t, f.bridge.ObserveSettlement(service.CanonicalWalletSettlementEvent{GatewayRequestID: "after-thirty-two", PlatformUserID: "media-user", Currency: "USD", AmountUnits: 1000000, AuthorizationID: h.ID, BillingSnapshotID: snap.ID}))
 	f.svc = f.newService(t)
 	require.Eventually(t, func() bool {
 		var state string
@@ -1022,7 +1022,7 @@ func TestExternalPoolConcurrentPositiveAndZeroReleaseIsWholeGroup(t *testing.T) 
 	<-transportEntered
 	positive := make(chan bool, 1)
 	go func() {
-		positive <- f.bridge.ObserveSettlement(service.CanonicalWalletSettlementEvent{GatewayRequestID: "positive-race", PlatformUserID: "media-user", Currency: "CNY", AmountUnits: 360000000, AuthorizationID: h.ID, AuthorizationToken: h.LastWriteToken(), BillingSnapshotID: snap.ID})
+		positive <- f.bridge.ObserveSettlement(service.CanonicalWalletSettlementEvent{GatewayRequestID: "positive-race", PlatformUserID: "media-user", Currency: "USD", AmountUnits: 360000000, AuthorizationID: h.ID, AuthorizationToken: h.LastWriteToken(), BillingSnapshotID: snap.ID})
 	}()
 	require.Eventually(t, func() bool {
 		var blocked bool
@@ -1069,7 +1069,7 @@ func TestExternalMediaCacheLossAndDefinitePinRefusalResolveKnownZero(t *testing.
 	for i, segment := range h.Segments {
 		id := event
 		if i > 0 {
-			id = service.CanonicalWalletSettlementEventID(task.TaskID+":"+segment.AuthorizationID, "media-user", "CNY")
+			id = service.CanonicalWalletSettlementEventID(task.TaskID+":"+segment.AuthorizationID, "media-user", "USD")
 		}
 		_, err = f.db.Exec(`UPDATE wallet_authorization_segment SET event_id=$2 WHERE authorization_id=$1`, segment.AuthorizationID, id)
 		require.NoError(t, err)
@@ -1098,10 +1098,10 @@ func TestExternalPoolLiveNextWindowActivationSurvivesAgeAndRedisLoss(t *testing.
 	first, snap := f.authorize(t, 72000000, service.BillingFamilyLive)
 	store := service.ProvideLiveProvisionalStore(f.cfg, f.db)
 	ctx := context.Background()
-	row := &service.LiveProvisionalRecord{Token: first.ID, AuthorizationID: first.ID, PlatformUserID: "media-user", UserID: f.userID, APIKeyID: 1, AccountID: 1, BillingCurrency: "CNY", BillingSnapshotID: snap.ID, EstimatedUnits: 9 * 720000000, Status: service.LiveProvisionalStatusProvisional, Windows: []service.LiveWindow{{WindowSeq: 1, LeaseID: first.LeaseID, Token: first.ID}}}
+	row := &service.LiveProvisionalRecord{Token: first.ID, AuthorizationID: first.ID, PlatformUserID: "media-user", UserID: f.userID, APIKeyID: 1, AccountID: 1, BillingCurrency: "USD", BillingSnapshotID: snap.ID, EstimatedUnits: 9 * 720000000, Status: service.LiveProvisionalStatusProvisional, Windows: []service.LiveWindow{{WindowSeq: 1, LeaseID: first.LeaseID, Token: first.ID}}}
 	require.NoError(t, store.Save(ctx, row))
 	require.NoError(t, store.Activate(ctx, first.ID, "real-next-window", time.Now()))
-	require.True(t, f.bridge.ObserveSettlement(service.CanonicalWalletSettlementEvent{GatewayRequestID: "live-first-window", PlatformUserID: "media-user", Currency: "CNY", AmountUnits: 72000000, AuthorizationID: first.ID, BillingSnapshotID: snap.ID}))
+	require.True(t, f.bridge.ObserveSettlement(service.CanonicalWalletSettlementEvent{GatewayRequestID: "live-first-window", PlatformUserID: "media-user", Currency: "USD", AmountUnits: 72000000, AuthorizationID: first.ID, BillingSnapshotID: snap.ID}))
 	next, _ := f.authorize(t, 9*720000000, service.BillingFamilyLive)
 	require.Len(t, next.Segments, 2)
 	window := service.LiveWindow{WindowSeq: 2, LeaseID: next.LeaseID, Token: next.ID, OpenedAtMS: time.Now().UnixMilli()}
@@ -1125,7 +1125,7 @@ func TestExternalPoolLiveNextWindowActivationSurvivesAgeAndRedisLoss(t *testing.
 	require.NoError(t, f.db.QueryRow(`SELECT count(*) FROM wallet_authorization_segment WHERE parent_authorization_id=$1 AND state='indeterminate' AND authorization_token=$2 AND pin_state='active'`, next.ID, next.ID+":live-window").Scan(&active))
 	require.Equal(t, 2, active)
 	require.NoError(t, store.SetLiveWindowPending(ctx, first.ID, 2, 9*720000000))
-	require.True(t, f.bridge.ObserveSettlement(service.CanonicalWalletSettlementEvent{GatewayRequestID: "live-next-window", PlatformUserID: "media-user", Currency: "CNY", AmountUnits: 9 * 720000000, AuthorizationID: next.ID, AuthorizationToken: next.ID, BillingSnapshotID: snap.ID}))
+	require.True(t, f.bridge.ObserveSettlement(service.CanonicalWalletSettlementEvent{GatewayRequestID: "live-next-window", PlatformUserID: "media-user", Currency: "USD", AmountUnits: 9 * 720000000, AuthorizationID: next.ID, AuthorizationToken: next.ID, BillingSnapshotID: snap.ID}))
 	require.Eventually(t, func() bool {
 		var n int
 		_ = f.db.QueryRow(`SELECT count(*) FROM wallet_authorization_segment WHERE parent_authorization_id=$1 AND state='finished'`, next.ID).Scan(&n)
@@ -1167,7 +1167,7 @@ func TestExternalPoolKnownHTTPRejectionRenewsOnlyAfterZeroPinACK(t *testing.T) {
 	resp.Body.Close()
 	intermediate := service.AuthorizationIDOf(h)
 	require.NotEqual(t, old, intermediate)
-	input := service.WalletAvailabilityInput{UnitVersion: "cny-e8-v1", USDPolicyVersion: "usd-wallet-v1", CapturedEventIDs: []string{}}
+	input := service.WalletAvailabilityInput{UnitVersion: "usd-e8-v1", USDPolicyVersion: "usd-wallet-v1", CapturedEventIDs: []string{}}
 	f.control.mu.Lock()
 	for _, lease := range f.control.pool {
 		input.Leases = append(input.Leases, service.WalletAvailabilityLeaseInput{LeaseID: lease.id, BudgetUnits: strconv.FormatInt(lease.budget, 10), CapturedUnits: "0", ReleasedUnits: "0", ReservedUnits: "0", Status: "active", ExpiresAt: lease.expires})
@@ -1197,7 +1197,7 @@ func TestExternalPoolKnownHTTPRejectionRenewsOnlyAfterZeroPinACK(t *testing.T) {
 	f.control.mu.Unlock()
 	// A late callback to the old token cannot release the fresh shares.
 	h.RecordOutcome(h.Writes()[0].Token, service.AuthorizationOutcomeNotWritten, context.Canceled)
-	require.True(t, f.bridge.ObserveSettlement(service.CanonicalWalletSettlementEvent{GatewayRequestID: "corrected-http", PlatformUserID: "media-user", Currency: "CNY", AmountUnits: 1440000000, AuthorizationID: fresh, AuthorizationToken: service.AuthorizationTokenOf(h), BillingSnapshotID: snap.ID}))
+	require.True(t, f.bridge.ObserveSettlement(service.CanonicalWalletSettlementEvent{GatewayRequestID: "corrected-http", PlatformUserID: "media-user", Currency: "USD", AmountUnits: 1440000000, AuthorizationID: fresh, AuthorizationToken: service.AuthorizationTokenOf(h), BillingSnapshotID: snap.ID}))
 	f.svc = f.newService(t)
 	require.Eventually(t, func() bool {
 		var n int
@@ -1226,7 +1226,7 @@ func TestExternalPoolClaimCarriesFrozenSnapshotIdentity(t *testing.T) {
 	f := newMediaFixture(t)
 	h, snap := f.authorize(t, 720000000, service.BillingFamilyOpenAI)
 	f.bridge.Close()
-	require.True(t, f.bridge.ObserveSettlement(service.CanonicalWalletSettlementEvent{GatewayRequestID: "claim-snapshot", PlatformUserID: "media-user", Currency: "CNY", AmountUnits: 720000000, AuthorizationID: h.ID, BillingSnapshotID: snap.ID}))
+	require.True(t, f.bridge.ObserveSettlement(service.CanonicalWalletSettlementEvent{GatewayRequestID: "claim-snapshot", PlatformUserID: "media-user", Currency: "USD", AmountUnits: 720000000, AuthorizationID: h.ID, BillingSnapshotID: snap.ID}))
 	claimed, err := repository.ProvideWalletOutboxStore(f.db).ClaimPendingOutboxEvents(context.Background(), "isolated-claim-proof", 1)
 	require.NoError(t, err)
 	require.Len(t, claimed, 1)

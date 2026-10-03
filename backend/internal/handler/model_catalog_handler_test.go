@@ -17,8 +17,7 @@ import (
 func TestListChannelCostsAcceptsCurrencyAndDisplayCurrencyAlias(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	cfg := &config.Config{}
-	cfg.Billing.ExchangeRate.BootstrapUSDToCNY = 7.2
-	fx := service.NewExchangeRateService(cfg)
+	fx := service.NewUSDPriceService(cfg)
 	catalog := service.NewModelCatalogService(nil, nil, nil, nil, fx)
 	handler := NewModelCatalogHandler(catalog, nil, nil)
 
@@ -30,10 +29,10 @@ func TestListChannelCostsAcceptsCurrencyAndDisplayCurrencyAlias(t *testing.T) {
 		rateSource string
 	}{
 		{name: "canonical USD", query: "currency=USD", currency: service.CurrencyUSD, rate: 1, rateSource: "identity"},
-		{name: "canonical CNY", query: "currency=CNY", currency: service.CurrencyCNY, rate: 7.2, rateSource: "bootstrap_config"},
+		{name: "canonical CNY", query: "currency=CNY", currency: service.CurrencyUSD, rate: 1, rateSource: "identity"},
 		{name: "display currency alias", query: "display_currency=USD", currency: service.CurrencyUSD, rate: 1, rateSource: "identity"},
 		{name: "canonical takes precedence", query: "currency=USD&display_currency=CNY", currency: service.CurrencyUSD, rate: 1, rateSource: "identity"},
-		{name: "legacy default remains CNY", query: "", currency: service.CurrencyCNY, rate: 7.2, rateSource: "bootstrap_config"},
+		{name: "legacy default remains CNY", query: "", currency: service.CurrencyUSD, rate: 1, rateSource: "identity"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -66,9 +65,9 @@ func TestListChannelCostsAcceptsCurrencyAndDisplayCurrencyAlias(t *testing.T) {
 	}
 }
 
-func TestListChannelCostsRejectsUnsupportedCurrency(t *testing.T) {
+func TestListChannelCostsIgnoresRetiredCurrencyParameter(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	handler := NewModelCatalogHandler(nil, nil, nil)
+	handler := NewModelCatalogHandler(service.NewModelCatalogService(nil, nil, nil, nil, service.NewUSDPriceService(nil)), nil, nil)
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/v1/models/channel-costs?currency=EUR", nil)
@@ -76,8 +75,8 @@ func TestListChannelCostsRejectsUnsupportedCurrency(t *testing.T) {
 
 	handler.ListChannelCosts(ctx)
 
-	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	require.Equal(t, http.StatusOK, recorder.Code)
 	var envelope response.Response
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &envelope))
-	require.Contains(t, envelope.Message, "allowed values are CNY and USD")
+	require.Equal(t, 0, envelope.Code)
 }

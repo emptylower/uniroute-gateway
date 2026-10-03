@@ -60,7 +60,6 @@ func canonicalWalletWiringCfg(serverURL string) *config.Config {
 		BillingSnapshotMode: "record", LiveWindowMinSeconds: 20, LiveControllerTakeoverSeconds: 15,
 		ReceivableRedriveIntervalSeconds: 60, ReceivableRedriveMaxAttempts: 2, RetentionDays: 45,
 	}
-	cfg.Billing.ExchangeRate.BootstrapUSDToCNY = 7.2 // keep the downstream currency step out of the way
 	return cfg
 }
 
@@ -87,10 +86,10 @@ func TestProvideBillingCacheServiceWiresTheRealBillingCacheUnderEnforce(t *testi
 	// lease installed through that same cache admits.
 	platformUserID := "shipany-user-" + uuid.NewString()
 	require.NoError(t, store.InstallCanonicalWalletLease(ctx, service.CanonicalWalletLease{
-		LeaseID: "lease-" + uuid.NewString(), PlatformUserID: platformUserID, Currency: "CNY",
+		LeaseID: "lease-" + uuid.NewString(), PlatformUserID: platformUserID, Currency: "USD",
 		BudgetUnits: 100_000000, ExpiresAt: time.Now().UTC().Add(time.Minute),
 	}))
-	require.NoError(t, svc.CheckBillingEligibility(ctx, &service.User{ID: 1, PlatformUserID: platformUserID, BillingCurrency: "CNY"}, nil, nil, nil, ""),
+	require.NoError(t, svc.CheckBillingEligibility(ctx, &service.User{ID: 1, PlatformUserID: platformUserID, BillingCurrency: "USD"}, nil, nil, nil, ""),
 		"a lease with real headroom must admit through the real entry point — the derived bridge actually gates")
 }
 
@@ -127,19 +126,19 @@ func TestAbsentLeaseBootstrapsThroughTheRealWiring(t *testing.T) {
 		rdb := service.SharedTestRedisClientForTest(t)
 		real := repository.NewBillingCache(rdb)
 		platformUserID := "shipany-user-" + uuid.NewString()
-		leaseJSON := fmt.Sprintf(`{"data":{"lease_id":"lease-%s","platform_user_id":%q,"currency":"CNY","unit_version":"cny-e8-v1","scale":8,`+
-			`"budget":{"amount_units":"100000000","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},`+
-			`"reserved":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},`+
-			`"captured":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},`+
-			`"released":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},`+
-			`"headroom":{"amount_units":"100000000","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},`+
+		leaseJSON := fmt.Sprintf(`{"data":{"lease_id":"lease-%s","platform_user_id":%q,"currency":"USD","unit_version":"usd-e8-v1","scale":8,`+
+			`"budget":{"amount_units":"100000000","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},`+
+			`"reserved":{"amount_units":"0","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},`+
+			`"captured":{"amount_units":"0","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},`+
+			`"released":{"amount_units":"0","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},`+
+			`"headroom":{"amount_units":"100000000","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},`+
 			`"capture_seq":0,"status":"active","expires_at":%q,"outcome":"issued","clamped_by":"none"}}`,
 			uuid.NewString(), platformUserID, time.Now().UTC().Add(time.Minute).Format(time.RFC3339))
 		server := canonicalWalletEnsureServer(t, http.StatusOK, leaseJSON)
 
 		svc := service.ProvideBillingCacheService(real, nil, nil, nil, nil, nil, canonicalWalletWiringCfg(server.URL), nil, nil, nil)
 		t.Cleanup(svc.Stop)
-		require.NoError(t, svc.CheckBillingEligibility(ctx, &service.User{ID: 2, PlatformUserID: platformUserID, BillingCurrency: "CNY"}, nil, nil, nil, ""),
+		require.NoError(t, svc.CheckBillingEligibility(ctx, &service.User{ID: 2, PlatformUserID: platformUserID, BillingCurrency: "USD"}, nil, nil, nil, ""),
 			"an absent lease with a funded control plane must bootstrap and admit — and never fall through to the legacy balance path")
 	})
 
@@ -150,7 +149,7 @@ func TestAbsentLeaseBootstrapsThroughTheRealWiring(t *testing.T) {
 
 		svc := service.ProvideBillingCacheService(real, nil, nil, nil, nil, nil, canonicalWalletWiringCfg(server.URL), nil, nil, nil)
 		t.Cleanup(svc.Stop)
-		err := svc.CheckBillingEligibility(ctx, &service.User{ID: 3, PlatformUserID: "shipany-user-" + uuid.NewString(), BillingCurrency: "CNY"}, nil, nil, nil, "")
+		err := svc.CheckBillingEligibility(ctx, &service.User{ID: 3, PlatformUserID: "shipany-user-" + uuid.NewString(), BillingCurrency: "USD"}, nil, nil, nil, "")
 		require.ErrorIs(t, err, service.ErrInsufficientBalance, "the control plane's no-money answer is the real 403")
 	})
 
@@ -159,7 +158,7 @@ func TestAbsentLeaseBootstrapsThroughTheRealWiring(t *testing.T) {
 		real := repository.NewBillingCache(rdb)
 		svc := service.ProvideBillingCacheService(real, nil, nil, nil, nil, nil, canonicalWalletWiringCfg("https://control.invalid.test"), nil, nil, nil)
 		t.Cleanup(svc.Stop)
-		err := svc.CheckBillingEligibility(ctx, &service.User{ID: 4, PlatformUserID: "shipany-user-" + uuid.NewString(), BillingCurrency: "CNY"}, nil, nil, nil, "")
+		err := svc.CheckBillingEligibility(ctx, &service.User{ID: 4, PlatformUserID: "shipany-user-" + uuid.NewString(), BillingCurrency: "USD"}, nil, nil, nil, "")
 		require.ErrorIs(t, err, service.ErrBillingServiceUnavailable, "an unreachable control plane fails closed — 503, never admitted, never legacy")
 	})
 }

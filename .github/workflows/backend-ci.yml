@@ -2,6 +2,7 @@ name: CI
 
 on:
   push:
+    branches: [main] # feature branches are covered by their pull_request run
   pull_request:
 
 permissions:
@@ -34,7 +35,9 @@ jobs:
       - name: Unit tests
         working-directory: backend
         run: make test-unit
+      # Run even when the unit step failed so one run reports both signals.
       - name: Integration tests
+        if: ${{ !cancelled() }}
         working-directory: backend
         run: make test-integration
 
@@ -60,8 +63,13 @@ jobs:
 
   golangci-lint:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read # only-new-issues reads the PR diff
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # only-new-issues compares against the base revision
       - uses: actions/setup-go@v6
         with:
           go-version-file: backend/go.mod
@@ -77,3 +85,6 @@ jobs:
           version: v2.9
           args: --timeout=30m
           working-directory: backend
+          # Legacy findings are baselined: only issues a change introduces fail CI.
+          # Pay the backlog down separately; do not turn this off to silence a new finding.
+          only-new-issues: true

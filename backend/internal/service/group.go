@@ -110,19 +110,9 @@ type Group struct {
 	RateLimitedAccountCount int64
 }
 
-func (g *Group) RateMultiplierForCurrency(currency string) float64 {
+func (g *Group) EffectiveRateMultiplier() float64 {
 	if g == nil {
 		return 1
-	}
-	switch normalizeBillingCurrencyOrDefault(currency) {
-	case CurrencyUSD:
-		if g.RateMultiplierUSD != nil {
-			return *g.RateMultiplierUSD
-		}
-	default:
-		if g.RateMultiplierCNY != nil {
-			return *g.RateMultiplierCNY
-		}
 	}
 	return g.RateMultiplier
 }

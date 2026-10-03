@@ -429,7 +429,7 @@ func (s *RedeemService) Redeem(ctx context.Context, userID int64, code string) (
 		if walletErr != nil {
 			return nil, walletErr
 		}
-		if NormalizeUserBillingCurrency(wallet.BillingCurrency) != NormalizeUserBillingCurrency(redeemCode.Currency) {
+		if strings.ToUpper(strings.TrimSpace(wallet.BillingCurrency)) != NormalizeHistoricalBillingCurrency(redeemCode.Currency) {
 			return nil, infraerrors.BadRequest("REDEEM_CURRENCY_MISMATCH", "redeem code currency does not match wallet currency")
 		}
 	}
@@ -459,7 +459,7 @@ func (s *RedeemService) Redeem(ctx context.Context, userID int64, code string) (
 		if lockErr != nil {
 			return nil, fmt.Errorf("lock redeem wallet: %w", lockErr)
 		}
-		if NormalizeUserBillingCurrency(wallet.BillingCurrency) != NormalizeUserBillingCurrency(redeemCode.Currency) {
+		if strings.ToUpper(strings.TrimSpace(wallet.BillingCurrency)) != NormalizeHistoricalBillingCurrency(redeemCode.Currency) {
 			return nil, infraerrors.BadRequest("REDEEM_CURRENCY_MISMATCH", "redeem code currency does not match wallet currency")
 		}
 	}

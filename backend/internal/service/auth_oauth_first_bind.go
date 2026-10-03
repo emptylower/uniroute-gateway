@@ -77,11 +77,9 @@ ON CONFLICT (user_id, provider_type, grant_reason) DO NOTHING`,
 		return nil
 	}
 
-	if providerDefaults.Balance != 0 {
-		if err := client.User.UpdateOneID(userID).AddBalance(providerDefaults.Balance).Exec(ctx); err != nil {
-			return fmt.Errorf("apply first bind balance default: %w", err)
-		}
-	}
+	// providerDefaults.Balance is not applied: the native gateway wallet is
+	// retired (finalize rejects any non-zero balance), so writing it would
+	// fail the whole bind. Signup funds are granted by the console USD ledger.
 	if providerDefaults.Concurrency != 0 {
 		if err := client.User.UpdateOneID(userID).AddConcurrency(providerDefaults.Concurrency).Exec(ctx); err != nil {
 			return fmt.Errorf("apply first bind concurrency default: %w", err)

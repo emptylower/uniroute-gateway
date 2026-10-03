@@ -20,17 +20,17 @@ func TestCanonicalWalletLeaseStoreIsAtomicAndIdempotent(t *testing.T) {
 	store := NewGatewayCache(client).(service.CanonicalWalletLeaseStore)
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	lease := service.CanonicalWalletLease{
-		LeaseID: "lease-1", PlatformUserID: "shipany-user-1", Currency: "CNY",
+		LeaseID: "lease-1", PlatformUserID: "shipany-user-1", Currency: "USD",
 		BudgetUnits: 1_000, ExpiresAt: now.Add(time.Minute),
 	}
 	require.NoError(t, store.InstallCanonicalWalletLease(context.Background(), lease))
 
-	first, err := store.ReserveCanonicalWalletLease(context.Background(), lease.PlatformUserID, lease.LeaseID, "CNY", "event-1", 600, now)
+	first, err := store.ReserveCanonicalWalletLease(context.Background(), lease.PlatformUserID, lease.LeaseID, "USD", "event-1", 600, now)
 	require.NoError(t, err)
 	require.False(t, first.Duplicate)
 	require.Equal(t, int64(600), first.Lease.ConsumedUnits)
 
-	duplicate, err := store.ReserveCanonicalWalletLease(context.Background(), lease.PlatformUserID, lease.LeaseID, "CNY", "event-1", 600, now)
+	duplicate, err := store.ReserveCanonicalWalletLease(context.Background(), lease.PlatformUserID, lease.LeaseID, "USD", "event-1", 600, now)
 	require.NoError(t, err)
 	require.True(t, duplicate.Duplicate)
 	require.Equal(t, int64(600), duplicate.Lease.ConsumedUnits)
@@ -42,10 +42,10 @@ func TestCanonicalWalletLeaseStoreIsAtomicAndIdempotent(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(600), preserved.ConsumedUnits)
 
-	_, err = store.ReserveCanonicalWalletLease(context.Background(), lease.PlatformUserID, lease.LeaseID, "CNY", "event-2", 401, now)
+	_, err = store.ReserveCanonicalWalletLease(context.Background(), lease.PlatformUserID, lease.LeaseID, "USD", "event-2", 401, now)
 	require.ErrorIs(t, err, service.ErrCanonicalWalletLeaseExhausted)
-	_, err = store.ReserveCanonicalWalletLease(context.Background(), lease.PlatformUserID, lease.LeaseID, "USD", "event-3", 1, now)
-	require.Error(t, err, "a non-CNY currency must be rejected outright by RequireCNYBillingCurrency, not coerced")
+	_, err = store.ReserveCanonicalWalletLease(context.Background(), lease.PlatformUserID, lease.LeaseID, "CNY", "event-3", 1, now)
+	require.Error(t, err, "a non-USD currency must be rejected outright by RequireUSDBillingCurrency, not coerced")
 }
 
 func TestCanonicalWalletReservationCannotCrossLeaseBoundary(t *testing.T) {
@@ -54,9 +54,9 @@ func TestCanonicalWalletReservationCannotCrossLeaseBoundary(t *testing.T) {
 	t.Cleanup(func() { _ = client.Close() })
 	store := NewGatewayCache(client).(service.CanonicalWalletLeaseStore)
 	now := time.Now().UTC().Truncate(time.Millisecond)
-	firstLease := service.CanonicalWalletLease{LeaseID: "lease-a", PlatformUserID: "shipany-user-3", Currency: "CNY", BudgetUnits: 100, ExpiresAt: now.Add(time.Minute)}
+	firstLease := service.CanonicalWalletLease{LeaseID: "lease-a", PlatformUserID: "shipany-user-3", Currency: "USD", BudgetUnits: 100, ExpiresAt: now.Add(time.Minute)}
 	require.NoError(t, store.InstallCanonicalWalletLease(context.Background(), firstLease))
-	_, err := store.ReserveCanonicalWalletLease(context.Background(), firstLease.PlatformUserID, firstLease.LeaseID, "CNY", "event-stable", 10, now)
+	_, err := store.ReserveCanonicalWalletLease(context.Background(), firstLease.PlatformUserID, firstLease.LeaseID, "USD", "event-stable", 10, now)
 	require.NoError(t, err)
 
 	secondLease := firstLease
@@ -68,7 +68,7 @@ func TestCanonicalWalletReservationCannotCrossLeaseBoundary(t *testing.T) {
 	// reserved against is now a legitimate duplicate — this is Task 3's
 	// whole point, and the property the OLD version of this test got
 	// backwards by asserting a conflict here instead.
-	retrySameLease, err := store.ReserveCanonicalWalletLease(context.Background(), firstLease.PlatformUserID, firstLease.LeaseID, "CNY", "event-stable", 10, now)
+	retrySameLease, err := store.ReserveCanonicalWalletLease(context.Background(), firstLease.PlatformUserID, firstLease.LeaseID, "USD", "event-stable", 10, now)
 	require.NoError(t, err)
 	require.True(t, retrySameLease.Duplicate)
 	require.Equal(t, firstLease.LeaseID, retrySameLease.Lease.LeaseID)
@@ -76,7 +76,7 @@ func TestCanonicalWalletReservationCannotCrossLeaseBoundary(t *testing.T) {
 	// But reusing the SAME event_id against a DIFFERENT lease id is a real
 	// conflict, not a silent duplicate carrying the wrong lease's snapshot
 	// — THIS is the actual "cannot cross lease boundary" property.
-	_, err = store.ReserveCanonicalWalletLease(context.Background(), firstLease.PlatformUserID, secondLease.LeaseID, "CNY", "event-stable", 10, now)
+	_, err = store.ReserveCanonicalWalletLease(context.Background(), firstLease.PlatformUserID, secondLease.LeaseID, "USD", "event-stable", 10, now)
 	require.ErrorIs(t, err, service.ErrCanonicalWalletReservationConflict)
 }
 
@@ -87,7 +87,7 @@ func TestCanonicalWalletLeaseStoreExpires(t *testing.T) {
 	store := NewGatewayCache(client).(service.CanonicalWalletLeaseStore)
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	require.NoError(t, store.InstallCanonicalWalletLease(context.Background(), service.CanonicalWalletLease{
-		LeaseID: "lease-expiring", PlatformUserID: "shipany-user-2", Currency: "CNY", BudgetUnits: 100, ExpiresAt: now.Add(time.Second),
+		LeaseID: "lease-expiring", PlatformUserID: "shipany-user-2", Currency: "USD", BudgetUnits: 100, ExpiresAt: now.Add(time.Second),
 	}))
 	mr.FastForward(2 * time.Second)
 	_, err := store.GetCanonicalWalletLease(context.Background(), "shipany-user-2")
@@ -102,13 +102,13 @@ func TestCanonicalWalletCurrentPointerIgnoresDelayedOlderLease(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	platformUserID := "shipany-user-pointer-order"
 
-	newer := service.CanonicalWalletLease{LeaseID: "lease-newer", PlatformUserID: platformUserID, Currency: "CNY", BudgetUnits: 1000, ExpiresAt: now.Add(10 * time.Minute)}
+	newer := service.CanonicalWalletLease{LeaseID: "lease-newer", PlatformUserID: platformUserID, Currency: "USD", BudgetUnits: 1000, ExpiresAt: now.Add(10 * time.Minute)}
 	require.NoError(t, store.InstallCanonicalWalletLease(context.Background(), newer))
 
 	// A delayed/reordered response for an OLDER lease (shorter expiry)
 	// arrives AFTER the newer one already became current — the pointer
 	// must not regress backward in time.
-	older := service.CanonicalWalletLease{LeaseID: "lease-older", PlatformUserID: platformUserID, Currency: "CNY", BudgetUnits: 500, ExpiresAt: now.Add(2 * time.Minute)}
+	older := service.CanonicalWalletLease{LeaseID: "lease-older", PlatformUserID: platformUserID, Currency: "USD", BudgetUnits: 500, ExpiresAt: now.Add(2 * time.Minute)}
 	require.NoError(t, store.InstallCanonicalWalletLease(context.Background(), older))
 
 	current, err := store.GetCanonicalWalletLease(context.Background(), platformUserID)
@@ -133,7 +133,7 @@ func TestCanonicalWalletRedisOperationsRejectValuesBeyondLuaSafeIntegerRange(t *
 	// The Phase 0 fixture's own "exceeds_number_max_safe_integer" case
 	// (1,000,000,000,001,000,000) is comfortably past this bound.
 	tooLarge := service.CanonicalWalletLease{
-		LeaseID: "lease-too-large", PlatformUserID: "shipany-user-oversized", Currency: "CNY",
+		LeaseID: "lease-too-large", PlatformUserID: "shipany-user-oversized", Currency: "USD",
 		BudgetUnits: 1_000_000_000_001_000_000, ExpiresAt: now.Add(time.Minute),
 	}
 	err := store.InstallCanonicalWalletLease(context.Background(), tooLarge)
@@ -148,7 +148,7 @@ func TestCanonicalWalletStoreValidationRejectsInvalidLeases(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Millisecond)
 
-	valid := service.CanonicalWalletLease{LeaseID: "lease-v", PlatformUserID: "shipany-user-validate", Currency: "CNY", BudgetUnits: 100, ExpiresAt: now.Add(time.Minute)}
+	valid := service.CanonicalWalletLease{LeaseID: "lease-v", PlatformUserID: "shipany-user-validate", Currency: "USD", BudgetUnits: 100, ExpiresAt: now.Add(time.Minute)}
 
 	err := store.InstallCanonicalWalletLease(ctx, service.CanonicalWalletLease{})
 	require.Error(t, err, "empty platform user id and lease id are rejected")
@@ -182,8 +182,8 @@ func TestCanonicalWalletStoreValidationRejectsInvalidLeases(t *testing.T) {
 	require.Error(t, store.InstallCanonicalWalletLease(ctx, bad), "amounts beyond Lua's exact integer range fail loudly before the script")
 
 	bad = valid
-	bad.Currency = "USD"
-	require.Error(t, store.InstallCanonicalWalletLease(ctx, bad), "cny-e8-v1 is CNY-only — reject, never coerce")
+	bad.Currency = "CNY"
+	require.Error(t, store.InstallCanonicalWalletLease(ctx, bad), "usd-e8-v1 is USD-only — reject, never coerce")
 
 	// A nil store (or one without a Redis client) reports unavailability
 	// instead of panicking. Phase 5-G Task 2 moved the lease-store methods
@@ -195,7 +195,7 @@ func TestCanonicalWalletStoreValidationRejectsInvalidLeases(t *testing.T) {
 	require.Error(t, (&canonicalWalletRedisStore{}).InstallCanonicalWalletLease(ctx, valid))
 	_, err = nilStore.GetCanonicalWalletLease(ctx, "shipany-user-validate")
 	require.Error(t, err)
-	_, err = nilStore.ReserveCanonicalWalletLease(ctx, "shipany-user-validate", "lease-v", "CNY", "event-x", 1, now)
+	_, err = nilStore.ReserveCanonicalWalletLease(ctx, "shipany-user-validate", "lease-v", "USD", "event-x", 1, now)
 	require.Error(t, err)
 }
 
@@ -207,35 +207,35 @@ func TestCanonicalWalletReserveValidationAndRealConflictPaths(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Millisecond)
 
-	lease := service.CanonicalWalletLease{LeaseID: "lease-paths", PlatformUserID: "shipany-user-paths", Currency: "CNY", BudgetUnits: 1000, ExpiresAt: now.Add(time.Minute)}
+	lease := service.CanonicalWalletLease{LeaseID: "lease-paths", PlatformUserID: "shipany-user-paths", Currency: "USD", BudgetUnits: 1000, ExpiresAt: now.Add(time.Minute)}
 	require.NoError(t, store.InstallCanonicalWalletLease(ctx, lease))
 
 	// Argument validation.
-	_, err := store.ReserveCanonicalWalletLease(ctx, lease.PlatformUserID, "", "CNY", "e", 1, now)
+	_, err := store.ReserveCanonicalWalletLease(ctx, lease.PlatformUserID, "", "USD", "e", 1, now)
 	require.Error(t, err)
-	_, err = store.ReserveCanonicalWalletLease(ctx, lease.PlatformUserID, lease.LeaseID, "CNY", " ", 1, now)
+	_, err = store.ReserveCanonicalWalletLease(ctx, lease.PlatformUserID, lease.LeaseID, "USD", " ", 1, now)
 	require.Error(t, err)
-	_, err = store.ReserveCanonicalWalletLease(ctx, lease.PlatformUserID, lease.LeaseID, "CNY", "e", 0, now)
+	_, err = store.ReserveCanonicalWalletLease(ctx, lease.PlatformUserID, lease.LeaseID, "USD", "e", 0, now)
 	require.Error(t, err)
-	_, err = store.ReserveCanonicalWalletLease(ctx, lease.PlatformUserID, lease.LeaseID, "CNY", "e-oversized", 1_000_000_000_001_000_000, now)
+	_, err = store.ReserveCanonicalWalletLease(ctx, lease.PlatformUserID, lease.LeaseID, "USD", "e-oversized", 1_000_000_000_001_000_000, now)
 	require.Error(t, err, "amounts beyond Lua's safe integer range are rejected before the script")
-	_, err = store.ReserveCanonicalWalletLease(ctx, lease.PlatformUserID, lease.LeaseID, "USD", "e-usd", 1, now)
-	require.Error(t, err, "a non-CNY request is rejected outright, never coerced")
+	_, err = store.ReserveCanonicalWalletLease(ctx, lease.PlatformUserID, lease.LeaseID, "CNY", "e-usd", 1, now)
+	require.Error(t, err, "a non-USD request is rejected outright, never coerced")
 
 	// Unknown lease id -> code 1.
-	_, err = store.ReserveCanonicalWalletLease(ctx, lease.PlatformUserID, "lease-nope", "CNY", "e-missing", 1, now)
+	_, err = store.ReserveCanonicalWalletLease(ctx, lease.PlatformUserID, "lease-nope", "USD", "e-missing", 1, now)
 	require.ErrorIs(t, err, service.ErrCanonicalWalletLeaseMissing)
 
-	// A genuinely stored NON-CNY lease (raw state, as if installed before a
+	// A genuinely stored NON-USD lease (raw state, as if installed before a
 	// stricter install policy existed) triggers the script's own currency
 	// guard (code 2).
 	usdKey := canonicalWalletLeaseKey(lease.PlatformUserID, "lease-usd")
 	require.NoError(t, client.HSet(ctx, usdKey, map[string]any{
-		"lease_id": "lease-usd", "platform_user_id": lease.PlatformUserID, "currency": "USD",
+		"lease_id": "lease-usd", "platform_user_id": lease.PlatformUserID, "currency": "CNY",
 		"budget_units": "1000", "consumed_units": "0", "expires_at_ms": strconv.FormatInt(now.Add(time.Minute).UnixMilli(), 10),
 	}).Err())
 	require.NoError(t, client.Set(ctx, canonicalWalletCurrentKey(lease.PlatformUserID), "lease-usd", 0).Err())
-	_, err = store.ReserveCanonicalWalletLease(ctx, lease.PlatformUserID, "lease-usd", "CNY", "e-cur", 1, now)
+	_, err = store.ReserveCanonicalWalletLease(ctx, lease.PlatformUserID, "lease-usd", "USD", "e-cur", 1, now)
 	require.ErrorIs(t, err, service.ErrCanonicalWalletLeaseCurrencyMismatch)
 
 	// Corrupt stored integers surface as parse errors, never silent zeros.
@@ -274,13 +274,13 @@ func TestCanonicalWalletStoreNilClientGuardsOnEveryMethod(t *testing.T) {
 	empty := &canonicalWalletRedisStore{} // Phase 5-G Task 2: the lease-store methods' receiver
 	now := time.Now().UTC()
 	require.Error(t, empty.InstallCanonicalWalletLease(ctx, service.CanonicalWalletLease{
-		LeaseID: "l", PlatformUserID: "u", Currency: "CNY", BudgetUnits: 1, ExpiresAt: now.Add(time.Minute),
+		LeaseID: "l", PlatformUserID: "u", Currency: "USD", BudgetUnits: 1, ExpiresAt: now.Add(time.Minute),
 	}))
 	_, err := empty.GetCanonicalWalletLease(ctx, "u")
 	require.Error(t, err)
 	_, err = empty.GetCanonicalWalletLeaseByID(ctx, "u", "l")
 	require.Error(t, err)
-	_, err = empty.ReserveCanonicalWalletLease(ctx, "u", "l", "CNY", "e", 1, now)
+	_, err = empty.ReserveCanonicalWalletLease(ctx, "u", "l", "USD", "e", 1, now)
 	require.Error(t, err)
 }
 
@@ -293,7 +293,7 @@ func TestParseCanonicalWalletLeaseRejectsEveryCorruptField(t *testing.T) {
 
 	store := NewGatewayCache(client).(service.CanonicalWalletLeaseStore)
 	require.NoError(t, store.InstallCanonicalWalletLease(ctx, service.CanonicalWalletLease{
-		LeaseID: "lease-corrupt", PlatformUserID: "shipany-user-corrupt", Currency: "CNY",
+		LeaseID: "lease-corrupt", PlatformUserID: "shipany-user-corrupt", Currency: "USD",
 		BudgetUnits: 1000, ExpiresAt: now.Add(time.Minute),
 	}))
 	key := canonicalWalletLeaseKey("shipany-user-corrupt", "lease-corrupt")
@@ -321,14 +321,14 @@ func TestCanonicalWalletReserveSurfacesRedisTransportFailure(t *testing.T) {
 	store := NewGatewayCache(client).(service.CanonicalWalletLeaseStore)
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	lease := service.CanonicalWalletLease{
-		LeaseID: "lease-transport", PlatformUserID: "shipany-user-transport", Currency: "CNY",
+		LeaseID: "lease-transport", PlatformUserID: "shipany-user-transport", Currency: "USD",
 		BudgetUnits: 1_000, ExpiresAt: now.Add(time.Minute),
 	}
 	require.NoError(t, store.InstallCanonicalWalletLease(context.Background(), lease))
 
 	mr.Close()
 
-	_, err := store.ReserveCanonicalWalletLease(context.Background(), lease.PlatformUserID, lease.LeaseID, "CNY", "event-transport", 10, now)
+	_, err := store.ReserveCanonicalWalletLease(context.Background(), lease.PlatformUserID, lease.LeaseID, "USD", "event-transport", 10, now)
 	require.Error(t, err, "a Redis outage during reservation must surface, never be reported as a successful no-op")
 	require.NotErrorIs(t, err, service.ErrCanonicalWalletLeaseMissing, "a transport failure is not a missing lease — conflating them would let a retry rebind the event to a different lease")
 }
@@ -362,7 +362,7 @@ func TestCanonicalWalletReservationMarkerCannotOutliveItsLease(t *testing.T) {
 	mr.SetTime(now)
 
 	lease := service.CanonicalWalletLease{
-		LeaseID: "lease-deadline", PlatformUserID: "shipany-user-deadline", Currency: "CNY",
+		LeaseID: "lease-deadline", PlatformUserID: "shipany-user-deadline", Currency: "USD",
 		BudgetUnits: 1_000, ExpiresAt: now.Add(time.Minute),
 	}
 	require.NoError(t, store.InstallCanonicalWalletLease(ctx, lease))
@@ -371,7 +371,7 @@ func TestCanonicalWalletReservationMarkerCannotOutliveItsLease(t *testing.T) {
 	// round-trip latency and clock offset that used to hand the marker extra
 	// life under the old relative ttl.
 	skewed := now.Add(-5 * time.Second)
-	_, err := store.ReserveCanonicalWalletLease(ctx, lease.PlatformUserID, lease.LeaseID, "CNY", "event-deadline", 10, skewed)
+	_, err := store.ReserveCanonicalWalletLease(ctx, lease.PlatformUserID, lease.LeaseID, "USD", "event-deadline", 10, skewed)
 	require.NoError(t, err)
 
 	leaseKey := canonicalWalletLeaseKey(lease.PlatformUserID, lease.LeaseID)
@@ -414,13 +414,13 @@ func TestCanonicalWalletReserveGuardSubtractsReleased(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	exp := now.Add(time.Minute)
-	require.NoError(t, c.InstallCanonicalWalletLease(ctx, service.CanonicalWalletLease{LeaseID: "L", PlatformUserID: "u", Currency: "CNY", BudgetUnits: 100, ExpiresAt: exp}))
-	_, err := c.ReserveCanonicalWalletLease(ctx, "u", "L", "CNY", "e1", 100, now)
+	require.NoError(t, c.InstallCanonicalWalletLease(ctx, service.CanonicalWalletLease{LeaseID: "L", PlatformUserID: "u", Currency: "USD", BudgetUnits: 100, ExpiresAt: exp}))
+	_, err := c.ReserveCanonicalWalletLease(ctx, "u", "L", "USD", "e1", 100, now)
 	require.NoError(t, err)
-	_, err = c.ReserveCanonicalWalletLease(ctx, "u", "L", "CNY", "e2", 1, now)
+	_, err = c.ReserveCanonicalWalletLease(ctx, "u", "L", "USD", "e2", 1, now)
 	require.ErrorIs(t, err, service.ErrCanonicalWalletLeaseExhausted) // the existing {4} sentinel (canonical_wallet_bridge.go:31)
 	require.NoError(t, rdb.HIncrBy(ctx, canonicalWalletLeaseKey("u", "L"), "released_units", 40).Err())
-	res, err := c.ReserveCanonicalWalletLease(ctx, "u", "L", "CNY", "e3", 40, now)
+	res, err := c.ReserveCanonicalWalletLease(ctx, "u", "L", "USD", "e3", 40, now)
 	require.NoError(t, err)
 	require.Equal(t, int64(140), res.Lease.ConsumedUnits, "consumed is monotone; the guard subtracted released")
 	consumed, released, err := c.SealCanonicalWalletLease(ctx, "u", "L")
@@ -464,10 +464,10 @@ func TestCanonicalWalletHoldArmReleaseConvert(t *testing.T) {
 	exp := now.Add(10 * time.Minute)
 	const user = "hold-user-1"
 	const graceMS = int64(30_000)
-	require.NoError(t, c.InstallCanonicalWalletLease(ctx, service.CanonicalWalletLease{LeaseID: "L2", PlatformUserID: user, Currency: "CNY", BudgetUnits: 1000, ExpiresAt: exp}))
+	require.NoError(t, c.InstallCanonicalWalletLease(ctx, service.CanonicalWalletLease{LeaseID: "L2", PlatformUserID: user, Currency: "USD", BudgetUnits: 1000, ExpiresAt: exp}))
 
 	// arm a1 E=300: consumed 0−0+300 ≤ 1000 → hash, set membership, hold_users.
-	leaseID, held, dup, err := c.ArmCanonicalWalletHold(ctx, user, "L2", "CNY", "a1", 300, graceMS, now)
+	leaseID, held, dup, err := c.ArmCanonicalWalletHold(ctx, user, "L2", "USD", "a1", 300, graceMS, now)
 	require.NoError(t, err)
 	require.Equal(t, "L2", leaseID)
 	require.Equal(t, int64(300), held)
@@ -493,7 +493,7 @@ func TestCanonicalWalletHoldArmReleaseConvert(t *testing.T) {
 	require.InDelta(t, (10*time.Minute + time.Duration(graceMS)*time.Millisecond).Milliseconds(), pttl.Milliseconds(), 50, "the hold outlives its lease by one grace")
 
 	// re-arm the same authorization id: {5} idempotent, consumed unchanged.
-	leaseID, held, dup, err = c.ArmCanonicalWalletHold(ctx, user, "L2", "CNY", "a1", 300, graceMS, now)
+	leaseID, held, dup, err = c.ArmCanonicalWalletHold(ctx, user, "L2", "USD", "a1", 300, graceMS, now)
 	require.NoError(t, err)
 	require.True(t, dup)
 	require.Equal(t, "L2", leaseID)
@@ -503,22 +503,22 @@ func TestCanonicalWalletHoldArmReleaseConvert(t *testing.T) {
 	require.Equal(t, "300", consumed)
 
 	// arm beyond budget: {4} the guard refuses (300 + 800 > 1000).
-	_, _, _, err = c.ArmCanonicalWalletHold(ctx, user, "L2", "CNY", "a2", 800, graceMS, now)
+	_, _, _, err = c.ArmCanonicalWalletHold(ctx, user, "L2", "USD", "a2", 800, graceMS, now)
 	require.ErrorIs(t, err, service.ErrCanonicalWalletLeaseExhausted)
 
 	// arm on a missing lease: {1}.
-	_, _, _, err = c.ArmCanonicalWalletHold(ctx, user, "L-missing", "CNY", "a3", 1, graceMS, now)
+	_, _, _, err = c.ArmCanonicalWalletHold(ctx, user, "L-missing", "USD", "a3", 1, graceMS, now)
 	require.ErrorIs(t, err, service.ErrCanonicalWalletLeaseMissing)
-	// wrong currency: rejected outright by RequireCNYBillingCurrency in Go —
+	// wrong currency: rejected outright by RequireUSDBillingCurrency in Go —
 	// the reserve method's own convention (its test at :47 asserts Error, not
 	// ErrorIs, for the same reason: the script's {2} is unreachable through
 	// the validated entry point).
-	_, _, _, err = c.ArmCanonicalWalletHold(ctx, user, "L2", "USD", "a3", 1, graceMS, now)
-	require.Error(t, err, "a non-CNY currency must be rejected outright, not coerced")
+	_, _, _, err = c.ArmCanonicalWalletHold(ctx, user, "L2", "CNY", "a3", 1, graceMS, now)
+	require.Error(t, err, "a non-USD currency must be rejected outright, not coerced")
 	// an expired lease hash (the FIELD, so miniredis keeps the key alive): {3}.
-	require.NoError(t, c.InstallCanonicalWalletLease(ctx, service.CanonicalWalletLease{LeaseID: "L-exp", PlatformUserID: user, Currency: "CNY", BudgetUnits: 100, ExpiresAt: exp}))
+	require.NoError(t, c.InstallCanonicalWalletLease(ctx, service.CanonicalWalletLease{LeaseID: "L-exp", PlatformUserID: user, Currency: "USD", BudgetUnits: 100, ExpiresAt: exp}))
 	require.NoError(t, rdb.HSet(ctx, canonicalWalletLeaseKey(user, "L-exp"), "expires_at_ms", now.Add(-time.Second).UnixMilli()).Err())
-	_, _, _, err = c.ArmCanonicalWalletHold(ctx, user, "L-exp", "CNY", "a3", 1, graceMS, now)
+	_, _, _, err = c.ArmCanonicalWalletHold(ctx, user, "L-exp", "USD", "a3", 1, graceMS, now)
 	require.ErrorIs(t, err, service.ErrCanonicalWalletLeaseExpired)
 	_, err = rdb.Del(ctx, canonicalWalletLeaseKey(user, "L-exp")).Result()
 	require.NoError(t, err)
@@ -554,7 +554,7 @@ func TestCanonicalWalletHoldArmReleaseConvert(t *testing.T) {
 	require.ErrorIs(t, err, service.ErrCanonicalWalletHoldMissing)
 
 	// convert A<E: released += E−A, marker == lease id, settled, event_id.
-	_, _, _, err = c.ArmCanonicalWalletHold(ctx, user, "L2", "CNY", "b3", 200, graceMS, now)
+	_, _, _, err = c.ArmCanonicalWalletHold(ctx, user, "L2", "USD", "b3", 200, graceMS, now)
 	require.NoError(t, err) // consumed 300−300+200 ≤ 1000 (the guard subtracts released)
 	conv, err := c.ConvertCanonicalWalletHold(ctx, user, "b3", "ev-b3", 50, now)
 	require.NoError(t, err)
@@ -590,7 +590,7 @@ func TestCanonicalWalletHoldArmReleaseConvert(t *testing.T) {
 	require.Equal(t, "450", rel, "a re-convert releases nothing")
 
 	// convert A>E within budget: consumed += excess.
-	_, _, _, err = c.ArmCanonicalWalletHold(ctx, user, "L2", "CNY", "b4", 100, graceMS, now)
+	_, _, _, err = c.ArmCanonicalWalletHold(ctx, user, "L2", "USD", "b4", 100, graceMS, now)
 	require.NoError(t, err) // 500−450+100 ≤ 1000
 	conv, err = c.ConvertCanonicalWalletHold(ctx, user, "b4", "ev-b4", 150, now)
 	require.NoError(t, err)
@@ -604,8 +604,8 @@ func TestCanonicalWalletHoldArmReleaseConvert(t *testing.T) {
 	require.Equal(t, "ev-b4", fields["event_id"])
 
 	// convert A>E beyond budget on a tight lease: {4}, released += E, state=released.
-	require.NoError(t, c.InstallCanonicalWalletLease(ctx, service.CanonicalWalletLease{LeaseID: "L4", PlatformUserID: user, Currency: "CNY", BudgetUnits: 100, ExpiresAt: exp}))
-	_, _, _, err = c.ArmCanonicalWalletHold(ctx, user, "L4", "CNY", "b5", 100, graceMS, now)
+	require.NoError(t, c.InstallCanonicalWalletLease(ctx, service.CanonicalWalletLease{LeaseID: "L4", PlatformUserID: user, Currency: "USD", BudgetUnits: 100, ExpiresAt: exp}))
+	_, _, _, err = c.ArmCanonicalWalletHold(ctx, user, "L4", "USD", "b5", 100, graceMS, now)
 	require.NoError(t, err)
 	conv, err = c.ConvertCanonicalWalletHold(ctx, user, "b5", "ev-b5", 150, now)
 	require.NoError(t, err)
@@ -635,7 +635,7 @@ func TestCanonicalWalletHoldArmReleaseConvert(t *testing.T) {
 	require.Equal(t, 1, conv.Code)
 
 	// convert A<=E with the lease hash gone: {3} — the event proceeds unbound.
-	_, _, _, err = c.ArmCanonicalWalletHold(ctx, user, "L2", "CNY", "c1", 100, graceMS, now)
+	_, _, _, err = c.ArmCanonicalWalletHold(ctx, user, "L2", "USD", "c1", 100, graceMS, now)
 	require.NoError(t, err)
 	require.NoError(t, rdb.Del(ctx, canonicalWalletLeaseKey(user, "L2")).Err())
 	conv, err = c.ConvertCanonicalWalletHold(ctx, user, "c1", "ev-c1", 50, now)
@@ -647,8 +647,8 @@ func TestCanonicalWalletHoldArmReleaseConvert(t *testing.T) {
 
 	// release on an expired lease hash: a no-op on the lease, the hash still
 	// transitions (the reaper's abandoned path, §10.7).
-	require.NoError(t, c.InstallCanonicalWalletLease(ctx, service.CanonicalWalletLease{LeaseID: "L6", PlatformUserID: user, Currency: "CNY", BudgetUnits: 100, ExpiresAt: exp}))
-	_, _, _, err = c.ArmCanonicalWalletHold(ctx, user, "L6", "CNY", "d1", 100, graceMS, now)
+	require.NoError(t, c.InstallCanonicalWalletLease(ctx, service.CanonicalWalletLease{LeaseID: "L6", PlatformUserID: user, Currency: "USD", BudgetUnits: 100, ExpiresAt: exp}))
+	_, _, _, err = c.ArmCanonicalWalletHold(ctx, user, "L6", "USD", "d1", 100, graceMS, now)
 	require.NoError(t, err)
 	require.NoError(t, rdb.Del(ctx, canonicalWalletLeaseKey(user, "L6")).Err())
 	released, err = c.ReleaseCanonicalWalletHold(ctx, user, "d1", "abandoned", "")
@@ -659,8 +659,8 @@ func TestCanonicalWalletHoldArmReleaseConvert(t *testing.T) {
 
 	// mark-class: HSET class iff state = armed. (L6's hash was deleted above;
 	// a fresh install re-arms cleanly.)
-	require.NoError(t, c.InstallCanonicalWalletLease(ctx, service.CanonicalWalletLease{LeaseID: "L6", PlatformUserID: user, Currency: "CNY", BudgetUnits: 100, ExpiresAt: exp}))
-	_, _, _, err = c.ArmCanonicalWalletHold(ctx, user, "L6", "CNY", "e1", 10, graceMS, now)
+	require.NoError(t, c.InstallCanonicalWalletLease(ctx, service.CanonicalWalletLease{LeaseID: "L6", PlatformUserID: user, Currency: "USD", BudgetUnits: 100, ExpiresAt: exp}))
+	_, _, _, err = c.ArmCanonicalWalletHold(ctx, user, "L6", "USD", "e1", 10, graceMS, now)
 	require.NoError(t, err)
 	hold, err := c.MarkCanonicalWalletHoldClass(ctx, user, "e1", "indeterminate")
 	require.NoError(t, err)
@@ -748,8 +748,8 @@ func TestCanonicalWalletReleaseReservationFullAndPartialForms(t *testing.T) {
 	user := "shipany-user-release"
 
 	// FULL FORM (§11.2 named_lease_id / §11.4 late capture).
-	require.NoError(t, c.InstallCanonicalWalletLease(ctx, service.CanonicalWalletLease{LeaseID: "L-full", PlatformUserID: user, Currency: "CNY", BudgetUnits: 1_000, ExpiresAt: now.Add(10 * time.Minute)}))
-	_, err := c.ReserveCanonicalWalletLease(ctx, user, "L-full", "CNY", "ev-full", 500, now)
+	require.NoError(t, c.InstallCanonicalWalletLease(ctx, service.CanonicalWalletLease{LeaseID: "L-full", PlatformUserID: user, Currency: "USD", BudgetUnits: 1_000, ExpiresAt: now.Add(10 * time.Minute)}))
+	_, err := c.ReserveCanonicalWalletLease(ctx, user, "L-full", "USD", "ev-full", 500, now)
 	require.NoError(t, err)
 
 	released, err := c.ReleaseCanonicalWalletReservation(ctx, user, "L-full", "ev-full", 500, true)
@@ -771,8 +771,8 @@ func TestCanonicalWalletReleaseReservationFullAndPartialForms(t *testing.T) {
 	require.Equal(t, "500", rel, "nothing was written a second time")
 
 	// PARTIAL FORM (§11.3 the split): a fresh reservation, release A−H.
-	require.NoError(t, c.InstallCanonicalWalletLease(ctx, service.CanonicalWalletLease{LeaseID: "L-part", PlatformUserID: user, Currency: "CNY", BudgetUnits: 1_000, ExpiresAt: now.Add(10 * time.Minute)}))
-	_, err = c.ReserveCanonicalWalletLease(ctx, user, "L-part", "CNY", "ev-part", 500, now)
+	require.NoError(t, c.InstallCanonicalWalletLease(ctx, service.CanonicalWalletLease{LeaseID: "L-part", PlatformUserID: user, Currency: "USD", BudgetUnits: 1_000, ExpiresAt: now.Add(10 * time.Minute)}))
+	_, err = c.ReserveCanonicalWalletLease(ctx, user, "L-part", "USD", "ev-part", 500, now)
 	require.NoError(t, err)
 
 	released, err = c.ReleaseCanonicalWalletReservation(ctx, user, "L-part", "ev-part", 200, false)
@@ -808,7 +808,7 @@ func TestCanonicalWalletReleaseReservationFullAndPartialForms(t *testing.T) {
 	require.Equal(t, "200", rel, "never 2 × (A − H) — §11.3's idempotency bullet")
 
 	// A marker pointing at a DIFFERENT lease: {6} — false, no write.
-	require.NoError(t, c.InstallCanonicalWalletLease(ctx, service.CanonicalWalletLease{LeaseID: "L-other", PlatformUserID: user, Currency: "CNY", BudgetUnits: 1_000, ExpiresAt: now.Add(10 * time.Minute)}))
+	require.NoError(t, c.InstallCanonicalWalletLease(ctx, service.CanonicalWalletLease{LeaseID: "L-other", PlatformUserID: user, Currency: "USD", BudgetUnits: 1_000, ExpiresAt: now.Add(10 * time.Minute)}))
 	released, err = c.ReleaseCanonicalWalletReservation(ctx, user, "L-other", "ev-part", 100, false)
 	require.NoError(t, err)
 	require.False(t, released)
@@ -818,10 +818,10 @@ func TestCanonicalWalletReleaseReservationFullAndPartialForms(t *testing.T) {
 	// A MISSING lease hash with an existing reservation marker (§11.4: a
 	// closed lease whose hash aged out): released_units is not written (there
 	// is no hash), the marker follows its form, and the call reports true.
-	require.NoError(t, c.InstallCanonicalWalletLease(ctx, service.CanonicalWalletLease{LeaseID: "L-gone", PlatformUserID: user, Currency: "CNY", BudgetUnits: 1_000, ExpiresAt: now.Add(10 * time.Minute)}))
-	_, err = c.ReserveCanonicalWalletLease(ctx, user, "L-gone", "CNY", "ev-gone-full", 300, now)
+	require.NoError(t, c.InstallCanonicalWalletLease(ctx, service.CanonicalWalletLease{LeaseID: "L-gone", PlatformUserID: user, Currency: "USD", BudgetUnits: 1_000, ExpiresAt: now.Add(10 * time.Minute)}))
+	_, err = c.ReserveCanonicalWalletLease(ctx, user, "L-gone", "USD", "ev-gone-full", 300, now)
 	require.NoError(t, err)
-	_, err = c.ReserveCanonicalWalletLease(ctx, user, "L-gone", "CNY", "ev-gone-part", 300, now)
+	_, err = c.ReserveCanonicalWalletLease(ctx, user, "L-gone", "USD", "ev-gone-part", 300, now)
 	require.NoError(t, err)
 	require.NoError(t, rdb.Del(ctx, canonicalWalletLeaseKey(user, "L-gone")).Err())
 

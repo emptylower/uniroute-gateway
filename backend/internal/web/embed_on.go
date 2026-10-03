@@ -1,4 +1,4 @@
-//go:build embed
+//go:build embed && legacy_gateway_frontend
 
 package web
 

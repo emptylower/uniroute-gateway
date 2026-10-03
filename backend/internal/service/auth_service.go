@@ -255,18 +255,7 @@ func (s *AuthService) RegisterWithVerification(ctx context.Context, email, passw
 			logger.LegacyPrintf("service.auth", "[Auth] Failed to mark invitation code as used for user %d: %v", user.ID, err)
 		}
 	}
-	// 应用优惠码（如果提供且功能已启用）
-	if promoCode != "" && s.promoService != nil && s.settingService != nil && s.settingService.IsPromoCodeEnabled(ctx) {
-		if err := s.promoService.ApplyPromoCode(ctx, user.ID, promoCode); err != nil {
-			// 优惠码应用失败不影响注册，只记录日志
-			logger.LegacyPrintf("service.auth", "[Auth] Failed to apply promo code for user %d: %v", user.ID, err)
-		} else {
-			// 重新获取用户信息以获取更新后的余额
-			if updatedUser, err := s.userRepo.GetByID(ctx, user.ID); err == nil {
-				user = updatedUser
-			}
-		}
-	}
+	// Native signup promo balance grants are retired; funding belongs to the console USD ledger.
 
 	// 生成token
 	token, err := s.GenerateToken(ctx, user)
@@ -774,18 +763,8 @@ func (s *AuthService) ApplyOAuthSignupPromoCode(ctx context.Context, userID int6
 	s.applyOAuthSignupPromoCode(ctx, &User{ID: userID}, promoCode)
 }
 
-func (s *AuthService) applyOAuthSignupPromoCode(ctx context.Context, user *User, promoCode string) *User {
-	promoCode = strings.TrimSpace(promoCode)
-	if user == nil || user.ID <= 0 || promoCode == "" || s.promoService == nil || s.settingService == nil || !s.settingService.IsPromoCodeEnabled(ctx) {
-		return user
-	}
-	if err := s.promoService.ApplyPromoCode(ctx, user.ID, promoCode); err != nil {
-		logger.LegacyPrintf("service.auth", "[Auth] Failed to apply promo code for oauth user %d: %v", user.ID, err)
-		return user
-	}
-	if updatedUser, err := s.userRepo.GetByID(ctx, user.ID); err == nil {
-		return updatedUser
-	}
+func (s *AuthService) applyOAuthSignupPromoCode(_ context.Context, user *User, _ string) *User {
+	// Native promo funding is retired. Console grant creation is the only signup funding path.
 	return user
 }
 
@@ -808,14 +787,11 @@ func (s *AuthService) assignSubscriptions(ctx context.Context, userID int64, ite
 func (s *AuthService) resolveSignupGrantPlan(ctx context.Context, signupSource string) signupGrantPlan {
 	plan := signupGrantPlan{}
 	if s != nil && s.cfg != nil {
-		plan.Balance = s.cfg.Default.UserBalance
 		plan.Concurrency = s.cfg.Default.UserConcurrency
 	}
 	if s == nil || s.settingService == nil {
 		return plan
 	}
-
-	plan.Balance = s.settingService.GetDefaultBalance(ctx)
 	plan.Concurrency = s.settingService.GetDefaultConcurrency(ctx)
 	plan.Subscriptions = s.settingService.GetDefaultSubscriptions(ctx)
 
@@ -836,8 +812,6 @@ func (s *AuthService) resolveSignupGrantPlan(ctx context.Context, signupSource s
 	if !enabled {
 		return plan // plan.PlatformQuotas 已含全局层
 	}
-
-	plan.Balance = resolved.Balance
 	plan.Concurrency = resolved.Concurrency
 	plan.Subscriptions = resolved.Subscriptions
 

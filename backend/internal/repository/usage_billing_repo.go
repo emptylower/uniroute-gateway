@@ -241,7 +241,7 @@ func incrementUsageBillingSubscription(ctx context.Context, tx *sql.Tx, subscrip
 }
 
 func deductUsageBillingBalance(ctx context.Context, tx *sql.Tx, userID int64, settlementCurrency string, amount float64) (float64, bool, error) {
-	if !service.IsSupportedBillingCurrency(settlementCurrency) {
+	if settlementCurrency != service.CurrencyUSD && settlementCurrency != service.CurrencyCNY {
 		return 0, false, service.ErrBillingCurrencyChanged
 	}
 	var newBalance float64
@@ -429,7 +429,7 @@ func billingUserMutationError(ctx context.Context, tx *sql.Tx, userID int64, exp
 	if err != nil {
 		return err
 	}
-	if !service.IsSupportedBillingCurrency(expectedCurrency) || service.NormalizeUserBillingCurrency(currency) != expectedCurrency {
+	if (expectedCurrency != service.CurrencyUSD && expectedCurrency != service.CurrencyCNY) || service.NormalizeHistoricalBillingCurrency(currency) != expectedCurrency {
 		return service.ErrBillingCurrencyChanged
 	}
 	return nil

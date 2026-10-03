@@ -28,7 +28,7 @@ func (f *modelCatalogPricingFake) Resolve(_ context.Context, input PricingInput)
 	return f.byGroup[*input.GroupID]
 }
 
-func TestModelCatalogListsEachRoutingGroupWithDynamicCNYCosts(t *testing.T) {
+func TestModelCatalogListsEachRoutingGroupWithUSDOnlyCosts(t *testing.T) {
 	now := time.Date(2026, time.August, 11, 12, 0, 0, 0, time.UTC)
 	groups := []Group{
 		{ID: 1, Name: "Claude standard", Platform: PlatformAnthropic, RateMultiplier: 1, Status: StatusActive},
@@ -58,37 +58,37 @@ func TestModelCatalogListsEachRoutingGroupWithDynamicCNYCosts(t *testing.T) {
 				"model_mapping": map[string]any{"claude-sonnet-4-5": "claude-sonnet-4-5"},
 			}}},
 		}},
-		fx: &ExchangeRateService{bootstrapRate: 7.2, ttl: time.Minute, staleTTL: time.Hour, cache: make(map[string]ExchangeRateSnapshot)},
+		fx: &USDPriceService{},
 	}
 
-	quote, err := svc.QuoteChannelCosts(context.Background(), 42, now, CurrencyCNY)
+	quote, err := svc.QuoteChannelCosts(context.Background(), 42, now, CurrencyUSD)
 
 	require.NoError(t, err)
 	require.Equal(t, CurrencyUSD, quote.BaseCurrency)
-	require.Equal(t, CurrencyCNY, quote.QuoteCurrency)
-	require.InDelta(t, 7.2, quote.ExchangeRate, 1e-12)
+	require.Equal(t, CurrencyUSD, quote.QuoteCurrency)
+	require.InDelta(t, 1, quote.ExchangeRate, 1e-12)
 	require.InDelta(t, quote.ExchangeRate, quote.Rate, 1e-12)
-	require.Equal(t, "bootstrap_config", quote.RateSource)
-	require.True(t, quote.RateFallback)
+	require.Equal(t, "identity", quote.RateSource)
+	require.False(t, quote.RateFallback)
 	require.False(t, quote.RateAsOf.IsZero())
 	require.False(t, quote.RateFetchedAt.IsZero())
-	require.True(t, quote.RateExpiresAt.After(quote.RateFetchedAt))
+	require.True(t, quote.RateExpiresAt.IsZero(), "USD identity has no market expiry")
 	items := quote.Groups
 	require.Len(t, items, 2)
 	require.Equal(t, []int64{3, 1}, []int64{items[0].GroupID, items[1].GroupID})
 	require.Len(t, items[0].Models, 1)
 	require.InDelta(t, 0.2, items[0].EffectiveMultiplier, 1e-12)
-	require.InDelta(t, 4.32, *items[0].Models[0].InputPricePerMillion, 1e-12)
-	require.InDelta(t, 21.6, *items[0].Models[0].OutputPricePerMillion, 1e-12)
-	require.InDelta(t, 21.6, *items[0].Models[0].OfficialInputPricePerMillion, 1e-12)
-	require.InDelta(t, 108.0, *items[0].Models[0].OfficialOutputPricePerMillion, 1e-12)
-	require.Equal(t, "CNY", items[0].Models[0].Currency)
+	require.InDelta(t, 0.6, *items[0].Models[0].InputPricePerMillion, 1e-12)
+	require.InDelta(t, 3.0, *items[0].Models[0].OutputPricePerMillion, 1e-12)
+	require.InDelta(t, 3.0, *items[0].Models[0].OfficialInputPricePerMillion, 1e-12)
+	require.InDelta(t, 15.0, *items[0].Models[0].OfficialOutputPricePerMillion, 1e-12)
+	require.Equal(t, "USD", items[0].Models[0].Currency)
 }
 
 func TestModelCatalogQuoteReturnsRequestedCurrencyAndRateMetadata(t *testing.T) {
 	now := time.Date(2026, time.August, 12, 12, 0, 0, 0, time.UTC)
 	usdMultiplier := 0.5
-	group := Group{ID: 1, Name: "USD", Platform: PlatformOpenAI, RateMultiplier: 1, RateMultiplierUSD: &usdMultiplier, Status: StatusActive}
+	group := Group{ID: 1, Name: "USD", Platform: PlatformOpenAI, RateMultiplier: usdMultiplier, RateMultiplierUSD: &usdMultiplier, Status: StatusActive}
 	access := &channelRoutingAccessFake{groups: []Group{group}}
 	selector := NewChannelRoutingSelector(&channelRoutingCatalogFake{}, access, channelRoutingConfig(true, 3))
 	pricing := &ModelPricing{InputPricePerToken: 2e-6, OutputPricePerToken: 10e-6}
@@ -96,7 +96,7 @@ func TestModelCatalogQuoteReturnsRequestedCurrencyAndRateMetadata(t *testing.T) 
 		channels: &channelRoutingCatalogFake{}, selector: selector,
 		pricing:  &modelCatalogPricingFake{byGroup: map[int64]*ResolvedPricing{1: {Mode: BillingModeToken, BasePricing: pricing}}, official: &ResolvedPricing{Mode: BillingModeToken, BasePricing: pricing}},
 		accounts: &modelCatalogAccountFake{byGroup: map[int64][]Account{1: {{ID: 1, Platform: PlatformOpenAI, Status: StatusActive, Schedulable: true, Credentials: map[string]any{"model_mapping": map[string]any{"gpt-5.4": "gpt-5.4"}}}}}},
-		fx:       &ExchangeRateService{bootstrapRate: 7.2, ttl: time.Minute, staleTTL: time.Hour, cache: make(map[string]ExchangeRateSnapshot)},
+		fx:       &USDPriceService{},
 	}
 
 	quote, err := svc.QuoteChannelCosts(context.Background(), 42, now, CurrencyUSD)
@@ -222,10 +222,10 @@ func TestModelCatalogQuoteFailsClosedForOpenAIAccountWithoutDiscoveredModels(t *
 		accounts: &modelCatalogAccountFake{byGroup: map[int64][]Account{
 			2: {{ID: 1, Platform: PlatformOpenAI, Status: StatusActive, Schedulable: true}},
 		}},
-		fx: &ExchangeRateService{bootstrapRate: 7.2, ttl: time.Minute, staleTTL: time.Hour, cache: make(map[string]ExchangeRateSnapshot)},
+		fx: &USDPriceService{},
 	}
 
-	quote, err := svc.QuoteChannelCosts(context.Background(), 42, now, CurrencyCNY)
+	quote, err := svc.QuoteChannelCosts(context.Background(), 42, now, CurrencyUSD)
 
 	require.NoError(t, err)
 	require.Len(t, quote.Groups, 1)
@@ -319,7 +319,7 @@ func TestModelVendorFamilyRealAggregatorCatalog(t *testing.T) {
 		"gpt-5.6-luna": "openai", "gpt-image-2": "openai", "gpt-image-2-beta": "openai",
 		"gemini-2.5-pro": "google", "gemini-3-pro-preview": "google", "gemini-3.1-pro-preview": "google",
 		"gemini-3.5-flash": "google",
-		"grok-4.5": "xai", "grok-4.6": "xai",
+		"grok-4.5":         "xai", "grok-4.6": "xai",
 		"glm-5.1": "glm", "glm-5.2": "glm",
 		"deepseek-v4-flash": "deepseek", "deepseek-v4-pro": "deepseek", "deepseek-v4-flash-vision-exp": "deepseek",
 		"kimi-k3": "kimi", "kimi-k2.7-code": "kimi", "kimi-k2.6": "kimi",
@@ -380,7 +380,7 @@ func TestQuoteChannelCostsFamilyIsolationRealAccountShapes(t *testing.T) {
 			1: {{ID: 8, Platform: PlatformOpenAI, Status: StatusActive, Schedulable: true, Credentials: mixedMapping}},
 			2: {{ID: 4, Platform: PlatformAnthropic, Status: StatusActive, Schedulable: true, Credentials: mixedMapping}},
 		}},
-		fx: &ExchangeRateService{bootstrapRate: 7.2, ttl: time.Minute, staleTTL: time.Hour, cache: make(map[string]ExchangeRateSnapshot)},
+		fx: &USDPriceService{},
 	}
 
 	quote, err := svc.QuoteChannelCosts(context.Background(), 42, now, CurrencyUSD)

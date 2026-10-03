@@ -336,7 +336,7 @@ func canonicalWalletTestConfig(mode string) config.CanonicalWalletConfig {
 
 func TestCanonicalWalletCheckAndReserveFailsClosedOnlyInEnforceMode(t *testing.T) {
 	failure := errors.New("control plane unavailable")
-	event := CanonicalWalletSettlementEvent{GatewayRequestID: "req-1", PlatformUserID: "user-1", Currency: "CNY", AmountUnits: 1}
+	event := CanonicalWalletSettlementEvent{GatewayRequestID: "req-1", PlatformUserID: "user-1", Currency: "USD", AmountUnits: 1}
 
 	shadow := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeShadow), &canonicalWalletStoreStub{}, &canonicalWalletControlStub{leaseErr: failure}, nil, nil, 0, nil)
 	t.Cleanup(shadow.Close)
@@ -370,14 +370,14 @@ func TestCanonicalWalletHTTPClientUsesShortScopedAssertion(t *testing.T) {
 		exp, _ := claims.GetExpirationTime()
 		require.LessOrEqual(t, exp.Time.Sub(iat.Time), 60*time.Second)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":{"lease_id":"lease-1","platform_user_id":"user-1","currency":"CNY","unit_version":"cny-e8-v1","scale":8,"budget":{"amount_units":"1000","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"reserved":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"captured":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"released":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"headroom":{"amount_units":"1000","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"capture_seq":0,"status":"active","expires_at":"2030-01-01T00:00:00Z","outcome":"issued","clamped_by":"none"}}`))
+		_, _ = w.Write([]byte(`{"data":{"lease_id":"lease-1","platform_user_id":"user-1","currency":"USD","unit_version":"usd-e8-v1","scale":8,"budget":{"amount_units":"1000","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"reserved":{"amount_units":"0","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"captured":{"amount_units":"0","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"released":{"amount_units":"0","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"headroom":{"amount_units":"1000","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"capture_seq":0,"status":"active","expires_at":"2030-01-01T00:00:00Z","outcome":"issued","clamped_by":"none"}}`))
 	}))
 	defer server.Close()
 
 	cfg := canonicalWalletTestConfig(config.CanonicalWalletModeShadow)
 	cfg.ControlPlaneURL, cfg.Secret, cfg.Issuer, cfg.Audience, cfg.Version = server.URL, secret, "gateway", "shipany", "v7"
 	client := newCanonicalWalletHTTPClient(cfg, server.Client())
-	res, err := client.EnsureLease(context.Background(), canonicalWalletEnsureRequest{PlatformUserID: "user-1", Currency: "CNY", Purpose: "authorize", MinHeadroom: newCanonicalWalletAmountObject(1), RequestedBudget: newCanonicalWalletAmountObject(1000), RequestedTTLSeconds: 60, CallerSlotTTLSeconds: 1800})
+	res, err := client.EnsureLease(context.Background(), canonicalWalletEnsureRequest{PlatformUserID: "user-1", Currency: "USD", Purpose: "authorize", MinHeadroom: newCanonicalWalletAmountObject(1), RequestedBudget: newCanonicalWalletAmountObject(1000), RequestedTTLSeconds: 60, CallerSlotTTLSeconds: 1800})
 	require.NoError(t, err)
 	require.Equal(t, "lease-1", res.Lease.LeaseID)
 }
@@ -404,22 +404,22 @@ func TestCanonicalWalletSettlementEventIDIsStableAcrossRepricing(t *testing.T) {
 	// them from the shared fixture file rather than hardcoding matching
 	// literals.
 	const requestID = "req_fixture_repricing_0001"
-	idA := CanonicalWalletSettlementEventID(requestID, "user-1", "CNY")
-	idB := CanonicalWalletSettlementEventID(requestID, "user-1", "CNY")
+	idA := CanonicalWalletSettlementEventID(requestID, "user-1", "USD")
+	idB := CanonicalWalletSettlementEventID(requestID, "user-1", "USD")
 	require.Equal(t, idA, idB, "identical request identity must always produce the identical event ID regardless of amount")
 
-	differentRequest := CanonicalWalletSettlementEventID("req-other", "user-1", "CNY")
+	differentRequest := CanonicalWalletSettlementEventID("req-other", "user-1", "USD")
 	require.NotEqual(t, idA, differentRequest, "different request identity must produce a different event ID")
 
-	differentUser := CanonicalWalletSettlementEventID(requestID, "user-2", "CNY")
+	differentUser := CanonicalWalletSettlementEventID(requestID, "user-2", "USD")
 	require.NotEqual(t, idA, differentUser, "different platform_user_id must produce a different event ID")
 }
 
-func TestCanonicalWalletUnitsFromCNYMatchesUnitsPerCNYConstant(t *testing.T) {
-	units, err := canonicalWalletUnitsFromCNY(1.0) // 1 CNY
+func TestCanonicalWalletUnitsFromUSDMatchesUnitsPerUSDConstant(t *testing.T) {
+	units, err := canonicalWalletUnitsFromUSD(1.0) // 1 USD
 	require.NoError(t, err)
-	require.Equal(t, int64(canonicalWalletUnitsPerCNY), units)
-	require.Equal(t, int64(100_000_000), units, "cny-e8-v1: 1 CNY must be exactly 100,000,000 units, not 1,000,000")
+	require.Equal(t, int64(canonicalWalletUnitsPerUSD), units)
+	require.Equal(t, int64(100_000_000), units, "usd-e8-v1: 1 USD must be exactly 100,000,000 units, not 1,000,000")
 }
 
 // newBridgeForEnsureLeaseTest builds a bridge over the stubs with the 500M-unit
@@ -446,8 +446,8 @@ func TestEnsureLeaseRejectsGrantBelowAmount(t *testing.T) {
 	// settle purpose installs the under-granted lease so the dispatcher can
 	// split before reserving (its sibling below).
 	b, store, control := newBridgeForEnsureLeaseTest(t)
-	control.lease = CanonicalWalletLease{LeaseID: "lease-1", Currency: "CNY", BudgetUnits: 100_000_000, ConsumedUnits: 0, ExpiresAt: time.Now().Add(5 * time.Minute)}
-	_, err := b.ensureLease(context.Background(), "user-1", "CNY", 200_000_000, canonicalWalletLeasePurposeAuthorize, "")
+	control.lease = CanonicalWalletLease{LeaseID: "lease-1", Currency: "USD", BudgetUnits: 100_000_000, ConsumedUnits: 0, ExpiresAt: time.Now().Add(5 * time.Minute)}
+	_, err := b.ensureLease(context.Background(), "user-1", "USD", 200_000_000, canonicalWalletLeasePurposeAuthorize, "")
 	require.ErrorIs(t, err, ErrCanonicalWalletLeaseGrantBelowAmount)
 	require.NotErrorIs(t, err, ErrCanonicalWalletBalanceShortfall)
 	require.Equal(t, 0, store.installCalls, "a rejected grant is never installed")
@@ -459,8 +459,8 @@ func TestEnsureLeaseRejectsGrantBelowAmount(t *testing.T) {
 // purpose keeps refusing (its sibling above).
 func TestEnsureLeaseSettlePurposeInstallsTheUnderGrant(t *testing.T) {
 	b, store, control := newBridgeForEnsureLeaseTest(t)
-	control.lease = CanonicalWalletLease{LeaseID: "lease-1", Currency: "CNY", BudgetUnits: 100_000_000, ConsumedUnits: 0, ExpiresAt: time.Now().Add(5 * time.Minute)}
-	lease, err := b.ensureLease(context.Background(), "user-1", "CNY", 200_000_000, canonicalWalletLeasePurposeSettle, "")
+	control.lease = CanonicalWalletLease{LeaseID: "lease-1", Currency: "USD", BudgetUnits: 100_000_000, ConsumedUnits: 0, ExpiresAt: time.Now().Add(5 * time.Minute)}
+	lease, err := b.ensureLease(context.Background(), "user-1", "USD", 200_000_000, canonicalWalletLeasePurposeSettle, "")
 	require.NoError(t, err, "the settle purpose never refuses an under-grant")
 	require.Equal(t, 1, store.installCalls, "§11.3: the under-granted lease is installed")
 	require.NotNil(t, store.lease, "its hash exists")
@@ -470,8 +470,8 @@ func TestEnsureLeaseSettlePurposeInstallsTheUnderGrant(t *testing.T) {
 
 func TestEnsureLeaseRejectsExpiredGrant(t *testing.T) {
 	b, store, control := newBridgeForEnsureLeaseTest(t)
-	control.lease = CanonicalWalletLease{LeaseID: "lease-1", Currency: "CNY", BudgetUnits: 500_000_000, ExpiresAt: time.Now().Add(-time.Second)}
-	_, err := b.ensureLease(context.Background(), "user-1", "CNY", 1_000_000, canonicalWalletLeasePurposeAuthorize, "")
+	control.lease = CanonicalWalletLease{LeaseID: "lease-1", Currency: "USD", BudgetUnits: 500_000_000, ExpiresAt: time.Now().Add(-time.Second)}
+	_, err := b.ensureLease(context.Background(), "user-1", "USD", 1_000_000, canonicalWalletLeasePurposeAuthorize, "")
 	require.ErrorIs(t, err, ErrCanonicalWalletLeaseExpired)
 	require.Equal(t, 0, store.installCalls)
 }
@@ -480,8 +480,8 @@ func TestEnsureLeaseAcceptsGrantBelowBudgetButAboveAmount(t *testing.T) {
 	// A lease below lease_budget_units is normal (both routes clamp to balance);
 	// only a lease below the AMOUNT is rejected (index 3.3 exit).
 	b, store, control := newBridgeForEnsureLeaseTest(t)
-	control.lease = CanonicalWalletLease{LeaseID: "lease-1", Currency: "CNY", BudgetUnits: 3_000_000, ExpiresAt: time.Now().Add(5 * time.Minute)}
-	lease, err := b.ensureLease(context.Background(), "user-1", "CNY", 1_000_000, canonicalWalletLeasePurposeAuthorize, "")
+	control.lease = CanonicalWalletLease{LeaseID: "lease-1", Currency: "USD", BudgetUnits: 3_000_000, ExpiresAt: time.Now().Add(5 * time.Minute)}
+	lease, err := b.ensureLease(context.Background(), "user-1", "USD", 1_000_000, canonicalWalletLeasePurposeAuthorize, "")
 	require.NoError(t, err)
 	require.Equal(t, "lease-1", lease.LeaseID)
 	require.Equal(t, 1, store.installCalls)
@@ -491,25 +491,25 @@ func TestObserveSettlementReturnBoolGuards(t *testing.T) {
 	// disabled mode
 	disabled := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeDisabled), &canonicalWalletStoreStub{}, &canonicalWalletControlStub{}, nil, nil, 0, nil)
 	t.Cleanup(disabled.Close)
-	require.False(t, disabled.ObserveSettlement(CanonicalWalletSettlementEvent{PlatformUserID: "u1", Currency: "CNY", AmountUnits: 100}))
+	require.False(t, disabled.ObserveSettlement(CanonicalWalletSettlementEvent{PlatformUserID: "u1", Currency: "USD", AmountUnits: 100}))
 
 	// nil bridge
 	var nilBridge *CanonicalWalletBridge
-	require.False(t, nilBridge.ObserveSettlement(CanonicalWalletSettlementEvent{PlatformUserID: "u1", Currency: "CNY", AmountUnits: 100}))
+	require.False(t, nilBridge.ObserveSettlement(CanonicalWalletSettlementEvent{PlatformUserID: "u1", Currency: "USD", AmountUnits: 100}))
 
 	// shadow mode with nil outboxDB / outbox
 	shadow := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeShadow), &canonicalWalletStoreStub{}, &canonicalWalletControlStub{}, nil, nil, 0, nil)
-	require.False(t, shadow.ObserveSettlement(CanonicalWalletSettlementEvent{PlatformUserID: "u1", Currency: "CNY", AmountUnits: 100}))
+	require.False(t, shadow.ObserveSettlement(CanonicalWalletSettlementEvent{PlatformUserID: "u1", Currency: "USD", AmountUnits: 100}))
 	t.Cleanup(shadow.Close)
 
 	// missing platform user id
-	require.False(t, shadow.ObserveSettlement(CanonicalWalletSettlementEvent{PlatformUserID: "", Currency: "CNY", AmountUnits: 100}))
+	require.False(t, shadow.ObserveSettlement(CanonicalWalletSettlementEvent{PlatformUserID: "", Currency: "USD", AmountUnits: 100}))
 
 	// invalid currency
-	require.False(t, shadow.ObserveSettlement(CanonicalWalletSettlementEvent{PlatformUserID: "u1", Currency: "USD", AmountUnits: 100}))
+	require.False(t, shadow.ObserveSettlement(CanonicalWalletSettlementEvent{PlatformUserID: "u1", Currency: "CNY", AmountUnits: 100}))
 
 	// non-positive amount
-	require.False(t, shadow.ObserveSettlement(CanonicalWalletSettlementEvent{PlatformUserID: "u1", Currency: "CNY", AmountUnits: 0}))
+	require.False(t, shadow.ObserveSettlement(CanonicalWalletSettlementEvent{PlatformUserID: "u1", Currency: "USD", AmountUnits: 0}))
 
 	// committed -> true
 	db, mock, err := sqlmock.New()
@@ -521,7 +521,7 @@ func TestObserveSettlementReturnBoolGuards(t *testing.T) {
 	mock.ExpectCommit()
 	shadowWithOutbox := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeShadow), &canonicalWalletStoreStub{}, &canonicalWalletControlStub{}, db, outboxStub, 0, nil)
 	t.Cleanup(shadowWithOutbox.Close)
-	require.True(t, shadowWithOutbox.ObserveSettlement(CanonicalWalletSettlementEvent{PlatformUserID: "u1", Currency: "CNY", AmountUnits: 100}))
+	require.True(t, shadowWithOutbox.ObserveSettlement(CanonicalWalletSettlementEvent{PlatformUserID: "u1", Currency: "USD", AmountUnits: 100}))
 	require.NoError(t, mock.ExpectationsWereMet())
 
 	// failing store -> false
@@ -534,7 +534,7 @@ func TestObserveSettlementReturnBoolGuards(t *testing.T) {
 	mockFail.ExpectRollback()
 	shadowFailing := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeShadow), &canonicalWalletStoreStub{}, &canonicalWalletControlStub{}, dbFail, failingOutbox, 0, nil)
 	t.Cleanup(shadowFailing.Close)
-	require.False(t, shadowFailing.ObserveSettlement(CanonicalWalletSettlementEvent{PlatformUserID: "u1", Currency: "CNY", AmountUnits: 100}))
+	require.False(t, shadowFailing.ObserveSettlement(CanonicalWalletSettlementEvent{PlatformUserID: "u1", Currency: "USD", AmountUnits: 100}))
 	require.NoError(t, mockFail.ExpectationsWereMet())
 }
 
@@ -582,7 +582,7 @@ func (s *outboxStoreStub) RequeueDeadLetter(context.Context, int64, string) erro
 func TestObserveCanonicalWalletSettlementReturnBool(t *testing.T) {
 	shadow := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeShadow), &canonicalWalletStoreStub{}, &canonicalWalletControlStub{}, nil, nil, 0, nil)
 	t.Cleanup(shadow.Close)
-	user := &User{ID: 1, PlatformUserID: "u1", BillingCurrency: "CNY", Balance: 10.0}
+	user := &User{ID: 1, PlatformUserID: "u1", BillingCurrency: "USD", Balance: 10.0}
 	cost := &CostBreakdown{ActualCost: 1.0}
 
 	// nil bridge -> false
@@ -611,11 +611,11 @@ func TestBridgeClockFlowsThroughTheConstructor(t *testing.T) {
 	// The cached lease is unexpired and covering by WALL clock but long past
 	// by the FIXED clock — only b.clock() can see it as expired.
 	store := &canonicalWalletStoreStub{lease: &CanonicalWalletLease{
-		LeaseID: "lease-stale-by-fixed-clock", PlatformUserID: "user-clock", Currency: "CNY",
+		LeaseID: "lease-stale-by-fixed-clock", PlatformUserID: "user-clock", Currency: "USD",
 		BudgetUnits: 500_000_000, ExpiresAt: time.Now().UTC().Add(5 * time.Minute),
 	}}
 	control := &canonicalWalletControlStub{lease: CanonicalWalletLease{
-		LeaseID: "lease-fresh", PlatformUserID: "user-clock", Currency: "CNY",
+		LeaseID: "lease-fresh", PlatformUserID: "user-clock", Currency: "USD",
 		BudgetUnits: 500_000_000, ExpiresAt: fixed.Add(5 * time.Minute),
 	}}
 	cfg := canonicalWalletTestConfig(config.CanonicalWalletModeEnforce)
@@ -625,7 +625,7 @@ func TestBridgeClockFlowsThroughTheConstructor(t *testing.T) {
 	require.NotNil(t, b.now, "the constructor installs the injected clock")
 
 	allowed, err := b.CheckAndReserve(context.Background(), CanonicalWalletSettlementEvent{
-		GatewayRequestID: "req-clock", PlatformUserID: "user-clock", Currency: "CNY", AmountUnits: 1_000_000,
+		GatewayRequestID: "req-clock", PlatformUserID: "user-clock", Currency: "USD", AmountUnits: 1_000_000,
 	})
 	require.NoError(t, err)
 	require.True(t, allowed)

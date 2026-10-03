@@ -31,7 +31,7 @@ func newLiveFinalizationFixture(t *testing.T, mode string) (*liveAuthTestFixture
 		AuthorizationID:   authID,
 		UserID:            f.user.ID,
 		PlatformUserID:    f.user.PlatformUserID,
-		BillingCurrency:   "CNY",
+		BillingCurrency:   "USD",
 		BillingSnapshotID: "bsnap_test_1",
 		EstimatedUnits:    10_000,
 		Status:            LiveProvisionalStatusActive,
@@ -53,11 +53,11 @@ func newLiveFinalizationFixture(t *testing.T, mode string) (*liveAuthTestFixture
 		AuthorizationToken:     authID + ".1",
 		AuthorizationID:        authID,
 		BillingSnapshotID:      "bsnap_test_1",
-		BillingCurrency:        "CNY",
+		BillingCurrency:        "USD",
 		Model:                  "claude-sonnet-4",
 		RateMultiplier:         1.5,
 		AccountRateMultiplier:  1.25,
-		ExchangeRate:           7.0,
+		ExchangeRate:           1.0,
 		ExchangeRateSource:     "test",
 		ExchangeRateAsOf:       now,
 		InputTokens:            100,
@@ -91,6 +91,14 @@ func newLiveFinalizationWithOutboxFixture(t *testing.T, mode string) (*liveAuthT
 // settled windows [a1, a2, 0] finalizes under :window:3's event id, settling
 // exactly units(total) − a1 − a2 with windows[2]'s authorization, and
 // completes with seq = 3.
+// expectNoAuthorizationSegments models a Live call that has no pool/media authorization
+// segments: ObserveSettlement reads wallet_authorization_segment first, and an empty result
+// leaves the call on the plain single-lease settlement path.
+func expectNoAuthorizationSegments(mock sqlmock.Sqlmock) {
+	mock.ExpectQuery(`FROM wallet_authorization_segment WHERE parent_authorization_id`).
+		WillReturnRows(sqlmock.NewRows([]string{"authorization_id", "lease_id", "held_units", "lease_basis", "event_id", "actual_units", "pin_state", "kind", "state", "settlement_payload", "remainder_payload"}))
+}
+
 func TestTryFinalizeLiveCallSettlesTheLastWindow(t *testing.T) {
 	f, rec, mock := newLiveFinalizationWithOutboxFixture(t, config.CanonicalWalletModeShadow)
 
@@ -101,8 +109,8 @@ func TestTryFinalizeLiveCallSettlesTheLastWindow(t *testing.T) {
 	// amount is the remainder. liveUsageUnits prices (InputTokens −
 	// CacheReadTokens) at the input price: 100 − 10 = 90.
 	inputTokens := 100 - 10
-	actualCost := (float64(inputTokens)*3e-6 + 50*15e-6 + 10*1e-6) * 7.0 * 1.5
-	totalUnits, err := canonicalWalletUnitsFromCNY(actualCost)
+	actualCost := (float64(inputTokens)*3e-6 + 50*15e-6 + 10*1e-6) * 1.5
+	totalUnits, err := canonicalWalletUnitsFromUSD(actualCost)
 	require.NoError(t, err)
 	require.Greater(t, totalUnits, a1+a2)
 	f.provStore.mu.Lock()
@@ -119,6 +127,7 @@ func TestTryFinalizeLiveCallSettlesTheLastWindow(t *testing.T) {
 		observedEvent = event
 		observedCount.Add(1)
 	}
+	expectNoAuthorizationSegments(mock)
 	mock.ExpectBegin()
 	mock.ExpectCommit()
 
@@ -180,7 +189,7 @@ func TestTryFinalizeLiveCallIdleLastWindow(t *testing.T) {
 }
 
 // Execution review MINOR-2: a finalization whose usage cannot be priced (a
-// non-finite cost reaching canonicalWalletUnitsFromCNY) retries instead of
+// non-finite cost reaching canonicalWalletUnitsFromUSD) retries instead of
 // finalizing as idle — idleFinalized unmoved, no settlement observed.
 func TestTryFinalizeLiveCallUnpriceableUsageRetriesNotIdle(t *testing.T) {
 	f, rec := newLiveFinalizationFixture(t, config.CanonicalWalletModeShadow)
@@ -235,6 +244,7 @@ func TestTryFinalizeLiveCallTransitionsProvisionalToFinalizedWhenEnqueueSucceeds
 		observedCount.Add(1)
 	}
 
+	expectNoAuthorizationSegments(mock)
 	mock.ExpectBegin()
 	mock.ExpectCommit()
 
@@ -248,8 +258,8 @@ func TestTryFinalizeLiveCallTransitionsProvisionalToFinalizedWhenEnqueueSucceeds
 	require.Equal(t, rec.AuthorizationToken, observedEvent.AuthorizationToken)
 	require.Equal(t, rec.AuthorizationID, observedEvent.AuthorizationID)
 	require.Equal(t, rec.CallHash, observedEvent.GatewayRequestID)
-	actualCost := ((100-10)*3e-6 + 50*15e-6 + 10*1e-6) * 7.0 * 1.5
-	expectedUnits, err := canonicalWalletUnitsFromCNY(actualCost)
+	actualCost := ((100-10)*3e-6 + 50*15e-6 + 10*1e-6) * 1.5
+	expectedUnits, err := canonicalWalletUnitsFromUSD(actualCost)
 	require.NoError(t, err)
 	require.Equal(t, expectedUnits, observedEvent.AmountUnits)
 	require.Nil(t, observedEvent.LocalBalanceAfterUnits, "Live local balance after units must be nil")
@@ -283,6 +293,7 @@ func TestTryFinalizeLiveCallEnqueueFailsReleasesClaimAndRetryObservesAgain(t *te
 	}
 
 	// 1. First attempt: enqueue fails (BeginTx/Commit fails or rollback)
+	expectNoAuthorizationSegments(mock)
 	mock.ExpectBegin()
 	mock.ExpectRollback()
 	failingOutbox := &outboxStoreStub{insertErr: errors.New("outbox insert failed")}
@@ -303,6 +314,7 @@ func TestTryFinalizeLiveCallEnqueueFailsReleasesClaimAndRetryObservesAgain(t *te
 	// 2. Retry: enqueue succeeds -> row transitions to finalized, retry observed again
 	_ = f.liveStore.SaveLiveCall(context.Background(), rec, time.Hour)
 	f.svc.canonicalWallet.outbox = &outboxStoreStub{}
+	expectNoAuthorizationSegments(mock)
 	mock.ExpectBegin()
 	mock.ExpectCommit()
 
@@ -328,6 +340,7 @@ func TestTryFinalizeLiveCallCompleteFailsKeepsFinalizingAndRetryRefusesClaim(t *
 	}
 
 	// 1. First attempt: enqueue commits, but CompleteFinalization in store fails
+	expectNoAuthorizationSegments(mock)
 	mock.ExpectBegin()
 	mock.ExpectCommit()
 	f.provStore.completeErr = errors.New("complete finalization db timeout")
@@ -352,6 +365,7 @@ func TestTryFinalizeLiveCallCompleteFailsKeepsFinalizingAndRetryRefusesClaim(t *
 
 func TestTryFinalizeLiveCallClaimProtectsConcurrentFinalize(t *testing.T) {
 	f, rec, mock := newLiveFinalizationWithOutboxFixture(t, config.CanonicalWalletModeShadow)
+	expectNoAuthorizationSegments(mock)
 	mock.ExpectBegin()
 	mock.ExpectCommit()
 

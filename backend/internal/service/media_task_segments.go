@@ -114,7 +114,7 @@ func (s *MediaTaskService) mediaAuthorization(ctx context.Context, r *mediaTaskR
 		segment := &r.Segments[i]
 		segment.EventID = r.EventID
 		if i > 0 {
-			segment.EventID = CanonicalWalletSettlementEventID(r.ID+":"+segment.AuthorizationID, r.PlatformUserID, "CNY")
+			segment.EventID = CanonicalWalletSettlementEventID(r.ID+":"+segment.AuthorizationID, r.PlatformUserID, "USD")
 		}
 		basis, e := s.bridge.store.GetCanonicalWalletLeaseByID(ctx, r.PlatformUserID, segment.LeaseID)
 		if e != nil {

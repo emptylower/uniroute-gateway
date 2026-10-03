@@ -76,7 +76,12 @@ func (a *CanonicalWalletAuthorizer) Authorize(ctx context.Context, in AuthorizeI
 		}
 		h.ID = in.DurableAuthorizationID
 	}
-	if a == nil || mode == "" || mode == config.CanonicalWalletModeDisabled || a.bridge == nil || a.snapshots == nil {
+	if a == nil || a.bridge == nil || a.snapshots == nil {
+		refused := &AuthorizationRefusedError{Reason: AuthorizationRefusalLeaseUnavailable, AuthorizationID: h.ID, Detail: "USD wallet authorization dependencies unavailable"}
+		h.Refusal = refused
+		return h, refused
+	}
+	if mode == "" || mode == config.CanonicalWalletModeDisabled {
 		return h, nil
 	}
 	authorizationMetrics.minted.Add(1)
@@ -134,18 +139,27 @@ func (a *CanonicalWalletAuthorizer) Authorize(ctx context.Context, in AuthorizeI
 		authorizationMetrics.identityMissing.Add(1)
 		return refuse(AuthorizationRefusalIdentityMissing, "no platform user id", nil)
 	}
-	currency := strings.ToUpper(strings.TrimSpace(in.User.BillingCurrency))
-	if currency == "" {
-		currency = "CNY"
+	// ObserveSettlement rejects any raw non-USD currency, so a user admitted
+	// here with one would be served and never charged. Refuse before any hold.
+	if raw := strings.TrimSpace(in.User.BillingCurrency); raw != "" {
+		if _, err := RequireUSDBillingCurrency(raw); err != nil {
+			authorizationMetrics.currencyUnsupported.Add(1)
+			return refuse(AuthorizationRefusalCurrency, "billing currency "+raw, err)
+		}
 	}
-	if currency != "CNY" {
-		authorizationMetrics.currencyUnsupported.Add(1)
-		return refuse(AuthorizationRefusalCurrency, "billing currency "+currency, nil)
-	}
+	currency := CurrencyUSD
 	leaseCtx, cancel := context.WithTimeout(ctx, a.requestTimeout())
 	defer cancel()
 	if policyVersion != "" && a.bridge.outboxDB != nil && a.bridge.HoldsEnabled() {
 		if _, ok := a.bridge.control.(*canonicalWalletHTTPClient); ok {
+			// The plan's segment rows reference the snapshot by foreign key, but a
+			// text or live snapshot is otherwise persisted only at settlement.
+			// Media persists its own in the task transaction; Persist is idempotent.
+			if h.AttemptKind != "media" {
+				if err = a.snapshots.Persist(leaseCtx, in.Snapshot); err != nil {
+					return refuse(AuthorizationRefusalLeaseUnavailable, "snapshot persist", err)
+				}
+			}
 			if err = a.bridge.authorizePool(leaseCtx, h, in.User.PlatformUserID, units); err != nil {
 				reason := AuthorizationRefusalLeaseUnavailable
 				if errors.Is(err, ErrCanonicalWalletBalanceShortfall) {

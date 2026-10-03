@@ -27,7 +27,7 @@ func (r *redeemCodeRepository) Create(ctx context.Context, code *service.RedeemC
 		SetCode(code.Code).
 		SetType(code.Type).
 		SetValue(code.Value).
-		SetCurrency(service.NormalizeUserBillingCurrency(code.Currency)).
+		SetCurrency(service.NormalizeHistoricalBillingCurrency(code.Currency)).
 		SetStatus(code.Status).
 		SetNotes(code.Notes).
 		SetValidityDays(code.ValidityDays).
@@ -55,7 +55,7 @@ func (r *redeemCodeRepository) CreateBatch(ctx context.Context, codes []service.
 			SetCode(c.Code).
 			SetType(c.Type).
 			SetValue(c.Value).
-			SetCurrency(service.NormalizeUserBillingCurrency(c.Currency)).
+			SetCurrency(service.NormalizeHistoricalBillingCurrency(c.Currency)).
 			SetStatus(c.Status).
 			SetNotes(c.Notes).
 			SetValidityDays(c.ValidityDays).

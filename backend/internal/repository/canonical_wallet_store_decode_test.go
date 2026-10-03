@@ -24,13 +24,13 @@ func TestDecodeCanonicalWalletReservationResultRejectsMalformedShapes(t *testing
 	_, err = decodeCanonicalWalletReservationResult([]any{int64(0), "lease-1"}, user)
 	require.EqualError(t, err, "canonical wallet reservation returned an invalid snapshot")
 
-	_, err = decodeCanonicalWalletReservationResult([]any{int64(0), "lease-1", "CNY", struct{}{}, int64(0), int64(1)}, user)
+	_, err = decodeCanonicalWalletReservationResult([]any{int64(0), "lease-1", "USD", struct{}{}, int64(0), int64(1)}, user)
 	require.ErrorContains(t, err, "unexpected Redis integer type", "a malformed budget field must be reported, not silently zeroed")
 
-	_, err = decodeCanonicalWalletReservationResult([]any{int64(0), "lease-1", "CNY", int64(10), struct{}{}, int64(1)}, user)
+	_, err = decodeCanonicalWalletReservationResult([]any{int64(0), "lease-1", "USD", int64(10), struct{}{}, int64(1)}, user)
 	require.ErrorContains(t, err, "unexpected Redis integer type", "a malformed consumed field must be reported, not silently zeroed")
 
-	_, err = decodeCanonicalWalletReservationResult([]any{int64(0), "lease-1", "CNY", int64(10), int64(1), struct{}{}}, user)
+	_, err = decodeCanonicalWalletReservationResult([]any{int64(0), "lease-1", "USD", int64(10), int64(1), struct{}{}}, user)
 	require.ErrorContains(t, err, "unexpected Redis integer type", "a malformed expiry field must be reported, not silently zeroed")
 
 	_, err = decodeCanonicalWalletReservationResult([]any{int64(9)}, user)
@@ -57,7 +57,7 @@ func TestDecodeCanonicalWalletReservationResultMapsEveryScriptCode(t *testing.T)
 func TestDecodeCanonicalWalletReservationResultCarriesTheSnapshot(t *testing.T) {
 	const user = "shipany-user-decode"
 	snapshot := func(code int64) []any {
-		return []any{code, "lease-7", "CNY", int64(1_000), int64(600), int64(1893456000000)}
+		return []any{code, "lease-7", "USD", int64(1_000), int64(600), int64(1893456000000)}
 	}
 
 	fresh, err := decodeCanonicalWalletReservationResult(snapshot(0), user)
@@ -65,7 +65,7 @@ func TestDecodeCanonicalWalletReservationResultCarriesTheSnapshot(t *testing.T) 
 	require.False(t, fresh.Duplicate)
 	require.Equal(t, "lease-7", fresh.Lease.LeaseID)
 	require.Equal(t, user, fresh.Lease.PlatformUserID)
-	require.Equal(t, "CNY", fresh.Lease.Currency)
+	require.Equal(t, "USD", fresh.Lease.Currency)
 	require.Equal(t, int64(1_000), fresh.Lease.BudgetUnits)
 	require.Equal(t, int64(600), fresh.Lease.ConsumedUnits)
 	require.Equal(t, int64(1893456000000), fresh.Lease.ExpiresAt.UnixMilli())

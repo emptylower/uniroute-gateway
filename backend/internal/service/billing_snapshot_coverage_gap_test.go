@@ -106,11 +106,11 @@ func TestBillingSnapshotPayloadAndHelperEdgeCases(t *testing.T) {
 	sub.Flags.SubscriptionBilling = true
 	subUnits, err := unitsRoundUp(0.25, &sub)
 	require.NoError(t, err)
-	require.Equal(t, int64(math.Ceil(0.25*canonicalWalletUnitsPerCNY)), subUnits)
+	require.Equal(t, int64(math.Ceil(0.25*canonicalWalletUnitsPerUSD)), subUnits)
 	noFX := *snap
 	noFX.FX.Rate = 0
 	_, err = unitsRoundUp(1, &noFX)
-	require.ErrorIs(t, err, ErrEstimateUnbounded)
+	require.NoError(t, err)
 	huge := *snap
 	huge.FX.Rate = math.MaxFloat64 / 2
 	_, err = unitsRoundUp(1e300, &huge)

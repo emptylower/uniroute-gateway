@@ -209,12 +209,12 @@ type BillingSnapshotService struct {
 	cfg           *config.Config
 	resolver      *ModelPricingResolver
 	billing       *BillingService
-	exchangeRates *ExchangeRateService
+	exchangeRates *USDPriceService
 	store         BillingSnapshotStore
 	now           func() time.Time
 }
 
-func NewBillingSnapshotService(cfg *config.Config, resolver *ModelPricingResolver, billing *BillingService, exchangeRates *ExchangeRateService, store BillingSnapshotStore) *BillingSnapshotService {
+func NewBillingSnapshotService(cfg *config.Config, resolver *ModelPricingResolver, billing *BillingService, exchangeRates *USDPriceService, store BillingSnapshotStore) *BillingSnapshotService {
 	return &BillingSnapshotService{cfg: cfg, resolver: resolver, billing: billing, exchangeRates: exchangeRates, store: store, now: func() time.Time { return timezone.Now() }}
 }
 
@@ -276,7 +276,7 @@ func (s *BillingSnapshotService) Freeze(ctx context.Context, in FreezeInput) (*B
 		base = s.cfg.Default.RateMultiplier
 	}
 	if apiKey.GroupID != nil && apiKey.Group != nil {
-		groupDefault := apiKey.Group.RateMultiplierForCurrency(multiplierCurrency)
+		groupDefault := apiKey.Group.EffectiveRateMultiplier()
 		if in.ResolveUserGroupRate != nil {
 			base = in.ResolveUserGroupRate(ctx, in.User.ID, *apiKey.GroupID, groupDefault)
 		} else {
@@ -289,7 +289,7 @@ func (s *BillingSnapshotService) Freeze(ctx context.Context, in FreezeInput) (*B
 
 	var fx ExchangeRateSnapshot
 	var walletPolicyVersion string
-	if !isSubscription && strings.TrimSpace(in.User.BillingCurrency) != "" {
+	if !isSubscription {
 		_, enabled, policyErr := canonicalUSDWalletSnapshot(in.User, s.cfg)
 		if policyErr != nil {
 			return nil, policyErr

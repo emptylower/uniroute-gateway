@@ -347,7 +347,7 @@ func (s *PaymentService) doBalance(ctx context.Context, o *dbent.PaymentOrder, l
 	} else {
 		return errors.New("user repository is unavailable")
 	}
-	if NormalizeUserBillingCurrency(walletCurrency) != PaymentOrderCurrency(o) {
+	if NormalizeHistoricalBillingCurrency(walletCurrency) != PaymentOrderCurrency(o) {
 		return infraerrors.Conflict("PAYMENT_CURRENCY_MISMATCH", "payment order currency no longer matches wallet currency")
 	}
 	// Idempotency: check if redeem code already exists (from a previous partial run)

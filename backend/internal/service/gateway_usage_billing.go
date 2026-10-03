@@ -211,16 +211,6 @@ func postUsageBilling(ctx context.Context, p *postUsageBillingParams, deps *bill
 				slog.Error("increment subscription usage failed", "subscription_id", p.Subscription.ID, "error", err)
 			}
 		}
-	} else {
-		if cost.ActualCost > 0 {
-			if err := deps.userRepo.DeductBalance(billingCtx, p.User.ID, cost.ActualCost); err != nil {
-				slog.Error("deduct balance failed", "user_id", p.User.ID, "error", err)
-			} else if deps.billingCacheService != nil {
-				if err := deps.billingCacheService.InvalidateUserBalance(billingCtx, p.User.ID); err != nil {
-					slog.Warn("invalidate balance cache after legacy deduction failed", "user_id", p.User.ID, "error", err)
-				}
-			}
-		}
 	}
 
 	if p.shouldDeductAPIKeyQuota() {
@@ -309,6 +299,7 @@ func buildUsageBillingCommand(requestID string, usageLog *UsageLog, p *postUsage
 		UserID:             p.User.ID,
 		AccountID:          p.Account.ID,
 		AccountType:        p.Account.Type,
+		WalletCostUSD:      p.Cost.ActualCost,
 		SettlementCurrency: NormalizeUserBillingCurrency(p.User.BillingCurrency),
 		RequestPayloadHash: strings.TrimSpace(p.RequestPayloadHash),
 	}
@@ -341,8 +332,6 @@ func buildUsageBillingCommand(requestID string, usageLog *UsageLog, p *postUsage
 	if p.IsSubscriptionBill && p.Subscription != nil && p.Cost.TotalCost > 0 {
 		cmd.SubscriptionID = &p.Subscription.ID
 		cmd.SubscriptionCost = p.Cost.ActualCost
-	} else if p.Cost.ActualCost > 0 {
-		cmd.BalanceCost = p.Cost.ActualCost
 	}
 
 	if p.shouldDeductAPIKeyQuota() {
@@ -764,10 +753,6 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 		cacheTTLOverridden = (result.Usage.CacheCreation5mTokens + result.Usage.CacheCreation1hTokens) > 0
 	}
 	isSubscriptionBilling := subscription != nil && apiKey.Group != nil && apiKey.Group.IsSubscriptionType()
-	multiplierCurrency := CurrencyUSD
-	if !isSubscriptionBilling {
-		multiplierCurrency = NormalizeUserBillingCurrency(user.BillingCurrency)
-	}
 
 	// 获取费率倍数（优先级：用户专属 > 分组默认 > 系统默认）
 	multiplier := 1.0
@@ -775,7 +760,7 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 		multiplier = s.cfg.Default.RateMultiplier
 	}
 	if apiKey.GroupID != nil && apiKey.Group != nil {
-		groupDefault := apiKey.Group.RateMultiplierForCurrency(multiplierCurrency)
+		groupDefault := apiKey.Group.EffectiveRateMultiplier()
 		multiplier = s.ResolveUserGroupRateMultiplier(ctx, user.ID, *apiKey.GroupID, groupDefault)
 	}
 	// token 倍率叠加高峰因子（token 计费含图片 token，图片按次倍率不受影响）。高峰因子按请求时刻现算，

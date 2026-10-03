@@ -66,6 +66,10 @@ const (
 	FieldTotalCost = "total_cost"
 	// FieldActualCost holds the string denoting the actual_cost field in the database.
 	FieldActualCost = "actual_cost"
+	// FieldActualCostUsd holds the string denoting the actual_cost_usd field in the database.
+	FieldActualCostUsd = "actual_cost_usd"
+	// FieldBaseCostUsd holds the string denoting the base_cost_usd field in the database.
+	FieldBaseCostUsd = "base_cost_usd"
 	// FieldSourceCurrency holds the string denoting the source_currency field in the database.
 	FieldSourceCurrency = "source_currency"
 	// FieldSettlementCurrency holds the string denoting the settlement_currency field in the database.
@@ -200,6 +204,8 @@ var Columns = []string{
 	FieldCacheReadCost,
 	FieldTotalCost,
 	FieldActualCost,
+	FieldActualCostUsd,
+	FieldBaseCostUsd,
 	FieldSourceCurrency,
 	FieldSettlementCurrency,
 	FieldExchangeRate,
@@ -281,6 +287,10 @@ var (
 	DefaultTotalCost float64
 	// DefaultActualCost holds the default value on creation for the "actual_cost" field.
 	DefaultActualCost float64
+	// DefaultActualCostUsd holds the default value on creation for the "actual_cost_usd" field.
+	DefaultActualCostUsd float64
+	// DefaultBaseCostUsd holds the default value on creation for the "base_cost_usd" field.
+	DefaultBaseCostUsd float64
 	// DefaultSourceCurrency holds the default value on creation for the "source_currency" field.
 	DefaultSourceCurrency string
 	// SourceCurrencyValidator is a validator for the "source_currency" field. It is called by the builders before save.
@@ -469,6 +479,16 @@ func ByTotalCost(opts ...sql.OrderTermOption) OrderOption {
 // ByActualCost orders the results by the actual_cost field.
 func ByActualCost(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldActualCost, opts...).ToFunc()
+}
+
+// ByActualCostUsd orders the results by the actual_cost_usd field.
+func ByActualCostUsd(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldActualCostUsd, opts...).ToFunc()
+}
+
+// ByBaseCostUsd orders the results by the base_cost_usd field.
+func ByBaseCostUsd(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldBaseCostUsd, opts...).ToFunc()
 }
 
 // BySourceCurrency orders the results by the source_currency field.

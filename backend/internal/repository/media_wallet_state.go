@@ -16,7 +16,7 @@ import (
 var protectMediaHoldScript = redis.NewScript(`
  local restored=0
  if redis.call('EXISTS',KEYS[1])==0 then
-  redis.call('HSET',KEYS[1],'lease_id',ARGV[1],'platform_user_id',ARGV[2],'currency','CNY','budget_units',ARGV[3],'consumed_units',ARGV[4],'released_units',ARGV[5],'expires_at_ms',ARGV[6],'sealed','1','media_recovered','1');restored=1
+  redis.call('HSET',KEYS[1],'lease_id',ARGV[1],'platform_user_id',ARGV[2],'currency','USD','budget_units',ARGV[3],'consumed_units',ARGV[4],'released_units',ARGV[5],'expires_at_ms',ARGV[6],'sealed','1','media_recovered','1');restored=1
  end
  if redis.call('HGET',KEYS[1],'platform_user_id')~=ARGV[2] then return redis.error_reply('media lease owner mismatch') end
  if redis.call('EXISTS',KEYS[2])==0 then

@@ -97,8 +97,8 @@ func TestUpdateUserPlatformQuotas_Success(t *testing.T) {
 	h := buildTestHandler(repo, cache)
 
 	body := `{"quotas":[
-		{"platform":"anthropic","daily_limit_usd":10.0,"weekly_limit_usd":null,"monthly_limit_usd":100.0},
-		{"platform":"openai","daily_limit_usd":80.0,"weekly_limit_usd":300.0,"monthly_limit_usd":null},
+		{"platform":"anthropic","daily_limit_usd":"10.0","weekly_limit_usd":null,"monthly_limit_usd":"100.0"},
+		{"platform":"openai","daily_limit_usd":"80.0","weekly_limit_usd":"300.0","monthly_limit_usd":null},
 		{"platform":"gemini","daily_limit_usd":null,"weekly_limit_usd":null,"monthly_limit_usd":null},
 		{"platform":"antigravity","daily_limit_usd":null,"weekly_limit_usd":null,"monthly_limit_usd":null},
 		{"platform":"grok","daily_limit_usd":null,"weekly_limit_usd":null,"monthly_limit_usd":null}
@@ -112,20 +112,21 @@ func TestUpdateUserPlatformQuotas_Success(t *testing.T) {
 	if len(repo.upsertCalls) != 1 {
 		t.Fatalf("UpsertForUser should be called once, got %d", len(repo.upsertCalls))
 	}
-	if repo.upsertCalls[0].userID != 42 || len(repo.upsertCalls[0].records) != len(service.AllowedQuotaPlatforms) {
+	// 只 upsert 请求里携带的 5 个平台（全量替换由 repo 负责，handler 不补齐其余平台）。
+	if repo.upsertCalls[0].userID != 42 || len(repo.upsertCalls[0].records) != 5 {
 		t.Errorf("unexpected upsert call: %+v", repo.upsertCalls[0])
 	}
 	// 缓存失效：按全部允许平台统一失效。
-	if len(cache.deleteCalls) != 5 {
-		t.Errorf("expected 5 cache delete calls, got %d: %+v", len(cache.deleteCalls), cache.deleteCalls)
+	if len(cache.deleteCalls) != len(service.AllowedQuotaPlatforms) {
+		t.Errorf("expected %d cache delete calls, got %d: %+v", len(service.AllowedQuotaPlatforms), len(cache.deleteCalls), cache.deleteCalls)
 	}
 }
 
 func TestUpdateUserPlatformQuotas_RejectsDuplicatePlatform(t *testing.T) {
 	h := buildTestHandler(&upsertCapturingQuotaRepo{}, &billingCacheStub{})
 	body := `{"quotas":[
-		{"platform":"anthropic","daily_limit_usd":1},
-		{"platform":"anthropic","daily_limit_usd":2}
+		{"platform":"anthropic","daily_limit_usd":"1"},
+		{"platform":"anthropic","daily_limit_usd":"2"}
 	]}`
 	c, w := putReq(t, body)
 	h.UpdateUserPlatformQuotas(c)
@@ -136,7 +137,7 @@ func TestUpdateUserPlatformQuotas_RejectsDuplicatePlatform(t *testing.T) {
 
 func TestUpdateUserPlatformQuotas_RejectsInvalidPlatform(t *testing.T) {
 	h := buildTestHandler(&upsertCapturingQuotaRepo{}, &billingCacheStub{})
-	body := `{"quotas":[{"platform":"unknown","daily_limit_usd":1}]}`
+	body := `{"quotas":[{"platform":"unknown","daily_limit_usd":"1"}]}`
 	c, w := putReq(t, body)
 	h.UpdateUserPlatformQuotas(c)
 	if w.Code != http.StatusBadRequest {
@@ -146,7 +147,7 @@ func TestUpdateUserPlatformQuotas_RejectsInvalidPlatform(t *testing.T) {
 
 func TestUpdateUserPlatformQuotas_RejectsNegativeLimit(t *testing.T) {
 	h := buildTestHandler(&upsertCapturingQuotaRepo{}, &billingCacheStub{})
-	body := `{"quotas":[{"platform":"anthropic","daily_limit_usd":-1}]}`
+	body := `{"quotas":[{"platform":"anthropic","daily_limit_usd":"-1"}]}`
 	c, w := putReq(t, body)
 	h.UpdateUserPlatformQuotas(c)
 	if w.Code != http.StatusBadRequest {
@@ -175,7 +176,7 @@ func TestUpdateUserPlatformQuotas_ReturnsLatestState(t *testing.T) {
 	cache := &billingCacheStub{}
 	h := buildTestHandler(repo, cache)
 
-	body := `{"quotas":[{"platform":"anthropic","daily_limit_usd":10}]}`
+	body := `{"quotas":[{"platform":"anthropic","daily_limit_usd":"10"}]}`
 	c, w := putReq(t, body)
 	h.UpdateUserPlatformQuotas(c)
 	if !strings.Contains(w.Body.String(), `"platform_quotas"`) {
@@ -255,7 +256,7 @@ func TestUpdateUserPlatformQuotas_JSONErrorOnRepoFailure(t *testing.T) {
 	repo := &upsertCapturingQuotaRepo{upsertErr: errors.New("db down")}
 	cache := &billingCacheStub{}
 	h := buildTestHandler(repo, cache)
-	body := `{"quotas":[{"platform":"anthropic","daily_limit_usd":10}]}`
+	body := `{"quotas":[{"platform":"anthropic","daily_limit_usd":"10"}]}`
 	c, w := putReq(t, body)
 	h.UpdateUserPlatformQuotas(c)
 	if w.Code < 500 {
@@ -278,7 +279,7 @@ func TestUpdateUserPlatformQuotas_UserNotFound(t *testing.T) {
 		billingCache:          cache,
 		adminService:          adminSvc,
 	}
-	body := `{"quotas":[{"platform":"anthropic","daily_limit_usd":10}]}`
+	body := `{"quotas":[{"platform":"anthropic","daily_limit_usd":"10"}]}`
 	c, w := putReq(t, body)
 	h.UpdateUserPlatformQuotas(c)
 	if w.Code != http.StatusNotFound {

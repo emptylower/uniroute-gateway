@@ -1134,9 +1134,9 @@ func liveUsageUnits(record *LiveCallRecord) (int64, error) {
 	outputCost := float64(record.OutputTokens) * record.OutputPricePerToken
 	cacheReadCost := float64(record.CacheReadTokens) * record.CacheReadPricePerToken
 	sourceCost := inputCost + outputCost + cacheReadCost
-	baseCost := sourceCost * record.ExchangeRate
+	baseCost := sourceCost
 	actualCost := baseCost * record.RateMultiplier
-	return canonicalWalletUnitsFromCNY(actualCost)
+	return canonicalWalletUnitsFromUSD(actualCost)
 }
 
 // liveClockArmed: the clock runs only with a provisional store, an
@@ -1476,7 +1476,7 @@ func (s *OpenAIGatewayService) tryFinalizeLiveCall(record *LiveCallRecord) bool 
 	outputCost := float64(record.OutputTokens) * record.OutputPricePerToken
 	cacheReadCost := float64(record.CacheReadTokens) * record.CacheReadPricePerToken
 	sourceCost := inputCost + outputCost + cacheReadCost
-	baseCost := sourceCost * record.ExchangeRate
+	baseCost := sourceCost
 	actualCost := baseCost * record.RateMultiplier
 	usageLog := &UsageLog{
 		UserID:             record.UserID,
@@ -1504,9 +1504,9 @@ func (s *OpenAIGatewayService) tryFinalizeLiveCall(record *LiveCallRecord) bool 
 		InboundEndpoint:    &inboundEndpoint,
 		UpstreamEndpoint:   &upstreamEndpoint,
 		SourceCurrency:     CurrencyUSD,
-		SettlementCurrency: record.BillingCurrency,
-		ExchangeRate:       record.ExchangeRate,
-		ExchangeRateSource: record.ExchangeRateSource,
+		SettlementCurrency: CurrencyUSD,
+		ExchangeRate:       1,
+		ExchangeRateSource: CanonicalWalletUnitVersion,
 		ExchangeRateAsOf:   &record.ExchangeRateAsOf,
 		SourceCost:         sourceCost,
 		BaseCost:           baseCost,

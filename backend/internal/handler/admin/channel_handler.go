@@ -60,13 +60,13 @@ type channelModelPricingRequest struct {
 	Platform         string                   `json:"platform" binding:"omitempty,max=50"`
 	Models           []string                 `json:"models" binding:"required,min=1,max=100"`
 	BillingMode      string                   `json:"billing_mode" binding:"omitempty,oneof=token per_request image"`
-	InputPrice       *float64                 `json:"input_price" binding:"omitempty,min=0"`
-	OutputPrice      *float64                 `json:"output_price" binding:"omitempty,min=0"`
-	CacheWritePrice  *float64                 `json:"cache_write_price" binding:"omitempty,min=0"`
-	CacheReadPrice   *float64                 `json:"cache_read_price" binding:"omitempty,min=0"`
-	ImageInputPrice  *float64                 `json:"image_input_price" binding:"omitempty,min=0"`
-	ImageOutputPrice *float64                 `json:"image_output_price" binding:"omitempty,min=0"`
-	PerRequestPrice  *float64                 `json:"per_request_price" binding:"omitempty,min=0"`
+	InputPrice       *float64                 `json:"input_price_usd,string" binding:"omitempty,min=0"`
+	OutputPrice      *float64                 `json:"output_price_usd,string" binding:"omitempty,min=0"`
+	CacheWritePrice  *float64                 `json:"cache_write_price_usd,string" binding:"omitempty,min=0"`
+	CacheReadPrice   *float64                 `json:"cache_read_price_usd,string" binding:"omitempty,min=0"`
+	ImageInputPrice  *float64                 `json:"image_input_price_usd,string" binding:"omitempty,min=0"`
+	ImageOutputPrice *float64                 `json:"image_output_price_usd,string" binding:"omitempty,min=0"`
+	PerRequestPrice  *float64                 `json:"per_request_price_usd,string" binding:"omitempty,min=0"`
 	Intervals        []pricingIntervalRequest `json:"intervals"`
 }
 
@@ -74,11 +74,11 @@ type pricingIntervalRequest struct {
 	MinTokens       int      `json:"min_tokens"`
 	MaxTokens       *int     `json:"max_tokens"`
 	TierLabel       string   `json:"tier_label"`
-	InputPrice      *float64 `json:"input_price"`
-	OutputPrice     *float64 `json:"output_price"`
-	CacheWritePrice *float64 `json:"cache_write_price"`
-	CacheReadPrice  *float64 `json:"cache_read_price"`
-	PerRequestPrice *float64 `json:"per_request_price"`
+	InputPrice      *float64 `json:"input_price_usd,string"`
+	OutputPrice     *float64 `json:"output_price_usd,string"`
+	CacheWritePrice *float64 `json:"cache_write_price_usd,string"`
+	CacheReadPrice  *float64 `json:"cache_read_price_usd,string"`
+	PerRequestPrice *float64 `json:"per_request_price_usd,string"`
 	SortOrder       int      `json:"sort_order"`
 }
 
@@ -112,13 +112,13 @@ type channelModelPricingResponse struct {
 	Platform         string                    `json:"platform"`
 	Models           []string                  `json:"models"`
 	BillingMode      string                    `json:"billing_mode"`
-	InputPrice       *float64                  `json:"input_price"`
-	OutputPrice      *float64                  `json:"output_price"`
-	CacheWritePrice  *float64                  `json:"cache_write_price"`
-	CacheReadPrice   *float64                  `json:"cache_read_price"`
-	ImageInputPrice  *float64                  `json:"image_input_price"`
-	ImageOutputPrice *float64                  `json:"image_output_price"`
-	PerRequestPrice  *float64                  `json:"per_request_price"`
+	InputPrice       *float64                  `json:"input_price_usd,string"`
+	OutputPrice      *float64                  `json:"output_price_usd,string"`
+	CacheWritePrice  *float64                  `json:"cache_write_price_usd,string"`
+	CacheReadPrice   *float64                  `json:"cache_read_price_usd,string"`
+	ImageInputPrice  *float64                  `json:"image_input_price_usd,string"`
+	ImageOutputPrice *float64                  `json:"image_output_price_usd,string"`
+	PerRequestPrice  *float64                  `json:"per_request_price_usd,string"`
 	Intervals        []pricingIntervalResponse `json:"intervals"`
 }
 
@@ -127,11 +127,11 @@ type pricingIntervalResponse struct {
 	MinTokens       int      `json:"min_tokens"`
 	MaxTokens       *int     `json:"max_tokens"`
 	TierLabel       string   `json:"tier_label,omitempty"`
-	InputPrice      *float64 `json:"input_price"`
-	OutputPrice     *float64 `json:"output_price"`
-	CacheWritePrice *float64 `json:"cache_write_price"`
-	CacheReadPrice  *float64 `json:"cache_read_price"`
-	PerRequestPrice *float64 `json:"per_request_price"`
+	InputPrice      *float64 `json:"input_price_usd,string"`
+	OutputPrice     *float64 `json:"output_price_usd,string"`
+	CacheWritePrice *float64 `json:"cache_write_price_usd,string"`
+	CacheReadPrice  *float64 `json:"cache_read_price_usd,string"`
+	PerRequestPrice *float64 `json:"per_request_price_usd,string"`
 	SortOrder       int      `json:"sort_order"`
 }
 
@@ -346,7 +346,7 @@ func (h *ChannelHandler) GetByID(c *gin.Context) {
 // POST /api/v1/admin/channels
 func (h *ChannelHandler) Create(c *gin.Context) {
 	var req createChannelRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := response.BindUSDJSON(c, &req); err != nil {
 		response.ErrorFrom(c, infraerrors.BadRequest("VALIDATION_ERROR", err.Error()))
 		return
 	}
@@ -407,7 +407,7 @@ func (h *ChannelHandler) Update(c *gin.Context) {
 	}
 
 	var req updateChannelRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := response.BindUSDJSON(c, &req); err != nil {
 		response.ErrorFrom(c, infraerrors.BadRequest("VALIDATION_ERROR", err.Error()))
 		return
 	}

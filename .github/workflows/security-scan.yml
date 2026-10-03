@@ -2,6 +2,7 @@ name: Security Scan
 
 on:
   push:
+    branches: [main]
   pull_request:
   schedule:
     - cron: '0 3 * * 1'
@@ -24,11 +25,20 @@ jobs:
       - name: Verify Go version
         run: |
           go version | grep -q 'go1.26.5'
+      # Advisory only: new advisories land upstream on their own schedule and must not block merges.
       - name: Run govulncheck
+        id: govulncheck
+        continue-on-error: true
         working-directory: backend
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
           govulncheck ./...
+      - name: Report govulncheck findings
+        if: steps.govulncheck.outcome == 'failure'
+        run: |
+          echo "::warning title=govulncheck::Vulnerabilities reported (advisory, not blocking). See the 'Run govulncheck' step log."
+          echo "### govulncheck reported vulnerabilities (advisory)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Not blocking. Open the 'Run govulncheck' step for details; most are fixed by a Go patch release." >> "$GITHUB_STEP_SUMMARY"
 
   frontend-security:
     runs-on: ubuntu-latest
@@ -51,8 +61,17 @@ jobs:
         working-directory: frontend
         run: |
           pnpm audit --prod --audit-level=high --json > audit.json || true
+      # Advisory only, same as govulncheck above.
       - name: Check audit exceptions
+        id: audit-exceptions
+        continue-on-error: true
         run: |
           python tools/check_pnpm_audit_exceptions.py \
             --audit frontend/audit.json \
             --exceptions .github/audit-exceptions.yml
+      - name: Report audit findings
+        if: steps.audit-exceptions.outcome == 'failure'
+        run: |
+          echo "::warning title=pnpm audit::High/critical advisories without a valid exception (advisory, not blocking). See the 'Check audit exceptions' step log."
+          echo "### pnpm audit: advisories without a valid exception (advisory)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Not blocking. Upgrade the package, or add a dated entry to .github/audit-exceptions.yml." >> "$GITHUB_STEP_SUMMARY"

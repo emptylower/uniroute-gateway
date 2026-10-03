@@ -30,10 +30,10 @@ type TextModelCatalogItem struct {
 	Available                 bool      `json:"available"`
 	AvailableRouteCount       int       `json:"available_route_count"`
 	Currency                  string    `json:"currency"`
-	InputPricePerMillion      *float64  `json:"input_price_per_million"`
-	OutputPricePerMillion     *float64  `json:"output_price_per_million"`
-	CacheReadPricePerMillion  *float64  `json:"cache_read_price_per_million"`
-	CacheWritePricePerMillion *float64  `json:"cache_write_price_per_million"`
+	InputPricePerMillion      *float64  `json:"input_price_per_million_usd,string"`
+	OutputPricePerMillion     *float64  `json:"output_price_per_million_usd,string"`
+	CacheReadPricePerMillion  *float64  `json:"cache_read_price_per_million_usd,string"`
+	CacheWritePricePerMillion *float64  `json:"cache_write_price_per_million_usd,string"`
 	EffectiveAt               time.Time `json:"effective_at"`
 }
 
@@ -45,14 +45,14 @@ type ChannelModelCostItem struct {
 	Name                              string   `json:"name"`
 	Provider                          string   `json:"provider"`
 	Currency                          string   `json:"currency"`
-	InputPricePerMillion              *float64 `json:"input_price_per_million"`
-	OutputPricePerMillion             *float64 `json:"output_price_per_million"`
-	CacheReadPricePerMillion          *float64 `json:"cache_read_price_per_million"`
-	CacheWritePricePerMillion         *float64 `json:"cache_write_price_per_million"`
-	OfficialInputPricePerMillion      *float64 `json:"official_input_price_per_million"`
-	OfficialOutputPricePerMillion     *float64 `json:"official_output_price_per_million"`
-	OfficialCacheReadPricePerMillion  *float64 `json:"official_cache_read_price_per_million"`
-	OfficialCacheWritePricePerMillion *float64 `json:"official_cache_write_price_per_million"`
+	InputPricePerMillion              *float64 `json:"input_price_per_million_usd,string"`
+	OutputPricePerMillion             *float64 `json:"output_price_per_million_usd,string"`
+	CacheReadPricePerMillion          *float64 `json:"cache_read_price_per_million_usd,string"`
+	CacheWritePricePerMillion         *float64 `json:"cache_write_price_per_million_usd,string"`
+	OfficialInputPricePerMillion      *float64 `json:"official_input_price_per_million_usd,string"`
+	OfficialOutputPricePerMillion     *float64 `json:"official_output_price_per_million_usd,string"`
+	OfficialCacheReadPricePerMillion  *float64 `json:"official_cache_read_price_per_million_usd,string"`
+	OfficialCacheWritePricePerMillion *float64 `json:"official_cache_write_price_per_million_usd,string"`
 }
 
 // RoutingGroupModelCosts keeps model availability and pricing scoped to the
@@ -85,7 +85,7 @@ type ModelCatalogService struct {
 	selector         *ChannelRoutingSelector
 	pricing          modelCatalogPricingResolver
 	accounts         modelCatalogAccountSource
-	fx               *ExchangeRateService
+	fx               *USDPriceService
 	publicationStore ModelAuthorizationStore
 	cfg              *config.Config
 }
@@ -99,7 +99,7 @@ func NewModelCatalogService(
 	selector *ChannelRoutingSelector,
 	pricing *ModelPricingResolver,
 	accounts AccountRepository,
-	fx *ExchangeRateService,
+	fx *USDPriceService,
 ) *ModelCatalogService {
 	return &ModelCatalogService{
 		channels: channels,
@@ -407,12 +407,12 @@ func catalogAccountSupportsModel(account *Account, model string) bool {
 // enabled/disabled preference because a disabled channel still needs a visible
 // price before the user decides to enable it.
 func (s *ModelCatalogService) ListChannelCosts(ctx context.Context, userID int64, now time.Time) ([]RoutingGroupModelCosts, error) {
-	quote, err := s.QuoteChannelCosts(ctx, userID, now, CurrencyCNY)
+	quote, err := s.QuoteChannelCosts(ctx, userID, now, CurrencyUSD)
 	return quote.Groups, err
 }
 
 func (s *ModelCatalogService) QuoteChannelCosts(ctx context.Context, userID int64, now time.Time, currency string) (ChannelCostQuote, error) {
-	quoteCurrency, err := NormalizeBillingCurrency(currency)
+	quoteCurrency, err := NormalizeBillingCurrency(CurrencyUSD)
 	if err != nil {
 		return ChannelCostQuote{}, err
 	}
@@ -506,7 +506,7 @@ func (s *ModelCatalogService) QuoteChannelCosts(ctx context.Context, userID int6
 			}
 		}
 
-		effectiveMultiplier := group.RateMultiplierForCurrency(quoteCurrency)
+		effectiveMultiplier := group.EffectiveRateMultiplier()
 		if override, ok := rates[group.ID]; ok {
 			effectiveMultiplier = override
 		}
