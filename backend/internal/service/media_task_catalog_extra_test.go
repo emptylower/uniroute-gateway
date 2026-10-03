@@ -52,6 +52,7 @@ var mediaKIECostTenThousandths = map[string]map[string]int64{
 	"kling/v2-5-turbo-text-to-video-pro":   {"5": 420, "10": 420},
 	"kling-3.0-omni/text-to-video":         {"720p:5": 700, "720p:10": 700, "1080p:5": 900, "1080p:10": 900},
 	"kling/v3-turbo-text-to-video":         {"720p:5": 900, "720p:10": 900, "1080p:5": 1125, "1080p:10": 1125},
+	"bytedance/seedance-1.5-pro":           {"480p:5": 88, "480p:10": 88, "720p:5": 175, "720p:10": 175, "1080p:5": 375, "1080p:10": 375},
 	"minimax-h3/text-to-video":             {"768P:5": 400, "768P:10": 400, "2K:5": 650, "2K:10": 650},
 	"pixverse-v6/text-to-video":            {"360p:5": 200, "360p:10": 200, "540p:5": 280, "540p:10": 280, "720p:5": 360, "720p:10": 360, "1080p:5": 720, "1080p:10": 720},
 	"wan/2-5-text-to-video":                {"720p:5": 600, "720p:10": 600, "1080p:5": 1000, "1080p:10": 1000},
