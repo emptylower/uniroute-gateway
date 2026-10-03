@@ -19,7 +19,7 @@ func TestMediaCatalogExactOptionPricing(t *testing.T) {
 	prices := map[string]map[string]string{
 		"nano-banana-2-lite": {"1:1": "0.0273", "16:9": "0.0273", "9:16": "0.0273"}, "google/imagen4-fast": {"1:1": "0.02", "16:9": "0.02"}, "google/nano-banana": {"1:1": "0.0273"}, "nano-banana-pro": {"1:1": "0.0938"}, "bytedance/seedream": {"1024x1024": "0.0245", "1280x720": "0.0245"}, "flux-2/pro-text-to-image": {"1K:16:9": "0.03", "2K:1:1": "0.12"}, "bytedance/seedance-2-mini": {"5": "0.1075", "10": "0.215"}, "grok-imagine/text-to-video": {"6": "0.21"}, "hailuo/02-text-to-video-standard": {"6": "0.1962"}, "veo-3-1": {"4": "0.14", "6": "0.21", "8": "0.28"}, "ai-music-api/generate": {"pop, upbeat": "0.084", "lofi, chill, mellow": "0.084", "cinematic, orchestral, epic": "0.084", "electronic, synth, dance": "0.084", "acoustic, folk, warm": "0.084", "jazz, smooth, brass": "0.084"},
 	}
-	require.Len(t, MediaTaskCatalog(), 11+len(extendedMediaModels()))
+	require.Len(t, MediaTaskCatalog(), 10+len(musicMediaModels())+len(extendedMediaModels()))
 	for model, options := range prices {
 		for option, price := range options {
 			t.Run(model+"/"+option, func(t *testing.T) {

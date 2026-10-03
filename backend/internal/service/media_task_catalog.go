@@ -39,6 +39,15 @@ type MediaModel struct {
 	// choose. A nil fields keeps the legacy single-parameter mapping.
 	fields []mediaField
 	fixed  map[string]any
+	// upstream is the provider model id when several catalog entries share one
+	// provider model (Suno versions differ only by a fixed input field).
+	upstream string
+	// promptMax caps the prompt length of models whose price is flat per
+	// request but whose provider cost grows with input length (speech).
+	promptMax int
+	// build replaces the generic option mapping for provider inputs that nest
+	// the prompt (speech models); it returns the complete provider input.
+	build func(prompt, option string) map[string]any
 }
 type mediaField struct {
 	name    string
@@ -85,9 +94,8 @@ func MediaTaskCatalog() []MediaModel {
 		mediaModel("grok-imagine/text-to-video", "Grok Imagine Text to Video", "Grok", "video", "duration", 350, "6"),
 		mediaModel("hailuo/02-text-to-video-standard", "Hailuo 02 Text to Video Standard", "Hailuo", "video", "duration", 327, "6"),
 		mediaModel("veo-3-1", "Veo 3.1", "Google", "video", "duration", 350, "4", "6", "8"),
-		mediaModel("ai-music-api/generate", "AI Music API Generate", "Suno", "music", "tags", 840, "pop, upbeat", "lofi, chill, mellow", "cinematic, orchestral, epic", "electronic, synth, dance", "acoustic, folk, warm", "jazz, smooth, brass"),
 	}
-	slugs := map[string]string{"nano-banana-2-lite": "nano-banana-2-lite", "google/imagen4-fast": "google-imagen4-fast", "google/nano-banana": "google-nano-banana", "nano-banana-pro": "nano-banana-pro", "bytedance/seedream": "bytedance-seedream", "flux-2/pro-text-to-image": "flux-2-pro-text-to-image", "bytedance/seedance-2-mini": "bytedance-seedance-2-mini", "grok-imagine/text-to-video": "grok-imagine-text-to-video", "hailuo/02-text-to-video-standard": "hailuo-02-text-to-video-standard", "veo-3-1": "veo-3-1", "ai-music-api/generate": "ai-music-api-generate"}
+	slugs := map[string]string{"nano-banana-2-lite": "nano-banana-2-lite", "google/imagen4-fast": "google-imagen4-fast", "google/nano-banana": "google-nano-banana", "nano-banana-pro": "nano-banana-pro", "bytedance/seedream": "bytedance-seedream", "flux-2/pro-text-to-image": "flux-2-pro-text-to-image", "bytedance/seedance-2-mini": "bytedance-seedance-2-mini", "grok-imagine/text-to-video": "grok-imagine-text-to-video", "hailuo/02-text-to-video-standard": "hailuo-02-text-to-video-standard", "veo-3-1": "veo-3-1"}
 	for i := range models {
 		if slug, ok := slugs[models[i].ModelID]; ok {
 			models[i].Slug = slug
@@ -96,6 +104,7 @@ func MediaTaskCatalog() []MediaModel {
 
 	models[5].prices["2K:1:1"] = 1200
 	models[5].OptionPriceUSD["2K:1:1"] = "0.12"
+	models = append(models, musicMediaModels()...)
 	models = append(models, extendedMediaModels()...)
 	for i := range models {
 		if models[i].ModelID == "google/gemini-omni-flash-1-1" {
@@ -214,6 +223,9 @@ func normalizeMediaCreate(in MediaCreateInput) (MediaCreateInput, MediaModel, in
 	if m.ModelID == "google/gemini-omni-flash-1-1" {
 		minPrompt, maxPrompt = 1, 20000
 	}
+	if m.promptMax > 0 {
+		maxPrompt = m.promptMax
+	}
 	if n := utf8.RuneCountInString(in.Prompt); n < minPrompt || n > maxPrompt {
 		return in, m, 0, nil, infraerrors.BadRequest("INVALID_PROMPT", fmt.Sprintf("prompt must contain %d to %d characters", minPrompt, maxPrompt))
 	}
@@ -222,6 +234,13 @@ func normalizeMediaCreate(in MediaCreateInput) (MediaCreateInput, MediaModel, in
 	}
 	in.MediaType = m.MediaKind
 	input := map[string]any{"prompt": in.Prompt}
+	if m.build != nil {
+		input = m.build(in.Prompt, option)
+		for k, v := range m.fixed {
+			input[k] = v
+		}
+		return finishMediaInput(in, m, units, input)
+	}
 	for k, v := range m.fixed {
 		input[k] = v
 	}
@@ -312,4 +331,14 @@ func finishMediaInput(in MediaCreateInput, m MediaModel, units int64, input map[
 		return invalid("frame input and image_urls cannot be combined")
 	}
 	return in, m, units, input, nil
+}
+
+// mediaUpstreamModel maps a catalog id onto the provider model it runs on.
+func mediaUpstreamModel(model string) string {
+	for _, m := range MediaTaskCatalog() {
+		if m.ModelID == model && m.upstream != "" {
+			return m.upstream
+		}
+	}
+	return model
 }
