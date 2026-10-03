@@ -49,7 +49,89 @@ func startCanonicalWalletTestPostgres(t *testing.T, ctx context.Context) *sql.DB
 	// startWalletReconciliationTestPostgres reads every migration).
 	_, err = db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_wallet_settlement_outbox_user_occurred ON wallet_settlement_outbox (platform_user_id, occurred_at, id)`)
 	require.NoError(t, err)
+	// Migrations 218 + 219: ObserveSettlement reads wallet_authorization_segment before it
+	// settles and fails closed when the table is missing. Inline here, in lockstep with the
+	// two migration files, for the same reason as the outbox above. The billing_snapshot_id
+	// foreign key of 218 is left out: this helper does not own wallet_billing_snapshot, and
+	// tests that need it apply migration 209 on top.
+	_, err = db.ExecContext(ctx, `
+		CREATE TABLE wallet_authorization_segment (
+			parent_authorization_id TEXT NOT NULL,
+			ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+			authorization_id TEXT NOT NULL UNIQUE,
+			platform_user_id TEXT NOT NULL,
+			billing_snapshot_id TEXT NOT NULL,
+			lease_id TEXT NOT NULL,
+			held_units BIGINT NOT NULL CHECK (held_units > 0),
+			lease_basis JSONB NOT NULL,
+			event_id TEXT UNIQUE,
+			actual_units BIGINT NOT NULL DEFAULT 0 CHECK (actual_units >= 0 AND actual_units <= held_units),
+			pin_state TEXT NOT NULL DEFAULT 'none' CHECK (pin_state IN ('none','active','finished')),
+			created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+			kind TEXT NOT NULL DEFAULT 'llm' CHECK (kind IN ('llm','live','media')),
+			state TEXT NOT NULL DEFAULT 'prepared' CHECK (state IN ('prepared','held','indeterminate','settling','released','finished')),
+			authorization_token TEXT,
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+			settlement_payload JSONB,
+			remainder_payload JSONB,
+			PRIMARY KEY (parent_authorization_id, ordinal),
+			CHECK ((ordinal = 0 AND authorization_id = parent_authorization_id) OR ordinal > 0)
+		)`)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `CREATE INDEX idx_wallet_authorization_segment_lease ON wallet_authorization_segment (platform_user_id, lease_id)`)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `CREATE INDEX idx_wallet_authorization_segment_pending ON wallet_authorization_segment (updated_at) WHERE state <> 'finished'`)
+	require.NoError(t, err)
+	createWalletMediaTaskTableForTest(t, ctx, db)
 	return db
+}
+
+// createWalletMediaTaskTableForTest mirrors migration 217's gateway_media_task without its
+// foreign keys (users, api_keys, wallet_billing_snapshot are not in these throwaway
+// databases). The hold-outcome and reaper paths ask EXISTS(SELECT 1 FROM gateway_media_task
+// ...) before they resolve a hold, and fail closed when the table is missing, so the wallet
+// harnesses need it present (empty) even though they never create a media task. Keep it in
+// lockstep with 217.
+func createWalletMediaTaskTableForTest(t testing.TB, ctx context.Context, db *sql.DB) {
+	t.Helper()
+	_, err := db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS gateway_media_task (
+			id TEXT PRIMARY KEY,
+			user_id BIGINT NOT NULL,
+			platform_user_id TEXT NOT NULL,
+			api_key_id BIGINT NOT NULL,
+			idempotency_key TEXT NOT NULL,
+			request_hash TEXT NOT NULL,
+			model TEXT NOT NULL,
+			media_type TEXT NOT NULL CHECK (media_type IN ('image','video','music')),
+			option TEXT NOT NULL,
+			prompt TEXT NOT NULL,
+			request_payload JSONB NOT NULL,
+			billing_snapshot_id TEXT NOT NULL,
+			quoted_units BIGINT NOT NULL CHECK (quoted_units > 0),
+			authorization_id TEXT NOT NULL UNIQUE,
+			lease_id TEXT,
+			lease_basis JSONB,
+			held_units BIGINT NOT NULL DEFAULT 0 CHECK (held_units >= 0),
+			actual_units BIGINT CHECK (actual_units >= 0 AND actual_units <= held_units),
+			settlement_event_id TEXT NOT NULL UNIQUE,
+			authorization_token TEXT,
+			provider_task_id TEXT UNIQUE,
+			status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','authorizing','submitting','processing','settling','releasing','completed','failed','indeterminate')),
+			pin_state TEXT NOT NULL DEFAULT 'none' CHECK (pin_state IN ('none','active','finished')),
+			result JSONB NOT NULL DEFAULT '{"urls":[]}'::jsonb,
+			error_code TEXT,
+			error_message TEXT,
+			claimed_by TEXT,
+			claim_until TIMESTAMPTZ,
+			next_poll_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+			deadline_at TIMESTAMPTZ NOT NULL,
+			settled_at TIMESTAMPTZ,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+			UNIQUE (user_id, idempotency_key)
+		)`)
+	require.NoError(t, err)
 }
 
 // outboxStoreForTest implements CanonicalWalletOutboxStore directly against

@@ -33,12 +33,15 @@ func startWalletReconciliationTestPostgres(t testing.TB, ctx context.Context) *s
 		"214_wallet_outbox_split_and_authorization.sql",
 		"215_wallet_reconciliation_indexes.sql",
 		"216_wallet_outbox_billing_snapshot.sql",
+		"218_wallet_authorization_segments.sql",
+		"219_wallet_attempt_protection.sql",
 	} {
 		sqlContent, err := os.ReadFile(filepath.Join("..", "..", "migrations", migration))
 		require.NoError(t, err)
 		_, err = db.ExecContext(ctx, string(sqlContent))
 		require.NoError(t, err)
 	}
+	createWalletMediaTaskTableForTest(t, ctx, db) // see its comment: 217 itself needs users/api_keys
 	return db
 }
 
