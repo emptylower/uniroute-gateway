@@ -94,9 +94,10 @@ type fakeSettlementEvent struct {
 // fakeCannedResponse is f.respondWith's entry: answer this path with
 // status/body, `times` times (-1 = until cleared).
 type fakeCannedResponse struct {
-	Status int
-	Body   string
-	Times  int
+	Status         int
+	Body           string
+	Times          int
+	EnsurePurposes []string // purposes actually answered by this canned ensure response
 }
 
 func newFakeEnsureControlPlane(t *testing.T, now func() time.Time) *fakeEnsureControlPlane {
@@ -186,6 +187,12 @@ func (f *fakeEnsureControlPlane) canned(w http.ResponseWriter, r *http.Request) 
 	c := f.responses[r.URL.Path]
 	if c == nil {
 		return false
+	}
+	if r.Method == http.MethodPost && r.URL.Path == "/api/internal/v2/wallet/leases/ensure" {
+		var req canonicalWalletEnsureRequest
+		if json.NewDecoder(r.Body).Decode(&req) == nil {
+			c.EnsurePurposes = append(c.EnsurePurposes, req.Purpose)
+		}
 	}
 	if c.Times > 0 {
 		c.Times--
