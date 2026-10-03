@@ -152,6 +152,14 @@ func (a *CanonicalWalletAuthorizer) Authorize(ctx context.Context, in AuthorizeI
 	defer cancel()
 	if policyVersion != "" && a.bridge.outboxDB != nil && a.bridge.HoldsEnabled() {
 		if _, ok := a.bridge.control.(*canonicalWalletHTTPClient); ok {
+			// The plan's segment rows reference the snapshot by foreign key, but a
+			// text or live snapshot is otherwise persisted only at settlement.
+			// Media persists its own in the task transaction; Persist is idempotent.
+			if h.AttemptKind != "media" {
+				if err = a.snapshots.Persist(leaseCtx, in.Snapshot); err != nil {
+					return refuse(AuthorizationRefusalLeaseUnavailable, "snapshot persist", err)
+				}
+			}
 			if err = a.bridge.authorizePool(leaseCtx, h, in.User.PlatformUserID, units); err != nil {
 				reason := AuthorizationRefusalLeaseUnavailable
 				if errors.Is(err, ErrCanonicalWalletBalanceShortfall) {
