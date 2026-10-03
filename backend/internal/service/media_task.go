@@ -173,6 +173,22 @@ func (s *MediaTaskService) internalKey(ctx context.Context, user *User) (*APIKey
 	}
 	return key, nil
 }
+
+// PlaygroundKey resolves a non-exportable, user-owned key projection. The
+// caller must still run the ordinary gateway authentication and wallet gates.
+func (s *MediaTaskService) PlaygroundKey(ctx context.Context, userID int64) (*APIKey, error) {
+	if s == nil || s.users == nil || s.keys == nil || s.apiKeys == nil {
+		return nil, ErrMediaUnavailable
+	}
+	user, err := s.users.GetByID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if !user.IsActive() || strings.TrimSpace(user.PlatformUserID) == "" {
+		return nil, ErrMediaUnavailable
+	}
+	return s.internalKey(ctx, user)
+}
 func (s *MediaTaskService) Create(ctx context.Context, userID int64, idempotency string, in MediaCreateInput) (MediaTaskView, error) {
 	if !s.Enabled() {
 		return MediaTaskView{}, ErrMediaUnavailable

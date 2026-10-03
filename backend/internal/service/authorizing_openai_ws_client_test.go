@@ -6,7 +6,9 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"sync"
 	"testing"
+	"time"
 
 	coderws "github.com/coder/websocket"
 	"github.com/stretchr/testify/require"
@@ -294,4 +296,230 @@ func TestAuthorizingWSClassification(t *testing.T) {
 		require.NoError(t, ac.Ping(context.Background()))
 		require.NoError(t, ac.Close())
 	})
+}
+
+type outcomeBarrierWSConn struct {
+	fakeWSConn
+	sendStarted chan struct{}
+	finishSend  chan struct{}
+	sendErr     error
+	readErr     error
+}
+
+func (c *outcomeBarrierWSConn) WriteJSON(context.Context, any) error {
+	close(c.sendStarted)
+	<-c.finishSend
+	return c.sendErr
+}
+
+func (c *outcomeBarrierWSConn) WriteFrame(ctx context.Context, _ coderws.MessageType, _ []byte) error {
+	return c.WriteJSON(ctx, nil)
+}
+
+func (c *outcomeBarrierWSConn) ReadMessage(context.Context) ([]byte, error) {
+	return []byte(`{"type":"response.completed"}`), c.readErr
+}
+
+func (c *outcomeBarrierWSConn) ReadFrame(ctx context.Context) (coderws.MessageType, []byte, error) {
+	payload, err := c.ReadMessage(ctx)
+	return coderws.MessageText, payload, err
+}
+
+// Observing Done proves the successful inner read reached the outcome wait;
+// negative ordering assertions do not depend on sleeps or scheduler timing.
+type outcomeWaitContext struct {
+	context.Context
+	waiting chan struct{}
+	once    sync.Once
+}
+
+func (c *outcomeWaitContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.waiting) })
+	return c.Context.Done()
+}
+
+func requireOutcomeSignal(t *testing.T, signal <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-signal:
+	case <-time.After(time.Second):
+		t.Fatal("authorization outcome ordering signal did not arrive")
+	}
+}
+
+func TestAuthorizingWSReadsWaitForWriteOutcome(t *testing.T) {
+	for _, frame := range []bool{false, true} {
+		for _, outcome := range []string{"result", "indeterminate", "cancel"} {
+			name := "message/" + outcome
+			if frame {
+				name = "frame/" + outcome
+			}
+			t.Run(name, func(t *testing.T) {
+				inner := &outcomeBarrierWSConn{sendStarted: make(chan struct{}), finishSend: make(chan struct{})}
+				if outcome == "indeterminate" {
+					inner.sendErr = errors.New("write became indeterminate")
+				}
+				conn := &authorizingOpenAIWSClientConn{inner: inner, mode: modeFn("enforce")}
+				handle, err := newAuthorizationHandle("enforce")
+				require.NoError(t, err)
+				outcomeStarted, finishOutcome := make(chan struct{}), make(chan struct{})
+				handle.onOutcome = func(string, AuthorizationOutcome, error) {
+					close(outcomeStarted)
+					<-finishOutcome
+				}
+				conn.ArmAuthorization(handle)
+				var sendOnce, outcomeOnce sync.Once
+				t.Cleanup(func() {
+					sendOnce.Do(func() { close(inner.finishSend) })
+					outcomeOnce.Do(func() { close(finishOutcome) })
+				})
+				writeDone := make(chan error, 1)
+				go func() {
+					if frame {
+						writeDone <- conn.WriteFrame(context.Background(), coderws.MessageText, []byte(`{}`))
+					} else {
+						writeDone <- conn.WriteJSON(context.Background(), map[string]any{})
+					}
+				}()
+				requireOutcomeSignal(t, inner.sendStarted)
+				require.Empty(t, AuthorizationTokenOf(handle), "an in-flight write is not a result")
+				baseCtx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				readCtx := &outcomeWaitContext{Context: baseCtx, waiting: make(chan struct{})}
+				type readResult struct {
+					payload []byte
+					err     error
+					token   string
+				}
+				readDone := make(chan readResult, 1)
+				go func() {
+					var payload []byte
+					var err error
+					if frame {
+						_, payload, err = conn.ReadFrame(readCtx)
+					} else {
+						payload, err = conn.ReadMessage(readCtx)
+					}
+					readDone <- readResult{payload, err, AuthorizationTokenOf(handle)}
+				}()
+				requireOutcomeSignal(t, readCtx.waiting)
+				sendOnce.Do(func() { close(inner.finishSend) })
+				requireOutcomeSignal(t, outcomeStarted)
+				select {
+				case <-readDone:
+					t.Fatal("read escaped before the outcome callback finished")
+				default:
+				}
+				if outcome == "cancel" {
+					cancel()
+					select {
+					case result := <-readDone:
+						require.ErrorIs(t, result.err, context.Canceled)
+						require.Nil(t, result.payload, "cancellation must not expose the terminal frame")
+					case <-time.After(time.Second):
+						t.Fatal("canceled read remained blocked by the outcome callback")
+					}
+				}
+				outcomeOnce.Do(func() { close(finishOutcome) })
+				select {
+				case err := <-writeDone:
+					require.Equal(t, inner.sendErr, err, "the original send result is preserved")
+				case <-time.After(time.Second):
+					t.Fatal("write did not finish")
+				}
+				if outcome != "cancel" {
+					select {
+					case result := <-readDone:
+						require.NoError(t, result.err)
+						require.JSONEq(t, `{"type":"response.completed"}`, string(result.payload))
+						if outcome == "result" {
+							require.NotEmpty(t, result.token)
+						} else {
+							require.Empty(t, result.token, "indeterminate must not become a result token")
+							require.Equal(t, AuthorizationOutcomeIndeterminate, handle.Writes()[0].Outcome)
+						}
+					case <-time.After(time.Second):
+						t.Fatal("read remained blocked after the outcome was recorded")
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestAuthorizingWSReadDoesNotWaitForAdmission(t *testing.T) {
+	for _, frame := range []bool{false, true} {
+		t.Run(map[bool]string{false: "message", true: "frame"}[frame], func(t *testing.T) {
+			inner := &outcomeBarrierWSConn{sendStarted: make(chan struct{}), finishSend: make(chan struct{})}
+			conn := &authorizingOpenAIWSClientConn{inner: inner, mode: modeFn("enforce")}
+			handle, err := newAuthorizationHandle("enforce")
+			require.NoError(t, err)
+			admissionStarted, finishAdmission := make(chan struct{}), make(chan struct{})
+			refusal := errors.New("admission refused")
+			handle.beforeWrite = func(context.Context, string) error {
+				close(admissionStarted)
+				<-finishAdmission
+				return refusal
+			}
+			conn.ArmAuthorization(handle)
+			var once sync.Once
+			t.Cleanup(func() { once.Do(func() { close(finishAdmission) }) })
+			writeDone := make(chan error, 1)
+			go func() { writeDone <- conn.WriteJSON(context.Background(), nil) }()
+			requireOutcomeSignal(t, admissionStarted)
+			readCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			var payload []byte
+			if frame {
+				_, payload, err = conn.ReadFrame(readCtx)
+			} else {
+				payload, err = conn.ReadMessage(readCtx)
+			}
+			require.NoError(t, err, "an unsent write must not block reads")
+			require.NotEmpty(t, payload)
+			once.Do(func() { close(finishAdmission) })
+			require.ErrorIs(t, <-writeDone, refusal)
+			select {
+			case <-inner.sendStarted:
+				t.Fatal("refused admission sent an upstream write")
+			default:
+			}
+		})
+	}
+}
+
+func TestAuthorizingWSReadErrorDoesNotWaitForWriteOutcome(t *testing.T) {
+	for _, frame := range []bool{false, true} {
+		t.Run(map[bool]string{false: "message", true: "frame"}[frame], func(t *testing.T) {
+			readErr := errors.New("upstream read failed")
+			inner := &outcomeBarrierWSConn{sendStarted: make(chan struct{}), finishSend: make(chan struct{}), readErr: readErr}
+			conn := &authorizingOpenAIWSClientConn{inner: inner, mode: modeFn("enforce")}
+			handle, err := newAuthorizationHandle("enforce")
+			require.NoError(t, err)
+			conn.ArmAuthorization(handle)
+			var once sync.Once
+			t.Cleanup(func() { once.Do(func() { close(inner.finishSend) }) })
+			writeDone := make(chan error, 1)
+			go func() { writeDone <- conn.WriteJSON(context.Background(), nil) }()
+			requireOutcomeSignal(t, inner.sendStarted)
+			baseCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			readCtx := &outcomeWaitContext{Context: baseCtx, waiting: make(chan struct{})}
+			var payload []byte
+			if frame {
+				_, payload, err = conn.ReadFrame(readCtx)
+			} else {
+				payload, err = conn.ReadMessage(readCtx)
+			}
+			require.ErrorIs(t, err, readErr, "network read errors must retain their original identity")
+			require.NotEmpty(t, payload, "the original failed read result is forwarded")
+			select {
+			case <-readCtx.waiting:
+				t.Fatal("failed network read entered the outcome wait")
+			default:
+			}
+			once.Do(func() { close(inner.finishSend) })
+			require.NoError(t, <-writeDone)
+		})
+	}
 }

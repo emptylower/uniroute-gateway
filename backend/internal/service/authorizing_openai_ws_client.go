@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"net/http"
+	"sync"
 	"sync/atomic"
 
 	coderws "github.com/coder/websocket"
@@ -67,6 +68,10 @@ type authorizingOpenAIWSClientConn struct {
 	inner openAIWSClientConn
 	mode  func() string
 	armed atomic.Pointer[AuthorizationHandle]
+
+	outcomeMu     sync.Mutex
+	pendingWrites int
+	outcomesDone  chan struct{}
 }
 
 var (
@@ -125,6 +130,22 @@ func (c *authorizingOpenAIWSClientConn) write(ctx context.Context, send func() e
 	if err := handle.prepareWrite(ctx, token); err != nil {
 		return err
 	}
+	// The peer can answer before send returns. Keep relay reads behind the write's
+	// recorded outcome, including its hold callback, without locking network I/O.
+	c.outcomeMu.Lock()
+	if c.pendingWrites == 0 {
+		c.outcomesDone = make(chan struct{})
+	}
+	c.pendingWrites++
+	c.outcomeMu.Unlock()
+	defer func() {
+		c.outcomeMu.Lock()
+		c.pendingWrites--
+		if c.pendingWrites == 0 {
+			close(c.outcomesDone)
+		}
+		c.outcomeMu.Unlock()
+	}()
 	authorizationMetrics.writesAuthorized.Add(1)
 	err := send()
 	if err == nil {
@@ -142,7 +163,14 @@ func (c *authorizingOpenAIWSClientConn) write(ctx context.Context, send func() e
 }
 
 func (c *authorizingOpenAIWSClientConn) ReadMessage(ctx context.Context) ([]byte, error) {
-	return c.inner.ReadMessage(ctx)
+	payload, err := c.inner.ReadMessage(ctx)
+	if err != nil {
+		return payload, err
+	}
+	if err := c.waitWriteOutcomes(ctx); err != nil {
+		return nil, err
+	}
+	return payload, nil
 }
 
 func (c *authorizingOpenAIWSClientConn) ReadFrame(ctx context.Context) (coderws.MessageType, []byte, error) {
@@ -152,7 +180,33 @@ func (c *authorizingOpenAIWSClientConn) ReadFrame(ctx context.Context) (coderws.
 	if !ok {
 		return coderws.MessageText, nil, errOpenAIWSConnClosed
 	}
-	return fc.ReadFrame(ctx)
+	msgType, payload, err := fc.ReadFrame(ctx)
+	if err != nil {
+		return msgType, payload, err
+	}
+	if err := c.waitWriteOutcomes(ctx); err != nil {
+		return msgType, nil, err
+	}
+	return msgType, payload, nil
+}
+
+func (c *authorizingOpenAIWSClientConn) waitWriteOutcomes(ctx context.Context) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		c.outcomeMu.Lock()
+		pending, done := c.pendingWrites, c.outcomesDone
+		c.outcomeMu.Unlock()
+		if pending == 0 {
+			return nil
+		}
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 }
 
 func (c *authorizingOpenAIWSClientConn) Ping(ctx context.Context) error { return c.inner.Ping(ctx) }

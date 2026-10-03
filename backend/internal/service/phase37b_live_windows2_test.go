@@ -1076,12 +1076,11 @@ func TestPhase37bRefusedReauthorizations(t *testing.T) {
 
 func TestPhase37bControllerLossAndTakeover(t *testing.T) {
 	sh := newLiveWindowShared(t)
-	// The exactly-E lease shape (requested budget 0) on BOTH instances: the
-	// session's one lease ends with zero remaining, so the boundary's ensure
-	// must ISSUE — and the fake's canned refusal answers it. Window 1's
-	// over-estimate amount then converts through the {4} overrun path (the
-	// hold released, the event unbound) — money-safe, and the over-budget
-	// shape is exactly what this test exists to drive.
+	// The exactly-E lease shape (requested budget 0) on BOTH instances
+	// drives window 1 through the {4} overrun path: the hold is released and
+	// the event proceeds unbound. That release restores E of legal cached
+	// headroom, so an overrun alone does not force remote re-authorization.
+	// Seal the old lease below to explicitly model budget no longer usable.
 	shBudget := func(c *config.CanonicalWalletConfig) { c.LeaseBudgetUnits = 0 }
 	fA := sh.newFixtureCfg(t, config.CanonicalWalletModeEnforce, shBudget)
 	callHash, _ := fA.createSession(t)
@@ -1093,12 +1092,22 @@ func TestPhase37bControllerLossAndTakeover(t *testing.T) {
 	fA.pumpUsage("resp-52a", 0, tokens)
 	time.Sleep(300 * time.Millisecond) // let the frame be read and accumulated
 	fA.cancel()
+	platformUserID := fA.recordByHash(t, callHash).PlatformUserID
+	initialHold, err := fA.store.GetCanonicalWalletHold(context.Background(), platformUserID, prov.Token)
+	require.NoError(t, err)
+	require.NotNil(t, initialHold)
+	// Sealing removes the current lease and prevents new holds even when
+	// conversion releases E. The initial hold still follows the same
+	// overrun settlement path; B must now ask the control plane to authorize.
+	_, _, err = fA.store.SealCanonicalWalletLease(context.Background(), platformUserID, initialHold.LeaseID)
+	require.NoError(t, err)
 
 	// B on the same stores: its observer loops on the takeover interval.
 	fB := sh.newFixtureCfg(t, config.CanonicalWalletModeEnforce, shBudget)
 	// The fake refuses the re-authorization (balance shortfall): the hard
 	// stop must fire from B after it closes the window. The canned response
-	// is path-scoped — the settlements route (window 1's settle) is untouched.
+	// is path-scoped and can also refuse unbound settlement ensure requests;
+	// assert the authorize purpose was refused, rather than relying on those.
 	fB.fake.respondWith("/api/internal/v2/wallet/leases/ensure", 409,
 		`{"code":-1,"message":"balance_shortfall","data":{"reason":"balance_shortfall"}}`, -1)
 	go fB.svc.observeLiveCall(fB.ctx, callHash)
@@ -1126,6 +1135,14 @@ func TestPhase37bControllerLossAndTakeover(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	require.Equal(t, LiveControllerClosed, fA.recordByHash(t, callHash).Controller, "the hard stop fired from B")
+	fB.fake.mu.Lock()
+	refusedPurposes := append([]string(nil), fB.fake.responses["/api/internal/v2/wallet/leases/ensure"].EnsurePurposes...)
+	fB.fake.mu.Unlock()
+	require.Contains(t, refusedPurposes, "authorize", "B re-authorization actually received the canned 409")
+	initialHold, err = fA.store.GetCanonicalWalletHold(context.Background(), platformUserID, prov.Token)
+	require.NoError(t, err)
+	require.NotNil(t, initialHold)
+	require.Equal(t, "released", initialHold.State, "the initial hold still converted through the overrun release path")
 	select {
 	case frame := <-fB.conn.writes:
 		require.JSONEq(t, `{"type":"session.close"}`, string(frame.payload))

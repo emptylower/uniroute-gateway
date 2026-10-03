@@ -407,21 +407,33 @@ func (f *mediaFixture) wait(t *testing.T, id, state string) service.MediaTaskVie
 
 func TestExternalMediaAllModelsDurableExactlyOnce(t *testing.T) {
 	f := newMediaFixture(t)
+	catalog := service.MediaTaskCatalog()
+	require.NotEmpty(t, catalog)
 	tasks := []service.MediaTaskView{}
-	for i, m := range service.MediaTaskCatalog() {
+	for i, m := range catalog {
 		tasks = append(tasks, f.create(t, fmt.Sprint(i), m.ModelID, m.Param.Options[0].Value))
 	}
 	for _, task := range tasks {
 		v := f.wait(t, task.TaskID, "charged")
 		require.Equal(t, "success", v.Status)
 		require.Equal(t, v.Billing.QuotedUSD, *v.Billing.ChargedUSD)
+		var taskUsage, taskOutbox int
+		require.NoError(t, f.db.QueryRow(`SELECT count(*) FROM usage_logs WHERE request_id=$1`, task.TaskID).Scan(&taskUsage))
+		require.NoError(t, f.db.QueryRow(`SELECT count(*) FROM wallet_settlement_outbox WHERE gateway_request_id=$1`, task.TaskID).Scan(&taskOutbox))
+		require.Equal(t, 1, taskUsage, "each task must record usage exactly once")
+		require.Equal(t, 1, taskOutbox, "each task must enqueue settlement exactly once")
 	}
-	require.Equal(t, int64(11), f.creates.Load())
+	// The catalog now includes the extended models; 11 was only the original
+	// seed catalog. Retain exact cardinality and per-task uniqueness checks.
+	require.Equal(t, int64(len(catalog)), f.creates.Load())
 	var usage, outbox int
 	require.NoError(t, f.db.QueryRow(`SELECT count(*) FROM usage_logs`).Scan(&usage))
 	require.NoError(t, f.db.QueryRow(`SELECT count(*) FROM wallet_settlement_outbox`).Scan(&outbox))
-	require.Equal(t, 11, usage)
-	require.Equal(t, 11, outbox)
+	require.Equal(t, len(catalog), usage)
+	require.Equal(t, len(catalog), outbox)
+	var providerTasks int
+	require.NoError(t, f.db.QueryRow(`SELECT count(DISTINCT provider_task_id) FROM gateway_media_task`).Scan(&providerTasks))
+	require.Equal(t, len(catalog), providerTasks, "each model must have a distinct accepted provider task")
 	var balance string
 	require.NoError(t, f.db.QueryRow(`SELECT balance::text FROM users WHERE id=$1`, f.userID).Scan(&balance))
 	require.Equal(t, "999.00000000", balance, "media must not debit native user balance")

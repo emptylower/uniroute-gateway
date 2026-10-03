@@ -237,7 +237,7 @@ func TestOpenAIWSPassthroughTurnLifecycle_SerializesTerminalCommitAndNextTurn(t 
 	case <-time.After(50 * time.Millisecond):
 	}
 
-	lifecycle.finishTerminalWrite(true, clientFrameConn.markTurnCompleted)
+	lifecycle.finishTerminalWrite(true, clientFrameConn.markTurnCompleted, nil)
 	select {
 	case ok := <-admitted:
 		require.True(t, ok)
@@ -254,8 +254,40 @@ func TestOpenAIWSPassthroughTurnLifecycle_SerializesTerminalCommitAndNextTurn(t 
 	}()
 	lifecycle.finishTerminalWrite(false, func() {
 		t.Error("failed terminal write must not commit idle state")
-	})
+	}, nil)
 	require.False(t, <-admitted, "failed terminal write must keep the current turn in flight")
+}
+
+func TestOpenAIWSPassthroughTurnLifecycle_DisarmsBeforeAdmittingNextTurn(t *testing.T) {
+	upstream := &authorizingOpenAIWSClientConn{}
+	oldHandle, err := newAuthorizationHandle("enforce")
+	require.NoError(t, err)
+	nextHandle, err := newAuthorizationHandle("enforce")
+	require.NoError(t, err)
+	upstream.ArmAuthorization(oldHandle)
+	lifecycle := newOpenAIWSPassthroughTurnLifecycle(true)
+	lifecycle.beginTerminalWrite()
+	nextStarted, nextAdmitted := make(chan struct{}), make(chan bool, 1)
+	lifecycle.finishTerminalWrite(true, func() {
+		require.Nil(t, upstream.ArmedAuthorization(), "old arm must be cleared before terminal commit")
+		go func() {
+			close(nextStarted)
+			nextAdmitted <- lifecycle.beginResponseCreate(func() { upstream.ArmAuthorization(nextHandle) })
+		}()
+		<-nextStarted
+	}, upstream)
+	select {
+	case admitted := <-nextAdmitted:
+		require.True(t, admitted)
+	case <-time.After(time.Second):
+		t.Fatal("next turn was not admitted after terminal commit")
+	}
+	require.Same(t, nextHandle, upstream.ArmedAuthorization(), "previous turn cleanup must preserve the next arm")
+
+	lifecycle.beginTerminalWrite()
+	lifecycle.finishTerminalWrite(false, func() { t.Error("failed terminal write committed") }, upstream)
+	require.Same(t, nextHandle, upstream.ArmedAuthorization(), "failed terminal write must retain the in-flight arm")
+	require.False(t, lifecycle.beginResponseCreate(nil), "failed terminal write must not admit another turn")
 }
 
 func TestPassthroughLifecycle_LeaseLossSendsRetryClose(t *testing.T) {

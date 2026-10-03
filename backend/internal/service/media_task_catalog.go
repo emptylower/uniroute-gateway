@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -31,6 +32,7 @@ type MediaModel struct {
 	PriceUSD       string            `json:"price_usd"`
 	OptionPriceUSD map[string]string `json:"option_price_usd"`
 	Param          MediaParam        `json:"param"`
+	InputFields    []string          `json:"input_fields,omitempty"`
 	prices         map[string]int64
 	// fields maps the colon-separated segments of an option value onto
 	// provider input fields; fixed holds provider inputs the browser cannot
@@ -94,7 +96,13 @@ func MediaTaskCatalog() []MediaModel {
 
 	models[5].prices["2K:1:1"] = 1200
 	models[5].OptionPriceUSD["2K:1:1"] = "0.12"
-	return append(models, extendedMediaModels()...)
+	models = append(models, extendedMediaModels()...)
+	for i := range models {
+		if models[i].ModelID == "google/gemini-omni-flash-1-1" {
+			models[i].InputFields = []string{"first_frame_url", "last_frame_url", "image_urls", "aspect_ratio", "seed"}
+		}
+	}
+	return models
 }
 
 // mediaOptionSeconds reads the billable duration from a video option, which is
@@ -147,10 +155,11 @@ func mediaSpecModel(id, slug, name, provider, kind, param string, fields []media
 }
 
 type MediaCreateInput struct {
-	Model     string `json:"model"`
-	Prompt    string `json:"prompt"`
-	Option    string `json:"option"`
-	MediaType string `json:"media_type,omitempty"`
+	Model     string         `json:"model"`
+	Prompt    string         `json:"prompt"`
+	Option    string         `json:"option"`
+	MediaType string         `json:"media_type,omitempty"`
+	Input     map[string]any `json:"input,omitempty"`
 }
 type MediaQuote struct {
 	Model         string `json:"model"`
@@ -201,8 +210,12 @@ func normalizeMediaCreate(in MediaCreateInput) (MediaCreateInput, MediaModel, in
 	in.Model = m.ModelID
 	in.Option = option
 	in.Prompt = strings.TrimSpace(in.Prompt)
-	if n := utf8.RuneCountInString(in.Prompt); n < 3 || n > 2000 {
-		return in, m, 0, nil, infraerrors.BadRequest("INVALID_PROMPT", "prompt must contain 3 to 2000 characters")
+	minPrompt, maxPrompt := 3, 2000
+	if m.ModelID == "google/gemini-omni-flash-1-1" {
+		minPrompt, maxPrompt = 1, 20000
+	}
+	if n := utf8.RuneCountInString(in.Prompt); n < minPrompt || n > maxPrompt {
+		return in, m, 0, nil, infraerrors.BadRequest("INVALID_PROMPT", fmt.Sprintf("prompt must contain %d to %d characters", minPrompt, maxPrompt))
 	}
 	if in.MediaType != "" && in.MediaType != m.MediaKind {
 		return in, m, 0, nil, infraerrors.BadRequest("INVALID_MEDIA_TYPE", "model and media type disagree")
@@ -228,7 +241,7 @@ func normalizeMediaCreate(in MediaCreateInput) (MediaCreateInput, MediaModel, in
 				input[field.name] = parts[i]
 			}
 		}
-		return in, m, units, input, nil
+		return finishMediaInput(in, m, units, input)
 	}
 	switch m.Param.Kind {
 	case "duration":
@@ -239,6 +252,64 @@ func normalizeMediaCreate(in MediaCreateInput) (MediaCreateInput, MediaModel, in
 		input["aspect_ratio"] = bits[1]
 	default:
 		input[m.Param.Kind] = option
+	}
+	return finishMediaInput(in, m, units, input)
+}
+
+// Additional form fields are model-specific. The priced option remains the
+// sole source of duration, resolution, quantity and all fixed billing flags.
+func finishMediaInput(in MediaCreateInput, m MediaModel, units int64, input map[string]any) (MediaCreateInput, MediaModel, int64, map[string]any, error) {
+	invalid := func(message string) (MediaCreateInput, MediaModel, int64, map[string]any, error) {
+		return in, m, 0, nil, infraerrors.BadRequest("INVALID_MEDIA_INPUT", message)
+	}
+	allowed := make(map[string]bool, len(m.InputFields))
+	for _, name := range m.InputFields {
+		allowed[name] = true
+	}
+	for name, value := range in.Input {
+		if !allowed[name] {
+			return invalid("unsupported model input: " + name)
+		}
+		switch name {
+		case "first_frame_url", "last_frame_url":
+			url, ok := value.(string)
+			if !ok || !validMediaURL(url) || len(url) > 4096 {
+				return invalid("frame URL must be a valid HTTPS URL")
+			}
+			input[name] = url
+		case "image_urls":
+			urls, ok := value.([]any)
+			if !ok || len(urls) > 7 {
+				return invalid("image_urls must contain at most 7 HTTPS URLs")
+			}
+			for _, raw := range urls {
+				url, ok := raw.(string)
+				if !ok || !validMediaURL(url) || len(url) > 4096 {
+					return invalid("image_urls must contain valid HTTPS URLs")
+				}
+			}
+			input[name] = urls
+		case "aspect_ratio":
+			if value != "16:9" && value != "9:16" {
+				return invalid("aspect_ratio must be 16:9 or 9:16")
+			}
+			input[name] = value
+		case "seed":
+			n, ok := value.(float64)
+			if !ok || math.IsNaN(n) || math.IsInf(n, 0) || n < 0 || n > 2147483647 || n != math.Trunc(n) {
+				return invalid("seed must be an integer from 0 to 2147483647")
+			}
+			input[name] = int64(n)
+		}
+	}
+	first, _ := input["first_frame_url"].(string)
+	last, _ := input["last_frame_url"].(string)
+	urls, _ := input["image_urls"].([]any)
+	if last != "" && first == "" {
+		return invalid("last_frame_url requires first_frame_url")
+	}
+	if first != "" && len(urls) > 0 {
+		return invalid("frame input and image_urls cannot be combined")
 	}
 	return in, m, units, input, nil
 }

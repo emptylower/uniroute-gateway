@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+env:
+  GOMAXPROCS: '2'
+  GOFLAGS: '-p=2'
+
 jobs:
   shell:
     runs-on: macos-15
@@ -40,6 +44,24 @@ jobs:
         if: ${{ !cancelled() }}
         working-directory: backend
         run: make test-integration
+
+  ws-race:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          check-latest: false
+          cache: true
+          cache-dependency-path: backend/go.sum
+      - name: Verify Go version
+        run: go version | grep -q 'go1.26.5'
+      - name: WebSocket outcome and lifecycle race regressions
+        working-directory: backend
+        run: |
+          go test -tags=unit -race -p=1 -count=10 -timeout=10m ./internal/service -run '^(TestAuthorizingWS(Read|Classification)|TestOpenAIWSPassthroughTurnLifecycle_)'
+          go test -tags=unit -race -p=1 -count=20 -timeout=10m ./internal/handler -run '^TestWSAuthorization_TwoTurnSessionsOnBothIngressModes$'
 
   frontend:
     runs-on: ubuntu-latest
@@ -88,3 +110,45 @@ jobs:
           # Legacy findings are baselined: only issues a change introduces fail CI.
           # Pay the backlog down separately; do not turn this off to silence a new finding.
           only-new-issues: true
+
+  gateway-release-artifact:
+    # Deployment consumes only a main commit that passed every merge gate.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [shell, test, ws-race, frontend, golangci-lint]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - target: linux-amd64
+            goos: linux
+            goarch: amd64
+          - target: darwin-arm64
+            goos: darwin
+            goarch: arm64
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          check-latest: false
+          cache: true
+          cache-dependency-path: backend/go.sum
+      - name: Build verified gateway
+        working-directory: backend
+        env:
+          CGO_ENABLED: '0'
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          mkdir -p release
+          market_build_date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          go build -trimpath -ldflags "-s -w -X main.Commit=$GITHUB_SHA -X main.Date=$market_build_date" -o release/gateway-server ./cmd/server
+          cd release
+          sha256sum gateway-server > SHA256SUMS
+          printf '%s\n' "$GITHUB_SHA" > SOURCE_COMMIT
+      - uses: actions/upload-artifact@v7
+        with:
+          name: uniroute-gateway-${{ matrix.target }}
+          path: backend/release/
+          if-no-files-found: error
+          retention-days: 7

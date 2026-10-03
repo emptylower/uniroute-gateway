@@ -68,7 +68,8 @@ Redis `127.0.0.1:56379`. It fails when infrastructure is absent, does not silent
 skip, applies the complete migration chain and clones disposable databases from
 the migrated template. It never targets the production database or Redis.
 
-The real-store suite has 26 top-level regression tests and covers all 11 models,
+The real-store suite covers the complete current `MediaTaskCatalog()` (including
+the extended models), with per-task usage and settlement uniqueness checks,
 concurrent idempotency, unknown provider
 submission, restart/Redis flush, pin ACK loss, disabled creation with ongoing
 recovery, multi-segment single provider/usage behavior, partial actual FIFO release,
