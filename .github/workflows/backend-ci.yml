@@ -116,6 +116,15 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [shell, test, ws-race, frontend, golangci-lint]
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - target: linux-amd64
+            goos: linux
+            goarch: amd64
+          - target: darwin-arm64
+            goos: darwin
+            goarch: arm64
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
@@ -124,12 +133,12 @@ jobs:
           check-latest: false
           cache: true
           cache-dependency-path: backend/go.sum
-      - name: Build verified Linux gateway
+      - name: Build verified gateway
         working-directory: backend
         env:
           CGO_ENABLED: '0'
-          GOOS: linux
-          GOARCH: amd64
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
         run: |
           mkdir -p release
           market_build_date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -139,7 +148,7 @@ jobs:
           printf '%s\n' "$GITHUB_SHA" > SOURCE_COMMIT
       - uses: actions/upload-artifact@v7
         with:
-          name: uniroute-gateway-linux-amd64
+          name: uniroute-gateway-${{ matrix.target }}
           path: backend/release/
           if-no-files-found: error
           retention-days: 7
