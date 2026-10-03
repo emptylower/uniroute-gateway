@@ -553,13 +553,12 @@ func mediaDuration(r *mediaTaskRecord) any {
 	if r.MediaType != "video" {
 		return nil
 	}
-	n, _ := strconv.Atoi(r.Option)
-	return n
+	return int(mediaOptionSeconds(r.Option))
 }
 func mediaImageSize(r *mediaTaskRecord) any {
 	if r.MediaType == "image" {
-		if len(r.Option) >= 2 && r.Option[:2] == "2K" {
-			return "2K"
+		if len(r.Option) >= 2 && (r.Option[:2] == "2K" || r.Option[:2] == "4K") {
+			return r.Option[:2]
 		}
 		return "1K"
 	}

@@ -32,6 +32,19 @@ type MediaModel struct {
 	OptionPriceUSD map[string]string `json:"option_price_usd"`
 	Param          MediaParam        `json:"param"`
 	prices         map[string]int64
+	// fields maps the colon-separated segments of an option value onto
+	// provider input fields; fixed holds provider inputs the browser cannot
+	// choose. A nil fields keeps the legacy single-parameter mapping.
+	fields []mediaField
+	fixed  map[string]any
+}
+type mediaField struct {
+	name    string
+	integer bool
+}
+type mediaOption struct {
+	value, label string
+	price        int64
 }
 
 // Prices are exact ten-thousandths of USD per unit. Only verified provider
@@ -81,7 +94,56 @@ func MediaTaskCatalog() []MediaModel {
 
 	models[5].prices["2K:1:1"] = 1200
 	models[5].OptionPriceUSD["2K:1:1"] = "0.12"
-	return models
+	return append(models, extendedMediaModels()...)
+}
+
+// mediaOptionSeconds reads the billable duration from a video option, which is
+// either a bare duration ("6") or ends with one ("720p:10").
+func mediaOptionSeconds(option string) int64 {
+	if i := strings.LastIndex(option, ":"); i >= 0 {
+		option = option[i+1:]
+	}
+	n, _ := strconv.ParseInt(option, 10, 64)
+	return n
+}
+
+// mediaFields parses "name" (string) and "name:int" (integer) field specs.
+func mediaFields(specs ...string) []mediaField {
+	out := make([]mediaField, 0, len(specs))
+	for _, spec := range specs {
+		name, kind, _ := strings.Cut(spec, ":")
+		out = append(out, mediaField{name: name, integer: kind == "int"})
+	}
+	return out
+}
+
+func mediaOpt(value, label string, price int64) mediaOption {
+	return mediaOption{value: value, label: label, price: price}
+}
+
+// mediaSpecModel builds a model whose options map onto provider input fields
+// and may each carry their own price. Prices are ten-thousandths of USD per
+// unit (per image, per video second or per track).
+func mediaSpecModel(id, slug, name, provider, kind, param string, fields []mediaField, fixed map[string]any, options ...mediaOption) MediaModel {
+	m := MediaModel{Slug: slug, ModelID: id, Name: name, Provider: provider, MediaKind: kind, Param: MediaParam{Kind: param}, prices: map[string]int64{}, OptionPriceUSD: map[string]string{}, fields: fields, fixed: fixed}
+	m.Unit = "per_image"
+	if kind == "video" {
+		m.Unit = "per_second"
+	}
+	if kind == "music" {
+		m.Unit = "per_track"
+	}
+	lowest := options[0].price
+	for _, option := range options {
+		m.Param.Options = append(m.Param.Options, MediaParamOption{option.value, option.label})
+		m.prices[option.value] = option.price
+		m.OptionPriceUSD[option.value] = mediaUSD(option.price * (mediaUnitsPerUSD / 10000))
+		if option.price < lowest {
+			lowest = option.price
+		}
+	}
+	m.PriceUSD = mediaUSD(lowest * (mediaUnitsPerUSD / 10000))
+	return m
 }
 
 type MediaCreateInput struct {
@@ -112,7 +174,10 @@ func resolveMediaQuote(model, option string) (MediaModel, string, int64, error) 
 		}
 		quantity := int64(1)
 		if m.MediaKind == "video" {
-			quantity, _ = strconv.ParseInt(option, 10, 64)
+			quantity = mediaOptionSeconds(option)
+			if quantity <= 0 {
+				return MediaModel{}, "", 0, infraerrors.BadRequest("INVALID_OPTION", "invalid media option")
+			}
 		}
 		return m, option, price * quantity * (mediaUnitsPerUSD / 10000), nil
 	}
@@ -144,6 +209,27 @@ func normalizeMediaCreate(in MediaCreateInput) (MediaCreateInput, MediaModel, in
 	}
 	in.MediaType = m.MediaKind
 	input := map[string]any{"prompt": in.Prompt}
+	for k, v := range m.fixed {
+		input[k] = v
+	}
+	if m.fields != nil {
+		parts := strings.SplitN(option, ":", len(m.fields))
+		if len(parts) != len(m.fields) {
+			return in, m, 0, nil, infraerrors.BadRequest("INVALID_OPTION", "invalid media option")
+		}
+		for i, field := range m.fields {
+			if field.integer {
+				n, err := strconv.Atoi(parts[i])
+				if err != nil {
+					return in, m, 0, nil, infraerrors.BadRequest("INVALID_OPTION", "invalid media option")
+				}
+				input[field.name] = n
+			} else {
+				input[field.name] = parts[i]
+			}
+		}
+		return in, m, units, input, nil
+	}
 	switch m.Param.Kind {
 	case "duration":
 		input["duration"], _ = strconv.Atoi(option)
