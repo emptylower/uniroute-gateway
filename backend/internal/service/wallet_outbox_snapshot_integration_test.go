@@ -43,7 +43,7 @@ func TestObserveSettlementCarriesSnapshot(t *testing.T) {
 		outbox:   outbox,
 		workerID: "test-worker-no-dispatcher",
 	}
-	user := &User{PlatformUserID: "shipany-user-76d", BillingCurrency: "CNY", Balance: 10}
+	user := &User{PlatformUserID: "shipany-user-76d", BillingCurrency: "USD", Balance: 10}
 	cost := &CostBreakdown{ActualCost: 0.05, BillingMode: string(BillingModeToken)}
 
 	// The HTTP/WS leg: called with the snapshot id the callers hold
@@ -82,7 +82,7 @@ func TestObserveSettlementCarriesSnapshotLive(t *testing.T) {
 	f.clock.Advance(6 * time.Second)
 	prov = f.pollWindowsLen(t, callHash, 2, 8*time.Second)
 
-	id1 := CanonicalWalletSettlementEventID(callHash, f.user.PlatformUserID, "CNY")
+	id1 := CanonicalWalletSettlementEventID(callHash, f.user.PlatformUserID, "USD")
 	f.waitDeliveredThroughFake(t, id1, 15*time.Second)
 	var snap1 sql.NullString
 	require.NoError(t, f.db.QueryRowContext(f.ctx,
@@ -109,7 +109,7 @@ func TestObserveSettlementCarriesSnapshotLive(t *testing.T) {
 	}
 	require.Equal(t, LiveProvisionalStatusFinalized, prov.Status, "the row finalizes after session.closed")
 
-	id3 := CanonicalWalletSettlementEventID(liveWindowRequestID(callHash, 3), f.user.PlatformUserID, "CNY")
+	id3 := CanonicalWalletSettlementEventID(liveWindowRequestID(callHash, 3), f.user.PlatformUserID, "USD")
 	f.waitDeliveredThroughFake(t, id3, 15*time.Second)
 	var snap3 sql.NullString
 	require.NoError(t, f.db.QueryRowContext(f.ctx,

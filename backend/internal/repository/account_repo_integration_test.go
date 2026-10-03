@@ -22,6 +22,10 @@ type AccountRepoSuite struct {
 	ctx    context.Context
 	client *dbent.Client
 	repo   *accountRepository
+	// setupTx is the transaction SetupTest opened. It holds row locks on the
+	// seeded media provider it deleted, so a test that opens its own
+	// transactions must roll it back first or it waits on itself forever.
+	setupTx *dbent.Tx
 }
 
 type schedulerCacheRecorder struct {
@@ -138,6 +142,7 @@ func (s *schedulerCacheRecorder) SetOutboxWatermark(ctx context.Context, id int6
 func (s *AccountRepoSuite) SetupTest() {
 	s.ctx = context.Background()
 	tx := testEntTx(s.T())
+	s.setupTx = tx
 	s.client = tx.Client()
 	s.repo = newAccountRepositoryWithSQL(s.client, tx, nil)
 	s.dropSeededMediaProvider(tx)
@@ -610,7 +615,9 @@ func (s *AccountRepoSuite) TestListWithFilters() {
 
 	for _, tt := range tests {
 		s.Run(tt.name, func() {
-			// 每个 case 重新获取隔离资源
+			// 每个 case 重新获取隔离资源；先释放 SetupTest 事务持有的行锁，否则
+			// 下面的 dropSeededMediaProvider 会与它互相等待。
+			_ = s.setupTx.Rollback()
 			tx := testEntTx(s.T())
 			client := tx.Client()
 			repo := newAccountRepositoryWithSQL(client, tx, nil)

@@ -924,7 +924,14 @@ func newGrokCredentialFailoverHandler(t *testing.T, mode string) (*OpenAIGateway
 	cfg := &config.Config{RunMode: config.RunModeSimple}
 	cfg.Gateway.MaxAccountSwitches = 3
 	billingCache := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil, nil)
-	usdFixtureCache1, usdFixtureSnapshots1 := newUSDHandlerTestWallet(t, cfg, service.NewBillingService(cfg, nil))
+	// The USD billing snapshot freezes before every upstream write and refuses
+	// a model without a billable price, so the Grok models need one too.
+	pricing := service.NewPricingService(cfg, nil)
+	for _, model := range []string{"grok-imagine-video", "grok-imagine-video-1.5"} {
+		pricing.SetModelPricingForTest(model, &service.LiteLLMModelPricing{InputCostPerToken: 0.000001, OutputCostPerToken: 0.000002, MaxOutputTokens: 4096, MaxInputTokens: 128000})
+	}
+	billing := service.NewBillingService(cfg, pricing)
+	usdFixtureCache1, usdFixtureSnapshots1 := newUSDHandlerTestWallet(t, cfg, billing)
 	gateway := service.NewOpenAIGatewayService(repo,
 		nil,
 		nil,
@@ -937,7 +944,7 @@ func newGrokCredentialFailoverHandler(t *testing.T, mode string) (*OpenAIGateway
 		nil,
 		nil,
 		nil,
-		service.NewBillingService(cfg, nil),
+		billing,
 		nil,
 		billingCache,
 		upstream,

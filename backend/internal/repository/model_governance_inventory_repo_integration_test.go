@@ -358,7 +358,7 @@ func TestModelGovernanceInventoryIncludesEnabledAccountWithoutGroup(t *testing.T
 	require.NoError(t, err)
 	require.Contains(t, items, service.InventoryItem{
 		AccountID: accountID, TargetPlatform: service.PlatformOpenAI,
-		UpstreamModelID: "ungrouped-model", Classification: "unknown", BillingCurrency: "CNY",
+		UpstreamModelID: "ungrouped-model", Classification: "unknown", BillingCurrency: "USD",
 	})
 }
 
@@ -1005,7 +1005,10 @@ func TestModelGovernanceInventoryRetainsHistoricalUsageForDisabledAccount(t *tes
 	require.NotContains(t, byModel, "current-observation")
 }
 
-func TestModelGovernanceInventoryRejectsMixedCurrencyBeforeRevenueConversion(t *testing.T) {
+// Inventory revenue is read from the USD projection of every usage row, so a
+// historical CNY row no longer makes a model "mixed currency": it is converted
+// and a negative one is rejected like any other negative revenue.
+func TestModelGovernanceInventoryProjectsHistoricalCNYRowsBeforeRevenueChecks(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
 	fixture := createModelGovernanceInventoryFixture(t, "USD")
@@ -1013,7 +1016,7 @@ func TestModelGovernanceInventoryRejectsMixedCurrencyBeforeRevenueConversion(t *
 	insertInventoryUsage(t, fixture, "mixed-model", "CNY", "inventory-mixed-cny", fixture.apiKey2, "-1", now.Add(-2*time.Hour))
 
 	_, err := listModelGovernanceInventory(ctx, now.Add(-7*24*time.Hour), now.Add(-30*24*time.Hour), now)
-	requireInventoryError(t, err, "MODEL_GOVERNANCE_INVENTORY_MIXED_CURRENCY", fixture, "mixed-model")
+	requireInventoryError(t, err, "MODEL_GOVERNANCE_INVENTORY_NEGATIVE_REVENUE", fixture, "mixed-model")
 }
 
 func TestModelGovernanceInventoryRejectsNegativeRevenueWithTypedDimensions(t *testing.T) {

@@ -170,6 +170,7 @@ func TestVerifyOrderByOutTradeNoBackfillsTradeNoFromPaidQuery(t *testing.T) {
 		SetEmail("checkpaid@example.com").
 		SetPasswordHash("hash").
 		SetUsername("checkpaid-user").
+		SetBillingCurrency(CurrencyCNY).
 		Save(ctx)
 	require.NoError(t, err)
 
@@ -194,10 +195,11 @@ func TestVerifyOrderByOutTradeNoBackfillsTradeNoFromPaidQuery(t *testing.T) {
 
 	userRepo := &mockUserRepo{
 		getByIDUser: &User{
-			ID:       user.ID,
-			Email:    user.Email,
-			Username: user.Username,
-			Balance:  0,
+			ID:              user.ID,
+			Email:           user.Email,
+			Username:        user.Username,
+			BillingCurrency: CurrencyCNY,
+			Balance:         0,
 		},
 	}
 	userRepo.updateBalanceFn = func(ctx context.Context, id int64, amount float64) error {
@@ -271,6 +273,7 @@ func TestVerifyOrderByOutTradeNoRetriesZeroAmountPaidQueryOnce(t *testing.T) {
 		SetEmail("checkpaid-retry@example.com").
 		SetPasswordHash("hash").
 		SetUsername("checkpaid-retry-user").
+		SetBillingCurrency(CurrencyCNY).
 		Save(ctx)
 	require.NoError(t, err)
 
@@ -295,10 +298,11 @@ func TestVerifyOrderByOutTradeNoRetriesZeroAmountPaidQueryOnce(t *testing.T) {
 
 	userRepo := &mockUserRepo{
 		getByIDUser: &User{
-			ID:       user.ID,
-			Email:    user.Email,
-			Username: user.Username,
-			Balance:  0,
+			ID:              user.ID,
+			Email:           user.Email,
+			Username:        user.Username,
+			BillingCurrency: CurrencyCNY,
+			Balance:         0,
 		},
 	}
 	userRepo.updateBalanceFn = func(ctx context.Context, id int64, amount float64) error {
@@ -369,6 +373,7 @@ func TestVerifyOrderByOutTradeNoRejectsPaidQueryWithZeroAmount(t *testing.T) {
 		SetEmail("checkpaid-zero-amount@example.com").
 		SetPasswordHash("hash").
 		SetUsername("checkpaid-zero-amount-user").
+		SetBillingCurrency(CurrencyCNY).
 		Save(ctx)
 	require.NoError(t, err)
 
@@ -393,10 +398,11 @@ func TestVerifyOrderByOutTradeNoRejectsPaidQueryWithZeroAmount(t *testing.T) {
 
 	userRepo := &mockUserRepo{
 		getByIDUser: &User{
-			ID:       user.ID,
-			Email:    user.Email,
-			Username: user.Username,
-			Balance:  0,
+			ID:              user.ID,
+			Email:           user.Email,
+			Username:        user.Username,
+			BillingCurrency: CurrencyCNY,
+			Balance:         0,
 		},
 	}
 	redeemRepo := &paymentOrderLifecycleRedeemRepo{
@@ -461,6 +467,7 @@ func TestVerifyOrderByOutTradeNoDoesNotCancelUnpaidUpstreamOrder(t *testing.T) {
 		SetEmail("checkpaid-pending@example.com").
 		SetPasswordHash("hash").
 		SetUsername("checkpaid-pending-user").
+		SetBillingCurrency(CurrencyCNY).
 		Save(ctx)
 	require.NoError(t, err)
 
@@ -518,6 +525,7 @@ func TestCancelOrderStillClosesUnpaidUpstreamOrder(t *testing.T) {
 		SetEmail("cancel-pending@example.com").
 		SetPasswordHash("hash").
 		SetUsername("cancel-pending-user").
+		SetBillingCurrency(CurrencyCNY).
 		Save(ctx)
 	require.NoError(t, err)
 
@@ -575,6 +583,7 @@ func TestReconcilePendingWxpayOrdersBackfillsPaidOrder(t *testing.T) {
 		SetEmail("wxpay-reconcile@example.com").
 		SetPasswordHash("hash").
 		SetUsername("wxpay-reconcile-user").
+		SetBillingCurrency(CurrencyCNY).
 		Save(ctx)
 	require.NoError(t, err)
 
@@ -599,10 +608,11 @@ func TestReconcilePendingWxpayOrdersBackfillsPaidOrder(t *testing.T) {
 
 	userRepo := &mockUserRepo{
 		getByIDUser: &User{
-			ID:       user.ID,
-			Email:    user.Email,
-			Username: user.Username,
-			Balance:  0,
+			ID:              user.ID,
+			Email:           user.Email,
+			Username:        user.Username,
+			BillingCurrency: CurrencyCNY,
+			Balance:         0,
 		},
 	}
 	userRepo.updateBalanceFn = func(ctx context.Context, id int64, amount float64) error {
@@ -677,6 +687,7 @@ func TestVerifyOrderByOutTradeNoUsesOutTradeNoWhenPaymentTradeNoAlreadyExistsFor
 		SetEmail("checkpaid-existing-trade@example.com").
 		SetPasswordHash("hash").
 		SetUsername("checkpaid-existing-trade-user").
+		SetBillingCurrency(CurrencyCNY).
 		Save(ctx)
 	require.NoError(t, err)
 
@@ -701,10 +712,11 @@ func TestVerifyOrderByOutTradeNoUsesOutTradeNoWhenPaymentTradeNoAlreadyExistsFor
 
 	userRepo := &mockUserRepo{
 		getByIDUser: &User{
-			ID:       user.ID,
-			Email:    user.Email,
-			Username: user.Username,
-			Balance:  0,
+			ID:              user.ID,
+			Email:           user.Email,
+			Username:        user.Username,
+			BillingCurrency: CurrencyCNY,
+			Balance:         0,
 		},
 	}
 	userRepo.updateBalanceFn = func(ctx context.Context, id int64, amount float64) error {

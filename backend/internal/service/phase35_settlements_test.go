@@ -47,7 +47,7 @@ func TestPhase35V2WireIsUnitsExact(t *testing.T) {
 	fake.fund(userA, fund)
 	localA := fund - A // the fake's canonical_balance after the capture: fund − captured (one lease, fully headroom-open)
 	require.True(t, b.ObserveSettlement(CanonicalWalletSettlementEvent{
-		GatewayRequestID: "req-35-32a", PlatformUserID: userA, Currency: "CNY", AmountUnits: A,
+		GatewayRequestID: "req-35-32a", PlatformUserID: userA, Currency: "USD", AmountUnits: A,
 		LocalBalanceAfterUnits: &localA, OccurredAt: now,
 	}))
 	p34WaitOutboxStatus(t, ctx, db, "req-35-32a", "delivered")
@@ -59,7 +59,7 @@ func TestPhase35V2WireIsUnitsExact(t *testing.T) {
 	fake.fund(userB, fund)
 	localB := fund - A - 2_000_000
 	require.True(t, b.ObserveSettlement(CanonicalWalletSettlementEvent{
-		GatewayRequestID: "req-35-32b", PlatformUserID: userB, Currency: "CNY", AmountUnits: A,
+		GatewayRequestID: "req-35-32b", PlatformUserID: userB, Currency: "USD", AmountUnits: A,
 		LocalBalanceAfterUnits: &localB, OccurredAt: now,
 	}))
 	p34WaitOutboxStatus(t, ctx, db, "req-35-32b", "delivered")
@@ -73,7 +73,7 @@ func TestPhase35V2WireIsUnitsExact(t *testing.T) {
 	fake.fund(userC, fund)
 	localC := fund - A + 2_000_000
 	require.True(t, b.ObserveSettlement(CanonicalWalletSettlementEvent{
-		GatewayRequestID: "req-35-32c", PlatformUserID: userC, Currency: "CNY", AmountUnits: A,
+		GatewayRequestID: "req-35-32c", PlatformUserID: userC, Currency: "USD", AmountUnits: A,
 		LocalBalanceAfterUnits: &localC, OccurredAt: now,
 	}))
 	p34WaitOutboxStatus(t, ctx, db, "req-35-32c", "delivered")
@@ -88,9 +88,9 @@ func TestPhase35V2WireIsUnitsExact(t *testing.T) {
 	require.NotEmpty(t, fake.settlementReqs)
 	for _, req := range fake.settlementReqs {
 		require.Equal(t, "500000001", req.Amount.AmountUnits, "the amount object the fake received carries the event's units exactly")
-		require.Equal(t, "cny-e8-v1", req.Amount.UnitVersion)
+		require.Equal(t, "usd-e8-v1", req.Amount.UnitVersion)
 		require.Equal(t, 8, req.Amount.Scale)
-		require.Equal(t, "CNY", req.Amount.Currency)
+		require.Equal(t, "USD", req.Amount.Currency)
 	}
 	for _, user := range []string{userA, userB, userC} {
 		var leaseID string
@@ -130,7 +130,7 @@ func TestPhase35NamedLeaseIDReleasesTheRetryReservation(t *testing.T) {
 
 	// First delivery: the event captures on Y.
 	require.True(t, b.ObserveSettlement(CanonicalWalletSettlementEvent{
-		GatewayRequestID: "req-35-33", PlatformUserID: user, Currency: "CNY", AmountUnits: A, OccurredAt: now,
+		GatewayRequestID: "req-35-33", PlatformUserID: user, Currency: "USD", AmountUnits: A, OccurredAt: now,
 	}))
 	p34WaitOutboxStatus(t, ctx, db, "req-35-33", "delivered")
 	fake.mu.Lock()
@@ -149,11 +149,11 @@ func TestPhase35NamedLeaseIDReleasesTheRetryReservation(t *testing.T) {
 	const X = "srv-lease-x"
 	fake.seedLease(user, X, "settle", 500_000_000, 0, now.Add(5*time.Minute))
 	require.NoError(t, store.InstallCanonicalWalletLease(ctx, CanonicalWalletLease{
-		LeaseID: X, PlatformUserID: user, Currency: "CNY", BudgetUnits: 500_000_000, ExpiresAt: now.Add(5 * time.Minute),
+		LeaseID: X, PlatformUserID: user, Currency: "USD", BudgetUnits: 500_000_000, ExpiresAt: now.Add(5 * time.Minute),
 	}))
-	eventID := CanonicalWalletSettlementEventID("req-35-33", user, "CNY")
+	eventID := CanonicalWalletSettlementEventID("req-35-33", user, "USD")
 	require.NoError(t, rdb.Del(ctx, testCanonicalWalletReservationKey(user, eventID)).Err())
-	_, err := store.ReserveCanonicalWalletLease(ctx, user, X, "CNY", eventID, A, now)
+	_, err := store.ReserveCanonicalWalletLease(ctx, user, X, "USD", eventID, A, now)
 	require.NoError(t, err)
 
 	var id int64
@@ -166,7 +166,7 @@ func TestPhase35NamedLeaseIDReleasesTheRetryReservation(t *testing.T) {
 
 	b.deliverOutboxEvent(ctx, CanonicalWalletOutboxEvent{
 		ID: id, EventID: eventID, GatewayRequestID: "req-35-33", PlatformUserID: user, LeaseID: X,
-		Currency: "CNY", AmountUnits: A, OccurredAt: now,
+		Currency: "USD", AmountUnits: A, OccurredAt: now,
 	})
 
 	var status string
@@ -192,7 +192,7 @@ func TestPhase35NamedLeaseIDReleasesTheRetryReservation(t *testing.T) {
 		eventID, b.workerID, Y).Scan(&id2))
 	b.deliverOutboxEvent(ctx, CanonicalWalletOutboxEvent{
 		ID: id2, EventID: eventID, GatewayRequestID: "req-35-33", PlatformUserID: user, LeaseID: Y,
-		Currency: "CNY", AmountUnits: A, OccurredAt: now,
+		Currency: "USD", AmountUnits: A, OccurredAt: now,
 	})
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT status FROM wallet_settlement_outbox WHERE id = $1`, id2).Scan(&status))
 	require.Equal(t, "delivered", status)
@@ -256,7 +256,7 @@ func TestPhase35ClassificationTable(t *testing.T) {
 			b := p34DispatcherBridge(t, fake, store, db, outbox, now)
 			reqID := "req-35-37-" + itoa(i)
 			b.ObserveSettlement(CanonicalWalletSettlementEvent{
-				GatewayRequestID: reqID, PlatformUserID: user, Currency: "CNY", AmountUnits: 10_000_000, OccurredAt: now,
+				GatewayRequestID: reqID, PlatformUserID: user, Currency: "USD", AmountUnits: 10_000_000, OccurredAt: now,
 			})
 
 			readRow := func() (string, int, sql.NullString) {
@@ -409,7 +409,7 @@ func TestPhase35OverCaptureSplits(t *testing.T) {
 		t.Helper()
 		fake.seedLease(user, L, "authorize", 500_000_000, 500_000_000-headroom, now.Add(5*time.Minute))
 		require.NoError(t, store.InstallCanonicalWalletLease(ctx, CanonicalWalletLease{
-			LeaseID: L, PlatformUserID: user, Currency: "CNY", BudgetUnits: 500_000_000, ExpiresAt: now.Add(5 * time.Minute),
+			LeaseID: L, PlatformUserID: user, Currency: "USD", BudgetUnits: 500_000_000, ExpiresAt: now.Add(5 * time.Minute),
 		}))
 	}
 
@@ -423,9 +423,9 @@ func TestPhase35OverCaptureSplits(t *testing.T) {
 		b := p34DispatcherBridge(t, fake, store, db, outbox, now)
 
 		require.True(t, b.ObserveSettlement(CanonicalWalletSettlementEvent{
-			GatewayRequestID: "req-35-34", PlatformUserID: user, Currency: "CNY", AmountUnits: A, LeaseID: L, OccurredAt: now,
+			GatewayRequestID: "req-35-34", PlatformUserID: user, Currency: "USD", AmountUnits: A, LeaseID: L, OccurredAt: now,
 		}))
-		eventID := CanonicalWalletSettlementEventID("req-35-34", user, "CNY")
+		eventID := CanonicalWalletSettlementEventID("req-35-34", user, "USD")
 		hashBefore := p35ReadRow(t, ctx, db, eventID).PayloadHash
 
 		// First tick: the fake refuses over-capture with headroom H → the
@@ -525,9 +525,9 @@ func TestPhase35OverCaptureSplits(t *testing.T) {
 		fake.mu.Unlock()
 
 		require.True(t, b.ObserveSettlement(CanonicalWalletSettlementEvent{
-			GatewayRequestID: "req-35-34e", PlatformUserID: user, Currency: "CNY", AmountUnits: smallA, LeaseID: L5, OccurredAt: now,
+			GatewayRequestID: "req-35-34e", PlatformUserID: user, Currency: "USD", AmountUnits: smallA, LeaseID: L5, OccurredAt: now,
 		}))
-		eventID := CanonicalWalletSettlementEventID("req-35-34e", user, "CNY")
+		eventID := CanonicalWalletSettlementEventID("req-35-34e", user, "USD")
 		p34WaitOutboxStatus(t, ctx, db, "req-35-34e", "delivered")
 		p35WaitRemainderDelivered(t, ctx, db, eventID+":r1")
 
@@ -569,7 +569,7 @@ func TestPhase35OverCaptureSplits(t *testing.T) {
 			eventID, b.workerID).Scan(&id))
 		b.deliverOutboxEvent(ctx, CanonicalWalletOutboxEvent{
 			ID: id, EventID: eventID, GatewayRequestID: "req-35-34e", PlatformUserID: user, LeaseID: L5,
-			Currency: "CNY", AmountUnits: smallH, OccurredAt: now,
+			Currency: "USD", AmountUnits: smallH, OccurredAt: now,
 		})
 		status, err := outbox.OutboxEventStatus(ctx, id)
 		require.NoError(t, err)
@@ -590,9 +590,9 @@ func TestPhase35OverCaptureSplits(t *testing.T) {
 		splitFullBase := canonicalWalletBridgeMetrics.settlementSplitFull.Load()
 
 		require.True(t, b.ObserveSettlement(CanonicalWalletSettlementEvent{
-			GatewayRequestID: "req-35-34z", PlatformUserID: user, Currency: "CNY", AmountUnits: A, LeaseID: L0, OccurredAt: now,
+			GatewayRequestID: "req-35-34z", PlatformUserID: user, Currency: "USD", AmountUnits: A, LeaseID: L0, OccurredAt: now,
 		}))
-		eventID := CanonicalWalletSettlementEventID("req-35-34z", user, "CNY")
+		eventID := CanonicalWalletSettlementEventID("req-35-34z", user, "USD")
 		p34WaitOutboxStatus(t, ctx, db, "req-35-34z", "delivered")
 		parent := p35ReadRow(t, ctx, db, eventID)
 		require.Equal(t, "delivered", parent.Status, "split_full resolves the parent in the split transaction")
@@ -617,9 +617,9 @@ func TestPhase35OverCaptureSplits(t *testing.T) {
 		seedOverCapturable(t, fake, store, user, L1, 0)
 		b := p34DispatcherBridge(t, fake, store, db, outbox, now)
 		require.True(t, b.ObserveSettlement(CanonicalWalletSettlementEvent{
-			GatewayRequestID: "req-35-34o", PlatformUserID: user, Currency: "CNY", AmountUnits: A, LeaseID: L1, OccurredAt: now,
+			GatewayRequestID: "req-35-34o", PlatformUserID: user, Currency: "USD", AmountUnits: A, LeaseID: L1, OccurredAt: now,
 		}))
-		eventID := CanonicalWalletSettlementEventID("req-35-34o", user, "CNY")
+		eventID := CanonicalWalletSettlementEventID("req-35-34o", user, "USD")
 		p34WaitOutboxStatus(t, ctx, db, "req-35-34o", "delivered")
 		require.Equal(t, A, p35ReadRow(t, ctx, db, eventID+":r1").AmountUnits, "an absent headroom field is treated as H = 0")
 		released, err := rdb.HGet(ctx, testCanonicalWalletLeaseKey(user, L1), "released_units").Int64()
@@ -636,9 +636,9 @@ func TestPhase35OverCaptureSplits(t *testing.T) {
 		seedOverCapturable(t, fake, store, user, L2, H)
 		b := p34DispatcherBridge(t, fake, store, db, outbox, now)
 		require.True(t, b.ObserveSettlement(CanonicalWalletSettlementEvent{
-			GatewayRequestID: "req-35-34d", PlatformUserID: user, Currency: "CNY", AmountUnits: A, LeaseID: L2, OccurredAt: now,
+			GatewayRequestID: "req-35-34d", PlatformUserID: user, Currency: "USD", AmountUnits: A, LeaseID: L2, OccurredAt: now,
 		}))
-		eventID := CanonicalWalletSettlementEventID("req-35-34d", user, "CNY")
+		eventID := CanonicalWalletSettlementEventID("req-35-34d", user, "USD")
 		p34WaitOutboxStatus(t, ctx, db, "req-35-34d", "delivered")
 		fake.mu.Lock()
 		capturedBefore := fake.lease(user, L2).Captured
@@ -651,7 +651,7 @@ func TestPhase35OverCaptureSplits(t *testing.T) {
 			eventID, b.workerID).Scan(&id))
 		b.deliverOutboxEvent(ctx, CanonicalWalletOutboxEvent{
 			ID: id, EventID: eventID, GatewayRequestID: "req-35-34d", PlatformUserID: user, LeaseID: L2,
-			Currency: "CNY", AmountUnits: H, OccurredAt: now,
+			Currency: "USD", AmountUnits: H, OccurredAt: now,
 		})
 		status, err := outbox.OutboxEventStatus(ctx, id)
 		require.NoError(t, err)
@@ -674,9 +674,9 @@ func TestPhase35OverCaptureSplits(t *testing.T) {
 		b := p34DispatcherBridge(t, fake, faulty, db, outbox, now)
 
 		require.True(t, b.ObserveSettlement(CanonicalWalletSettlementEvent{
-			GatewayRequestID: "req-35-34c1", PlatformUserID: user, Currency: "CNY", AmountUnits: A, LeaseID: L3, OccurredAt: now,
+			GatewayRequestID: "req-35-34c1", PlatformUserID: user, Currency: "USD", AmountUnits: A, LeaseID: L3, OccurredAt: now,
 		}))
-		eventID := CanonicalWalletSettlementEventID("req-35-34c1", user, "CNY")
+		eventID := CanonicalWalletSettlementEventID("req-35-34c1", user, "USD")
 		p35WaitForRemainder(t, ctx, db, eventID+":r1")
 
 		// The release failed after the split: the column still records the
@@ -710,9 +710,9 @@ func TestPhase35OverCaptureSplits(t *testing.T) {
 		replayedBase := canonicalWalletBridgeMetrics.pendingReleaseReplayed.Load()
 
 		require.True(t, b.ObserveSettlement(CanonicalWalletSettlementEvent{
-			GatewayRequestID: "req-35-34c2", PlatformUserID: user, Currency: "CNY", AmountUnits: A, LeaseID: L4, OccurredAt: now,
+			GatewayRequestID: "req-35-34c2", PlatformUserID: user, Currency: "USD", AmountUnits: A, LeaseID: L4, OccurredAt: now,
 		}))
-		eventID := CanonicalWalletSettlementEventID("req-35-34c2", user, "CNY")
+		eventID := CanonicalWalletSettlementEventID("req-35-34c2", user, "USD")
 		p35WaitForRemainder(t, ctx, db, eventID+":r1")
 
 		// The release landed but its clear failed: the column still set. The
@@ -878,9 +878,9 @@ func TestPhase35SettleUnderGrantSplits(t *testing.T) {
 		b := p34DispatcherBridge(t, fake, store, db, outbox, now)
 
 		require.True(t, b.ObserveSettlement(CanonicalWalletSettlementEvent{
-			GatewayRequestID: "req-35-35", PlatformUserID: user, Currency: "CNY", AmountUnits: A, OccurredAt: now,
+			GatewayRequestID: "req-35-35", PlatformUserID: user, Currency: "USD", AmountUnits: A, OccurredAt: now,
 		}))
-		eventID := CanonicalWalletSettlementEventID("req-35-35", user, "CNY")
+		eventID := CanonicalWalletSettlementEventID("req-35-35", user, "USD")
 		p34WaitOutboxStatus(t, ctx, db, "req-35-35", "delivered")
 		p35WaitRemainderDelivered(t, ctx, db, eventID+":r1")
 
@@ -925,9 +925,9 @@ func TestPhase35SettleUnderGrantSplits(t *testing.T) {
 		exhaustedBase := canonicalWalletBridgeMetrics.settlementSplitExhausted.Load()
 
 		require.True(t, b.ObserveSettlement(CanonicalWalletSettlementEvent{
-			GatewayRequestID: "req-35-35x", PlatformUserID: user, Currency: "CNY", AmountUnits: 9_000_000, OccurredAt: now,
+			GatewayRequestID: "req-35-35x", PlatformUserID: user, Currency: "USD", AmountUnits: 9_000_000, OccurredAt: now,
 		}))
-		eventID := CanonicalWalletSettlementEventID("req-35-35x", user, "CNY")
+		eventID := CanonicalWalletSettlementEventID("req-35-35x", user, "USD")
 
 		// The chain terminates: exactly one dead_letter row with reason
 		// split_exhausted, and the fake's total captures sum to 8 units.
@@ -982,7 +982,7 @@ func TestPhase35LateCaptureRetargetsAndTheReceivable(t *testing.T) {
 		const L = "srv-late-l"
 		fake.seedLease(user, L, "authorize", 500_000_000, 0, now.Add(5*time.Minute))
 		require.NoError(t, store.InstallCanonicalWalletLease(ctx, CanonicalWalletLease{
-			LeaseID: L, PlatformUserID: user, Currency: "CNY", BudgetUnits: 500_000_000, ExpiresAt: now.Add(5 * time.Minute),
+			LeaseID: L, PlatformUserID: user, Currency: "USD", BudgetUnits: 500_000_000, ExpiresAt: now.Add(5 * time.Minute),
 		}))
 		fake.close(user, L)
 		b := p34DispatcherBridge(t, fake, store, db, outbox, now)
@@ -990,9 +990,9 @@ func TestPhase35LateCaptureRetargetsAndTheReceivable(t *testing.T) {
 
 		const A = int64(30_000_000)
 		require.True(t, b.ObserveSettlement(CanonicalWalletSettlementEvent{
-			GatewayRequestID: "req-35-36", PlatformUserID: user, Currency: "CNY", AmountUnits: A, LeaseID: L, OccurredAt: now,
+			GatewayRequestID: "req-35-36", PlatformUserID: user, Currency: "USD", AmountUnits: A, LeaseID: L, OccurredAt: now,
 		}))
-		eventID := CanonicalWalletSettlementEventID("req-35-36", user, "CNY")
+		eventID := CanonicalWalletSettlementEventID("req-35-36", user, "USD")
 
 		// The first delivery: ShipAny refuses lease_not_capturable → release
 		// in full, unbind, one failed attempt (the row retries unbound).
@@ -1041,7 +1041,7 @@ func TestPhase35LateCaptureRetargetsAndTheReceivable(t *testing.T) {
 
 		const A = int64(30_000_000)
 		require.True(t, b.ObserveSettlement(CanonicalWalletSettlementEvent{
-			GatewayRequestID: "req-35-36b", PlatformUserID: user, Currency: "CNY", AmountUnits: A, OccurredAt: now,
+			GatewayRequestID: "req-35-36b", PlatformUserID: user, Currency: "USD", AmountUnits: A, OccurredAt: now,
 		}))
 		p34WaitOutboxStatus(t, ctx, db, "req-35-36b", "dead_letter")
 		var reason sql.NullString
@@ -1067,15 +1067,15 @@ func TestPhase35LateCaptureRetargetsAndTheReceivable(t *testing.T) {
 		// to exactly A − H (the parent's rewrite is what makes that true).
 		fake.seedLease(user, L, "authorize", 500_000_000, 450_000_000, now.Add(5*time.Minute))
 		require.NoError(t, store.InstallCanonicalWalletLease(ctx, CanonicalWalletLease{
-			LeaseID: L, PlatformUserID: user, Currency: "CNY", BudgetUnits: 500_000_000, ExpiresAt: now.Add(5 * time.Minute),
+			LeaseID: L, PlatformUserID: user, Currency: "USD", BudgetUnits: 500_000_000, ExpiresAt: now.Add(5 * time.Minute),
 		}))
 		fake.fund(user, 10_000_000)
 		b := p34DispatcherBridge(t, fake, store, db, outbox, now)
 
 		require.True(t, b.ObserveSettlement(CanonicalWalletSettlementEvent{
-			GatewayRequestID: "req-35-36c", PlatformUserID: user, Currency: "CNY", AmountUnits: A, LeaseID: L, OccurredAt: now,
+			GatewayRequestID: "req-35-36c", PlatformUserID: user, Currency: "USD", AmountUnits: A, LeaseID: L, OccurredAt: now,
 		}))
-		eventID := CanonicalWalletSettlementEventID("req-35-36c", user, "CNY")
+		eventID := CanonicalWalletSettlementEventID("req-35-36c", user, "USD")
 		p34WaitOutboxStatus(t, ctx, db, "req-35-36c", "delivered") // the parent captures H on L
 		deadline := time.Now().Add(30 * time.Second)
 		for {
@@ -1149,7 +1149,7 @@ func TestPhase35FourTokenStatesToTheUnit(t *testing.T) {
 		fake.fund(user, 100_000_000_000)
 		missingBase := canonicalWalletBridgeMetrics.holdMissingAtSettlement.Load()
 		require.True(t, b.ObserveSettlement(CanonicalWalletSettlementEvent{
-			GatewayRequestID: "req-35-38a", PlatformUserID: user, Currency: "CNY", AmountUnits: A, OccurredAt: now,
+			GatewayRequestID: "req-35-38a", PlatformUserID: user, Currency: "USD", AmountUnits: A, OccurredAt: now,
 		}))
 		p34WaitOutboxStatus(t, ctx, db, "req-35-38a", "delivered")
 		require.Equal(t, A, capturedByUser(t, fake, user), "captured == settled, to the unit")
@@ -1165,14 +1165,14 @@ func TestPhase35FourTokenStatesToTheUnit(t *testing.T) {
 		const L = "srv-38-l"
 		fake.seedLease(user, L, "authorize", 500_000_000, 0, now.Add(5*time.Minute))
 		require.NoError(t, store.InstallCanonicalWalletLease(ctx, CanonicalWalletLease{
-			LeaseID: L, PlatformUserID: user, Currency: "CNY", BudgetUnits: 500_000_000, ExpiresAt: now.Add(5 * time.Minute),
+			LeaseID: L, PlatformUserID: user, Currency: "USD", BudgetUnits: 500_000_000, ExpiresAt: now.Add(5 * time.Minute),
 		}))
 		const E = int64(40_000_000)
-		_, _, _, err := store.ArmCanonicalWalletHold(ctx, user, L, "CNY", "auth-38b", E, 900_000, now)
+		_, _, _, err := store.ArmCanonicalWalletHold(ctx, user, L, "USD", "auth-38b", E, 900_000, now)
 		require.NoError(t, err)
 		convertedBase := canonicalWalletBridgeMetrics.holdConverted.Load()
 		require.True(t, b.ObserveSettlement(CanonicalWalletSettlementEvent{
-			GatewayRequestID: "req-35-38b", PlatformUserID: user, Currency: "CNY", AmountUnits: A, OccurredAt: now, AuthorizationID: "auth-38b",
+			GatewayRequestID: "req-35-38b", PlatformUserID: user, Currency: "USD", AmountUnits: A, OccurredAt: now, AuthorizationID: "auth-38b",
 		}))
 		p34WaitOutboxStatus(t, ctx, db, "req-35-38b", "delivered")
 		require.Equal(t, A, capturedByUser(t, fake, user), "captured == settled, to the unit")
@@ -1186,15 +1186,15 @@ func TestPhase35FourTokenStatesToTheUnit(t *testing.T) {
 		const L = "srv-38-l"
 		fake.seedLease(user, L, "authorize", 500_000_000, 0, now.Add(5*time.Minute))
 		require.NoError(t, store.InstallCanonicalWalletLease(ctx, CanonicalWalletLease{
-			LeaseID: L, PlatformUserID: user, Currency: "CNY", BudgetUnits: 500_000_000, ExpiresAt: now.Add(5 * time.Minute),
+			LeaseID: L, PlatformUserID: user, Currency: "USD", BudgetUnits: 500_000_000, ExpiresAt: now.Add(5 * time.Minute),
 		}))
-		_, _, _, err := store.ArmCanonicalWalletHold(ctx, user, L, "CNY", "auth-38c", A, 900_000, now)
+		_, _, _, err := store.ArmCanonicalWalletHold(ctx, user, L, "USD", "auth-38c", A, 900_000, now)
 		require.NoError(t, err)
 		_, err = store.ReleaseCanonicalWalletHold(ctx, user, "auth-38c", "released", "not_written")
 		require.NoError(t, err)
 		afterReleaseBase := canonicalWalletBridgeMetrics.holdSettlementAfterRelease.Load()
 		require.True(t, b.ObserveSettlement(CanonicalWalletSettlementEvent{
-			GatewayRequestID: "req-35-38c", PlatformUserID: user, Currency: "CNY", AmountUnits: A, OccurredAt: now, AuthorizationID: "auth-38c",
+			GatewayRequestID: "req-35-38c", PlatformUserID: user, Currency: "USD", AmountUnits: A, OccurredAt: now, AuthorizationID: "auth-38c",
 		}))
 		p34WaitOutboxStatus(t, ctx, db, "req-35-38c", "delivered")
 		require.Equal(t, A, capturedByUser(t, fake, user), "captured == settled, to the unit — on a settle lease")
@@ -1213,16 +1213,16 @@ func TestPhase35FourTokenStatesToTheUnit(t *testing.T) {
 		const L = "srv-38-l"
 		fake.seedLease(user, L, "authorize", 500_000_000, 0, now.Add(5*time.Minute))
 		require.NoError(t, store.InstallCanonicalWalletLease(ctx, CanonicalWalletLease{
-			LeaseID: L, PlatformUserID: user, Currency: "CNY", BudgetUnits: 500_000_000, ExpiresAt: now.Add(5 * time.Minute),
+			LeaseID: L, PlatformUserID: user, Currency: "USD", BudgetUnits: 500_000_000, ExpiresAt: now.Add(5 * time.Minute),
 		}))
-		_, _, _, err := store.ArmCanonicalWalletHold(ctx, user, L, "CNY", "auth-38d", A, 900_000, now)
+		_, _, _, err := store.ArmCanonicalWalletHold(ctx, user, L, "USD", "auth-38d", A, 900_000, now)
 		require.NoError(t, err)
 		require.NoError(t, rdb.Del(ctx, testCanonicalWalletReaperTickKey).Err())
 		b.reapOnce(ctx, now.Add(20*time.Minute)) // past the 900s grace
 		require.Equal(t, "abandoned", p34bHoldState(t, ctx, store, user, "auth-38d"))
 		afterReleaseBase := canonicalWalletBridgeMetrics.holdSettlementAfterRelease.Load()
 		require.True(t, b.ObserveSettlement(CanonicalWalletSettlementEvent{
-			GatewayRequestID: "req-35-38d", PlatformUserID: user, Currency: "CNY", AmountUnits: A, OccurredAt: now, AuthorizationID: "auth-38d",
+			GatewayRequestID: "req-35-38d", PlatformUserID: user, Currency: "USD", AmountUnits: A, OccurredAt: now, AuthorizationID: "auth-38d",
 		}))
 		p34WaitOutboxStatus(t, ctx, db, "req-35-38d", "delivered")
 		require.Equal(t, A, capturedByUser(t, fake, user), "captured == settled, to the unit — on a settle lease")
@@ -1263,9 +1263,9 @@ func TestPhase35ZeroCostAbortPointsReleaseTheHold(t *testing.T) {
 	arm := func(t *testing.T, user, authID string) {
 		t.Helper()
 		require.NoError(t, store.InstallCanonicalWalletLease(ctx, CanonicalWalletLease{
-			LeaseID: "srv-39-l", PlatformUserID: user, Currency: "CNY", BudgetUnits: 500_000_000, ExpiresAt: now.Add(30 * time.Minute),
+			LeaseID: "srv-39-l", PlatformUserID: user, Currency: "USD", BudgetUnits: 500_000_000, ExpiresAt: now.Add(30 * time.Minute),
 		}))
-		_, _, _, err := store.ArmCanonicalWalletHold(ctx, user, "srv-39-l", "CNY", authID, 10_000_000, 900_000, now)
+		_, _, _, err := store.ArmCanonicalWalletHold(ctx, user, "srv-39-l", "USD", authID, 10_000_000, 900_000, now)
 		require.NoError(t, err)
 	}
 
@@ -1284,7 +1284,7 @@ func TestPhase35ZeroCostAbortPointsReleaseTheHold(t *testing.T) {
 	for i, leg := range legs {
 		t.Run(leg.name, func(t *testing.T) {
 			_, _, b, _ := newWorld(t, "on")
-			user := &User{ID: int64(100 + i), PlatformUserID: "shipany-user-39-" + itoa(i), BillingCurrency: "CNY", Balance: 10}
+			user := &User{ID: int64(100 + i), PlatformUserID: "shipany-user-39-" + itoa(i), BillingCurrency: "USD", Balance: 10}
 			authID := "auth-39-" + itoa(i)
 			arm(t, user.PlatformUserID, authID)
 			require.False(t, observeCanonicalWalletSettlement(b, "req-39-"+itoa(i), user, leg.cost, leg.sub, leg.appl, nil, "tok", authID, ""))
@@ -1299,7 +1299,7 @@ func TestPhase35ZeroCostAbortPointsReleaseTheHold(t *testing.T) {
 	// holds OFF: nothing is written — the manually-armed hold stays armed.
 	t.Run("holds off writes nothing", func(t *testing.T) {
 		_, _, b, _ := newWorld(t, "off")
-		user := &User{ID: int64(200), PlatformUserID: "shipany-user-39-off", BillingCurrency: "CNY", Balance: 10}
+		user := &User{ID: int64(200), PlatformUserID: "shipany-user-39-off", BillingCurrency: "USD", Balance: 10}
 		authID := "auth-39-off"
 		arm(t, user.PlatformUserID, authID)
 		base := canonicalWalletBridgeMetrics.holdReleasedZeroCost.Load()
@@ -1319,7 +1319,7 @@ func TestPhase35ZeroCostAbortPointsReleaseTheHold(t *testing.T) {
 		user := "shipany-user-39-tl"
 		tokenlessBase := canonicalWalletBridgeStatsValue("settlement_without_authorization")
 		require.True(t, b.ObserveSettlement(CanonicalWalletSettlementEvent{
-			GatewayRequestID: "req-39-tl", PlatformUserID: user, Currency: "CNY", AmountUnits: 10_000_000, OccurredAt: now,
+			GatewayRequestID: "req-39-tl", PlatformUserID: user, Currency: "USD", AmountUnits: 10_000_000, OccurredAt: now,
 		}))
 		require.Equal(t, tokenlessBase+1, canonicalWalletBridgeStatsValue("settlement_without_authorization"), "counted once")
 		var rows int
@@ -1359,10 +1359,10 @@ func TestPhase35RepricingIsPinned(t *testing.T) {
 	// (CanonicalWalletSettlementEventID excludes the
 	// amount, so both carry the SAME event id.)
 	require.True(t, b.ObserveSettlement(CanonicalWalletSettlementEvent{
-		GatewayRequestID: "req-35-40", PlatformUserID: user, Currency: "CNY", AmountUnits: A1, OccurredAt: now,
+		GatewayRequestID: "req-35-40", PlatformUserID: user, Currency: "USD", AmountUnits: A1, OccurredAt: now,
 	}))
 	require.False(t, b.ObserveSettlement(CanonicalWalletSettlementEvent{
-		GatewayRequestID: "req-35-40", PlatformUserID: user, Currency: "CNY", AmountUnits: A2, OccurredAt: now,
+		GatewayRequestID: "req-35-40", PlatformUserID: user, Currency: "USD", AmountUnits: A2, OccurredAt: now,
 	}), "the repriced resubmission is rejected by the payload-hash identity")
 	var rows int
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM wallet_settlement_outbox WHERE gateway_request_id = 'req-35-40'`).Scan(&rows))
@@ -1374,14 +1374,14 @@ func TestPhase35RepricingIsPinned(t *testing.T) {
 	// event carrying A2 is the fake's settlement_payload_conflict → terminal
 	// payload_conflict.
 	p34WaitOutboxStatus(t, ctx, db, "req-35-40", "delivered")
-	eventID := CanonicalWalletSettlementEventID("req-35-40", user, "CNY")
+	eventID := CanonicalWalletSettlementEventID("req-35-40", user, "USD")
 	var id int64
 	require.NoError(t, db.QueryRowContext(ctx,
 		`UPDATE wallet_settlement_outbox SET status = 'in_flight', claimed_by = $2, claimed_at = now(), amount_units = $3 WHERE event_id = $1 RETURNING id`,
 		eventID, b.workerID, A2).Scan(&id))
 	b.deliverOutboxEvent(ctx, CanonicalWalletOutboxEvent{
 		ID: id, EventID: eventID, GatewayRequestID: "req-35-40", PlatformUserID: user,
-		Currency: "CNY", AmountUnits: A2, OccurredAt: now,
+		Currency: "USD", AmountUnits: A2, OccurredAt: now,
 	})
 	var status string
 	var attempts int

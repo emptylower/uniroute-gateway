@@ -123,7 +123,7 @@ func TestWalletReceivableCollector(t *testing.T) {
 		_, err := db.ExecContext(ctx, `
 			INSERT INTO wallet_settlement_outbox
 				(event_id, platform_user_id, gateway_request_id, currency, amount_units, payload_hash, status, dead_letter_reason, occurred_at, redrive_count)
-			VALUES ($1, $2, $3, 'CNY', 1000, $4, 'dead_letter', 'balance_shortfall', $5, $6)`,
+			VALUES ($1, $2, $3, 'USD', 1000, $4, 'dead_letter', 'balance_shortfall', $5, $6)`,
 			eventID, user, "req-"+eventID, "hash-"+eventID, occurred, redriveCount)
 		require.NoError(t, err)
 	}
@@ -134,9 +134,9 @@ func TestWalletReceivableCollector(t *testing.T) {
 	// still fits one lease).
 	const debtUnits = int64(8_000000_000)
 	const debtReq = "req-70-debt"
-	debtEvent := CanonicalWalletSettlementEventID(debtReq, user, "CNY")
+	debtEvent := CanonicalWalletSettlementEventID(debtReq, user, "USD")
 	require.True(t, bridge.ObserveSettlement(CanonicalWalletSettlementEvent{
-		GatewayRequestID: debtReq, PlatformUserID: user, Currency: "CNY", AmountUnits: debtUnits,
+		GatewayRequestID: debtReq, PlatformUserID: user, Currency: "USD", AmountUnits: debtUnits,
 		BillingSnapshotID: "wbs_70_debt",
 	}))
 	pollStatus(debtEvent, "dead_letter", 10*time.Second)
@@ -185,7 +185,7 @@ func TestWalletReceivableCollector(t *testing.T) {
 	_, err = db.ExecContext(ctx, `
 		INSERT INTO wallet_settlement_outbox
 			(event_id, platform_user_id, gateway_request_id, currency, amount_units, payload_hash, status, dead_letter_reason, occurred_at, parent_event_id, split_depth)
-		VALUES ($1, $2, 'req-70-old', 'CNY', 1000, 'hash-70-old', 'dead_letter', 'balance_shortfall', $3, 'gwusg_70_parent', 1)`,
+		VALUES ($1, $2, 'req-70-old', 'USD', 1000, 'hash-70-old', 'dead_letter', 'balance_shortfall', $3, 'gwusg_70_parent', 1)`,
 		oldEvent, user, now.Add(-60*24*time.Hour))
 	require.NoError(t, err)
 	redrivenBefore = canonicalWalletBridgeMetrics.receivableRedriven.Load()
@@ -270,7 +270,7 @@ func TestWalletReceivableCollector(t *testing.T) {
 	_, err = db.ExecContext(ctx, `
 		INSERT INTO wallet_settlement_outbox
 			(event_id, platform_user_id, gateway_request_id, currency, amount_units, payload_hash, status, dead_letter_reason, occurred_at)
-		VALUES ($1, $2, 'req-70-transport', 'CNY', 1000, 'hash-70-t', 'dead_letter', 'balance_shortfall', $3)`,
+		VALUES ($1, $2, 'req-70-transport', 'USD', 1000, 'hash-70-t', 'dead_letter', 'balance_shortfall', $3)`,
 		transportEvent, user, time.Now().UTC())
 	require.NoError(t, err)
 	fake.respondWith("/api/internal/v2/wallet/settlements", 500, `{"code":-1}`, -1)

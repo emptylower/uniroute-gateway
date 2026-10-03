@@ -63,14 +63,14 @@ func TestPhase34Proto16SixteenDispatchersOneIssuanceNoWindowKey(t *testing.T) {
 	// (captured 495,000,000 → headroom 5,000,000 < the 10,000,000 ask): §3 step 2
 	// would otherwise reuse it forever — see Known limits.
 	fake.seedLease(user, "srv-exhausted", "authorize", 500_000_000, 495_000_000, now.Add(5*time.Minute))
-	require.NoError(t, store.InstallCanonicalWalletLease(ctx, CanonicalWalletLease{LeaseID: "srv-exhausted", PlatformUserID: user, Currency: "CNY", BudgetUnits: 500_000_000, ConsumedUnits: 500_000_000, ExpiresAt: now.Add(5 * time.Minute)}))
+	require.NoError(t, store.InstallCanonicalWalletLease(ctx, CanonicalWalletLease{LeaseID: "srv-exhausted", PlatformUserID: user, Currency: "USD", BudgetUnits: 500_000_000, ConsumedUnits: 500_000_000, ExpiresAt: now.Add(5 * time.Minute)}))
 
 	bridges := make([]*CanonicalWalletBridge, 0, 16)
 	for i := 0; i < 16; i++ {
 		bridges = append(bridges, p34DispatcherBridge(t, fake, store, db, outbox, now))
 	}
 	for i := 0; i < 16; i++ {
-		bridges[i%16].ObserveSettlement(CanonicalWalletSettlementEvent{GatewayRequestID: "req-k16-" + itoa(i), PlatformUserID: user, Currency: "CNY", AmountUnits: 10_000_000})
+		bridges[i%16].ObserveSettlement(CanonicalWalletSettlementEvent{GatewayRequestID: "req-k16-" + itoa(i), PlatformUserID: user, Currency: "USD", AmountUnits: 10_000_000})
 	}
 	for i := 0; i < 16; i++ {
 		p34WaitOutboxStatus(t, ctx, db, "req-k16-"+itoa(i), "delivered")
@@ -109,7 +109,7 @@ func TestPhase34Proto19DispatcherUnderCapShortfallAndContention(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		fake.seedLease(capped, "srv-cap-"+itoa(i), "authorize", 500_000_000, 495_000_000, now.Add(5*time.Minute))
 	}
-	require.NoError(t, store.InstallCanonicalWalletLease(ctx, CanonicalWalletLease{LeaseID: "srv-cap-2", PlatformUserID: capped, Currency: "CNY", BudgetUnits: 500_000_000, ConsumedUnits: 500_000_000, ExpiresAt: now.Add(5 * time.Minute)}))
+	require.NoError(t, store.InstallCanonicalWalletLease(ctx, CanonicalWalletLease{LeaseID: "srv-cap-2", PlatformUserID: capped, Currency: "USD", BudgetUnits: 500_000_000, ConsumedUnits: 500_000_000, ExpiresAt: now.Add(5 * time.Minute)}))
 	// shortfall
 	broke := "shipany-user-" + uuid.NewString()
 	fake.fund(broke, 1_000_000) // 0.01 CNY — below the 10,000,000-unit settlement, so the clamp lands under min_headroom_units
@@ -118,8 +118,8 @@ func TestPhase34Proto19DispatcherUnderCapShortfallAndContention(t *testing.T) {
 	fake.fund(racy, 10_000_000_000)
 
 	b := p34DispatcherBridge(t, fake, store, db, outbox, now)
-	b.ObserveSettlement(CanonicalWalletSettlementEvent{GatewayRequestID: "req-capped", PlatformUserID: capped, Currency: "CNY", AmountUnits: 10_000_000})
-	b.ObserveSettlement(CanonicalWalletSettlementEvent{GatewayRequestID: "req-broke", PlatformUserID: broke, Currency: "CNY", AmountUnits: 10_000_000})
+	b.ObserveSettlement(CanonicalWalletSettlementEvent{GatewayRequestID: "req-capped", PlatformUserID: capped, Currency: "USD", AmountUnits: 10_000_000})
+	b.ObserveSettlement(CanonicalWalletSettlementEvent{GatewayRequestID: "req-broke", PlatformUserID: broke, Currency: "USD", AmountUnits: 10_000_000})
 	p34WaitOutboxStatus(t, ctx, db, "req-capped", "delivered")
 	p34WaitOutboxStatus(t, ctx, db, "req-broke", "dead_letter")
 
@@ -139,7 +139,7 @@ func TestPhase34Proto19DispatcherUnderCapShortfallAndContention(t *testing.T) {
 	require.Equal(t, 1, attempts, "balance shortfall is terminal: dead-lettered on the first attempt, no backoff retries")
 	require.Equal(t, int64(1), canonicalWalletBridgeMetrics.deadLetterBalanceShortfall.Load()-base, "counted under reason balance_shortfall")
 
-	b.ObserveSettlement(CanonicalWalletSettlementEvent{GatewayRequestID: "req-racy", PlatformUserID: racy, Currency: "CNY", AmountUnits: 10_000_000})
+	b.ObserveSettlement(CanonicalWalletSettlementEvent{GatewayRequestID: "req-racy", PlatformUserID: racy, Currency: "USD", AmountUnits: 10_000_000})
 	p34WaitOutboxStatus(t, ctx, db, "req-racy", "delivered") // first attempt: lease_contention → MarkOutboxEventFailed (2 s backoff); second: issued → delivered
 	var racyAttempts int
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT attempt_count FROM wallet_settlement_outbox WHERE gateway_request_id = 'req-racy'`).Scan(&racyAttempts))
@@ -156,7 +156,7 @@ func TestPhase34Proto19DispatcherUnderCapShortfallAndContention(t *testing.T) {
 	fake.mu.Lock()
 	fake.grantBelowMinOnce = true // no other row is claimable: only the under user's first ensure sees it
 	fake.mu.Unlock()
-	b.ObserveSettlement(CanonicalWalletSettlementEvent{GatewayRequestID: "req-under", PlatformUserID: under, Currency: "CNY", AmountUnits: 10_000_000})
+	b.ObserveSettlement(CanonicalWalletSettlementEvent{GatewayRequestID: "req-under", PlatformUserID: under, Currency: "USD", AmountUnits: 10_000_000})
 	p34WaitOutboxStatus(t, ctx, db, "req-under", "delivered") // the under-grant splits (H = 9,999,999, remainder 1) and both halves deliver
 	var underAttempts int
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT attempt_count FROM wallet_settlement_outbox WHERE gateway_request_id = 'req-under'`).Scan(&underAttempts))
@@ -184,7 +184,7 @@ func TestPhase34Proto19bDispatcherRecoversABoundLeaseThroughPreferLeaseID(t *tes
 	b := p34DispatcherBridge(t, fake, store, db, outbox, now)
 	// The row is born bound: ObserveSettlement with LeaseID set (BindOutboxEventLease is
 	// claim-guarded and cannot be called by a test that does not own the row).
-	b.ObserveSettlement(CanonicalWalletSettlementEvent{GatewayRequestID: "req-19b", PlatformUserID: user, Currency: "CNY", AmountUnits: 10_000_000, LeaseID: X})
+	b.ObserveSettlement(CanonicalWalletSettlementEvent{GatewayRequestID: "req-19b", PlatformUserID: user, Currency: "USD", AmountUnits: 10_000_000, LeaseID: X})
 	p34WaitOutboxStatus(t, ctx, db, "req-19b", "delivered")
 	fake.mu.Lock()
 	defer fake.mu.Unlock()

@@ -153,7 +153,7 @@ func TestOpenAILiveRestartSurvivalAndRedisLossIntegration(t *testing.T) {
 		UserID:              user.ID,
 		APIKeyID:            apiKey.ID,
 		GroupID:             apiKey.GroupID,
-		BillingCurrency:     "CNY",
+		BillingCurrency:     "USD",
 		RateMultiplier:      1.0,
 		GroupRateMultiplier: 1.5,
 		BillingModel:        "claude-sonnet-4",

@@ -114,12 +114,12 @@ func TestWalletFailoverDrillScenarioA_RedisOutage(t *testing.T) {
 	require.NoError(t, store.InstallCanonicalWalletLease(ctx, CanonicalWalletLease{
 		LeaseID:        leaseID,
 		PlatformUserID: user,
-		Currency:       "CNY",
+		Currency:       "USD",
 		BudgetUnits:    500_000_000,
 		ExpiresAt:      clockNow.Add(30 * time.Minute),
 	}))
 	const heldUnits = int64(50_000_000)
-	_, _, _, err := store.ArmCanonicalWalletHold(ctx, user, leaseID, "CNY", authID, heldUnits, 900_000, clockNow)
+	_, _, _, err := store.ArmCanonicalWalletHold(ctx, user, leaseID, "USD", authID, heldUnits, 900_000, clockNow)
 	require.NoError(t, err)
 
 	outcomeStore := newWalletHoldOutcomeStore(db)
@@ -133,7 +133,7 @@ func TestWalletFailoverDrillScenarioA_RedisOutage(t *testing.T) {
 	// Step 3: Outage-time ensure / authorize fails closed with lease_unavailable
 	_, authErr := authorizer.Authorize(ctx, AuthorizeInput{
 		Snapshot:           snap,
-		User:               &User{PlatformUserID: user, BillingCurrency: "CNY"},
+		User:               &User{PlatformUserID: user, BillingCurrency: "USD"},
 		FixedEstimateUnits: heldUnits,
 	})
 	require.Error(t, authErr, "enforce refuses when Redis is down (fail-closed)")
@@ -147,7 +147,7 @@ func TestWalletFailoverDrillScenarioA_RedisOutage(t *testing.T) {
 	b.ObserveSettlement(CanonicalWalletSettlementEvent{
 		GatewayRequestID:   outageReqID,
 		PlatformUserID:     user,
-		Currency:           "CNY",
+		Currency:           "USD",
 		AmountUnits:        heldUnits,
 		OccurredAt:         clockNow,
 		AuthorizationID:    outageAuthID,
@@ -257,7 +257,7 @@ func TestWalletFailoverDrillScenarioB_ReplicaPromotion(t *testing.T) {
 	require.NoError(t, storePrimary.InstallCanonicalWalletLease(ctx, CanonicalWalletLease{
 		LeaseID:        leaseID,
 		PlatformUserID: user,
-		Currency:       "CNY",
+		Currency:       "USD",
 		BudgetUnits:    500_000_000,
 		ExpiresAt:      clockNow.Add(30 * time.Minute),
 	}))
@@ -267,11 +267,11 @@ func TestWalletFailoverDrillScenarioB_ReplicaPromotion(t *testing.T) {
 	auth2 := "auth-drill-b-2-" + uuid.NewString()
 	auth3 := "auth-drill-b-3-" + uuid.NewString()
 
-	_, _, _, err = storePrimary.ArmCanonicalWalletHold(ctx, user, leaseID, "CNY", auth1, heldUnits, 900_000, clockNow)
+	_, _, _, err = storePrimary.ArmCanonicalWalletHold(ctx, user, leaseID, "USD", auth1, heldUnits, 900_000, clockNow)
 	require.NoError(t, err)
-	_, _, _, err = storePrimary.ArmCanonicalWalletHold(ctx, user, leaseID, "CNY", auth2, heldUnits, 900_000, clockNow)
+	_, _, _, err = storePrimary.ArmCanonicalWalletHold(ctx, user, leaseID, "USD", auth2, heldUnits, 900_000, clockNow)
 	require.NoError(t, err)
-	_, _, _, err = storePrimary.ArmCanonicalWalletHold(ctx, user, leaseID, "CNY", auth3, heldUnits, 900_000, clockNow)
+	_, _, _, err = storePrimary.ArmCanonicalWalletHold(ctx, user, leaseID, "USD", auth3, heldUnits, 900_000, clockNow)
 	require.NoError(t, err)
 
 	outcomeStore := newWalletHoldOutcomeStore(db)
@@ -315,7 +315,7 @@ func TestWalletFailoverDrillScenarioB_ReplicaPromotion(t *testing.T) {
 	b2.ObserveSettlement(CanonicalWalletSettlementEvent{
 		GatewayRequestID:   reqID1,
 		PlatformUserID:     user,
-		Currency:           "CNY",
+		Currency:           "USD",
 		AmountUnits:        heldUnits,
 		OccurredAt:         clockNow,
 		AuthorizationID:    auth1,

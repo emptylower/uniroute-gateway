@@ -74,7 +74,7 @@ func TestPhase36OneEnsurePerExhaustion(t *testing.T) {
 			return p34bAuthorize(t, ctx, config.CanonicalWalletModeEnforce, b, user, `{"max_tokens":64}`)
 		}
 		reserve := func(leaseID string, step int) {
-			_, err := store.ReserveCanonicalWalletLease(ctx, user, leaseID, "CNY", "evt-44-"+itoa(step), E, now)
+			_, err := store.ReserveCanonicalWalletLease(ctx, user, leaseID, "USD", "evt-44-"+itoa(step), E, now)
 			require.NoError(t, err, "step %d", step)
 		}
 
@@ -147,7 +147,7 @@ func TestPhase36OneEnsurePerExhaustion(t *testing.T) {
 		// the arm, §10.4's {4}. Pre-seeded BEFORE the first authorize so the
 		// current pointer ends the setup on the real L1.
 		require.NoError(t, store.InstallCanonicalWalletLease(ctx, CanonicalWalletLease{
-			LeaseID: "srv-lease-2", PlatformUserID: user, Currency: "CNY",
+			LeaseID: "srv-lease-2", PlatformUserID: user, Currency: "USD",
 			BudgetUnits: 500_000_000, ConsumedUnits: 500_000_000, ExpiresAt: now.Add(5 * time.Minute),
 		}))
 
@@ -167,7 +167,7 @@ func TestPhase36OneEnsurePerExhaustion(t *testing.T) {
 		// exhaustion point (test 21's exhaust pattern: reserve the remaining).
 		cur, err := store.GetCanonicalWalletLease(ctx, user)
 		require.NoError(t, err)
-		_, err = store.ReserveCanonicalWalletLease(ctx, user, h1.LeaseID, "CNY", "evt-44h-exhaust", cur.RemainingUnits(), now)
+		_, err = store.ReserveCanonicalWalletLease(ctx, user, h1.LeaseID, "USD", "evt-44h-exhaust", cur.RemainingUnits(), now)
 		require.NoError(t, err)
 
 		// Authorization 2 at the exhaustion point: the sealing ensure issues
@@ -225,13 +225,13 @@ func TestPhase36FailClosedArmsUnpinned(t *testing.T) {
 
 		shadow := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeShadow), &canonicalWalletStoreStub{getErr: outage}, &canonicalWalletControlStub{}, nil, nil, 0, nil)
 		t.Cleanup(shadow.Close)
-		ok, err := shadow.HasCanonicalWalletHeadroom(ctx, "user-45b", "CNY")
+		ok, err := shadow.HasCanonicalWalletHeadroom(ctx, "user-45b", "USD")
 		require.True(t, ok, "shadow never denies admission — the shadow return precedes the error check")
 		require.NoError(t, err)
 
 		enforce := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeEnforce), &canonicalWalletStoreStub{getErr: outage}, &canonicalWalletControlStub{}, nil, nil, 0, nil)
 		t.Cleanup(enforce.Close)
-		ok, err = enforce.HasCanonicalWalletHeadroom(ctx, "user-45b", "CNY")
+		ok, err = enforce.HasCanonicalWalletHeadroom(ctx, "user-45b", "USD")
 		require.False(t, ok)
 		require.ErrorIs(t, err, outage, "a transport error — the existing test pins only ErrCanonicalWalletLeaseMissing here")
 	})
@@ -243,9 +243,9 @@ func TestPhase36FailClosedArmsUnpinned(t *testing.T) {
 		// arm under test is the RESERVE error, not the ensureLease error the
 		// existing test pins.
 		coveringLease := func() *CanonicalWalletLease {
-			return &CanonicalWalletLease{LeaseID: "lease-45c", Currency: "CNY", BudgetUnits: 500_000_000, ExpiresAt: time.Now().Add(5 * time.Minute)}
+			return &CanonicalWalletLease{LeaseID: "lease-45c", Currency: "USD", BudgetUnits: 500_000_000, ExpiresAt: time.Now().Add(5 * time.Minute)}
 		}
-		event := CanonicalWalletSettlementEvent{GatewayRequestID: "req-45c", PlatformUserID: "user-45c", Currency: "CNY", AmountUnits: 100}
+		event := CanonicalWalletSettlementEvent{GatewayRequestID: "req-45c", PlatformUserID: "user-45c", Currency: "USD", AmountUnits: 100}
 
 		shadow := newCanonicalWalletBridge(canonicalWalletTestConfig(config.CanonicalWalletModeShadow), &canonicalWalletStoreStub{lease: coveringLease(), reserveErr: reserveFailure}, &canonicalWalletControlStub{}, nil, nil, 0, nil)
 		t.Cleanup(shadow.Close)
@@ -276,15 +276,15 @@ func TestPhase36FailClosedArmsUnpinned(t *testing.T) {
 		require.Nil(t, h.Refusal)
 		require.Equal(t, "", h.LeaseID, "the handle carries only its id")
 
-		ok, err := b.HasCanonicalWalletHeadroom(ctx, user, "CNY")
+		ok, err := b.HasCanonicalWalletHeadroom(ctx, user, "USD")
 		require.True(t, ok)
 		require.NoError(t, err)
 
-		allowed, err := b.CheckAndReserve(ctx, CanonicalWalletSettlementEvent{GatewayRequestID: "req-45d", PlatformUserID: user, Currency: "CNY", AmountUnits: 100})
+		allowed, err := b.CheckAndReserve(ctx, CanonicalWalletSettlementEvent{GatewayRequestID: "req-45d", PlatformUserID: user, Currency: "USD", AmountUnits: 100})
 		require.True(t, allowed)
 		require.NoError(t, err)
 
-		require.False(t, b.ObserveSettlement(CanonicalWalletSettlementEvent{GatewayRequestID: "req-45d-obs", PlatformUserID: user, Currency: "CNY", AmountUnits: 100}), "disabled mode observes nothing")
+		require.False(t, b.ObserveSettlement(CanonicalWalletSettlementEvent{GatewayRequestID: "req-45d-obs", PlatformUserID: user, Currency: "USD", AmountUnits: 100}), "disabled mode observes nothing")
 
 		require.Equal(t, 0, store.getCalls)
 		require.Equal(t, 0, store.installCalls)
