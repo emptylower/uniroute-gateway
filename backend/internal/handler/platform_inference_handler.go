@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"strconv"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
@@ -14,6 +15,11 @@ type PlatformInferenceHandler struct{ service *service.MediaTaskService }
 func NewPlatformInferenceHandler(s *service.MediaTaskService) *PlatformInferenceHandler {
 	return &PlatformInferenceHandler{service: s}
 }
+
+func (h *PlatformInferenceHandler) PlaygroundKey(ctx context.Context, userID int64) (*service.APIKey, error) {
+	return h.service.PlaygroundKey(ctx, userID)
+}
+
 func (h *PlatformInferenceHandler) Catalog(c *gin.Context) {
 	response.Success(c, gin.H{"models": service.MediaTaskCatalog(), "currency": "USD", "policy_version": "usd-wallet-v1", "enabled": h.service.Enabled()})
 }
