@@ -63,7 +63,8 @@ func TestCanonicalWalletOutboxDispatcherDeliversEndToEnd(t *testing.T) {
 
 	cfg := canonicalWalletTestConfig(config.CanonicalWalletModeEnforce)
 	cfg.ControlPlaneURL, cfg.Secret = controlPlane.URL, strings.Repeat("s", 32)
-	cfg.RequestTimeoutMS = 100 // dispatcher tick interval for this test
+	cfg.LeaseBudgetUnits = 500_000_000 // above the 0.30 USD settlement, so requested_budget stays the configured budget
+	cfg.RequestTimeoutMS = 100         // dispatcher tick interval for this test
 
 	client := newCanonicalWalletHTTPClient(cfg, controlPlane.Client())
 	bridge := newCanonicalWalletBridge(cfg, store, client, db, outbox, 0, nil)

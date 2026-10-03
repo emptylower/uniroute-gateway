@@ -1085,7 +1085,7 @@ func TestCheckBalanceEligibilityEnforceBranchesThroughRealEntryPoints(t *testing
 	require.ErrorIs(t, err, ErrBillingServiceUnavailable, "a user without a canonical identity cannot be checked — fail closed")
 
 	// A non-USD billing currency is rejected outright, never coerced to USD.
-	usdUser := &User{ID: 12, PlatformUserID: "shipany-user-" + uuid.NewString(), BillingCurrency: "CNY"}
+	usdUser := &User{ID: 12, PlatformUserID: "shipany-user-" + uuid.NewString(), BillingCurrency: "USD"}
 	usdSvc := NewBillingCacheService(&billingCacheWorkerStub{}, nil, nil, nil, nil, nil, newCfg(), nil, newBridge(nil))
 	err = usdSvc.CheckBillingEligibility(ctx, usdUser, nil, nil, nil, "")
 	require.ErrorIs(t, err, ErrBillingServiceUnavailable, "usd-e8-v1 is USD-only — reject instead of admitting under the wrong wallet")

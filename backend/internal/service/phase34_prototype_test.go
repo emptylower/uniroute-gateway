@@ -46,9 +46,9 @@ func TestPhase34Proto15aSealRefusesNewReservationsButHonoursMarkers(t *testing.T
 	user := "shipany-user-" + uuid.NewString()
 	expires := time.Now().UTC().Add(10 * time.Second)
 	require.NoError(t, store.InstallCanonicalWalletLease(ctx, CanonicalWalletLease{
-		LeaseID: "lease-seal", PlatformUserID: user, Currency: "CNY", BudgetUnits: 500_000_000, ExpiresAt: expires,
+		LeaseID: "lease-seal", PlatformUserID: user, Currency: "USD", BudgetUnits: 500_000_000, ExpiresAt: expires,
 	}))
-	_, err := store.ReserveCanonicalWalletLease(ctx, user, "lease-seal", "CNY", "evt-before", 30_000_000, time.Now().UTC())
+	_, err := store.ReserveCanonicalWalletLease(ctx, user, "lease-seal", "USD", "evt-before", 30_000_000, time.Now().UTC())
 	require.NoError(t, err)
 
 	pre, releasedUnits, err := store.SealCanonicalWalletLease(ctx, user, "lease-seal")
@@ -62,10 +62,10 @@ func TestPhase34Proto15aSealRefusesNewReservationsButHonoursMarkers(t *testing.T
 	_, err = store.GetCanonicalWalletLease(ctx, user)
 	require.ErrorIs(t, err, ErrCanonicalWalletLeaseMissing, "the current pointer is deleted by the seal")
 
-	_, err = store.ReserveCanonicalWalletLease(ctx, user, "lease-seal", "CNY", "evt-after", 1, time.Now().UTC())
+	_, err = store.ReserveCanonicalWalletLease(ctx, user, "lease-seal", "USD", "evt-after", 1, time.Now().UTC())
 	require.ErrorIs(t, err, ErrCanonicalWalletLeaseExhausted, "a new reservation on a sealed lease is refused")
 
-	dup, err := store.ReserveCanonicalWalletLease(ctx, user, "lease-seal", "CNY", "evt-before", 30_000_000, time.Now().UTC())
+	dup, err := store.ReserveCanonicalWalletLease(ctx, user, "lease-seal", "USD", "evt-before", 30_000_000, time.Now().UTC())
 	require.NoError(t, err)
 	require.True(t, dup.Duplicate, "a retry carrying its marker still succeeds on the sealed lease")
 
@@ -86,14 +86,14 @@ func TestPhase34Proto18SkewMarginTreatsNearExpiryAsExpired(t *testing.T) {
 	wall := time.Now().UTC()
 	expires := wall.Add(10 * time.Second) // Redis keeps the key alive for the whole test
 	require.NoError(t, store.InstallCanonicalWalletLease(ctx, CanonicalWalletLease{
-		LeaseID: "lease-margin", PlatformUserID: user, Currency: "CNY", BudgetUnits: 500_000_000, ExpiresAt: expires,
+		LeaseID: "lease-margin", PlatformUserID: user, Currency: "USD", BudgetUnits: 500_000_000, ExpiresAt: expires,
 	}))
 	control := &canonicalWalletControlStub{} // records ensure calls; returns a fresh lease when asked
 
 	// 50 ms before expiry, inside the 100 ms margin → expired → ensure is called.
-	control.lease = CanonicalWalletLease{LeaseID: "lease-fresh", PlatformUserID: user, Currency: "CNY", BudgetUnits: 500_000_000, ExpiresAt: expires.Add(time.Minute)}
+	control.lease = CanonicalWalletLease{LeaseID: "lease-fresh", PlatformUserID: user, Currency: "USD", BudgetUnits: 500_000_000, ExpiresAt: expires.Add(time.Minute)}
 	b := p34Bridge(t, ctx, config.CanonicalWalletModeEnforce, store, control, expires.Add(-50*time.Millisecond))
-	lease, err := b.ensureLease(ctx, user, "CNY", 1_000_000, canonicalWalletLeasePurposeAuthorize, "")
+	lease, err := b.ensureLease(ctx, user, "USD", 1_000_000, canonicalWalletLeasePurposeAuthorize, "")
 	require.NoError(t, err)
 	require.Equal(t, "lease-fresh", lease.LeaseID)
 	require.Equal(t, 1, control.ensureCalls)
@@ -101,10 +101,10 @@ func TestPhase34Proto18SkewMarginTreatsNearExpiryAsExpired(t *testing.T) {
 	// 150 ms before expiry, outside the margin → cache hit, no ensure.
 	control2 := &canonicalWalletControlStub{}
 	require.NoError(t, store.InstallCanonicalWalletLease(ctx, CanonicalWalletLease{
-		LeaseID: "lease-margin-2", PlatformUserID: user + "-b", Currency: "CNY", BudgetUnits: 500_000_000, ExpiresAt: expires,
+		LeaseID: "lease-margin-2", PlatformUserID: user + "-b", Currency: "USD", BudgetUnits: 500_000_000, ExpiresAt: expires,
 	}))
 	b2 := p34Bridge(t, ctx, config.CanonicalWalletModeEnforce, store, control2, expires.Add(-150*time.Millisecond))
-	lease, err = b2.ensureLease(ctx, user+"-b", "CNY", 1_000_000, canonicalWalletLeasePurposeAuthorize, "")
+	lease, err = b2.ensureLease(ctx, user+"-b", "USD", 1_000_000, canonicalWalletLeasePurposeAuthorize, "")
 	require.NoError(t, err)
 	require.Equal(t, "lease-margin-2", lease.LeaseID)
 	require.Equal(t, 0, control2.ensureCalls)
@@ -134,9 +134,9 @@ func p34HTTPBridge(t *testing.T, ctx context.Context, fake *fakeEnsureControlPla
 // not verify (captured ≠ the reported consumed) unless captured == 450,000,000.
 func p34Fill(t *testing.T, ctx context.Context, b *CanonicalWalletBridge, store CanonicalWalletLeaseStore, fake *fakeEnsureControlPlane, user, tag string, captured int64, now time.Time) *CanonicalWalletLease {
 	t.Helper()
-	l, err := b.ensureLease(ctx, user, "CNY", 100_000_000, canonicalWalletLeasePurposeAuthorize, "")
+	l, err := b.ensureLease(ctx, user, "USD", 100_000_000, canonicalWalletLeasePurposeAuthorize, "")
 	require.NoError(t, err)
-	_, err = store.ReserveCanonicalWalletLease(ctx, user, l.LeaseID, "CNY", "evt-"+tag, 450_000_000, now)
+	_, err = store.ReserveCanonicalWalletLease(ctx, user, l.LeaseID, "USD", "evt-"+tag, 450_000_000, now)
 	require.NoError(t, err)
 	fake.setCaptured(user, l.LeaseID, captured)
 	return l
@@ -156,11 +156,11 @@ func TestPhase34Proto14RedisLossReinstallsCoveringLease(t *testing.T) {
 	fake.fund(user, 10_000_000_000)
 	b := p34HTTPBridge(t, ctx, fake, store, now)
 
-	first, err := b.ensureLease(ctx, user, "CNY", 100_000_000, canonicalWalletLeasePurposeAuthorize, "")
+	first, err := b.ensureLease(ctx, user, "USD", 100_000_000, canonicalWalletLeasePurposeAuthorize, "")
 	require.NoError(t, err)
 	require.Equal(t, 1, fake.issuances)
 	// live gateway reservations before the loss: 200,000,000 held locally …
-	_, err = store.ReserveCanonicalWalletLease(ctx, user, first.LeaseID, "CNY", "evt-live", 200_000_000, now)
+	_, err = store.ReserveCanonicalWalletLease(ctx, user, first.LeaseID, "USD", "evt-live", 200_000_000, now)
 	require.NoError(t, err)
 	// … of which 100,000,000 has been captured on the server, so the bound
 	// below is budget − captured = 400,000,000 and not merely budget.
@@ -168,7 +168,7 @@ func TestPhase34Proto14RedisLossReinstallsCoveringLease(t *testing.T) {
 
 	require.NoError(t, rdb.FlushAll(ctx).Err()) // the loss
 
-	again, err := b.ensureLease(ctx, user, "CNY", 100_000_000, canonicalWalletLeasePurposeAuthorize, "")
+	again, err := b.ensureLease(ctx, user, "USD", 100_000_000, canonicalWalletLeasePurposeAuthorize, "")
 	require.NoError(t, err)
 	require.Equal(t, first.LeaseID, again.LeaseID, "reused, not issued")
 	require.Equal(t, 1, fake.issuances, "zero issuance on a Redis loss with a covering lease")
@@ -177,13 +177,13 @@ func TestPhase34Proto14RedisLossReinstallsCoveringLease(t *testing.T) {
 	require.Equal(t, int64(400_000_000), again.RemainingUnits(), "budget − captured is the re-authorizable bound")
 
 	// The gateway can reserve up to budget − captured again, and no more.
-	_, err = store.ReserveCanonicalWalletLease(ctx, user, first.LeaseID, "CNY", "evt-post-1", 400_000_000, now)
+	_, err = store.ReserveCanonicalWalletLease(ctx, user, first.LeaseID, "USD", "evt-post-1", 400_000_000, now)
 	require.NoError(t, err)
-	_, err = store.ReserveCanonicalWalletLease(ctx, user, first.LeaseID, "CNY", "evt-post-2", 1, now)
+	_, err = store.ReserveCanonicalWalletLease(ctx, user, first.LeaseID, "USD", "evt-post-2", 1, now)
 	require.ErrorIs(t, err, ErrCanonicalWalletLeaseExhausted)
 
 	// Monotone install: a reinstall with a LOWER consumed never lowers Redis's consumed.
-	require.NoError(t, store.InstallCanonicalWalletLease(ctx, CanonicalWalletLease{LeaseID: first.LeaseID, PlatformUserID: user, Currency: "CNY", BudgetUnits: first.BudgetUnits, ConsumedUnits: 0, ExpiresAt: first.ExpiresAt}))
+	require.NoError(t, store.InstallCanonicalWalletLease(ctx, CanonicalWalletLease{LeaseID: first.LeaseID, PlatformUserID: user, Currency: "USD", BudgetUnits: first.BudgetUnits, ConsumedUnits: 0, ExpiresAt: first.ExpiresAt}))
 	cur, err := store.GetCanonicalWalletLeaseByID(ctx, user, first.LeaseID)
 	require.NoError(t, err)
 	require.Equal(t, int64(500_000_000), cur.ConsumedUnits, "max(current, incoming) kept consumed at the budget")
@@ -226,17 +226,17 @@ func TestPhase34Proto15ExhaustionSealsDrainsAndHitsTheCap(t *testing.T) {
 	require.Equal(t, 3, fake.issuances)
 
 	// at the cap (l1, l2, l3 all slot-holding): authorize refuses, settle issues
-	_, err = b.ensureLease(ctx, user, "CNY", 100_000_000, canonicalWalletLeasePurposeAuthorize, "")
+	_, err = b.ensureLease(ctx, user, "USD", 100_000_000, canonicalWalletLeasePurposeAuthorize, "")
 	require.ErrorIs(t, err, ErrCanonicalWalletLeaseCapReached)
 	require.Equal(t, 3, fake.issuances)
-	l4, err := b.ensureLease(ctx, user, "CNY", 100_000_000, canonicalWalletLeasePurposeSettle, "")
+	l4, err := b.ensureLease(ctx, user, "USD", 100_000_000, canonicalWalletLeasePurposeSettle, "")
 	require.NoError(t, err)
 	require.Equal(t, 4, fake.issuances)
 	require.Equal(t, "settle", fake.purpose(user, l4.LeaseID))
 
 	// lease_contention is transient: surfaced as its own error, nothing installed
 	fake.setContentionOnce()
-	_, err = b.ensureLease(ctx, user+"-c", "CNY", 1, canonicalWalletLeasePurposeAuthorize, "")
+	_, err = b.ensureLease(ctx, user+"-c", "USD", 1, canonicalWalletLeasePurposeAuthorize, "")
 	require.ErrorIs(t, err, ErrCanonicalWalletLeaseContention)
 	_, err = store.GetCanonicalWalletLease(ctx, user+"-c")
 	require.ErrorIs(t, err, ErrCanonicalWalletLeaseMissing, "the refused ensure installed nothing for that user")
@@ -264,7 +264,7 @@ func TestPhase34Proto15DrainOpensTheSlotWhenCapturedEqualsConsumed(t *testing.T)
 	// the next ensure seals l3 (pre-seal consumed 450,000,000), drains it, and
 	// the server verifies 450,000,000 == 450,000,000 → closed in the same
 	// transaction → the slot opens → issued.
-	l5, err := b.ensureLease(ctx, user, "CNY", 100_000_000, canonicalWalletLeasePurposeAuthorize, "")
+	l5, err := b.ensureLease(ctx, user, "USD", 100_000_000, canonicalWalletLeasePurposeAuthorize, "")
 	require.NoError(t, err)
 	require.Equal(t, "closed", fake.status(user, l3.LeaseID), "the drain verified")
 	require.Equal(t, 4, fake.issuances, "the slot opened in the same transaction")
@@ -293,7 +293,7 @@ func TestPhase34Proto15aDrainWithoutSealDoesNotClose(t *testing.T) {
 	client := newCanonicalWalletHTTPClient(cfg, fake.Server.Client())
 	// a drain claiming consumed == 0 (an unsealed, stale read) must not close it
 	res, err := client.EnsureLease(ctx, canonicalWalletEnsureRequest{
-		PlatformUserID: user, Currency: "CNY", Purpose: "authorize", MinHeadroom: newCanonicalWalletAmountObject(1), RequestedBudget: newCanonicalWalletAmountObject(500_000_000), RequestedTTLSeconds: 300,
+		PlatformUserID: user, Currency: "USD", Purpose: "authorize", MinHeadroom: newCanonicalWalletAmountObject(1), RequestedBudget: newCanonicalWalletAmountObject(500_000_000), RequestedTTLSeconds: 300,
 		Drained: []canonicalWalletDrainEntry{{LeaseID: "srv-a", GatewayConsumed: newCanonicalWalletAmountObject(0)}}, CallerSlotTTLSeconds: 1800,
 	})
 	require.NoError(t, err)
@@ -318,18 +318,24 @@ func TestPhase34Proto17DenseRisingFixture(t *testing.T) {
 	const cny = int64(100_000_000)
 	for i, amountCNY := range []int64{6, 7, 8, 9, 10, 11, 12, 13} {
 		amount := amountCNY * cny
-		lease, err := b.ensureLease(ctx, user, "CNY", amount, canonicalWalletLeasePurposeAuthorize, "")
+		lease, err := b.ensureLease(ctx, user, "USD", amount, canonicalWalletLeasePurposeAuthorize, "")
 		require.NoError(t, err, "event %d", i)
 		require.GreaterOrEqual(t, lease.RemainingUnits(), amount, "headroom covers the amount")
 		req := fake.requests[len(fake.requests)-1]
 		require.Equal(t, amount, mustUnits(req.MinHeadroom), "never a request below the amount")
-		require.Equal(t, int64(500_000_000), mustUnits(req.RequestedBudget), "requested_budget is the configured lease budget; the server takes the max")
+		// The client asks for max(configured budget, amount): the 6..13 USD events here
+		// exceed the 5 USD configured budget, so each request is its own amount.
+		wantBudget := int64(500_000_000)
+		if amount > wantBudget {
+			wantBudget = amount
+		}
+		require.Equal(t, wantBudget, mustUnits(req.RequestedBudget), "requested_budget is max(configured lease budget, amount)")
 		require.Equal(t, amount, lease.BudgetUnits, "never a doubled budget: budget == max(cfg, amount) == amount here")
 		// exhaust it on the gateway and settle it FULLY on the server: captured == the
 		// pre-seal consumed, so this lease's drain VERIFIES on the next ensure and it is
 		// closed — the next, larger ask issues against an empty slot set. (A second,
 		// independent proof of the drain-close path beside test 15's drain half.)
-		_, err = store.ReserveCanonicalWalletLease(ctx, user, lease.LeaseID, "CNY", "evt-"+itoa(i), amount, now)
+		_, err = store.ReserveCanonicalWalletLease(ctx, user, lease.LeaseID, "USD", "evt-"+itoa(i), amount, now)
 		require.NoError(t, err)
 		fake.setCaptured(user, lease.LeaseID, amount)
 	}
@@ -349,7 +355,7 @@ func TestPhase34Proto20ExplicitIDBranchRecoversThroughPreferLeaseID(t *testing.T
 	fake.fund(user, 10_000_000_000)
 	b := p34HTTPBridge(t, ctx, fake, store, now)
 
-	first := CanonicalWalletSettlementEvent{GatewayRequestID: "req-retry", PlatformUserID: user, Currency: "CNY", AmountUnits: 100_000_000}
+	first := CanonicalWalletSettlementEvent{GatewayRequestID: "req-retry", PlatformUserID: user, Currency: "USD", AmountUnits: 100_000_000}
 	allowed, err := b.CheckAndReserve(ctx, first)
 	require.NoError(t, err)
 	require.True(t, allowed)
@@ -385,31 +391,31 @@ func TestPhase34Proto21UnverifiedDrainMarksTheLeaseAndTheCapIsHonest(t *testing.
 	fake.fund(user, 100_000_000_000)
 	b := p34HTTPBridge(t, ctx, fake, store, now)
 	exhaust := func(l *CanonicalWalletLease, tag string) { // gateway-only exhaustion: reserve the whole budget, capture nothing on the server
-		_, err := store.ReserveCanonicalWalletLease(ctx, user, l.LeaseID, "CNY", "evt-"+tag, l.BudgetUnits, now)
+		_, err := store.ReserveCanonicalWalletLease(ctx, user, l.LeaseID, "USD", "evt-"+tag, l.BudgetUnits, now)
 		require.NoError(t, err)
 	}
-	l1, err := b.ensureLease(ctx, user, "CNY", 100_000_000, canonicalWalletLeasePurposeAuthorize, "")
+	l1, err := b.ensureLease(ctx, user, "USD", 100_000_000, canonicalWalletLeasePurposeAuthorize, "")
 	require.NoError(t, err)
 	exhaust(l1, "1")
-	l2, err := b.ensureLease(ctx, user, "CNY", 100_000_000, canonicalWalletLeasePurposeAuthorize, "")
+	l2, err := b.ensureLease(ctx, user, "USD", 100_000_000, canonicalWalletLeasePurposeAuthorize, "")
 	require.NoError(t, err)
 	require.NotEqual(t, l1.LeaseID, l2.LeaseID, "§4's livelock: the drained lease is marked, never reused")
 	require.NotNil(t, fake.drainedAt(user, l1.LeaseID))
 	require.Equal(t, 2, fake.issuances)
 	exhaust(l2, "2")
-	l3, err := b.ensureLease(ctx, user, "CNY", 100_000_000, canonicalWalletLeasePurposeAuthorize, "")
+	l3, err := b.ensureLease(ctx, user, "USD", 100_000_000, canonicalWalletLeasePurposeAuthorize, "")
 	require.NoError(t, err)
 	require.NotEqual(t, l1.LeaseID, l3.LeaseID, "the round-1 alternation: L1 must not come back")
 	require.NotEqual(t, l2.LeaseID, l3.LeaseID)
 	exhaust(l3, "3")
-	_, err = b.ensureLease(ctx, user, "CNY", 100_000_000, canonicalWalletLeasePurposeAuthorize, "")
+	_, err = b.ensureLease(ctx, user, "USD", 100_000_000, canonicalWalletLeasePurposeAuthorize, "")
 	require.ErrorIs(t, err, ErrCanonicalWalletLeaseCapReached, "three marked, slot-holding leases → the cap, honestly")
 	require.Equal(t, 3, fake.issuances)
 	// Resolution: the server captures L1's whole budget. The previous refusal already
 	// sealed L3 and deleted the current pointer, so this call sends NO drain at all;
 	// L1's early close (captured == budget) is what frees the slot.
 	fake.setCaptured(user, l1.LeaseID, l1.BudgetUnits)
-	l4, err := b.ensureLease(ctx, user, "CNY", 100_000_000, canonicalWalletLeasePurposeAuthorize, "")
+	l4, err := b.ensureLease(ctx, user, "USD", 100_000_000, canonicalWalletLeasePurposeAuthorize, "")
 	require.NoError(t, err)
 	require.Equal(t, "closed", fake.status(user, l1.LeaseID))
 	require.Equal(t, 4, fake.issuances)

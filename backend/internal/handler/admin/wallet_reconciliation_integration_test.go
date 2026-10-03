@@ -111,7 +111,7 @@ func TestWalletReconciliationWireThroughGin(t *testing.T) {
 	// current lease for U in Redis through the REAL cache writer.
 	seedOutboxRow(t, db, user, "gwusg_69w_d1", "lease-69w-a", "delivered", "", 1_000000, now)
 	require.NoError(t, leaseWriter.InstallCanonicalWalletLease(ctx, service.CanonicalWalletLease{
-		LeaseID: "lease-69w-current", PlatformUserID: user, Currency: "CNY",
+		LeaseID: "lease-69w-current", PlatformUserID: user, Currency: "USD",
 		BudgetUnits: 500_000000, ConsumedUnits: 1_000000, ExpiresAt: now.Add(10 * time.Minute),
 	}))
 
@@ -206,7 +206,7 @@ func TestWalletReconciliationWireThroughGin(t *testing.T) {
 		bridge.ObserveSettlement(service.CanonicalWalletSettlementEvent{
 			GatewayRequestID: "req-drop-recon69",
 			PlatformUserID:   user,
-			Currency:         "CNY",
+			Currency:         "USD",
 			AmountUnits:      100,
 		})
 
@@ -258,7 +258,7 @@ func TestWalletReconciliationWireThroughGin(t *testing.T) {
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO wallet_settlement_outbox
 			(event_id, platform_user_id, gateway_request_id, currency, amount_units, payload_hash, status, occurred_at)
-		VALUES ($1, $2, $3, 'CNY', 1000, 'hash-69w', 'pending', $4)`)
+		VALUES ($1, $2, $3, 'USD', 1000, 'hash-69w', 'pending', $4)`)
 	require.NoError(t, err)
 	for i := 0; i < 5001; i++ {
 		_, err := stmt.ExecContext(ctx, fmt.Sprintf("gwusg_69w_t%04d", i), truncUser, fmt.Sprintf("req-69w-t%04d", i), occurred)
@@ -353,7 +353,7 @@ func seedOutboxRow(t *testing.T, db *sql.DB, user, eventID, leaseID, status, rea
 	_, err := db.ExecContext(context.Background(), `
 		INSERT INTO wallet_settlement_outbox
 			(event_id, platform_user_id, lease_id, gateway_request_id, currency, amount_units, payload_hash, status, occurred_at, delivered_at, dead_letter_reason)
-		VALUES ($1, $2, $3, $4, 'CNY', $5, 'hash-69w', $6, $7, $8, $9)`,
+		VALUES ($1, $2, $3, $4, 'USD', $5, 'hash-69w', $6, $7, $8, $9)`,
 		eventID, user, leaseID, "req-"+eventID, amount, status, now.Add(-30*time.Minute), deliveredAt, deadReason)
 	require.NoError(t, err)
 }
@@ -482,7 +482,7 @@ func seedOutboxRow76e(t *testing.T, db *sql.DB, user, eventID, leaseID, snapshot
 	_, err := db.ExecContext(context.Background(), `
 		INSERT INTO wallet_settlement_outbox
 			(event_id, platform_user_id, lease_id, gateway_request_id, currency, amount_units, payload_hash, status, occurred_at, delivered_at, billing_snapshot_id)
-		VALUES ($1, $2, $3, $4, 'CNY', $5, 'hash-76e', 'delivered', $6, $7, NULLIF($8, ''))`,
+		VALUES ($1, $2, $3, $4, 'USD', $5, 'hash-76e', 'delivered', $6, $7, NULLIF($8, ''))`,
 		eventID, user, leaseID, "req-"+eventID, amount, now.Add(-30*time.Minute), now.Add(-time.Minute), snapshotID)
 	require.NoError(t, err)
 }

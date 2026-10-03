@@ -334,7 +334,7 @@ func (f *liveWindowFixture) createSessionFunded(t *testing.T, fundUnits int64) (
 		APIKey:          f.apiKey,
 		User:            f.user,
 		GroupID:         f.apiKey.GroupID,
-		BillingCurrency: "CNY",
+		BillingCurrency: "USD",
 		RateMultiplier:  1.0,
 		BillingModel:    "claude-sonnet-4",
 	}, 5)
@@ -572,7 +572,7 @@ func TestPhase37bWindowsCloseSettleAndReauthorize(t *testing.T) {
 		// The outbox row: window 1's event id is the session id, the amount is
 		// A_1, the authorization is T(1), delivered through the fake.
 		T1 := prov.Token
-		eventID := CanonicalWalletSettlementEventID(callHash, f.user.PlatformUserID, "CNY")
+		eventID := CanonicalWalletSettlementEventID(callHash, f.user.PlatformUserID, "USD")
 		f.waitDeliveredThroughFake(t, eventID, 15*time.Second)
 		row := f.outboxRow(t, eventID)
 		require.Equal(t, callHash, row.GatewayID)
@@ -606,7 +606,7 @@ func TestPhase37bWindowsCloseSettleAndReauthorize(t *testing.T) {
 		require.Equal(t, int64(0), prov.Windows[0].PendingUnits)
 
 		// No outbox row for the idle window — none is expected (§13.2.3).
-		eventID := CanonicalWalletSettlementEventID(callHash, f.user.PlatformUserID, "CNY")
+		eventID := CanonicalWalletSettlementEventID(callHash, f.user.PlatformUserID, "USD")
 		require.Equal(t, 0, f.outboxRowCount(t, eventID))
 		require.Equal(t, int64(0), canonicalWalletBridgeMetrics.outboxPayloadConflict.Load()-conflictsBefore)
 
@@ -679,9 +679,9 @@ func TestPhase37bWindowsCloseSettleAndReauthorize(t *testing.T) {
 			"Σ settled == units(total)")
 
 		// Three distinct event ids: window 1 = the session id, 2–3 = :window:n.
-		id1 := CanonicalWalletSettlementEventID(callHash, f.user.PlatformUserID, "CNY")
-		id2 := CanonicalWalletSettlementEventID(liveWindowRequestID(callHash, 2), f.user.PlatformUserID, "CNY")
-		id3 := CanonicalWalletSettlementEventID(liveWindowRequestID(callHash, 3), f.user.PlatformUserID, "CNY")
+		id1 := CanonicalWalletSettlementEventID(callHash, f.user.PlatformUserID, "USD")
+		id2 := CanonicalWalletSettlementEventID(liveWindowRequestID(callHash, 2), f.user.PlatformUserID, "USD")
+		id3 := CanonicalWalletSettlementEventID(liveWindowRequestID(callHash, 3), f.user.PlatformUserID, "USD")
 		require.Equal(t, 1, f.outboxRowCount(t, id1))
 		require.Equal(t, 1, f.outboxRowCount(t, id2))
 		require.Equal(t, 1, f.outboxRowCount(t, id3))
@@ -741,7 +741,7 @@ func TestPhase37bLastWindowSettlesAtFinalization(t *testing.T) {
 	require.NoError(t, err)
 	remainder := totalUnits - prov.Windows[0].SettledUnits - prov.Windows[1].SettledUnits
 	require.Equal(t, f.unitsForTokens(t, rec, 0, tailTokens, 0), remainder)
-	id3 := CanonicalWalletSettlementEventID(liveWindowRequestID(callHash, 3), f.user.PlatformUserID, "CNY")
+	id3 := CanonicalWalletSettlementEventID(liveWindowRequestID(callHash, 3), f.user.PlatformUserID, "USD")
 	f.waitDeliveredThroughFake(t, id3, 15*time.Second)
 	row := f.outboxRow(t, id3)
 	require.Equal(t, liveWindowRequestID(callHash, 3), row.GatewayID)
@@ -811,7 +811,7 @@ func TestPhase37bCrashBetweenPendingAndAdvanceReissuesSameAmount(t *testing.T) {
 	require.Equal(t, int64(0), prov.Windows[0].PendingUnits)
 
 	// Exactly one outbox row for window 1 — the duplicate submission deduped.
-	eventID := CanonicalWalletSettlementEventID(callHash, f.user.PlatformUserID, "CNY")
+	eventID := CanonicalWalletSettlementEventID(callHash, f.user.PlatformUserID, "USD")
 	require.Equal(t, 1, f.outboxRowCount(t, eventID))
 	require.Equal(t, persisted, f.outboxRow(t, eventID).Amount)
 	require.Equal(t, int64(0), canonicalWalletBridgeMetrics.outboxPayloadConflict.Load()-conflictsBefore, "no payload conflict from the re-issue")
@@ -1009,7 +1009,7 @@ func TestPhase37bRefusedReauthorizations(t *testing.T) {
 
 		// The row finalizes; the last window settles the tail with no hold.
 		require.Equal(t, LiveProvisionalStatusFinalized, prov.Status)
-		eventID1 := CanonicalWalletSettlementEventID(callHash1, f1.user.PlatformUserID, "CNY")
+		eventID1 := CanonicalWalletSettlementEventID(callHash1, f1.user.PlatformUserID, "USD")
 		f1.waitDeliveredThroughFake(t, eventID1, 5*time.Second)
 		require.Empty(t, f1.holdIDs(t), "no armed hold remains — the last window settled with no hold")
 
@@ -1188,7 +1188,7 @@ func TestPhase37bDisconnectedSideband(t *testing.T) {
 		require.Equal(t, int64(0), p.Windows[0].PendingUnits)
 		time.Sleep(200 * time.Millisecond)
 	}
-	require.Zero(t, f.outboxRowCount(t, CanonicalWalletSettlementEventID(callHash, f.user.PlatformUserID, "CNY")), "no settlement during the outage")
+	require.Zero(t, f.outboxRowCount(t, CanonicalWalletSettlementEventID(callHash, f.user.PlatformUserID, "USD")), "no settlement during the outage")
 	attempts := atomic.LoadInt32(&flaky.attempts)
 	require.GreaterOrEqual(t, attempts, int32(5), "the observer keeps retrying (under-runs are diagnosable)")
 	require.LessOrEqual(t, attempts, int32(9), "the retry cadence is the one-second waitForLiveObserverRetry")
@@ -1333,7 +1333,7 @@ func TestPhase37bLiveClockSplitIsPinned(t *testing.T) {
 	require.Equal(t, LiveProvisionalStatusFinalized, prov.Status, "the row finalizes after session.closed")
 
 	// 3. Settlement occurred_at stays wall-clock (openai_live.go:1608)
-	id2 := CanonicalWalletSettlementEventID(liveWindowRequestID(callHash, 2), f.user.PlatformUserID, "CNY")
+	id2 := CanonicalWalletSettlementEventID(liveWindowRequestID(callHash, 2), f.user.PlatformUserID, "USD")
 	f.waitDeliveredThroughFake(t, id2, 15*time.Second)
 
 	var occurredAt time.Time

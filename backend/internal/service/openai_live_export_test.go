@@ -351,7 +351,7 @@ func NewSnapshotTestFixtureForTest(t testing.TB) (*BillingSnapshotService, *APIK
 	svc.now = func() time.Time { return time.Date(2026, 8, 27, 3, 0, 0, 0, time.UTC) }
 	group := &Group{ID: 7, RateMultiplier: 1.5, ImageRateIndependent: true, ImageRateMultiplier: 2.5}
 	gid := int64(7)
-	user := &User{ID: 42, BillingCurrency: "CNY"}
+	user := &User{ID: 42, BillingCurrency: "USD"}
 	apiKey := &APIKey{ID: 11, GroupID: &gid, Group: group, User: user}
 	rate := 1.25
 	account := &Account{

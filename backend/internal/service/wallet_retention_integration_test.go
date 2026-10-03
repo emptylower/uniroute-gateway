@@ -77,25 +77,25 @@ func TestWalletRetentionPruners(t *testing.T) {
 	termOld := now.Add(-50 * 24 * time.Hour)
 	require.NoError(t, live.Save(ctx, &LiveProvisionalRecord{
 		Token: "live_71_old_aborted", AuthorizationID: "auth_live_old_ab", PlatformUserID: user,
-		UserID: 1, APIKeyID: 1, AccountID: 1, BillingCurrency: "CNY", Status: LiveProvisionalStatusAborted,
+		UserID: 1, APIKeyID: 1, AccountID: 1, BillingCurrency: "USD", Status: LiveProvisionalStatusAborted,
 		CreatedAt: termOld, TerminalAt: &termOld,
 	}))
 	require.NoError(t, live.Save(ctx, &LiveProvisionalRecord{
 		Token: "live_71_old_finalized", AuthorizationID: "auth_live_old_fin", PlatformUserID: user,
-		UserID: 1, APIKeyID: 1, AccountID: 1, BillingCurrency: "CNY", Status: LiveProvisionalStatusFinalized,
+		UserID: 1, APIKeyID: 1, AccountID: 1, BillingCurrency: "USD", Status: LiveProvisionalStatusFinalized,
 		CreatedAt: termOld, TerminalAt: &termOld, SettlementEventID: "gwusg_live_old",
 	}))
 	// Old active (created_at = now - 50d, terminal_at = NULL -> MUST SURVIVE):
 	require.NoError(t, live.Save(ctx, &LiveProvisionalRecord{
 		Token: "live_71_old_active", AuthorizationID: "auth_live_old_act", PlatformUserID: user,
-		UserID: 1, APIKeyID: 1, AccountID: 1, BillingCurrency: "CNY", Status: LiveProvisionalStatusActive,
+		UserID: 1, APIKeyID: 1, AccountID: 1, BillingCurrency: "USD", Status: LiveProvisionalStatusActive,
 		CreatedAt: termOld,
 	}))
 	// Recent in-window (terminal_at = now - 10d -> MUST SURVIVE):
 	termRec := now.Add(-10 * 24 * time.Hour)
 	require.NoError(t, live.Save(ctx, &LiveProvisionalRecord{
 		Token: "live_71_rec_finalized", AuthorizationID: "auth_live_rec_fin", PlatformUserID: user,
-		UserID: 1, APIKeyID: 1, AccountID: 1, BillingCurrency: "CNY", Status: LiveProvisionalStatusFinalized,
+		UserID: 1, APIKeyID: 1, AccountID: 1, BillingCurrency: "USD", Status: LiveProvisionalStatusFinalized,
 		CreatedAt: termRec, TerminalAt: &termRec,
 	}))
 
@@ -114,7 +114,7 @@ func TestWalletRetentionPruners(t *testing.T) {
 		_, err := db.ExecContext(ctx, `
 			INSERT INTO wallet_settlement_outbox
 				(event_id, platform_user_id, gateway_request_id, currency, amount_units, payload_hash, status, dead_letter_reason, occurred_at, delivered_at)
-			VALUES ($1, $2, $3, 'CNY', 1000, $4, $5, $6, $7, $8)`,
+			VALUES ($1, $2, $3, 'USD', 1000, $4, $5, $6, $7, $8)`,
 			eventID, user, "req-"+eventID, "hash-"+eventID, status, rVal, occurred, dVal)
 		require.NoError(t, err)
 	}

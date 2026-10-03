@@ -2079,7 +2079,13 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				// Phase 3.2 freeze point (row 4, gated): per-turn freeze (including
 				// turn 1) — the carried WS snapshot is this turn's, read at :2084's
 				// RecordUsage literal.
-				turnSnapshot, freezeErr := h.gatewayService.FreezeBillingSnapshot(ctx, apiKey, account, subscription, model, account.GetMappedModel(mapping.MappedModel), true)
+				// The frozen price is what settlement charges, so a channel that bills
+				// the requested model must freeze the requested model's price.
+				turnBillingModel := account.GetMappedModel(mapping.MappedModel)
+				if mapping.BillingModelSource == service.BillingModelSourceRequested && strings.TrimSpace(model) != "" {
+					turnBillingModel = strings.TrimSpace(model)
+				}
+				turnSnapshot, freezeErr := h.gatewayService.FreezeBillingSnapshot(ctx, apiKey, account, subscription, model, turnBillingModel, true)
 				if freezeErr != nil {
 					return "", service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "model pricing is not configured", freezeErr)
 				}
