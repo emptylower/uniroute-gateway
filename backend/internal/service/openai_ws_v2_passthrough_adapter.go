@@ -336,11 +336,14 @@ func (l *openAIWSPassthroughTurnLifecycle) beginTerminalWrite() {
 	}
 }
 
-func (l *openAIWSPassthroughTurnLifecycle) finishTerminalWrite(succeeded bool, onSucceeded func()) {
+func (l *openAIWSPassthroughTurnLifecycle) finishTerminalWrite(succeeded bool, onSucceeded func(), upstream authorizationArmable) {
 	if l == nil {
 		return
 	}
 	if succeeded {
+		if upstream != nil {
+			upstream.DisarmAuthorization()
+		}
 		if onSucceeded != nil {
 			onSucceeded()
 		}
@@ -1172,10 +1175,8 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			},
 			AfterClientWrite: func(msgType coderws.MessageType, payload []byte, writeErr error) {
 				if msgType == coderws.MessageText && openAIWSPassthroughIsTerminalOutput(payload) {
-					turnLifecycle.finishTerminalWrite(writeErr == nil, clientFrameConn.markTurnCompleted)
-					if a, ok := upstreamConn.(authorizationArmable); ok {
-						a.DisarmAuthorization()
-					}
+					armedUpstream, _ := upstreamConn.(authorizationArmable)
+					turnLifecycle.finishTerminalWrite(writeErr == nil, clientFrameConn.markTurnCompleted, armedUpstream)
 				}
 			},
 			BeforeRelayCancel: func(exit openaiwsv2.RelayExit) {
