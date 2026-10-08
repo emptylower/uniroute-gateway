@@ -82,6 +82,9 @@ func startCanonicalWalletTestPostgres(t *testing.T, ctx context.Context) *sql.DB
 	require.NoError(t, err)
 	_, err = db.ExecContext(ctx, `CREATE INDEX idx_wallet_authorization_segment_pending ON wallet_authorization_segment (updated_at) WHERE state <> 'finished'`)
 	require.NoError(t, err)
+	// The pool queries also require the current immutable expiry evidence and
+	// cleanup columns. Apply the actual additive migration to the legacy fixture.
+	p34bApplyMigration(t, ctx, db, "222_wallet_unknown_expiry.sql")
 	createWalletMediaTaskTableForTest(t, ctx, db)
 	return db
 }

@@ -1447,7 +1447,7 @@ func (h *OpenAIGatewayHandler) handleAnthropicFailoverExhausted(c *gin.Context, 
 		return
 	}
 	status, errType, errMsg := h.mapUpstreamError(failoverErr.StatusCode)
-	if failoverErr.StatusCode == http.StatusServiceUnavailable && !service.WalletAttemptMayRetry(c.Request.Context()) {
+	if failoverErr.StatusCode == http.StatusServiceUnavailable && c.Request != nil && !service.WalletAttemptMayRetry(c.Request.Context()) {
 		status = failoverErr.StatusCode
 	}
 	h.anthropicStreamingAwareError(c, status, errType, errMsg, streamStarted)
@@ -2577,7 +2577,7 @@ func (h *OpenAIGatewayHandler) handleFailoverExhausted(c *gin.Context, failoverE
 
 	// 使用默认的错误映射
 	status, errType, errMsg := h.mapUpstreamError(statusCode)
-	if statusCode == http.StatusServiceUnavailable && !service.WalletAttemptMayRetry(c.Request.Context()) {
+	if statusCode == http.StatusServiceUnavailable && c.Request != nil && !service.WalletAttemptMayRetry(c.Request.Context()) {
 		status = statusCode
 	}
 	h.handleStreamingAwareError(c, status, errType, errMsg, streamStarted)
@@ -2804,7 +2804,10 @@ func openAIForwardErrorAlreadyCommunicated(c *gin.Context, writerSizeBeforeForwa
 }
 
 func openAIForwardMayFailover(c *gin.Context, writerSizeBeforeForward int, failoverErr *service.UpstreamFailoverError) bool {
-	if c == nil || c.Writer == nil || !service.WalletAttemptMayRetry(c.Request.Context()) {
+	if c == nil || c.Writer == nil {
+		return false
+	}
+	if c.Request != nil && !service.WalletAttemptMayRetry(c.Request.Context()) {
 		return false
 	}
 	if service.OpenAICompactKeepaliveAdjustedWrittenSize(c) == writerSizeBeforeForward {
