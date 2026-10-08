@@ -487,7 +487,7 @@ func parseCanonicalWalletAmountObject(field string, a canonicalWalletAmountObjec
 type canonicalWalletEnsureResult struct {
 	USDWalletPolicyVersion string
 	Lease                  CanonicalWalletLease
-	Outcome                string // reused | issued
+	Outcome                string // reused | issued | topped_up
 	ClampedBy              string // none | cap | balance
 }
 
@@ -577,10 +577,17 @@ func (c *canonicalWalletHTTPClient) EnsureLease(ctx context.Context, request can
 	if err != nil {
 		return nil, err
 	}
+	validOutcome := wire.Outcome == "reused" || wire.Outcome == "issued"
+	if wire.Outcome == "topped_up" {
+		// Same-lease funding has a distinct success outcome on the control plane.
+		// Accept it only for the USD policy's explicit authorization top-up.
+		minimum, minimumErr := parseCanonicalWalletAmountObject("minimum_budget_units", canonicalWalletAmountObject{AmountUnits: request.MinimumBudgetUnits, Currency: "USD", Scale: 8, UnitVersion: CanonicalWalletUnitVersion})
+		validOutcome = minimumErr == nil && minimum > 0 && budget >= minimum && request.Purpose == "authorize" && request.USDWalletPolicyVersion == config.CanonicalUSDWalletPolicyVersion && strings.TrimSpace(request.TopUpLeaseID) != "" && wire.LeaseID == request.TopUpLeaseID
+	}
 	// The §4 invariants, restated over the parsed int64s. The sign clauses are
 	// gone — the parser rejects a sign — and §9.2's status is added: only an
 	// active lease may be installed.
-	if strings.TrimSpace(wire.LeaseID) == "" || strings.TrimSpace(wire.PlatformUserID) != strings.TrimSpace(request.PlatformUserID) || budget <= 0 || headroom > budget || wire.ExpiresAt.IsZero() || wire.Status != "active" || (wire.Outcome != "reused" && wire.Outcome != "issued") {
+	if strings.TrimSpace(wire.LeaseID) == "" || strings.TrimSpace(wire.PlatformUserID) != strings.TrimSpace(request.PlatformUserID) || budget <= 0 || headroom > budget || wire.ExpiresAt.IsZero() || wire.Status != "active" || !validOutcome {
 		return nil, errors.New("control plane returned an invalid canonical wallet lease")
 	}
 	currency, err := RequireUSDBillingCurrency(wire.Currency)
