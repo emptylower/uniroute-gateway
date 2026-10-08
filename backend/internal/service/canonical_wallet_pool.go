@@ -146,6 +146,9 @@ func (b *CanonicalWalletBridge) fundingPool(ctx context.Context, user string) ([
 		if wire.ExpiresAt.Before(cached.ExpiresAt) {
 			cached.ExpiresAt = wire.ExpiresAt
 		}
+		// Redis reads do not carry the local retention deadline. Restore the
+		// receipt window without extending the lease's authorization expiry.
+		cached.RetainUntil = cached.ExpiresAt.Add(time.Duration(b.callerSlotTTLSeconds) * time.Second)
 		if err = b.store.InstallCanonicalWalletLease(ctx, *cached); err != nil {
 			return nil, err
 		}
@@ -233,6 +236,7 @@ func (b *CanonicalWalletBridge) authorizePool(ctx context.Context, h *Authorizat
 					return errors.New("wallet pool top-up proof mismatch")
 				}
 				result.Lease.RequireCachedLease = true
+				result.Lease.RetainUntil = result.Lease.ExpiresAt.Add(time.Duration(b.callerSlotTTLSeconds) * time.Second)
 				err = b.store.InstallCanonicalWalletLease(ctx, result.Lease)
 			}
 		}
