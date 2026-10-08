@@ -208,7 +208,7 @@ func TestCanonicalWalletColdBootstrapTopUpArmsPoolOnlyAfterValidFunding(t *testi
 			cfg.ControlPlaneURL, cfg.USDWalletEnabled, cfg.USDPolicyVersion = server.URL, true, config.CanonicalUSDWalletPolicyVersion
 			db, mock, err := sqlmock.New()
 			require.NoError(t, err)
-			defer db.Close()
+			defer func() { _ = db.Close() }()
 			store := &canonicalWalletTopUpPoolStore{beforeArm: func() {
 				require.NoError(t, mock.ExpectationsWereMet(), "durable funding plan must commit before any hold")
 			}}
