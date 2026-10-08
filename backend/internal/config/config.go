@@ -1578,6 +1578,9 @@ type CanonicalWalletConfig struct {
 	// no hold is armed, no callback fires, ObserveSettlement converts nothing and
 	// no reaper starts; "on" arms a hold at every authorization. Literal match.
 	Holds string `mapstructure:"holds"`
+	// Shadow reports finite-expiry candidates without changing money or pins.
+	PoolExpiryMode         string `mapstructure:"pool_expiry_mode"`
+	PoolExpiryGraceSeconds int    `mapstructure:"pool_expiry_grace_seconds"`
 	// OrphanGraceSeconds (§10.7): an unclassified hold older than this with no
 	// live owner is released by the reaper. A FLOOR on the finite upstream
 	// timeouts, not a bound on attempt lifetime.
@@ -2103,6 +2106,8 @@ func setDefaults() {
 	viper.SetDefault("media_tasks.poll_seconds", 5)
 	viper.SetDefault("media_tasks.deadline_seconds", 86400)
 	viper.SetDefault("canonical_wallet.holds", "off")
+	viper.SetDefault("canonical_wallet.pool_expiry_mode", "shadow")
+	viper.SetDefault("canonical_wallet.pool_expiry_grace_seconds", 1800)
 	viper.SetDefault("canonical_wallet.orphan_grace_seconds", 900)
 	viper.SetDefault("canonical_wallet.reconciliation_read_token", "")
 	viper.SetDefault("canonical_wallet.receivable_redrive_interval_seconds", 300)
@@ -2824,6 +2829,13 @@ func (c *Config) Validate() error {
 				longest = t
 			}
 		}
+		if c.CanonicalWallet.PoolExpiryMode != "" && c.CanonicalWallet.PoolExpiryMode != "off" && c.CanonicalWallet.PoolExpiryMode != "shadow" && c.CanonicalWallet.PoolExpiryMode != "enabled" {
+			return fmt.Errorf("canonical_wallet.pool_expiry_mode must be off, shadow, or enabled")
+		}
+		if c.CanonicalWallet.PoolExpiryGraceSeconds != 0 && (c.CanonicalWallet.PoolExpiryGraceSeconds < 300 || c.CanonicalWallet.PoolExpiryGraceSeconds > 7200) {
+			return fmt.Errorf("canonical_wallet.pool_expiry_grace_seconds must be between 300 and 7200")
+		}
+
 		if c.CanonicalWallet.OrphanGraceSeconds < longest || c.CanonicalWallet.OrphanGraceSeconds < 60 {
 			return fmt.Errorf("canonical_wallet.orphan_grace_seconds must be >= every finite upstream timeout (%d) and >= 60", longest)
 		}

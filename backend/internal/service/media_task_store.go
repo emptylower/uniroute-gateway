@@ -10,6 +10,7 @@ import (
 )
 
 type mediaTaskRecord struct {
+	AuthorizationKind  string
 	Segments           []AuthorizationSegment
 	ID                 string
 	UserID             int64

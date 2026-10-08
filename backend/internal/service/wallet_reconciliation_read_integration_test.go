@@ -34,7 +34,7 @@ func startWalletReconciliationTestPostgres(t testing.TB, ctx context.Context) *s
 		"215_wallet_reconciliation_indexes.sql",
 		"216_wallet_outbox_billing_snapshot.sql",
 		"218_wallet_authorization_segments.sql",
-		"219_wallet_attempt_protection.sql",
+		"219_wallet_attempt_protection.sql", "222_wallet_unknown_expiry.sql",
 	} {
 		sqlContent, err := os.ReadFile(filepath.Join("..", "..", "migrations", migration))
 		require.NoError(t, err)

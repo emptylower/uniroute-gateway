@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -69,7 +70,9 @@ type AuthorizationHandle struct {
 	// by RecordOutcome AFTER h.mu is released — the callback does a Redis
 	// round trip and must never re-enter the handle.
 	beforeWrite    func(context.Context, string) error
+	writeEnded     func()
 	onOutcome      func(token string, outcome AuthorizationOutcome, err error)
+	retryCheck     func(context.Context) error
 	renewAfterZero func(context.Context) (*AuthorizationHandle, error)
 	renewMu        sync.Mutex
 	renewed        atomic.Pointer[AuthorizationHandle]
@@ -94,11 +97,20 @@ func (h *AuthorizationHandle) nextHTTPAttempt(ctx context.Context) (*Authorizati
 		return next.nextHTTPAttempt(ctx)
 	}
 	writes := h.Writes()
-	if h.renewAfterZero == nil || len(writes) == 0 {
+	if len(writes) == 0 {
+		return h, nil
+	}
+	if h.renewAfterZero == nil {
+		if h.beforeWrite != nil {
+			return nil, ErrWalletUnknownCostRetry
+		}
 		return h, nil
 	}
 	outcome := writes[len(writes)-1].Outcome
 	if outcome != AuthorizationOutcomeRejected && outcome != AuthorizationOutcomeNotWritten {
+		if h.beforeWrite != nil {
+			return nil, ErrWalletUnknownCostRetry
+		}
 		return h, nil
 	}
 	next, err := h.renewAfterZero(ctx)
@@ -404,4 +416,26 @@ func (h *AuthorizationHandle) prepareWrite(ctx context.Context, token string) er
 		return h.beforeWrite(ctx, token)
 	}
 	return nil
+}
+
+// ErrWalletUnknownCostRetry prevents another potentially billable write when
+// the previous attempt has no durable, acknowledged known-zero resolution.
+var ErrWalletUnknownCostRetry = errors.New("upstream attempt cost is unresolved; automatic replay stopped")
+
+// WalletAttemptMayRetry checks the same cost boundary for handler account
+// failover and provider-internal retries. Non-wallet paths remain unchanged.
+func WalletAttemptMayRetry(ctx context.Context) bool {
+	h := AuthorizationHandleFromContext(ctx).activeAttempt()
+	if h == nil || h.beforeWrite == nil {
+		return true
+	}
+	writes := h.Writes()
+	if len(writes) == 0 {
+		return true
+	}
+	last := writes[len(writes)-1]
+	if last.Outcome != AuthorizationOutcomeRejected && last.Outcome != AuthorizationOutcomeNotWritten {
+		return false
+	}
+	return h.retryCheck != nil && h.retryCheck(ctx) == nil
 }

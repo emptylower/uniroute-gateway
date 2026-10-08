@@ -655,7 +655,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 							return
 						}
 						if !openAIForwardMayFailover(c, writerSizeBeforeForward, failoverErr) {
-							h.handleFailoverExhausted(c, failoverErr, true)
+							h.handleFailoverExhausted(c, failoverErr, streamStarted || c.Writer.Written())
 							return
 						}
 						if failoverErr.SafeToFailoverAfterWrite && c.Writer.Written() {
@@ -664,7 +664,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 						if failoverErr.ShouldReportAccountScheduleFailure() {
 							h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, account.GetMappedModel(reqModel), false, nil)
 						}
-						if !failoverErr.ShouldRetryNextAccount() {
+						if !service.WalletAttemptMayRetry(c.Request.Context()) || !failoverErr.ShouldRetryNextAccount() {
 							h.handleFailoverExhausted(c, failoverErr, streamStarted)
 							return
 						}
@@ -1270,7 +1270,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 					if failoverErr.ShouldReportAccountScheduleFailure() {
 						h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, account.GetMappedModel(currentRoutingModel), false, nil)
 					}
-					if !failoverErr.ShouldRetryNextAccount() {
+					if !service.WalletAttemptMayRetry(c.Request.Context()) || !failoverErr.ShouldRetryNextAccount() {
 						h.handleAnthropicFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
@@ -1447,6 +1447,9 @@ func (h *OpenAIGatewayHandler) handleAnthropicFailoverExhausted(c *gin.Context, 
 		return
 	}
 	status, errType, errMsg := h.mapUpstreamError(failoverErr.StatusCode)
+	if failoverErr.StatusCode == http.StatusServiceUnavailable && c.Request != nil && !service.WalletAttemptMayRetry(c.Request.Context()) {
+		status = failoverErr.StatusCode
+	}
 	h.anthropicStreamingAwareError(c, status, errType, errMsg, streamStarted)
 }
 
@@ -1848,7 +1851,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, account.GetMappedModel(reqModel), false, nil)
 		}
 		releaseAccountSlot()
-		if !failoverErr.ShouldRetryNextAccount() {
+		if !service.WalletAttemptMayRetry(c.Request.Context()) || !failoverErr.ShouldRetryNextAccount() {
 			closeOpenAIWSFailoverExhausted(wsConn, failoverErr)
 			return false
 		}
@@ -2574,6 +2577,9 @@ func (h *OpenAIGatewayHandler) handleFailoverExhausted(c *gin.Context, failoverE
 
 	// 使用默认的错误映射
 	status, errType, errMsg := h.mapUpstreamError(statusCode)
+	if statusCode == http.StatusServiceUnavailable && c.Request != nil && !service.WalletAttemptMayRetry(c.Request.Context()) {
+		status = statusCode
+	}
 	h.handleStreamingAwareError(c, status, errType, errMsg, streamStarted)
 }
 
@@ -2799,6 +2805,9 @@ func openAIForwardErrorAlreadyCommunicated(c *gin.Context, writerSizeBeforeForwa
 
 func openAIForwardMayFailover(c *gin.Context, writerSizeBeforeForward int, failoverErr *service.UpstreamFailoverError) bool {
 	if c == nil || c.Writer == nil {
+		return false
+	}
+	if c.Request != nil && !service.WalletAttemptMayRetry(c.Request.Context()) {
 		return false
 	}
 	if service.OpenAICompactKeepaliveAdjustedWrittenSize(c) == writerSizeBeforeForward {

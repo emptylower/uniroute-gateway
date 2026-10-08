@@ -81,7 +81,7 @@ var (
 )
 
 func (c *authorizingOpenAIWSClientConn) ArmAuthorization(h *AuthorizationHandle) { c.armed.Store(h) }
-func (c *authorizingOpenAIWSClientConn) DisarmAuthorization()                    { c.armed.Store(nil) }
+func (c *authorizingOpenAIWSClientConn) DisarmAuthorization()                    { c.armed.Swap(nil).completeWrite() }
 func (c *authorizingOpenAIWSClientConn) ArmedAuthorization() *AuthorizationHandle {
 	return c.armed.Load()
 }
@@ -165,6 +165,7 @@ func (c *authorizingOpenAIWSClientConn) write(ctx context.Context, send func() e
 func (c *authorizingOpenAIWSClientConn) ReadMessage(ctx context.Context) ([]byte, error) {
 	payload, err := c.inner.ReadMessage(ctx)
 	if err != nil {
+		c.armed.Load().completeWrite()
 		return payload, err
 	}
 	if err := c.waitWriteOutcomes(ctx); err != nil {
@@ -182,6 +183,7 @@ func (c *authorizingOpenAIWSClientConn) ReadFrame(ctx context.Context) (coderws.
 	}
 	msgType, payload, err := fc.ReadFrame(ctx)
 	if err != nil {
+		c.armed.Load().completeWrite()
 		return msgType, payload, err
 	}
 	if err := c.waitWriteOutcomes(ctx); err != nil {
@@ -212,7 +214,7 @@ func (c *authorizingOpenAIWSClientConn) waitWriteOutcomes(ctx context.Context) e
 func (c *authorizingOpenAIWSClientConn) Ping(ctx context.Context) error { return c.inner.Ping(ctx) }
 
 func (c *authorizingOpenAIWSClientConn) Close() error {
-	c.armed.Store(nil)
+	c.DisarmAuthorization()
 	return c.inner.Close()
 }
 

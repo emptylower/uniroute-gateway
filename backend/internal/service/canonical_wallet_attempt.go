@@ -32,7 +32,7 @@ func lockWalletAttempt(ctx context.Context, tx *sql.Tx, parent string) (int, err
 func (b *CanonicalWalletBridge) protectPoolAttempt(ctx context.Context, parent, user, snapshot string, segment *AuthorizationSegment, finish bool) error {
 	svc := &MediaTaskService{bridge: b, db: b.outboxDB}
 	actual := segment.ActualUnits
-	record := &mediaTaskRecord{ID: parent, PlatformUserID: user, SnapshotID: snapshot, AuthorizationID: segment.AuthorizationID, LeaseID: segment.LeaseID, LeaseBasis: &segment.Basis, HeldUnits: segment.HeldUnits, EventID: segment.EventID, PinState: segment.PinState, Status: "settling", ActualUnits: &actual, CreatedAt: time.Now().UTC()}
+	record := &mediaTaskRecord{AuthorizationKind: segment.Kind, ID: parent, PlatformUserID: user, SnapshotID: snapshot, AuthorizationID: segment.AuthorizationID, LeaseID: segment.LeaseID, LeaseBasis: &segment.Basis, HeldUnits: segment.HeldUnits, EventID: segment.EventID, PinState: segment.PinState, Status: "settling", ActualUnits: &actual, CreatedAt: time.Now().UTC()}
 	if finish {
 
 		if err := svc.pinSingle(ctx, record, true); err != nil {
@@ -94,7 +94,7 @@ func (b *CanonicalWalletBridge) preparePoolAttempt(ctx context.Context, h *Autho
 		if count, e := lockWalletAttempt(ctx, tx, h.ID); e != nil || count != len(h.Segments) {
 			return fmt.Errorf("wallet attempt group unavailable: %v", e)
 		}
-		result, err := tx.ExecContext(ctx, `UPDATE wallet_authorization_segment SET state='indeterminate',authorization_token=$2,updated_at=now() WHERE parent_authorization_id=$1 AND state='held' AND authorization_token IS NULL`, h.ID, token)
+		result, err := tx.ExecContext(ctx, `UPDATE wallet_authorization_segment SET state='indeterminate',authorization_token=$2,updated_at=now(),first_write_at=CASE WHEN kind='llm' THEN now() ELSE first_write_at END,write_active_until=CASE WHEN kind='llm' THEN now()+interval '90 seconds' ELSE NULL END,expiry_deadline=CASE WHEN kind='llm' THEN date_trunc('milliseconds',(lease_basis->>'expires_at')::timestamptz)+($3 * interval '1 second') ELSE NULL END WHERE parent_authorization_id=$1 AND state='held' AND authorization_token IS NULL`, h.ID, token, int64(b.poolExpiryGrace()/time.Second))
 		if err != nil {
 			return err
 		}
@@ -105,7 +105,11 @@ func (b *CanonicalWalletBridge) preparePoolAttempt(ctx context.Context, h *Autho
 		if n != int64(len(h.Segments)) {
 			return &AuthorizationRefusedError{Reason: AuthorizationRefusalLeaseUnavailable, AuthorizationID: h.ID, Detail: "attempt already crossed the upstream write boundary"}
 		}
-		return tx.Commit()
+		if err = tx.Commit(); err != nil {
+			return err
+		}
+		b.startPoolWriteOwner(ctx, h, token)
+		return nil
 	}
 	// Only explicit validation/auth rejection or proven pre-application-byte
 	// errors resolve as zero. Uncertain writes never resolve through a clock.
@@ -113,6 +117,7 @@ func (b *CanonicalWalletBridge) preparePoolAttempt(ctx context.Context, h *Autho
 		if outcome == AuthorizationOutcomeResult {
 			return
 		}
+		h.completeWrite()
 		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(b.cfg.RequestTimeoutMS)*time.Millisecond)
 		defer cancel()
 		// A failed TCP dial or DNS resolution cannot have written application
@@ -139,17 +144,17 @@ func (b *CanonicalWalletBridge) poolAttemptActive(ctx context.Context, auth stri
 		return false
 	}
 	var active bool
-	err := b.outboxDB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM wallet_authorization_segment WHERE authorization_id=$1 AND kind<>'media' AND state<>'finished')`, auth).Scan(&active)
+	err := b.outboxDB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM wallet_authorization_segment WHERE authorization_id=$1 AND kind<>'media' AND state<>'finished' AND (expiry_ack_at IS NULL OR expiry_cleanup_at IS NULL))`, auth).Scan(&active)
 	return err != nil || active
 }
 
 // All operations are idempotent under their authorization/event IDs. This runs
-// regardless of the new-media feature flag and retains unknown writes forever.
+// regardless of the new-media feature flag and preserves unknown cost evidence.
 func (b *CanonicalWalletBridge) recoverPoolAttempts(ctx context.Context) {
 	if b == nil || b.outboxDB == nil || !b.HoldsEnabled() {
 		return
 	}
-	rows, err := b.outboxDB.QueryContext(ctx, `SELECT parent_authorization_id,platform_user_id,billing_snapshot_id FROM wallet_authorization_segment WHERE kind<>'media' AND state<>'finished' GROUP BY parent_authorization_id,platform_user_id,billing_snapshot_id ORDER BY min(updated_at) LIMIT 32`)
+	rows, err := b.outboxDB.QueryContext(ctx, `SELECT parent_authorization_id,platform_user_id,billing_snapshot_id FROM wallet_authorization_segment WHERE kind<>'media' AND state<>'finished' AND (state<>'expired_unknown' OR expiry_cleanup_at IS NULL) GROUP BY parent_authorization_id,platform_user_id,billing_snapshot_id ORDER BY min(updated_at) LIMIT 32`)
 	if err != nil {
 		return
 	}
@@ -167,6 +172,17 @@ func (b *CanonicalWalletBridge) recoverPoolAttempts(ctx context.Context) {
 		return
 	}
 	for _, g := range groups {
+		// Rotate every inspected group, including a failed/partial expiry ACK.
+		// Mutable scheduling time never extends the immutable cost deadline.
+		_, _ = b.outboxDB.ExecContext(ctx, `UPDATE wallet_authorization_segment SET updated_at=now() WHERE parent_authorization_id=$1 AND state<>'finished'`, g.parent)
+		handled, expiryErr := b.recoverExpiredPoolGroup(ctx, g.parent, g.user, g.snapshot)
+		if expiryErr != nil {
+			slog.Warn("wallet unknown expiry recovery deferred", "parent_authorization_id", g.parent, "error_class", "expiry_protocol")
+			continue
+		}
+		if handled {
+			continue
+		}
 		segments, e := b.authorizationSegments(ctx, g.parent)
 		if e != nil {
 			continue
@@ -223,6 +239,9 @@ func (b *CanonicalWalletBridge) recoverPoolAttempts(ctx context.Context) {
 				}
 				continue
 			}
+			if segment.State == "settling" && segment.Payload != nil && segment.Payload.LeaseID == "" {
+				continue
+			}
 			e = b.protectPoolAttempt(ctx, g.parent, g.user, g.snapshot, segment, false)
 			if e == nil && segment.State == "settling" {
 				conv, convertErr := b.store.ConvertCanonicalWalletHold(ctx, g.user, segment.AuthorizationID, segment.EventID, segment.ActualUnits, b.clock())
@@ -236,9 +255,6 @@ func (b *CanonicalWalletBridge) recoverPoolAttempts(ctx context.Context) {
 			}
 			_ = b.saveAuthorizationSegments(ctx, g.parent, segments)
 		}
-		// Move inspected groups behind the others without changing their durable
-		// creation/write boundary. Unknown groups must not monopolize the batch.
-		_, _ = b.outboxDB.ExecContext(ctx, `UPDATE wallet_authorization_segment SET updated_at=now() WHERE parent_authorization_id=$1 AND state<>'finished'`, g.parent)
 		// A failed original PG outbox transaction is retried as one group.
 		pendingInsert := false
 		for _, segment := range segments {
@@ -271,7 +287,7 @@ func (b *CanonicalWalletBridge) finishPoolSegment(ctx context.Context, user stri
 		return errors.New("wallet retention unavailable")
 	}
 	var pending bool
-	err = b.outboxDB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM wallet_authorization_segment WHERE platform_user_id=$1 AND lease_id=$2 AND ((kind<>'media' AND state<>'finished') OR (kind='media' AND pin_state<>'finished')))`, user, segment.LeaseID).Scan(&pending)
+	err = b.outboxDB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM wallet_authorization_segment WHERE platform_user_id=$1 AND lease_id=$2 AND ((kind<>'media' AND state<>'finished' AND expiry_ack_at IS NULL) OR (kind='media' AND pin_state<>'finished')))`, user, segment.LeaseID).Scan(&pending)
 	if err != nil {
 		return err
 	}

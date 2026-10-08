@@ -1925,6 +1925,13 @@
     "note": "egress-capable import; actual wallet classification hangs on the write site / client"
   },
   {
+    "file": "internal/service/canonical_wallet_expiry.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "HTTP method constant only; signed reservation-expiry receipt goes through the existing canonical wallet control-plane client"
+  },
+  {
     "file": "internal/service/canonical_wallet_pool.go",
     "kind": "import",
     "detail": "net/http",
