@@ -1515,6 +1515,138 @@ func TestAPIKeyAuthRejectsExhaustedBalance(t *testing.T) {
 	requireAPIKeyAuthError(t, w, "INSUFFICIENT_BALANCE", "Insufficient account balance")
 }
 
+func TestAPIKeyAuthModelCatalogReadKeepsAuthorizationChecks(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	past := time.Now().Add(-time.Hour)
+	for _, path := range []string{"/models", "/v1/models"} {
+		for _, test := range []struct {
+			name       string
+			mutate     func(*service.APIKey)
+			invalidKey bool
+			wantStatus int
+			wantCode   string
+		}{
+			{name: "active projected key with zero legacy balance", wantStatus: http.StatusOK},
+			{name: "invalid key", invalidKey: true, wantStatus: http.StatusUnauthorized, wantCode: "INVALID_API_KEY"},
+			{name: "disabled key", mutate: func(k *service.APIKey) { k.Status = service.StatusAPIKeyDisabled }, wantStatus: http.StatusUnauthorized, wantCode: "API_KEY_DISABLED"},
+			{name: "inactive user", mutate: func(k *service.APIKey) { k.User.Status = service.StatusDisabled }, wantStatus: http.StatusUnauthorized, wantCode: "USER_INACTIVE"},
+			{name: "IP restriction", mutate: func(k *service.APIKey) { k.IPWhitelist = []string{"192.0.2.1"} }, wantStatus: http.StatusForbidden, wantCode: "ACCESS_DENIED"},
+			{name: "expired status", mutate: func(k *service.APIKey) { k.Status = service.StatusAPIKeyExpired }, wantStatus: http.StatusForbidden, wantCode: "API_KEY_EXPIRED"},
+			{name: "runtime expiry", mutate: func(k *service.APIKey) { k.ExpiresAt = &past }, wantStatus: http.StatusForbidden, wantCode: "API_KEY_EXPIRED"},
+			{name: "quota exhausted status", mutate: func(k *service.APIKey) { k.Status = service.StatusAPIKeyQuotaExhausted }, wantStatus: http.StatusTooManyRequests, wantCode: "API_KEY_QUOTA_EXHAUSTED"},
+			{name: "runtime quota exhausted", mutate: func(k *service.APIKey) { k.Quota, k.QuotaUsed = 1, 1 }, wantStatus: http.StatusTooManyRequests, wantCode: "API_KEY_QUOTA_EXHAUSTED"},
+		} {
+			t.Run(path+"/"+test.name, func(t *testing.T) {
+				user := &service.User{ID: 11, Role: service.RoleUser, Status: service.StatusActive, PlatformUserID: "catalog-platform-user", BillingCurrency: service.CurrencyUSD}
+				platformKeyID := "catalog-platform-key"
+				apiKey := &service.APIKey{ID: 105, UserID: user.ID, Key: "catalog-key", Status: service.StatusActive, User: user, PlatformKeyID: &platformKeyID, RoutingMode: service.APIKeyRoutingModeAutoChannels}
+				if test.mutate != nil {
+					test.mutate(apiKey)
+				}
+				cfg := &config.Config{RunMode: config.RunModeStandard}
+				cfg.Gateway.ChannelRoutingEnabled = true
+				cfg.CanonicalWallet.Mode = config.CanonicalWalletModeEnforce
+				cfg.CanonicalWallet.USDWalletEnabled = true
+				cfg.SetTrustForwardedIPForAPIKeyACL(false)
+				repo := &stubApiKeyRepo{getByKey: func(_ context.Context, key string) (*service.APIKey, error) {
+					if key != apiKey.Key {
+						return nil, service.ErrAPIKeyNotFound
+					}
+					clone := *apiKey
+					return &clone, nil
+				}}
+				settings := service.NewSettingService(fakeSettingRepo{values: map[string]string{service.SettingKeyAllowUngroupedKeyScheduling: "false"}}, cfg)
+				router := gin.New()
+				require.NoError(t, router.SetTrustedProxies(nil))
+				router.Use(gin.HandlerFunc(NewAPIKeyAuthMiddleware(service.NewAPIKeyService(repo, nil, nil, nil, nil, nil, cfg), nil, cfg)))
+				router.Use(CanonicalUSDWalletGate(cfg))
+				router.Use(RequireGroupAssignment(settings, cfg, AnthropicErrorWriter))
+				called := false
+				router.GET(path, func(c *gin.Context) {
+					called = true
+					loaded, ok := GetAPIKeyFromContext(c)
+					require.True(t, ok)
+					require.Equal(t, service.APIKeyRoutingModeAutoChannels, loaded.RoutingMode)
+					require.Nil(t, loaded.GroupID)
+					require.Zero(t, loaded.User.Balance)
+					// No wallet dependency is installed: metadata must not acquire a lease.
+					c.JSON(http.StatusOK, gin.H{"object": "list", "data": []gin.H{{"id": "gpt-catalog-test"}}})
+				})
+				w := httptest.NewRecorder()
+				req := httptest.NewRequest(http.MethodGet, path, nil)
+				req.RemoteAddr = "198.51.100.2:12345"
+				credential := apiKey.Key
+				if test.invalidKey {
+					credential = "invalid-key"
+				}
+				req.Header.Set("Authorization", "Bearer "+credential)
+				router.ServeHTTP(w, req)
+				require.Equal(t, test.wantStatus, w.Code, w.Body.String())
+				require.Equal(t, test.wantStatus == http.StatusOK, called)
+				if test.wantCode != "" {
+					var response ErrorResponse
+					require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+					require.Equal(t, test.wantCode, response.Code)
+				}
+			})
+		}
+	}
+}
+
+func TestAPIKeyAuthModelCatalogExceptionDoesNotChangeOtherEndpoints(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, test := range []struct {
+		name       string
+		method     string
+		path       string
+		autoRoute  bool
+		wantStatus int
+		wantError  string
+	}{
+		{name: "POST models", method: http.MethodPost, path: "/v1/models", autoRoute: true, wantStatus: http.StatusForbidden, wantError: "INSUFFICIENT_BALANCE"},
+		{name: "HEAD models", method: http.MethodHead, path: "/models", autoRoute: true, wantStatus: http.StatusForbidden, wantError: "INSUFFICIENT_BALANCE"},
+		{name: "other GET", method: http.MethodGet, path: "/v1/models/other", autoRoute: true, wantStatus: http.StatusForbidden, wantError: "INSUFFICIENT_BALANCE"},
+		{name: "legacy inference", method: http.MethodPost, path: "/v1/messages", wantStatus: http.StatusForbidden, wantError: "INSUFFICIENT_BALANCE"},
+		{name: "dynamic inference still defers billing", method: http.MethodPost, path: "/v1/responses", autoRoute: true, wantStatus: http.StatusNoContent},
+		{name: "usage still requires group", method: http.MethodGet, path: "/v1/usage", autoRoute: true, wantStatus: http.StatusForbidden, wantError: "not assigned to any group"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			user := &service.User{ID: 11, Role: service.RoleUser, Status: service.StatusActive, PlatformUserID: "catalog-platform-user", BillingCurrency: service.CurrencyUSD}
+			apiKey := &service.APIKey{ID: 105, UserID: user.ID, Key: "catalog-other-key", Status: service.StatusActive, User: user}
+			if test.autoRoute {
+				apiKey.RoutingMode = service.APIKeyRoutingModeAutoChannels
+			}
+			cfg := &config.Config{RunMode: config.RunModeStandard}
+			cfg.Gateway.ChannelRoutingEnabled = true
+			cfg.CanonicalWallet.Mode = config.CanonicalWalletModeEnforce
+			cfg.CanonicalWallet.USDWalletEnabled = true
+			repo := &stubApiKeyRepo{getByKey: func(context.Context, string) (*service.APIKey, error) {
+				clone := *apiKey
+				return &clone, nil
+			}}
+			settings := service.NewSettingService(fakeSettingRepo{values: map[string]string{service.SettingKeyAllowUngroupedKeyScheduling: "false"}}, cfg)
+			router := gin.New()
+			router.Use(gin.HandlerFunc(NewAPIKeyAuthMiddleware(service.NewAPIKeyService(repo, nil, nil, nil, nil, nil, cfg), nil, cfg)))
+			router.Use(CanonicalUSDWalletGate(cfg))
+			router.Use(RequireGroupAssignment(settings, cfg, AnthropicErrorWriter))
+			called := false
+			router.Handle(test.method, test.path, func(c *gin.Context) {
+				called = true
+				c.Status(http.StatusNoContent)
+			})
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(test.method, test.path, nil)
+			req.Header.Set("Authorization", "Bearer "+apiKey.Key)
+			router.ServeHTTP(w, req)
+			require.Equal(t, test.wantStatus, w.Code, w.Body.String())
+			require.Equal(t, test.wantStatus == http.StatusNoContent, called)
+			if test.wantError != "" {
+				require.Contains(t, w.Body.String(), test.wantError)
+			}
+		})
+	}
+}
+
 func TestAPIKeyAuthOpenAIQuotaErrorFormat(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

@@ -279,7 +279,12 @@ func validateLoadedAPIKey(c *gin.Context, apiKey *service.APIKey, apiKeyService 
 			}
 		} else {
 			// 非订阅模式 或 订阅模式但 subscriptionService 未注入：回退到余额检查
-			if apiKeyBalanceBelowAuthThreshold(apiKey.User.Balance, cfg) {
+			// Model discovery is read-only. Platform-managed users may have a
+			// funded canonical USD wallet while their legacy balance remains zero.
+			// Keep the key expiry/quota checks above and all billable paths unchanged.
+			modelCatalogRead := c.Request.Method == http.MethodGet &&
+				(c.Request.URL.Path == "/models" || c.Request.URL.Path == "/v1/models")
+			if !modelCatalogRead && apiKeyBalanceBelowAuthThreshold(apiKey.User.Balance, cfg) {
 				AbortWithError(c, 403, "INSUFFICIENT_BALANCE", "Insufficient account balance")
 				return
 			}
