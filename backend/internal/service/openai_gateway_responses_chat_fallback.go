@@ -48,6 +48,12 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 		writeOpenAIResponsesFallbackError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return nil, fmt.Errorf("resolve responses tools: %w", err)
 	}
+	if account.Platform == PlatformGrok {
+		if err := validateGrokResponsesChatRequest(c, body, &responsesReq, effectiveTools); err != nil {
+			writeOpenAIResponsesFallbackError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+			return nil, err
+		}
+	}
 	customTools := apicompat.CustomToolNames(effectiveTools)
 	toolSearch := apicompat.HasToolSearchTool(effectiveTools)
 	namespaceTools := apicompat.NamespaceToolNames(effectiveTools)
@@ -97,7 +103,12 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 	if err != nil {
 		return nil, err
 	}
-	resp, err := s.sendCCUpstreamRequest(ctx, c, account, targetURL, chatBody, clientStream, apiKey, account.GetOpenAIUserAgent(), "")
+	cacheIdentity := ""
+	if account.Platform == PlatformGrok {
+		cacheIdentity = resolveGrokCacheIdentity(c, body, "", upstreamModel)
+		SetActualOpenAIUpstreamEndpoint(c, grokChatRawEndpoint)
+	}
+	resp, err := s.sendCCUpstreamRequest(ctx, c, account, targetURL, chatBody, clientStream, apiKey, account.GetOpenAIUserAgent(), cacheIdentity)
 	if err != nil {
 		return nil, err
 	}
@@ -111,10 +122,16 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 		return s.handleErrorResponse(ctx, resp, c, account, chatBody, billingModel)
 	}
 
+	var result *OpenAIForwardResult
 	if clientStream {
-		return s.streamChatCompletionsAsResponses(c, resp, account, originalModel, customTools, toolSearch, namespaceTools, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
+		result, err = s.streamChatCompletionsAsResponses(c, resp, account, originalModel, customTools, toolSearch, namespaceTools, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
+	} else {
+		result, err = s.bufferChatCompletionsAsResponses(c, resp, account, originalModel, customTools, toolSearch, namespaceTools, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
 	}
-	return s.bufferChatCompletionsAsResponses(c, resp, account, originalModel, customTools, toolSearch, namespaceTools, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
+	if result != nil && account.Platform == PlatformGrok {
+		result.UpstreamEndpoint = grokChatRawEndpoint
+	}
+	return result, err
 }
 
 func (s *OpenAIGatewayService) bufferChatCompletionsAsResponses(
@@ -137,6 +154,9 @@ func (s *OpenAIGatewayService) bufferChatCompletionsAsResponses(
 		return nil, err
 	}
 	responsesResp := apicompat.ChatCompletionsResponseToResponses(ccResp, originalModel, customTools, toolSearch, namespaceTools)
+	if account != nil && account.Platform == PlatformGrok && responsesResp.Usage != nil {
+		responsesResp.Usage.OutputTokensDetails = grokConvertedReasoningDetails(account, ccResp.Usage)
+	}
 
 	if s.responseHeaderFilter != nil {
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
@@ -206,7 +226,11 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(
 	}
 
 	scan := s.scanCCStream(resp, account, "openai responses chat fallback", requestID, startTime, func(chunk *apicompat.ChatCompletionsChunk) {
-		writeEvents(apicompat.ChatCompletionsChunkToResponsesEvents(chunk, state))
+		events := apicompat.ChatCompletionsChunkToResponsesEvents(chunk, state)
+		if chunk.Usage != nil && state.Usage != nil && account != nil && account.Platform == PlatformGrok {
+			state.Usage.OutputTokensDetails = grokConvertedReasoningDetails(account, chunk.Usage)
+		}
+		writeEvents(events)
 	})
 
 	if scan.Err != nil {
@@ -262,4 +286,11 @@ func chatChunkStartsResponsesOutput(chunk *apicompat.ChatCompletionsChunk) bool 
 		}
 	}
 	return false
+}
+
+func grokConvertedReasoningDetails(account *Account, usage *apicompat.ChatUsage) *apicompat.ResponsesOutputTokensDetails {
+	if account == nil || account.Platform != PlatformGrok || usage == nil || usage.CompletionTokensDetails == nil || usage.CompletionTokensDetails.ReasoningTokens <= 0 {
+		return nil
+	}
+	return &apicompat.ResponsesOutputTokensDetails{ReasoningTokens: usage.CompletionTokensDetails.ReasoningTokens}
 }

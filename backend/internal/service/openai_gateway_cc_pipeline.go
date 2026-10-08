@@ -150,13 +150,17 @@ func (s *OpenAIGatewayService) openAIChatCompletionsTargetURL(account *Account) 
 }
 
 // resolveCCFallbackTarget 解析两条 CC 回退路径共用的账号凭证与上游端点
-// （回退路径仅面向 APIKey 账号，凭证恒为 openai api_key）。
+// （回退路径仅面向 APIKey 账号，保留厂商自己的凭证与 URL 规则）。
 func (s *OpenAIGatewayService) resolveCCFallbackTarget(account *Account) (apiKey string, targetURL string, err error) {
-	apiKey = account.GetOpenAIApiKey()
+	if account.Platform == PlatformGrok && account.Type == AccountTypeAPIKey {
+		apiKey = strings.TrimSpace(account.GetCredential("api_key"))
+	} else {
+		apiKey = account.GetOpenAIApiKey()
+	}
 	if apiKey == "" {
 		return "", "", fmt.Errorf("account %d missing api_key", account.ID)
 	}
-	targetURL, err = s.openAIChatCompletionsTargetURL(account)
+	targetURL, err = s.rawChatCompletionsURL(account)
 	if err != nil {
 		return "", "", err
 	}
@@ -298,6 +302,7 @@ func (s *OpenAIGatewayService) scanCCStream(
 			ms := int(time.Since(startTime).Milliseconds())
 			st.FirstTokenMs = &ms
 		}
+		normalizeGrokConvertedChatUsage(account, gjson.Get(payload, "usage"), chunk.Usage)
 		emit(&chunk)
 	}
 
@@ -346,6 +351,7 @@ func (s *OpenAIGatewayService) readCCUpstreamJSONResponse(
 	if parsed, ok := extractOpenAIUsageFromJSONBytesForAccount(respBody, account); ok {
 		usage = parsed
 	}
+	normalizeGrokConvertedChatUsage(account, gjson.GetBytes(respBody, "usage"), ccResp.Usage)
 	return &ccResp, usage, nil
 }
 
@@ -358,4 +364,14 @@ func writeOpenAIResponsesFallbackError(c *gin.Context, statusCode int, errType, 
 			"message": message,
 		},
 	})
+}
+
+// Only protocol-conversion copies use inclusive output; raw CC remains unchanged.
+func normalizeGrokConvertedChatUsage(account *Account, raw gjson.Result, usage *apicompat.ChatUsage) {
+	if usage == nil {
+		return
+	}
+	normalized := OpenAIUsage{OutputTokens: usage.CompletionTokens}
+	normalizeGrokChatCompletionUsage(account, raw, &normalized)
+	usage.CompletionTokens = normalized.OutputTokens
 }
