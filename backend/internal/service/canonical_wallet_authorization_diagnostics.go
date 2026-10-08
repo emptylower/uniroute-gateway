@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"net"
 	"strings"
 	"sync"
 	"time"
@@ -141,7 +140,11 @@ func walletAuthorizationErrorClass(err error) string {
 	if errors.As(err, &status) {
 		return "control_http"
 	}
-	var network net.Error
+	var network interface {
+		error
+		Timeout() bool
+		Temporary() bool
+	}
 	if errors.As(err, &network) {
 		if network.Timeout() {
 			return "network_timeout"
