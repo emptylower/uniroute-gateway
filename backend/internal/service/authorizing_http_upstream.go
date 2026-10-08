@@ -142,6 +142,11 @@ func (a *AuthorizingHTTPUpstream) authorizedWrite(req *http.Request, handle *Aut
 		authorizationMetrics.outcomeNotWritten.Add(1)
 		handle.RecordOutcome(token, AuthorizationOutcomeNotWritten, err)
 	}
+	if err != nil || resp == nil || resp.Body == nil {
+		handle.completeWrite()
+	} else {
+		resp.Body = &walletResponseBody{ReadCloser: resp.Body, handle: handle}
+	}
 	return resp, err
 }
 

@@ -612,6 +612,7 @@ func (s *WalletOutboxStore) PruneDeliveredOlderThan(ctx context.Context, cutoff 
 		WHERE id IN (
 			SELECT id FROM wallet_settlement_outbox
 			WHERE status = 'delivered' AND occurred_at < $1
+            AND NOT EXISTS(SELECT 1 FROM wallet_authorization_segment a WHERE a.event_id=wallet_settlement_outbox.event_id AND a.state<>'finished')
 			ORDER BY id
 			LIMIT $2
 			FOR UPDATE SKIP LOCKED

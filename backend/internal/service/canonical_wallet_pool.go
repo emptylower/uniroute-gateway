@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -137,6 +138,17 @@ func (b *CanonicalWalletBridge) fundingPool(ctx context.Context, user string) ([
 		}
 		walletAuthorizationStage(ctx, "pool_cache_read")
 		cached, err := b.store.GetCanonicalWalletLeaseByID(ctx, user, wire.LeaseID)
+		// A signed pool can observe D1's creation before the creator installs
+		// Redis. Wait within the admission budget; missing Redis is never a
+		// license to reconstruct consumed=0 from D1's capture count.
+		for retry := 0; errors.Is(err, ErrCanonicalWalletLeaseMissing) && retry < 80; retry++ {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(10 * time.Millisecond):
+			}
+			cached, err = b.store.GetCanonicalWalletLeaseByID(ctx, user, wire.LeaseID)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -164,7 +176,52 @@ func (b *CanonicalWalletBridge) fundingPool(ctx context.Context, user string) ([
 	}
 	return leases, nil
 }
+
+var errWalletPoolConcurrentShortfall = errors.New("wallet pool headroom changed during admission")
+
+// A competing authorizer can spend the headroom between refresh and atomic arm.
+// Refresh/re-fund a bounded number of times, never replacing cached consumption.
 func (b *CanonicalWalletBridge) authorizePool(ctx context.Context, h *AuthorizationHandle, user string, units int64) error {
+	for round := 0; round < 4; round++ {
+		err := b.authorizePoolOnce(ctx, h, user, units)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, ErrCanonicalWalletLeaseExhausted) && !errors.Is(err, errWalletPoolConcurrentShortfall) {
+			return err
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		// Lua rejects an over-budget group before any hold is changed. Only a
+		// tokenless, unpinned prepared plan may be rebuilt after that exact result.
+		tx, txErr := b.outboxDB.BeginTx(ctx, nil)
+		if txErr != nil {
+			return txErr
+		}
+		count, lockErr := lockWalletAttempt(ctx, tx, h.ID)
+		if lockErr != nil {
+			_ = tx.Rollback()
+			return lockErr
+		}
+		result, deleteErr := tx.ExecContext(ctx, `DELETE FROM wallet_authorization_segment WHERE parent_authorization_id=$1 AND state='prepared' AND pin_state='none' AND authorization_token IS NULL`, h.ID)
+		if deleteErr != nil {
+			_ = tx.Rollback()
+			return deleteErr
+		}
+		n, deleteErr := result.RowsAffected()
+		if deleteErr != nil || n != int64(count) {
+			_ = tx.Rollback()
+			return errors.New("wallet authorization plan is not refreshable")
+		}
+		if txErr = tx.Commit(); txErr != nil {
+			return txErr
+		}
+	}
+	return ErrCanonicalWalletLeaseExhausted
+}
+
+func (b *CanonicalWalletBridge) authorizePoolOnce(ctx context.Context, h *AuthorizationHandle, user string, units int64) error {
 	walletAuthorizationStage(ctx, "pool_store_check")
 	store, ok := b.store.(CanonicalWalletPoolStore)
 	if !ok {
@@ -291,6 +348,9 @@ func (b *CanonicalWalletBridge) authorizePool(ctx context.Context, h *Authorizat
 		}
 	}
 	if remaining != 0 {
+		if len(leases) > 0 {
+			return errWalletPoolConcurrentShortfall
+		}
 		return ErrCanonicalWalletBalanceShortfall
 	}
 	// This committed plan owns every hold even if the process dies after Lua.
@@ -336,6 +396,14 @@ func (b *CanonicalWalletBridge) observePoolSettlement(event CanonicalWalletSettl
 	}
 	for i := range segments {
 		segment := &segments[i]
+		// The caller's segment mirror can predate a concurrent expiry intent.
+		// Read authoritative state under the same group lock before binding.
+		var intent int
+		var ack sql.NullTime
+		if err = tx.QueryRowContext(ctx, `SELECT state,expiry_intent_version,expiry_ack_at FROM wallet_authorization_segment WHERE authorization_id=$1`, segment.AuthorizationID).Scan(&segment.State, &intent, &ack); err != nil {
+			return false
+		}
+		late := intent == 1
 		actual := remaining
 		if actual > segment.HeldUnits {
 			actual = segment.HeldUnits
@@ -345,6 +413,9 @@ func (b *CanonicalWalletBridge) observePoolSettlement(event CanonicalWalletSettl
 		e.AmountUnits = actual
 		e.EventID = segment.EventID
 		e.LeaseID = segment.LeaseID
+		if late {
+			e.LeaseID = ""
+		}
 		e.AuthorizationID = segment.AuthorizationID
 		if segment.Payload != nil {
 			if segment.Payload.AmountUnits != actual || segment.Payload.GatewayRequestID != event.GatewayRequestID {
@@ -359,11 +430,18 @@ func (b *CanonicalWalletBridge) observePoolSettlement(event CanonicalWalletSettl
 		if actual == 0 {
 			state = "released"
 		}
+		if late {
+			if !ack.Valid {
+				state = "expiry_pending"
+			} else if actual == 0 {
+				state = "expired_unknown"
+			}
+		}
 		raw, marshalErr := json.Marshal(e)
 		if marshalErr != nil {
 			return false
 		}
-		res, e2 := tx.ExecContext(ctx, `UPDATE wallet_authorization_segment SET actual_units=$2,state=$3,settlement_payload=$4::jsonb,updated_at=now() WHERE authorization_id=$1 AND state IN ('held','indeterminate','settling','released') AND (state<>'released' OR $2::bigint=0) AND (settlement_payload IS NULL OR settlement_payload->>'amount_units'=$5)`, segment.AuthorizationID, actual, state, string(raw), strconv.FormatInt(actual, 10))
+		res, e2 := tx.ExecContext(ctx, `UPDATE wallet_authorization_segment SET actual_units=$2,state=$3,settlement_payload=$4::jsonb,updated_at=now() WHERE authorization_id=$1 AND state IN ('held','indeterminate','settling','released','expiry_pending','expired_unknown') AND (state<>'released' OR $2::bigint=0) AND (settlement_payload IS NULL OR settlement_payload->>'amount_units'=$5)`, segment.AuthorizationID, actual, state, string(raw), strconv.FormatInt(actual, 10))
 		if e2 != nil {
 			slog.Warn("wallet pooled settlement plan persistence failed", "authorization_id", segment.AuthorizationID, "error", e2)
 			return false
@@ -410,6 +488,11 @@ func (b *CanonicalWalletBridge) observePoolSettlement(event CanonicalWalletSettl
 func (b *CanonicalWalletBridge) enqueuePoolSettlements(ctx context.Context, user, snapshot string, segments []AuthorizationSegment) error {
 	events := []CanonicalWalletSettlementEvent{}
 	for _, segment := range segments {
+		if segment.State == "expiry_pending" {
+			return nil
+		}
+	}
+	for _, segment := range segments {
 		if segment.Payload == nil {
 			continue
 		}
@@ -422,6 +505,9 @@ func (b *CanonicalWalletBridge) enqueuePoolSettlements(ctx context.Context, user
 			}
 			continue
 		}
+		if segment.State == "expired_unknown" && segment.ActualUnits == 0 {
+			continue
+		}
 		if segment.ActualUnits == 0 {
 			_, err := b.store.ReleaseCanonicalWalletHold(ctx, user, segment.AuthorizationID, "released", "zero_cost")
 			if err != nil && !isHoldNotArmed(err) && !errors.Is(err, ErrCanonicalWalletHoldMissing) {
@@ -432,6 +518,14 @@ func (b *CanonicalWalletBridge) enqueuePoolSettlements(ctx context.Context, user
 		e := *segment.Payload
 		e.AuthorizationID = segment.AuthorizationID
 		e.BillingSnapshotID = snapshot
+		if e.LeaseID == "" {
+			var acknowledged bool
+			if err := b.outboxDB.QueryRowContext(ctx, `SELECT expiry_ack_at IS NOT NULL AND NOT EXISTS(SELECT 1 FROM wallet_authorization_segment p WHERE p.parent_authorization_id=a.parent_authorization_id AND p.state='expiry_pending') FROM wallet_authorization_segment a WHERE authorization_id=$1`, segment.AuthorizationID).Scan(&acknowledged); err != nil || !acknowledged {
+				return errors.New("late pooled settlement expiry ACK unavailable")
+			}
+			events = append(events, e)
+			continue
+		}
 		conv, err := b.store.ConvertCanonicalWalletHold(ctx, user, segment.AuthorizationID, e.EventID, segment.ActualUnits, b.clock())
 		if err != nil || (conv.Code != 0 && !(conv.Code == 7 && conv.EventID == e.EventID)) {
 			return errors.New("pooled settlement conversion unavailable")

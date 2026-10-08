@@ -127,19 +127,24 @@ func (u *mediaHTTP) Do(req *http.Request, _ string, _ int64, _ int) (*http.Respo
 }
 
 type testControl struct {
-	mu               sync.Mutex
-	budget, captured int64
-	expires          time.Time
-	events           map[string]int64
-	pins             map[string]map[string]any
-	pinAckLost       bool
-	pinRefused       bool
-	pinFinishRefused bool
-	pinAccepted      chan struct{}
-	issued           bool
-	pool             []*testFundingLease
-	unleased         int64
-	pinStatus        map[string]string
+	mu                  sync.Mutex
+	budget, captured    int64
+	expires             time.Time
+	events              map[string]int64
+	pins                map[string]map[string]any
+	pinAckLost          bool
+	pinRefused          bool
+	pinFinishRefused    bool
+	pinAccepted         chan struct{}
+	issued              bool
+	pool                []*testFundingLease
+	unleased            int64
+	pinStatus           map[string]string
+	expiryAckLost       bool
+	expiryRefused       bool
+	expiryRefusedAuth   string
+	forceOverCapture    bool
+	overCaptureHeadroom int64
 }
 
 func amount(n int64) map[string]any {
@@ -157,6 +162,7 @@ type testFundingLease struct {
 	budget, captured int64
 	expires          time.Time
 	drained          bool
+	closed           bool
 }
 
 func (c *testControl) lease(id string) *testFundingLease {
@@ -212,11 +218,15 @@ func (c *testControl) handler(w http.ResponseWriter, r *http.Request) {
 		if len(c.pool) > 0 && id == "lease-test" {
 			minimum := units(in["min_headroom"])
 			if c.unleased < minimum {
-				w.WriteHeader(409)
-				_ = json.NewEncoder(w).Encode(map[string]any{"code": 409, "data": map[string]string{"reason": "insufficient_balance"}})
-				return
+				if in["purpose"] == "settle" && c.unleased > 0 {
+					minimum = c.unleased
+				} else {
+					w.WriteHeader(409)
+					_ = json.NewEncoder(w).Encode(map[string]any{"code": 409, "data": map[string]string{"reason": "insufficient_balance"}})
+					return
+				}
 			}
-			id = "lease-cold"
+			id = fmt.Sprintf("lease-cold-%d", len(c.pool))
 			c.pool = append(c.pool, &testFundingLease{id: id, budget: minimum, expires: time.Now().Add(5 * time.Minute)})
 			c.unleased -= minimum
 		}
@@ -243,6 +253,18 @@ func (c *testControl) handler(w http.ResponseWriter, r *http.Request) {
 		lease, _ := in["lease_id"].(string)
 		n := units(in["amount"])
 		duplicate := c.events[id] > 0
+		if !duplicate && c.forceOverCapture {
+			w.WriteHeader(409)
+			_ = json.NewEncoder(w).Encode(map[string]any{"code": 409, "data": map[string]any{"reason": "lease_over_capture", "headroom": amount(c.overCaptureHeadroom)}})
+			return
+		}
+		if !duplicate {
+			if l := c.lease(lease); l != nil && l.closed {
+				w.WriteHeader(409)
+				_ = json.NewEncoder(w).Encode(map[string]any{"code": 409, "data": map[string]string{"reason": "lease_not_capturable"}})
+				return
+			}
+		}
 		if !duplicate {
 			c.events[id] = n
 			if l := c.lease(lease); l != nil {
@@ -252,6 +274,55 @@ func (c *testControl) handler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		data = map[string]any{"accepted": true, "duplicate": duplicate, "canonical_balance": amount(c.budget - c.captured), "event": map[string]any{"lease_id": lease, "amount": amount(n), "lease_capture_seq": len(c.events)}}
+	case "/api/internal/v2/wallet/task-pins/expire":
+		auth, _ := in["authorization_id"].(string)
+		lease, _ := in["lease_id"].(string)
+		event, _ := in["settlement_event_id"].(string)
+		if c.expiryRefused || c.expiryRefusedAuth == auth || c.events[event] > 0 {
+			w.WriteHeader(409)
+			return
+		}
+		if c.pinStatus == nil {
+			c.pinStatus = map[string]string{}
+		}
+		if c.pinStatus[auth] != "active" && c.pinStatus[auth] != "expired_unknown" {
+			w.WriteHeader(409)
+			return
+		}
+		if l := c.lease(lease); l != nil && time.Now().Before(l.expires.Add(1800*time.Second)) {
+			w.WriteHeader(409)
+			return
+		}
+		c.pinStatus[auth] = "expired_unknown"
+		// A swept lease closes only after its final active pin expires; expired
+		// admission time alone never invalidates Live or in-flight capture.
+		if l := c.lease(lease); l != nil {
+			active := false
+			for id, pin := range c.pins {
+				if pin["lease_id"] == lease && c.pinStatus[id] == "active" {
+					active = true
+				}
+			}
+			if !active {
+				l.closed = true
+			}
+		}
+		data = map[string]any{}
+		for _, key := range []string{"authorization_id", "gateway_job_id", "platform_user_id", "lease_id", "billing_snapshot_id", "settlement_event_id", "held", "usd_wallet_policy_version", "authorization_kind", "expiry_version", "expiry_deadline", "legacy_completion_proof"} {
+			if val, ok := in[key]; ok {
+				data[key] = val
+			}
+		}
+		data["status"] = "expired_unknown"
+		data["expiry_receipt_id"] = auth + ":expiry:1"
+		if c.expiryAckLost {
+			c.expiryAckLost = false
+			if hijack, ok := w.(http.Hijacker); ok {
+				conn, _, _ := hijack.Hijack()
+				conn.Close()
+				return
+			}
+		}
 	case "/api/internal/v2/wallet/task-pins/create", "/api/internal/v2/wallet/task-pins/finish":
 		if c.pinFinishRefused && r.URL.Path == "/api/internal/v2/wallet/task-pins/finish" {
 			w.WriteHeader(503)
@@ -338,7 +409,7 @@ type mediaFixture struct {
 	readHook  func(http.ResponseWriter, *http.Request)
 }
 
-func newMediaFixture(t *testing.T) *mediaFixture {
+func newMediaFixture(t *testing.T, configure ...func(*config.Config)) *mediaFixture {
 	db, rdb := mediaDatabase(t)
 	f := &mediaFixture{db: db, rdb: rdb}
 	f.control = &testControl{budget: 72000000000, expires: time.Now().Add(5 * time.Minute), events: map[string]int64{}, pins: map[string]map[string]any{}}
@@ -373,6 +444,9 @@ func newMediaFixture(t *testing.T) *mediaFixture {
 	f.cfg.CanonicalWallet = config.CanonicalWalletConfig{Mode: "enforce", Holds: "on", EnforceReady: true, BillingSnapshotMode: "settle", USDWalletEnabled: true, USDPolicyVersion: "usd-wallet-v1", ControlPlaneURL: control.URL, Issuer: "sub2api-gateway", Audience: "shipany-control-plane", Secret: strings.Repeat("s", 32), Version: "v1", RequestTimeoutMS: 1000, LeaseTTLSeconds: 300, LeaseBudgetUnits: 500000000, ExpirySkewMarginMS: 10, OrphanGraceSeconds: 2, OrphanSweepIntervalSeconds: 1, OrphanSweepBatch: 100, ReceivableRedriveIntervalSeconds: 3600, ReceivableRedriveMaxAttempts: 3, RetentionDays: 45}
 	f.cfg.MediaTasks = config.MediaTasksConfig{Enabled: true, KIEAPIKey: "isolated-test-key", KIEBaseURL: f.upstream.URL, PollSeconds: 1, DeadlineSeconds: 86400}
 	f.cfg.Gateway.ConcurrencySlotTTLMinutes = 30
+	for _, configureFixture := range configure {
+		configureFixture(f.cfg)
+	}
 	require.NoError(t, db.QueryRow(`INSERT INTO users(email,password_hash,platform_user_id,billing_currency,status,balance) VALUES('media@example.test','test','media-user','USD','active',999) RETURNING id`).Scan(&f.userID))
 	f.users = &mediaUsers{db: db}
 	f.apiKeys = service.NewAPIKeyService(&mediaKeys{db: db}, f.users, nil, nil, nil, nil, f.cfg)
@@ -913,7 +987,7 @@ func TestExternalPoolUnknownWriteCannotReplaySameHandle(t *testing.T) {
 	first := h.LastWriteToken()
 	require.Equal(t, service.AuthorizationOutcomeIndeterminate, h.Writes()[0].Outcome)
 	_, err = decorated.Do(req, "", 0, 1)
-	require.ErrorIs(t, err, service.ErrAuthorizationRefused)
+	require.ErrorIs(t, err, service.ErrWalletUnknownCostRetry)
 	require.Equal(t, int64(1), requests.Load())
 	var token, state string
 	require.NoError(t, f.db.QueryRow(`SELECT authorization_token,state FROM wallet_authorization_segment WHERE parent_authorization_id=$1`, h.ID).Scan(&token, &state))

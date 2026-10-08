@@ -58,7 +58,7 @@ func startLiveRestartPostgres(t *testing.T, ctx context.Context) *sql.DB {
 
 	// Migrations 209 + 218 + 219: ObserveSettlement reads wallet_authorization_segment before
 	// it settles (209 is the billing-snapshot table 218 references).
-	for _, migration := range []string{"209_wallet_billing_snapshot.sql", "218_wallet_authorization_segments.sql", "219_wallet_attempt_protection.sql"} {
+	for _, migration := range []string{"209_wallet_billing_snapshot.sql", "218_wallet_authorization_segments.sql", "219_wallet_attempt_protection.sql", "222_wallet_unknown_expiry.sql"} {
 		content, readErr := os.ReadFile(filepath.Join("..", "..", "migrations", migration))
 		require.NoError(t, readErr)
 		_, err = db.ExecContext(ctx, string(content))

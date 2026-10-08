@@ -1164,6 +1164,11 @@ func probeCanonicalWalletEnsureRoute(cfg *config.Config, client *canonicalWallet
 // construction is forbidden: the dispatcher goroutine starts inside this
 // constructor and would race the assignment.
 func newCanonicalWalletBridge(cfg config.CanonicalWalletConfig, store CanonicalWalletLeaseStore, control canonicalWalletControlPlane, outboxDB *sql.DB, outbox CanonicalWalletOutboxStore, callerSlotTTLSeconds int, clock func() time.Time) *CanonicalWalletBridge {
+	mode := cfg.PoolExpiryMode
+	if mode == "" {
+		mode = "shadow"
+	}
+	slog.Info("canonical wallet pool expiry configured", "mode", mode)
 	if callerSlotTTLSeconds <= 0 {
 		callerSlotTTLSeconds = 1800 // gateway.concurrency_slot_ttl_minutes' default (30) × 60
 	}
@@ -1223,13 +1228,9 @@ func newCanonicalWalletBridge(cfg config.CanonicalWalletConfig, store CanonicalW
 
 // Close (Phase 3.7a, redesign §13.2.6) stops every tick loop (the
 // dispatcher, the reaper and the receivable collector) and waits for them
-// to exit; it is idempotent (sync.Once) and nil-safe. It is a TEST
-// facility with no production caller: the three bridges are constructed
-// inside NewGatewayService, NewOpenAIGatewayService and
-// ProvideBillingCacheService and are never returned to the DI graph, so in
-// production the loops end with the process exactly as before. A bridge
-// built as a bare &CanonicalWalletBridge{…} literal has stop == nil and
-// never started a loop — Close on it is a no-op, not a nil-channel panic.
+// to exit; it is idempotent (sync.Once) and nil-safe. OpenAI gateway shutdown
+// closes its privately owned bridge; fixtures close their separately owned
+// bridges. A bare literal with stop == nil never started a loop and is a no-op.
 // Close is never called from inside a tick (neither deliverOutboxEvent nor
 // reapOnce reaches it), so loops.Wait cannot deadlock; for a nil-outbox
 // bridge Add(1) precedes the goroutine, the loop returns on its guard,
@@ -1882,6 +1883,13 @@ func (b *CanonicalWalletBridge) deliverOutboxEvent(ctx context.Context, e Canoni
 		LeaseID: e.LeaseID, Currency: e.Currency, AmountUnits: e.AmountUnits,
 		LocalBalanceAfterUnits: e.LocalBalanceAfterUnits, OccurredAt: e.OccurredAt,
 	}
+	latePinned := false
+	if e.AuthorizationID != "" && e.BillingSnapshotID != "" && b.outboxDB != nil {
+		if err := b.outboxDB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM wallet_authorization_segment WHERE authorization_id=$1 AND event_id=$2 AND billing_snapshot_id=$3 AND platform_user_id=$4 AND actual_units=$5 AND expiry_ack_at IS NOT NULL)`, e.AuthorizationID, e.EventID, e.BillingSnapshotID, e.PlatformUserID, e.AmountUnits).Scan(&latePinned); err != nil {
+			_ = b.outbox.MarkOutboxEventFailed(ctx, e.ID, b.workerID, b.clock())
+			return
+		}
+	}
 	// (0) §11.3: a pending release is owed to the bound lease — pay it
 	// BEFORE anything else reserves again. The partial form is gated on its
 	// own release marker, so a replay answers {7} (counted) and writes
@@ -1937,6 +1945,13 @@ func (b *CanonicalWalletBridge) deliverOutboxEvent(ctx context.Context, e Canoni
 		// reach here (the dispatcher ensures with purpose = settle); if it
 		// ever did, it would retry as today.
 		_ = b.outbox.MarkOutboxEventFailed(ctx, e.ID, b.workerID, b.clock())
+		return
+	}
+	// A late pinned root must retain its complete amount and identity. A
+	// partial funding grant becomes a full proven-cost receivable, never a
+	// rewritten root plus children that cannot satisfy its pin proof.
+	if latePinned && e.LeaseID == "" && lease.RemainingUnits() < e.AmountUnits {
+		_ = b.outbox.MarkOutboxEventDeadLetter(ctx, e.ID, b.workerID, "balance_shortfall")
 		return
 	}
 	// (2) §11.3 proactive split: a FRESH settle-purpose lease (unbound row)
@@ -1999,6 +2014,21 @@ func (b *CanonicalWalletBridge) deliverOutboxEvent(ctx context.Context, e Canoni
 		// mechanism, not a dead-letter.
 		var se *canonicalWalletStatusError
 		if errors.As(err, &se) && se.Reason == "lease_over_capture" {
+			if latePinned {
+				if _, releaseErr := b.store.ReleaseCanonicalWalletReservation(ctx, event.PlatformUserID, event.LeaseID, event.EventID, event.AmountUnits, true); releaseErr != nil {
+					_ = b.outbox.MarkOutboxEventFailed(ctx, e.ID, b.workerID, b.clock())
+					return
+				}
+				if bindErr := b.outbox.BindOutboxEventLease(ctx, e.ID, b.workerID, ""); bindErr != nil {
+					return
+				}
+				if _, _, sealErr := b.store.SealCanonicalWalletLease(ctx, event.PlatformUserID, event.LeaseID); sealErr != nil && !errors.Is(sealErr, ErrCanonicalWalletLeaseMissing) {
+					_ = b.outbox.MarkOutboxEventFailed(ctx, e.ID, b.workerID, b.clock())
+					return
+				}
+				_ = b.outbox.MarkOutboxEventDeadLetter(ctx, e.ID, b.workerID, "balance_shortfall")
+				return
+			}
 			headroomUnits := int64(0)
 			if se.HeadroomUnits != nil {
 				headroomUnits = *se.HeadroomUnits
@@ -2239,7 +2269,7 @@ func (b *CanonicalWalletBridge) resolveOutboxEventLease(ctx context.Context, e C
 
 func (b *CanonicalWalletBridge) protectedSettlementBinding(ctx context.Context, e CanonicalWalletOutboxEvent) (bool, error) {
 	var protected bool
-	err := b.outboxDB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM wallet_authorization_segment a JOIN wallet_settlement_outbox o ON o.event_id=a.event_id AND o.authorization_id=a.authorization_id AND o.billing_snapshot_id=a.billing_snapshot_id WHERE a.authorization_id=$1 AND a.platform_user_id=$2 AND a.lease_id=$3 AND a.event_id=$4 AND o.id=$5 AND a.actual_units=$6 AND o.amount_units=a.actual_units AND o.lease_id=a.lease_id AND a.actual_units>0 AND (a.kind='media' OR a.state IN ('settling','finished')))`, e.AuthorizationID, e.PlatformUserID, e.LeaseID, e.EventID, e.ID, e.AmountUnits).Scan(&protected)
+	err := b.outboxDB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM wallet_authorization_segment a JOIN wallet_settlement_outbox o ON o.event_id=a.event_id AND o.authorization_id=a.authorization_id AND o.billing_snapshot_id=a.billing_snapshot_id WHERE a.authorization_id=$1 AND a.platform_user_id=$2 AND a.lease_id=$3 AND a.event_id=$4 AND o.id=$5 AND a.actual_units=$6 AND o.amount_units=a.actual_units AND o.lease_id=a.lease_id AND a.actual_units>0 AND a.expiry_ack_at IS NULL AND (a.kind='media' OR a.state IN ('settling','finished')))`, e.AuthorizationID, e.PlatformUserID, e.LeaseID, e.EventID, e.ID, e.AmountUnits).Scan(&protected)
 	return protected, err
 }
 

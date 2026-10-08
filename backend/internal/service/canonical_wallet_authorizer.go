@@ -182,23 +182,32 @@ func (a *CanonicalWalletAuthorizer) Authorize(ctx context.Context, in AuthorizeI
 				}
 			}
 			if h.AttemptKind == "llm" {
-				h.renewAfterZero = func(ctx context.Context) (*AuthorizationHandle, error) {
+				h.retryCheck = func(ctx context.Context) error {
 					segments, e := a.bridge.authorizationSegments(ctx, h.ID)
 					if e != nil || len(segments) != len(h.Segments) {
-						return nil, &AuthorizationRefusedError{Reason: AuthorizationRefusalLeaseUnavailable, AuthorizationID: h.ID, Detail: "previous zero resolution unavailable", Cause: e}
+						return &AuthorizationRefusedError{Reason: AuthorizationRefusalLeaseUnavailable, AuthorizationID: h.ID, Detail: "previous zero resolution unavailable", Cause: e}
 					}
 					for _, segment := range segments {
 						if segment.ActualUnits != 0 || segment.Remainder != nil || (segment.State != "released" && segment.State != "finished") {
-							return nil, &AuthorizationRefusedError{Reason: AuthorizationRefusalLeaseUnavailable, AuthorizationID: h.ID, Detail: "previous attempt has no reliable zero proof"}
+							return &AuthorizationRefusedError{Reason: AuthorizationRefusalLeaseUnavailable, AuthorizationID: h.ID, Detail: "previous attempt has no reliable zero proof"}
 						}
 						if segment.State != "finished" {
+							if _, e = a.bridge.store.ReleaseCanonicalWalletHold(ctx, in.User.PlatformUserID, segment.AuthorizationID, "released", "zero_cost"); e != nil && !isHoldNotArmed(e) && !errors.Is(e, ErrCanonicalWalletHoldMissing) {
+								return e
+							}
 							if e = a.bridge.protectPoolAttempt(ctx, h.ID, in.User.PlatformUserID, h.SnapshotID, &segment, true); e == nil {
 								e = a.bridge.finishPoolSegment(ctx, in.User.PlatformUserID, segment)
 							}
 							if e != nil {
-								return nil, &AuthorizationRefusedError{Reason: AuthorizationRefusalLeaseUnavailable, AuthorizationID: h.ID, Detail: "previous zero pin ACK unavailable", Cause: e}
+								return &AuthorizationRefusedError{Reason: AuthorizationRefusalLeaseUnavailable, AuthorizationID: h.ID, Detail: "previous zero pin ACK unavailable", Cause: e}
 							}
 						}
+					}
+					return nil
+				}
+				h.renewAfterZero = func(ctx context.Context) (*AuthorizationHandle, error) {
+					if err := h.retryCheck(ctx); err != nil {
+						return nil, err
 					}
 					return a.Authorize(ctx, in)
 				}

@@ -399,6 +399,7 @@ type mediaPinRequest struct {
 	Held               canonicalWalletAmountObject  `json:"held"`
 	BillingSnapshotID  string                       `json:"billing_snapshot_id"`
 	SettlementEventID  string                       `json:"settlement_event_id"`
+	AuthorizationKind  string                       `json:"authorization_kind,omitempty"`
 	USDPolicyVersion   string                       `json:"usd_wallet_policy_version"`
 	Resolution         string                       `json:"resolution,omitempty"`
 	SettlementEventIDs []string                     `json:"settlement_event_ids,omitempty"`
@@ -410,7 +411,7 @@ func (s *MediaTaskService) pinSingle(ctx context.Context, r *mediaTaskRecord, fi
 	if !ok {
 		return errors.New("media task pin control plane unavailable")
 	}
-	request := mediaPinRequest{AuthorizationID: r.AuthorizationID, GatewayJobID: r.ID, PlatformUserID: r.PlatformUserID, LeaseID: r.LeaseID, Held: newCanonicalWalletAmountObject(r.HeldUnits), BillingSnapshotID: r.SnapshotID, SettlementEventID: r.EventID, USDPolicyVersion: "usd-wallet-v1"}
+	request := mediaPinRequest{AuthorizationKind: r.AuthorizationKind, AuthorizationID: r.AuthorizationID, GatewayJobID: r.ID, PlatformUserID: r.PlatformUserID, LeaseID: r.LeaseID, Held: newCanonicalWalletAmountObject(r.HeldUnits), BillingSnapshotID: r.SnapshotID, SettlementEventID: r.EventID, USDPolicyVersion: "usd-wallet-v1"}
 	path := "/api/internal/v2/wallet/task-pins/create"
 	if finish {
 		path = "/api/internal/v2/wallet/task-pins/finish"

@@ -79,7 +79,7 @@ func (s *FailoverState) HandleFailoverError(
 		return FailoverCanceled
 	}
 	s.LastFailoverErr = failoverErr
-	if failoverErr == nil || !failoverErr.ShouldRetryNextAccount() {
+	if failoverErr == nil || !service.WalletAttemptMayRetry(ctx) || !failoverErr.ShouldRetryNextAccount() {
 		return FailoverExhausted
 	}
 
