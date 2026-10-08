@@ -40,7 +40,7 @@ func startWalletHoldOutcomeTestPostgres(t testing.TB, ctx context.Context) *sql.
 		"214_wallet_outbox_split_and_authorization.sql",
 		"215_wallet_reconciliation_indexes.sql",
 		"218_wallet_authorization_segments.sql", // the hold-outcome store reads it
-		"219_wallet_attempt_protection.sql",
+		"219_wallet_attempt_protection.sql", "222_wallet_unknown_expiry.sql",
 	} {
 		sqlContent, err := os.ReadFile(filepath.Join("..", "..", "migrations", migration))
 		require.NoError(t, err)

@@ -11,7 +11,7 @@ func TestAddUnitsRejectsOverflow(t *testing.T) {
 	_, err := AddUnits(math.MaxInt64-1, 2)
 	require.ErrorIs(t, err, ErrCanonicalWalletUnitsOverflow)
 
-	sum, err := AddUnits(100_00000000, 50_00000000) // 100 CNY + 50 CNY
+	sum, err := AddUnits(100_00000000, 50_00000000) // 100 USD + 50 USD
 	require.NoError(t, err)
 	require.Equal(t, int64(150_00000000), sum)
 }
@@ -43,7 +43,7 @@ func TestMulUnitsRejectsOverflow(t *testing.T) {
 	_, err := MulUnits(math.MaxInt64/2+1, 2)
 	require.ErrorIs(t, err, ErrCanonicalWalletUnitsOverflow)
 
-	product, err := MulUnits(3, 100_00000000) // 3 requests at 100 CNY each
+	product, err := MulUnits(3, 100_00000000) // 3 requests at 100 USD each
 	require.NoError(t, err)
 	require.Equal(t, int64(300_00000000), product)
 }
@@ -51,7 +51,7 @@ func TestMulUnitsRejectsOverflow(t *testing.T) {
 func TestMulUnitsRejectsNegativeOperands(t *testing.T) {
 	// The protocol domain has no legitimate use for a negative amount or a
 	// negative factor (there is no such thing as "negative tokens" or
-	// "negative CNY"), so both are rejected outright — MulUnits(math.MinInt64, -1)
+	// "negative USD"), so both are rejected outright — MulUnits(math.MinInt64, -1)
 	// would silently wrap instead of erroring without the guard.
 	_, err := MulUnits(-1, 2)
 	require.ErrorIs(t, err, ErrCanonicalWalletUnitsNegative)
@@ -59,22 +59,4 @@ func TestMulUnitsRejectsNegativeOperands(t *testing.T) {
 	require.ErrorIs(t, err, ErrCanonicalWalletUnitsNegative)
 	_, err = MulUnits(math.MinInt64, -1)
 	require.ErrorIs(t, err, ErrCanonicalWalletUnitsNegative)
-}
-
-func TestCreditsToUnitsMatchesFrozenConversion(t *testing.T) {
-	// 1 ShipAny credit = 0.01 CNY = 1,000,000 units at cny-e8-v1 scale.
-	units, err := CreditsToUnits(1)
-	require.NoError(t, err)
-	require.Equal(t, int64(1_000_000), units)
-
-	units, err = CreditsToUnits(100)
-	require.NoError(t, err)
-	require.Equal(t, int64(100_000_000), units)
-}
-
-func TestCreditsToUnitsRejectsOverflowAndNegative(t *testing.T) {
-	_, err := CreditsToUnits(-1)
-	require.ErrorIs(t, err, ErrCanonicalWalletUnitsNegative)
-	_, err = CreditsToUnits(math.MaxInt64)
-	require.ErrorIs(t, err, ErrCanonicalWalletUnitsOverflow)
 }

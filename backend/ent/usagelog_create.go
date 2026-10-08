@@ -351,6 +351,34 @@ func (_c *UsageLogCreate) SetNillableActualCost(v *float64) *UsageLogCreate {
 	return _c
 }
 
+// SetActualCostUsd sets the "actual_cost_usd" field.
+func (_c *UsageLogCreate) SetActualCostUsd(v float64) *UsageLogCreate {
+	_c.mutation.SetActualCostUsd(v)
+	return _c
+}
+
+// SetNillableActualCostUsd sets the "actual_cost_usd" field if the given value is not nil.
+func (_c *UsageLogCreate) SetNillableActualCostUsd(v *float64) *UsageLogCreate {
+	if v != nil {
+		_c.SetActualCostUsd(*v)
+	}
+	return _c
+}
+
+// SetBaseCostUsd sets the "base_cost_usd" field.
+func (_c *UsageLogCreate) SetBaseCostUsd(v float64) *UsageLogCreate {
+	_c.mutation.SetBaseCostUsd(v)
+	return _c
+}
+
+// SetNillableBaseCostUsd sets the "base_cost_usd" field if the given value is not nil.
+func (_c *UsageLogCreate) SetNillableBaseCostUsd(v *float64) *UsageLogCreate {
+	if v != nil {
+		_c.SetBaseCostUsd(*v)
+	}
+	return _c
+}
+
 // SetSourceCurrency sets the "source_currency" field.
 func (_c *UsageLogCreate) SetSourceCurrency(v string) *UsageLogCreate {
 	_c.mutation.SetSourceCurrency(v)
@@ -843,6 +871,14 @@ func (_c *UsageLogCreate) defaults() {
 		v := usagelog.DefaultActualCost
 		_c.mutation.SetActualCost(v)
 	}
+	if _, ok := _c.mutation.ActualCostUsd(); !ok {
+		v := usagelog.DefaultActualCostUsd
+		_c.mutation.SetActualCostUsd(v)
+	}
+	if _, ok := _c.mutation.BaseCostUsd(); !ok {
+		v := usagelog.DefaultBaseCostUsd
+		_c.mutation.SetBaseCostUsd(v)
+	}
 	if _, ok := _c.mutation.SourceCurrency(); !ok {
 		v := usagelog.DefaultSourceCurrency
 		_c.mutation.SetSourceCurrency(v)
@@ -993,6 +1029,12 @@ func (_c *UsageLogCreate) check() error {
 	}
 	if _, ok := _c.mutation.ActualCost(); !ok {
 		return &ValidationError{Name: "actual_cost", err: errors.New(`ent: missing required field "UsageLog.actual_cost"`)}
+	}
+	if _, ok := _c.mutation.ActualCostUsd(); !ok {
+		return &ValidationError{Name: "actual_cost_usd", err: errors.New(`ent: missing required field "UsageLog.actual_cost_usd"`)}
+	}
+	if _, ok := _c.mutation.BaseCostUsd(); !ok {
+		return &ValidationError{Name: "base_cost_usd", err: errors.New(`ent: missing required field "UsageLog.base_cost_usd"`)}
 	}
 	if _, ok := _c.mutation.SourceCurrency(); !ok {
 		return &ValidationError{Name: "source_currency", err: errors.New(`ent: missing required field "UsageLog.source_currency"`)}
@@ -1210,6 +1252,14 @@ func (_c *UsageLogCreate) createSpec() (*UsageLog, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.ActualCost(); ok {
 		_spec.SetField(usagelog.FieldActualCost, field.TypeFloat64, value)
 		_node.ActualCost = value
+	}
+	if value, ok := _c.mutation.ActualCostUsd(); ok {
+		_spec.SetField(usagelog.FieldActualCostUsd, field.TypeFloat64, value)
+		_node.ActualCostUsd = value
+	}
+	if value, ok := _c.mutation.BaseCostUsd(); ok {
+		_spec.SetField(usagelog.FieldBaseCostUsd, field.TypeFloat64, value)
+		_node.BaseCostUsd = value
 	}
 	if value, ok := _c.mutation.SourceCurrency(); ok {
 		_spec.SetField(usagelog.FieldSourceCurrency, field.TypeString, value)
@@ -1901,6 +1951,42 @@ func (u *UsageLogUpsert) UpdateActualCost() *UsageLogUpsert {
 // AddActualCost adds v to the "actual_cost" field.
 func (u *UsageLogUpsert) AddActualCost(v float64) *UsageLogUpsert {
 	u.Add(usagelog.FieldActualCost, v)
+	return u
+}
+
+// SetActualCostUsd sets the "actual_cost_usd" field.
+func (u *UsageLogUpsert) SetActualCostUsd(v float64) *UsageLogUpsert {
+	u.Set(usagelog.FieldActualCostUsd, v)
+	return u
+}
+
+// UpdateActualCostUsd sets the "actual_cost_usd" field to the value that was provided on create.
+func (u *UsageLogUpsert) UpdateActualCostUsd() *UsageLogUpsert {
+	u.SetExcluded(usagelog.FieldActualCostUsd)
+	return u
+}
+
+// AddActualCostUsd adds v to the "actual_cost_usd" field.
+func (u *UsageLogUpsert) AddActualCostUsd(v float64) *UsageLogUpsert {
+	u.Add(usagelog.FieldActualCostUsd, v)
+	return u
+}
+
+// SetBaseCostUsd sets the "base_cost_usd" field.
+func (u *UsageLogUpsert) SetBaseCostUsd(v float64) *UsageLogUpsert {
+	u.Set(usagelog.FieldBaseCostUsd, v)
+	return u
+}
+
+// UpdateBaseCostUsd sets the "base_cost_usd" field to the value that was provided on create.
+func (u *UsageLogUpsert) UpdateBaseCostUsd() *UsageLogUpsert {
+	u.SetExcluded(usagelog.FieldBaseCostUsd)
+	return u
+}
+
+// AddBaseCostUsd adds v to the "base_cost_usd" field.
+func (u *UsageLogUpsert) AddBaseCostUsd(v float64) *UsageLogUpsert {
+	u.Add(usagelog.FieldBaseCostUsd, v)
 	return u
 }
 
@@ -2938,6 +3024,48 @@ func (u *UsageLogUpsertOne) AddActualCost(v float64) *UsageLogUpsertOne {
 func (u *UsageLogUpsertOne) UpdateActualCost() *UsageLogUpsertOne {
 	return u.Update(func(s *UsageLogUpsert) {
 		s.UpdateActualCost()
+	})
+}
+
+// SetActualCostUsd sets the "actual_cost_usd" field.
+func (u *UsageLogUpsertOne) SetActualCostUsd(v float64) *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetActualCostUsd(v)
+	})
+}
+
+// AddActualCostUsd adds v to the "actual_cost_usd" field.
+func (u *UsageLogUpsertOne) AddActualCostUsd(v float64) *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.AddActualCostUsd(v)
+	})
+}
+
+// UpdateActualCostUsd sets the "actual_cost_usd" field to the value that was provided on create.
+func (u *UsageLogUpsertOne) UpdateActualCostUsd() *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateActualCostUsd()
+	})
+}
+
+// SetBaseCostUsd sets the "base_cost_usd" field.
+func (u *UsageLogUpsertOne) SetBaseCostUsd(v float64) *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetBaseCostUsd(v)
+	})
+}
+
+// AddBaseCostUsd adds v to the "base_cost_usd" field.
+func (u *UsageLogUpsertOne) AddBaseCostUsd(v float64) *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.AddBaseCostUsd(v)
+	})
+}
+
+// UpdateBaseCostUsd sets the "base_cost_usd" field to the value that was provided on create.
+func (u *UsageLogUpsertOne) UpdateBaseCostUsd() *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateBaseCostUsd()
 	})
 }
 
@@ -4220,6 +4348,48 @@ func (u *UsageLogUpsertBulk) AddActualCost(v float64) *UsageLogUpsertBulk {
 func (u *UsageLogUpsertBulk) UpdateActualCost() *UsageLogUpsertBulk {
 	return u.Update(func(s *UsageLogUpsert) {
 		s.UpdateActualCost()
+	})
+}
+
+// SetActualCostUsd sets the "actual_cost_usd" field.
+func (u *UsageLogUpsertBulk) SetActualCostUsd(v float64) *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetActualCostUsd(v)
+	})
+}
+
+// AddActualCostUsd adds v to the "actual_cost_usd" field.
+func (u *UsageLogUpsertBulk) AddActualCostUsd(v float64) *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.AddActualCostUsd(v)
+	})
+}
+
+// UpdateActualCostUsd sets the "actual_cost_usd" field to the value that was provided on create.
+func (u *UsageLogUpsertBulk) UpdateActualCostUsd() *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateActualCostUsd()
+	})
+}
+
+// SetBaseCostUsd sets the "base_cost_usd" field.
+func (u *UsageLogUpsertBulk) SetBaseCostUsd(v float64) *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetBaseCostUsd(v)
+	})
+}
+
+// AddBaseCostUsd adds v to the "base_cost_usd" field.
+func (u *UsageLogUpsertBulk) AddBaseCostUsd(v float64) *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.AddBaseCostUsd(v)
+	})
+}
+
+// UpdateBaseCostUsd sets the "base_cost_usd" field to the value that was provided on create.
+func (u *UsageLogUpsertBulk) UpdateBaseCostUsd() *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateBaseCostUsd()
 	})
 }
 

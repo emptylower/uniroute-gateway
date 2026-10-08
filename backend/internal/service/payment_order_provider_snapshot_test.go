@@ -52,6 +52,7 @@ func TestCreateOrderInTx_WritesProviderSnapshot(t *testing.T) {
 		SetEmail("snapshot@example.com").
 		SetPasswordHash("hash").
 		SetUsername("snapshot-user").
+		SetBillingCurrency(CurrencyCNY).
 		Save(ctx)
 	require.NoError(t, err)
 
@@ -76,9 +77,10 @@ func TestCreateOrderInTx_WritesProviderSnapshot(t *testing.T) {
 			SrcHost:     "app.example.com",
 		},
 		&User{
-			ID:       user.ID,
-			Email:    user.Email,
-			Username: user.Username,
+			ID:              user.ID,
+			Email:           user.Email,
+			Username:        user.Username,
+			BillingCurrency: CurrencyCNY,
 		},
 		nil,
 		&PaymentConfig{

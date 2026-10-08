@@ -964,7 +964,7 @@ var ProviderSet = wire.NewSet(
 	wire.Bind(new(ChannelRoutingAccess), new(*APIKeyService)),
 	NewModelPricingResolver,
 	NewBillingSnapshotService,
-	NewExchangeRateService,
+	NewUSDPriceService,
 	ProvideModelCatalogService,
 	NewContentModerationService,
 	NewAffiliateService,
@@ -1038,7 +1038,7 @@ func ProvideModelCatalogService(
 	selector *ChannelRoutingSelector,
 	pricing *ModelPricingResolver,
 	accounts AccountRepository,
-	fx *ExchangeRateService,
+	fx *USDPriceService,
 	store ModelAuthorizationStore,
 	cfg *config.Config,
 ) *ModelCatalogService {

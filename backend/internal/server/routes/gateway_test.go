@@ -26,6 +26,8 @@ func newGatewayRoutesTestRouter(platform ...string) *gin.Engine {
 }
 
 func newGatewayRoutesTestRouterWithConfig(cfg *config.Config, platform ...string) *gin.Engine {
+	cfg.CanonicalWallet.Mode = config.CanonicalWalletModeEnforce
+	cfg.CanonicalWallet.USDWalletEnabled = true
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 
@@ -43,6 +45,7 @@ func newGatewayRoutesTestRouterWithConfig(cfg *config.Config, platform ...string
 		servermiddleware.APIKeyAuthMiddleware(func(c *gin.Context) {
 			groupID := int64(1)
 			c.Set(string(servermiddleware.ContextKeyAPIKey), &service.APIKey{
+				User:    &service.User{PlatformUserID: "route-test-user"},
 				GroupID: &groupID,
 				Group:   &service.Group{Platform: groupPlatform},
 			})

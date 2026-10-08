@@ -50,7 +50,7 @@ func TestPhase34ProbeEnsureRouteAtStartup(t *testing.T) {
 		t.Cleanup(b.Close)
 		require.NotNil(t, b, "shadow observes; it must not take the process down")
 		require.Equal(t, int64(1), CanonicalWalletBridgeStats()["control_plane_incompatible"]-baseIncompat)
-		_, err := b.ensureLease(ctx, "user-probe", "CNY", 1_000_000, canonicalWalletLeasePurposeAuthorize, "")
+		_, err := b.ensureLease(ctx, "user-probe", "USD", 1_000_000, canonicalWalletLeasePurposeAuthorize, "")
 		require.ErrorIs(t, err, ErrCanonicalWalletControlPlaneIncompatible, "a runtime 404 from /ensure is classified control_plane_incompatible")
 	})
 

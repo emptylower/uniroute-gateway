@@ -34,7 +34,7 @@ func startWalletReconciliationTestPostgres(t testing.TB, ctx context.Context) *s
 		"215_wallet_reconciliation_indexes.sql",
 		"216_wallet_outbox_billing_snapshot.sql",
 		"218_wallet_authorization_segments.sql",
-		"219_wallet_attempt_protection.sql",
+		"219_wallet_attempt_protection.sql", "222_wallet_unknown_expiry.sql",
 	} {
 		sqlContent, err := os.ReadFile(filepath.Join("..", "..", "migrations", migration))
 		require.NoError(t, err)
@@ -176,7 +176,7 @@ func TestLiveProvisionalListByUser(t *testing.T) {
 		INSERT INTO wallet_live_provisional
 			(token, authorization_id, call_hash, platform_user_id, user_id, api_key_id, account_id,
 			 billing_currency, billing_snapshot_id, estimated_units, status, windows, settlement_event_id, created_at, activated_at)
-		VALUES ($1, $2, $3, $4, 101, 202, 303, 'CNY', '', 7_000000, 'active', $5::jsonb, '', $6, $6)`,
+		VALUES ($1, $2, $3, $4, 101, 202, 303, 'USD', '', 7_000000, 'active', $5::jsonb, '', $6, $6)`,
 		"auth_live_read", "auth_live_read", callHash, user,
 		`[{"window_seq":1,"lease_id":"lease-l1","token":"auth_live_read","pending_units":0,"settled_units":3000000,"opened_at_ms":1000},
 		   {"window_seq":2,"lease_id":"lease-l2","token":"auth_live_read","pending_units":5,"settled_units":4000000,"opened_at_ms":2000}]`,
@@ -189,7 +189,7 @@ func TestLiveProvisionalListByUser(t *testing.T) {
 		INSERT INTO wallet_live_provisional
 			(token, authorization_id, call_hash, platform_user_id, user_id, api_key_id, account_id,
 			 billing_currency, billing_snapshot_id, estimated_units, status, windows, settlement_event_id, created_at)
-		VALUES ('auth_live_other', 'auth_live_other', 'live_callhash_other', $1, 1, 2, 3, 'CNY', '', 100, 'finalized', '[]'::jsonb, 'gwusg_other', now())`,
+		VALUES ('auth_live_other', 'auth_live_other', 'live_callhash_other', $1, 1, 2, 3, 'USD', '', 100, 'finalized', '[]'::jsonb, 'gwusg_other', now())`,
 		"shipany-user-live-other",
 	)
 	require.NoError(t, err)
@@ -203,7 +203,7 @@ func TestLiveProvisionalListByUser(t *testing.T) {
 	require.Equal(t, "auth_live_read", rec.AuthorizationID)
 	require.Equal(t, callHash, rec.CallHash)
 	require.Equal(t, user, rec.PlatformUserID)
-	require.Equal(t, "CNY", rec.BillingCurrency)
+	require.Equal(t, "USD", rec.BillingCurrency)
 	require.Equal(t, "", rec.BillingSnapshotID)
 	require.Nil(t, rec.BillingFX, "an empty billing_snapshot_id degrades to null fx — never drops the record")
 	require.Equal(t, "active", rec.Status)
@@ -265,7 +265,7 @@ func TestWalletReconciliationSummaryEqualsDirectSums(t *testing.T) {
 		_, err := db.ExecContext(ctx, `
 			INSERT INTO wallet_settlement_outbox
 				(event_id, platform_user_id, lease_id, gateway_request_id, currency, amount_units, payload_hash, status, occurred_at, delivered_at, dead_letter_reason, attempt_count, authorization_id)
-			VALUES ($1, $2, $3, $4, 'CNY', $5, 'hash-69', $6, $7, $8, $9, 1, $10)`,
+			VALUES ($1, $2, $3, $4, 'USD', $5, 'hash-69', $6, $7, $8, $9, 1, $10)`,
 			s.eventID, user, s.leaseID, "req-"+s.eventID, s.amount, s.status, now.Add(-30*time.Minute), deliveredAt, reason, "auth-69-"+s.eventID)
 		require.NoError(t, err)
 		require.NoError(t, db.QueryRowContext(ctx, `SELECT id FROM wallet_settlement_outbox WHERE event_id = $1`, s.eventID).Scan(&seeds[i].id))
@@ -294,14 +294,14 @@ func TestWalletReconciliationSummaryEqualsDirectSums(t *testing.T) {
 	// fold), one with billing_snapshot_id='' (fx = null).
 	_, err = db.ExecContext(ctx, `
 		INSERT INTO wallet_billing_snapshot (id, version, user_id, api_key_id, account_id, billing_model, pricing_mode, payload)
-		VALUES ('snap-69', 1, 101, 202, 303, 'paygo', 'per_call', '{"fx":{"rate":"7.2451","base":"CNY"}}'::jsonb)`)
+		VALUES ('snap-69', 1, 101, 202, 303, 'paygo', 'per_call', '{"fx":{"rate":"7.2451","base":"USD"}}'::jsonb)`)
 	require.NoError(t, err)
 	liveCallHash := "live_callhash_69"
 	_, err = db.ExecContext(ctx, `
 		INSERT INTO wallet_live_provisional
 			(token, authorization_id, call_hash, platform_user_id, user_id, api_key_id, account_id,
 			 billing_currency, billing_snapshot_id, estimated_units, status, windows, settlement_event_id, created_at)
-		VALUES ('auth-69-live-a', 'auth-69-live-a', $1, $2, 101, 202, 303, 'CNY', 'snap-69', 7_000000, 'finalized',
+		VALUES ('auth-69-live-a', 'auth-69-live-a', $1, $2, 101, 202, 303, 'USD', 'snap-69', 7_000000, 'finalized',
 			$3::jsonb, 'gwusg_69_live_final', $4)`,
 		liveCallHash, user,
 		`[{"window_seq":1,"lease_id":"lease-69-a","token":"auth-69-live-a","pending_units":0,"settled_units":3,"opened_at_ms":1000},
@@ -312,7 +312,7 @@ func TestWalletReconciliationSummaryEqualsDirectSums(t *testing.T) {
 		INSERT INTO wallet_live_provisional
 			(token, authorization_id, call_hash, platform_user_id, user_id, api_key_id, account_id,
 			 billing_currency, billing_snapshot_id, estimated_units, status, windows, settlement_event_id, created_at)
-		VALUES ('auth-69-live-b', 'auth-69-live-b', 'live_callhash_69b', $1, 101, 202, 303, 'CNY', '', 500, 'finalized', '[]'::jsonb, 'gwusg_69_live_b_final', $2)`,
+		VALUES ('auth-69-live-b', 'auth-69-live-b', 'live_callhash_69b', $1, 101, 202, 303, 'USD', '', 500, 'finalized', '[]'::jsonb, 'gwusg_69_live_b_final', $2)`,
 		user, now.Add(-24*time.Minute))
 	require.NoError(t, err)
 	t.Logf("test 69 seeded: holds=%d live=2 (1 with resolvable fx, 1 without)", len(holdSeeds))
@@ -323,12 +323,12 @@ func TestWalletReconciliationSummaryEqualsDirectSums(t *testing.T) {
 	leaseStore := &gatewayCacheAdapterForTest{rdb: rdb}
 	leaseID := "lease-69-current"
 	lease := CanonicalWalletLease{
-		LeaseID: leaseID, PlatformUserID: user, Currency: "CNY",
+		LeaseID: leaseID, PlatformUserID: user, Currency: "USD",
 		BudgetUnits: 500_000000, ConsumedUnits: 9_000000, ExpiresAt: now.Add(10 * time.Minute),
 	}
 	require.NoError(t, leaseStore.InstallCanonicalWalletLease(ctx, lease))
 	for _, authID := range []string{"auth-69-open", "auth-69-open2"} {
-		outLease, held, _, armErr := leaseStore.ArmCanonicalWalletHold(ctx, user, leaseID, "CNY", authID, 14_000000, 60_000, now)
+		outLease, held, _, armErr := leaseStore.ArmCanonicalWalletHold(ctx, user, leaseID, "USD", authID, 14_000000, 60_000, now)
 		require.NoError(t, armErr)
 		require.Equal(t, leaseID, outLease)
 		require.Equal(t, int64(14_000000), held)
@@ -417,8 +417,8 @@ func TestWalletReconciliationSummaryEqualsDirectSums(t *testing.T) {
 	require.NotNil(t, liveA, "the snapshot-backed Live record")
 	require.NotNil(t, liveB)
 	require.Len(t, liveA.Windows, 2)
-	require.Equal(t, LiveWindowSettlementEventID(liveCallHash, 1, user, "CNY"), liveA.Windows[0].EventID)
-	require.Equal(t, LiveWindowSettlementEventID(liveCallHash, 2, user, "CNY"), liveA.Windows[1].EventID)
+	require.Equal(t, LiveWindowSettlementEventID(liveCallHash, 1, user, "USD"), liveA.Windows[0].EventID)
+	require.Equal(t, LiveWindowSettlementEventID(liveCallHash, 2, user, "USD"), liveA.Windows[1].EventID)
 	require.NotEqual(t, liveA.Windows[0].EventID, liveA.Windows[1].EventID)
 	require.NotNil(t, liveA.BillingFX, "the resolvable snapshot reports its rate")
 	require.Equal(t, "7.2451", *liveA.BillingFX)

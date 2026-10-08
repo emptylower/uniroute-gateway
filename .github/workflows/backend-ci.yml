@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+env:
+  GOMAXPROCS: '2'
+  GOFLAGS: '-p=2'
+
 jobs:
   shell:
     runs-on: macos-15
@@ -40,6 +44,67 @@ jobs:
         if: ${{ !cancelled() }}
         working-directory: backend
         run: make test-integration
+
+  ws-race:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          check-latest: false
+          cache: true
+          cache-dependency-path: backend/go.sum
+      - name: Verify Go version
+        run: go version | grep -q 'go1.26.5'
+      - name: WebSocket outcome and lifecycle race regressions
+        working-directory: backend
+        run: |
+          go test -tags=unit -race -p=1 -count=10 -timeout=10m ./internal/service -run '^(TestAuthorizingWS(Read|Classification)|TestOpenAIWSPassthroughTurnLifecycle_)'
+          go test -tags=unit -race -p=1 -count=20 -timeout=10m ./internal/handler -run '^TestWSAuthorization_TwoTurnSessionsOnBothIngressModes$'
+
+  wallet-recovery:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: wallet_test
+          POSTGRES_PASSWORD: wallet_test
+          POSTGRES_DB: uniroute_media_test_ci
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U wallet_test -d uniroute_media_test_ci"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+      redis:
+        image: redis:7
+        ports:
+          - 56379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          check-latest: false
+          cache: true
+          cache-dependency-path: backend/go.sum
+      - name: Verify Go version
+        run: go version | grep -q 'go1.26.5'
+      - name: Real PostgreSQL Redis wallet recovery regressions
+        working-directory: backend
+        env:
+          UNIROUTE_MEDIA_TEST_POSTGRES_DSN: postgres://wallet_test:wallet_test@127.0.0.1:55432/uniroute_media_test_ci?sslmode=disable
+          UNIROUTE_MEDIA_TEST_REDIS_ADDR: 127.0.0.1:56379
+        run: |
+          go test -tags=media_integration -p=1 -count=1 -timeout=15m ./internal/media_integration
+          go test -tags=media_integration -race -p=1 -count=3 -timeout=10m ./internal/media_integration -run '^(TestExternalCold|TestExternalPoolConcurrentPositiveAndZero|TestExternalPartialExpiryAck)'
+      - name: Wallet owner and retry race regressions
+        working-directory: backend
+        run: go test -tags=unit -race -p=1 -count=10 -timeout=10m ./internal/service -run '^(TestWalletBodyOwner|TestWalletWSDisarm|TestWalletGatewayShutdown|TestWalletUnknown503|TestWalletKnownZero|TestWalletRetryGate)'
 
   frontend:
     runs-on: ubuntu-latest
@@ -88,3 +153,45 @@ jobs:
           # Legacy findings are baselined: only issues a change introduces fail CI.
           # Pay the backlog down separately; do not turn this off to silence a new finding.
           only-new-issues: true
+
+  gateway-release-artifact:
+    # Deployment consumes only a main commit that passed every merge gate.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [shell, test, ws-race, wallet-recovery, frontend, golangci-lint]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - target: linux-amd64
+            goos: linux
+            goarch: amd64
+          - target: darwin-arm64
+            goos: darwin
+            goarch: arm64
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          check-latest: false
+          cache: true
+          cache-dependency-path: backend/go.sum
+      - name: Build verified gateway
+        working-directory: backend
+        env:
+          CGO_ENABLED: '0'
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          mkdir -p release
+          market_build_date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          go build -trimpath -ldflags "-s -w -X main.Commit=$GITHUB_SHA -X main.Date=$market_build_date" -o release/gateway-server ./cmd/server
+          cd release
+          sha256sum gateway-server > SHA256SUMS
+          printf '%s\n' "$GITHUB_SHA" > SOURCE_COMMIT
+      - uses: actions/upload-artifact@v7
+        with:
+          name: uniroute-gateway-${{ matrix.target }}
+          path: backend/release/
+          if-no-files-found: error
+          retention-days: 7

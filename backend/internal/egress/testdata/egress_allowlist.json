@@ -226,7 +226,7 @@
   {
     "file": "internal/handler/auth_dingtalk_oauth.go",
     "kind": "construct",
-    "detail": "AuthHandler.dingTalkClient: \u0026http.Client{}",
+    "detail": "AuthHandler.dingTalkClient: &http.Client{}",
     "annotation": "non-billable",
     "note": "dingtalk oauth client"
   },
@@ -303,14 +303,14 @@
   {
     "file": "internal/handler/auth_wechat_oauth.go",
     "kind": "construct",
-    "detail": "exchangeWeChatOAuthCode: \u0026http.Client{}",
+    "detail": "exchangeWeChatOAuthCode: &http.Client{}",
     "annotation": "non-billable",
     "note": "wechat oauth client"
   },
   {
     "file": "internal/handler/auth_wechat_oauth.go",
     "kind": "construct",
-    "detail": "fetchWeChatUserInfo: \u0026http.Client{}",
+    "detail": "fetchWeChatUserInfo: &http.Client{}",
     "annotation": "non-billable",
     "note": "wechat oauth client"
   },
@@ -611,14 +611,14 @@
   {
     "file": "internal/payment/provider/airwallex.go",
     "kind": "construct",
-    "detail": "Airwallex.do: \u0026http.Client{}",
+    "detail": "Airwallex.do: &http.Client{}",
     "annotation": "non-billable",
     "note": "payment provider client"
   },
   {
     "file": "internal/payment/provider/airwallex.go",
     "kind": "construct",
-    "detail": "NewAirwallex: \u0026http.Client{}",
+    "detail": "NewAirwallex: &http.Client{}",
     "annotation": "non-billable",
     "note": "payment provider client"
   },
@@ -646,14 +646,14 @@
   {
     "file": "internal/payment/provider/easypay.go",
     "kind": "construct",
-    "detail": "EasyPay.postRaw: \u0026http.Client{}",
+    "detail": "EasyPay.postRaw: &http.Client{}",
     "annotation": "non-billable",
     "note": "payment provider client"
   },
   {
     "file": "internal/payment/provider/easypay.go",
     "kind": "construct",
-    "detail": "NewEasyPay: \u0026http.Client{}",
+    "detail": "NewEasyPay: &http.Client{}",
     "annotation": "non-billable",
     "note": "payment provider client"
   },
@@ -688,7 +688,7 @@
   {
     "file": "internal/pkg/antigravity/client.go",
     "kind": "construct",
-    "detail": "NewClient: \u0026http.Client{}",
+    "detail": "NewClient: &http.Client{}",
     "annotation": "non-billable",
     "note": "antigravity SDK client"
   },
@@ -786,7 +786,7 @@
   {
     "file": "internal/pkg/httpclient/pool.go",
     "kind": "construct",
-    "detail": "buildClient: \u0026http.Client{}",
+    "detail": "buildClient: &http.Client{}",
     "annotation": "non-billable",
     "note": "shared httpclient pool"
   },
@@ -905,7 +905,7 @@
   {
     "file": "internal/pkg/servertiming/http.go",
     "kind": "construct",
-    "detail": "InstrumentClient: \u0026http.Client{}",
+    "detail": "InstrumentClient: &http.Client{}",
     "annotation": "non-billable",
     "note": "servertiming instrumentation"
   },
@@ -982,7 +982,7 @@
   {
     "file": "internal/pkg/websearch/manager.go",
     "kind": "construct",
-    "detail": "newHTTPClient: \u0026http.Client{}",
+    "detail": "newHTTPClient: &http.Client{}",
     "annotation": "non-billable",
     "note": "websearch manager pooled client"
   },
@@ -1066,7 +1066,7 @@
   {
     "file": "internal/pkg/xai/sso_device.go",
     "kind": "construct",
-    "detail": "ConvertSSOToBuild: \u0026http.Client{}",
+    "detail": "ConvertSSOToBuild: &http.Client{}",
     "annotation": "non-billable",
     "note": "non-wallet egress client (construction/factory)"
   },
@@ -1122,7 +1122,7 @@
   {
     "file": "internal/repository/github_release_service.go",
     "kind": "construct",
-    "detail": "NewGitHubReleaseClient: \u0026http.Client{}",
+    "detail": "NewGitHubReleaseClient: &http.Client{}",
     "annotation": "non-billable",
     "note": "github release check client"
   },
@@ -1178,14 +1178,14 @@
   {
     "file": "internal/repository/http_upstream.go",
     "kind": "construct",
-    "detail": "httpUpstreamService.getClientEntry: \u0026http.Client{}",
+    "detail": "httpUpstreamService.getClientEntry: &http.Client{}",
     "annotation": "port",
-    "note": "the decorated HTTP port: one client pool behind repository.NewHTTPUpstream (spec §2.0)"
+    "note": "the decorated HTTP port: one client pool behind repository.NewHTTPUpstream (spec \u00a72.0)"
   },
   {
     "file": "internal/repository/http_upstream.go",
     "kind": "construct",
-    "detail": "httpUpstreamService.getClientEntryWithTLS: \u0026http.Client{}",
+    "detail": "httpUpstreamService.getClientEntryWithTLS: &http.Client{}",
     "annotation": "port",
     "note": "the decorated HTTP port: TLS-fingerprint client pool behind repository.NewHTTPUpstream"
   },
@@ -1255,7 +1255,7 @@
   {
     "file": "internal/repository/pricing_service.go",
     "kind": "construct",
-    "detail": "NewPricingRemoteClient: \u0026http.Client{}",
+    "detail": "NewPricingRemoteClient: &http.Client{}",
     "annotation": "non-billable",
     "note": "remote pricing feed client"
   },
@@ -1325,7 +1325,7 @@
   {
     "file": "internal/repository/turnstile_service.go",
     "kind": "construct",
-    "detail": "NewTurnstileVerifier: \u0026http.Client{}",
+    "detail": "NewTurnstileVerifier: &http.Client{}",
     "annotation": "non-billable",
     "note": "turnstile captcha verifier"
   },
@@ -1353,7 +1353,7 @@
   {
     "file": "internal/securityaudit/prompt_outbound_security.go",
     "kind": "construct",
-    "detail": "NewSecureHTTPClient: \u0026http.Client{}",
+    "detail": "NewSecureHTTPClient: &http.Client{}",
     "annotation": "non-billable",
     "note": "prompt security audit client"
   },
@@ -1519,6 +1519,13 @@
     "note": "egress-capable import; actual wallet classification hangs on the write site / client"
   },
   {
+    "file": "internal/server/middleware/usd_maintenance.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "HTTP status and method constants only; no upstream client"
+  },
+  {
     "file": "internal/server/middleware/wallet_reconciliation_token.go",
     "kind": "import",
     "detail": "net/http",
@@ -1540,9 +1547,16 @@
     "note": "egress-capable import; actual wallet classification hangs on the write site / client"
   },
   {
+    "file": "internal/server/routes/native_wallet_retired.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "HTTP status and method constants only; no upstream client"
+  },
+  {
     "file": "internal/service/account_endpoint_probe.go",
     "kind": "construct",
-    "detail": "NewAccountEndpointProbeService: \u0026http.Client{}",
+    "detail": "NewAccountEndpointProbeService: &http.Client{}",
     "annotation": "non-billable",
     "note": "account endpoint probe client"
   },
@@ -1803,14 +1817,14 @@
     "kind": "construct",
     "detail": "batchImageDefaultHTTPClient: http.DefaultClient",
     "annotation": "billable-outside-this-wallet",
-    "note": "Batch Image Gemini client — debits outside the canonical wallet (spec §2.5)"
+    "note": "Batch Image Gemini client \u2014 debits outside the canonical wallet (spec \u00a72.5)"
   },
   {
     "file": "internal/service/batch_image_provider_gemini.go",
     "kind": "factory",
     "detail": "batchImageDefaultHTTPClient",
     "annotation": "billable-outside-this-wallet",
-    "note": "Batch Image Gemini client factory — debits outside the canonical wallet (spec §2.5)"
+    "note": "Batch Image Gemini client factory \u2014 debits outside the canonical wallet (spec \u00a72.5)"
   },
   {
     "file": "internal/service/batch_image_provider_gemini.go",
@@ -1899,7 +1913,7 @@
   {
     "file": "internal/service/canonical_wallet_bridge.go",
     "kind": "construct",
-    "detail": "newCanonicalWalletHTTPClient: \u0026http.Client{}",
+    "detail": "newCanonicalWalletHTTPClient: &http.Client{}",
     "annotation": "non-billable",
     "note": "canonical wallet control-plane client (money path itself, non-billable)"
   },
@@ -1911,6 +1925,13 @@
     "note": "egress-capable import; actual wallet classification hangs on the write site / client"
   },
   {
+    "file": "internal/service/canonical_wallet_expiry.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "HTTP method constant only; signed reservation-expiry receipt goes through the existing canonical wallet control-plane client"
+  },
+  {
     "file": "internal/service/canonical_wallet_pool.go",
     "kind": "import",
     "detail": "net/http",
@@ -1920,7 +1941,7 @@
   {
     "file": "internal/service/catalog_http_client.go",
     "kind": "construct",
-    "detail": "NewCatalogHTTPClient: \u0026http.Client{}",
+    "detail": "NewCatalogHTTPClient: &http.Client{}",
     "annotation": "non-billable",
     "note": "catalog client"
   },
@@ -1948,7 +1969,7 @@
   {
     "file": "internal/service/channel_monitor_checker.go",
     "kind": "construct",
-    "detail": "newSSRFSafeHTTPClient: \u0026http.Client{}",
+    "detail": "newSSRFSafeHTTPClient: &http.Client{}",
     "annotation": "non-billable",
     "note": "channel monitor SSRF-safe client"
   },
@@ -2045,27 +2066,6 @@
   },
   {
     "file": "internal/service/email_service.go",
-    "kind": "import",
-    "detail": "net/url",
-    "annotation": "non-billable",
-    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
-  },
-  {
-    "file": "internal/service/exchange_rate.go",
-    "kind": "construct",
-    "detail": "NewExchangeRateService: \u0026http.Client{}",
-    "annotation": "non-billable",
-    "note": "FX rate client"
-  },
-  {
-    "file": "internal/service/exchange_rate.go",
-    "kind": "import",
-    "detail": "net/http",
-    "annotation": "non-billable",
-    "note": "egress-capable import; actual wallet classification hangs on the write site / client"
-  },
-  {
-    "file": "internal/service/exchange_rate.go",
     "kind": "import",
     "detail": "net/url",
     "annotation": "non-billable",
@@ -2249,7 +2249,7 @@
   {
     "file": "internal/service/image_storage.go",
     "kind": "construct",
-    "detail": "defaultImageDownloadHTTPClient: \u0026http.Client{}",
+    "detail": "defaultImageDownloadHTTPClient: &http.Client{}",
     "annotation": "non-billable",
     "note": "image download client (media_fetch)"
   },
@@ -2963,7 +2963,7 @@
   {
     "file": "internal/service/vertex_service_account.go",
     "kind": "construct",
-    "detail": "newVertexServiceAccountHTTPClient: \u0026http.Client{}",
+    "detail": "newVertexServiceAccountHTTPClient: &http.Client{}",
     "annotation": "non-billable",
     "note": "vertex service account token client"
   },

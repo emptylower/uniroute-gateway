@@ -462,17 +462,17 @@ type canonicalWalletAmountObject struct {
 }
 
 func newCanonicalWalletAmountObject(units int64) canonicalWalletAmountObject {
-	return canonicalWalletAmountObject{AmountUnits: strconv.FormatInt(units, 10), Currency: "CNY", Scale: 8, UnitVersion: "cny-e8-v1"}
+	return canonicalWalletAmountObject{AmountUnits: strconv.FormatInt(units, 10), Currency: "USD", Scale: 8, UnitVersion: "usd-e8-v1"}
 }
 
 var canonicalWalletDecimalUnitsPattern = regexp.MustCompile(`^(0|[1-9][0-9]{0,18})$`)
 
 // parseCanonicalWalletAmountObject is strict on every field: decimal string only (no sign,
-// no leading zero, ≤ 19 digits — ShipAny's units.ts:53-85 twin), CNY, scale 8,
-// cny-e8-v1, and a value int64 can hold.
+// no leading zero, ≤ 19 digits — ShipAny's units.ts:53-85 twin), USD, scale 8,
+// usd-e8-v1, and a value int64 can hold.
 func parseCanonicalWalletAmountObject(field string, a canonicalWalletAmountObject) (int64, error) {
-	if a.Currency != "CNY" || a.Scale != 8 || a.UnitVersion != "cny-e8-v1" {
-		return 0, fmt.Errorf("%s: not a cny-e8-v1 amount object", field)
+	if a.Currency != "USD" || a.Scale != 8 || a.UnitVersion != "usd-e8-v1" {
+		return 0, fmt.Errorf("%s: not a usd-e8-v1 amount object", field)
 	}
 	if !canonicalWalletDecimalUnitsPattern.MatchString(a.AmountUnits) {
 		return 0, fmt.Errorf("%s.amount_units: not a decimal integer string", field)
@@ -487,7 +487,7 @@ func parseCanonicalWalletAmountObject(field string, a canonicalWalletAmountObjec
 type canonicalWalletEnsureResult struct {
 	USDWalletPolicyVersion string
 	Lease                  CanonicalWalletLease
-	Outcome                string // reused | issued
+	Outcome                string // reused | issued | topped_up
 	ClampedBy              string // none | cap | balance
 }
 
@@ -537,7 +537,7 @@ func classifyControlPlaneError(err error) (terminalReason string, ok bool) {
 }
 
 func (c *canonicalWalletHTTPClient) EnsureLease(ctx context.Context, request canonicalWalletEnsureRequest) (*canonicalWalletEnsureResult, error) {
-	if _, err := RequireCNYBillingCurrency(request.Currency); err != nil {
+	if _, err := RequireUSDBillingCurrency(request.Currency); err != nil {
 		return nil, fmt.Errorf("requested an unsupported currency: %w", err)
 	}
 	var wire canonicalWalletEnsureWireResponse
@@ -577,13 +577,20 @@ func (c *canonicalWalletHTTPClient) EnsureLease(ctx context.Context, request can
 	if err != nil {
 		return nil, err
 	}
+	validOutcome := wire.Outcome == "reused" || wire.Outcome == "issued"
+	if wire.Outcome == "topped_up" {
+		// Same-lease funding has a distinct success outcome on the control plane.
+		// Accept it only for the USD policy's explicit authorization top-up.
+		minimum, minimumErr := parseCanonicalWalletAmountObject("minimum_budget_units", canonicalWalletAmountObject{AmountUnits: request.MinimumBudgetUnits, Currency: "USD", Scale: 8, UnitVersion: CanonicalWalletUnitVersion})
+		validOutcome = minimumErr == nil && minimum > 0 && budget >= minimum && request.Purpose == "authorize" && request.USDWalletPolicyVersion == config.CanonicalUSDWalletPolicyVersion && strings.TrimSpace(request.TopUpLeaseID) != "" && wire.LeaseID == request.TopUpLeaseID
+	}
 	// The §4 invariants, restated over the parsed int64s. The sign clauses are
 	// gone — the parser rejects a sign — and §9.2's status is added: only an
 	// active lease may be installed.
-	if strings.TrimSpace(wire.LeaseID) == "" || strings.TrimSpace(wire.PlatformUserID) != strings.TrimSpace(request.PlatformUserID) || budget <= 0 || headroom > budget || wire.ExpiresAt.IsZero() || wire.Status != "active" || (wire.Outcome != "reused" && wire.Outcome != "issued") {
+	if strings.TrimSpace(wire.LeaseID) == "" || strings.TrimSpace(wire.PlatformUserID) != strings.TrimSpace(request.PlatformUserID) || budget <= 0 || headroom > budget || wire.ExpiresAt.IsZero() || wire.Status != "active" || !validOutcome {
 		return nil, errors.New("control plane returned an invalid canonical wallet lease")
 	}
-	currency, err := RequireCNYBillingCurrency(wire.Currency)
+	currency, err := RequireUSDBillingCurrency(wire.Currency)
 	if err != nil {
 		return nil, fmt.Errorf("control plane returned an unsupported currency: %w", err)
 	}
@@ -698,6 +705,8 @@ func (c *canonicalWalletHTTPClient) SubmitSettlement(ctx context.Context, event 
 }
 
 func (c *canonicalWalletHTTPClient) doJSON(ctx context.Context, method, path, scope, idempotencyKey string, requestBody, responseBody any) error {
+	finishDiagnostic := walletAuthorizationControlStart(ctx)
+	defer finishDiagnostic()
 	payload, err := json.Marshal(requestBody)
 	if err != nil {
 		return fmt.Errorf("encode canonical wallet request: %w", err)
@@ -720,6 +729,7 @@ func (c *canonicalWalletHTTPClient) doJSON(ctx context.Context, method, path, sc
 		return fmt.Errorf("call canonical wallet control plane: %w", err)
 	}
 	defer resp.Body.Close()
+	walletAuthorizationControlResponse(ctx, resp.StatusCode, "", nil)
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return fmt.Errorf("read canonical wallet response: %w", err)
@@ -743,6 +753,7 @@ func (c *canonicalWalletHTTPClient) doJSON(ctx context.Context, method, path, sc
 				}
 			}
 		}
+		walletAuthorizationControlResponse(ctx, statusErr.Status, statusErr.Reason, statusErr.HeadroomUnits)
 		// §9.6 item 6 (PRESERVED, not replaced): a 404/405 from the ensure
 		// route at runtime means the control plane predates 3.4a-S — the
 		// status error WRAPS ErrCanonicalWalletControlPlaneIncompatible so
@@ -1153,6 +1164,11 @@ func probeCanonicalWalletEnsureRoute(cfg *config.Config, client *canonicalWallet
 // construction is forbidden: the dispatcher goroutine starts inside this
 // constructor and would race the assignment.
 func newCanonicalWalletBridge(cfg config.CanonicalWalletConfig, store CanonicalWalletLeaseStore, control canonicalWalletControlPlane, outboxDB *sql.DB, outbox CanonicalWalletOutboxStore, callerSlotTTLSeconds int, clock func() time.Time) *CanonicalWalletBridge {
+	mode := cfg.PoolExpiryMode
+	if mode == "" {
+		mode = "shadow"
+	}
+	slog.Info("canonical wallet pool expiry configured", "mode", mode)
 	if callerSlotTTLSeconds <= 0 {
 		callerSlotTTLSeconds = 1800 // gateway.concurrency_slot_ttl_minutes' default (30) × 60
 	}
@@ -1212,13 +1228,9 @@ func newCanonicalWalletBridge(cfg config.CanonicalWalletConfig, store CanonicalW
 
 // Close (Phase 3.7a, redesign §13.2.6) stops every tick loop (the
 // dispatcher, the reaper and the receivable collector) and waits for them
-// to exit; it is idempotent (sync.Once) and nil-safe. It is a TEST
-// facility with no production caller: the three bridges are constructed
-// inside NewGatewayService, NewOpenAIGatewayService and
-// ProvideBillingCacheService and are never returned to the DI graph, so in
-// production the loops end with the process exactly as before. A bridge
-// built as a bare &CanonicalWalletBridge{…} literal has stop == nil and
-// never started a loop — Close on it is a no-op, not a nil-channel panic.
+// to exit; it is idempotent (sync.Once) and nil-safe. OpenAI gateway shutdown
+// closes its privately owned bridge; fixtures close their separately owned
+// bridges. A bare literal with stop == nil never started a loop and is a no-op.
 // Close is never called from inside a tick (neither deliverOutboxEvent nor
 // reapOnce reaches it), so loops.Wait cannot deadlock; for a nil-outbox
 // bridge Add(1) precedes the goroutine, the loop returns on its guard,
@@ -1260,7 +1272,7 @@ func (b *CanonicalWalletBridge) ObserveSettlement(event CanonicalWalletSettlemen
 			return false
 		}
 		if len(segments) > 0 {
-			currency, e := RequireCNYBillingCurrency(event.Currency)
+			currency, e := RequireUSDBillingCurrency(event.Currency)
 			if e != nil {
 				return false
 			}
@@ -1306,7 +1318,7 @@ func (b *CanonicalWalletBridge) ObserveSettlement(event CanonicalWalletSettlemen
 		canonicalWalletBridgeMetrics.missingPlatformID.Add(1)
 		return false
 	}
-	currency, err := RequireCNYBillingCurrency(event.Currency)
+	currency, err := RequireUSDBillingCurrency(event.Currency)
 	if err != nil {
 		canonicalWalletBridgeMetrics.unsupportedCurrency.Add(1)
 		return false
@@ -1871,6 +1883,13 @@ func (b *CanonicalWalletBridge) deliverOutboxEvent(ctx context.Context, e Canoni
 		LeaseID: e.LeaseID, Currency: e.Currency, AmountUnits: e.AmountUnits,
 		LocalBalanceAfterUnits: e.LocalBalanceAfterUnits, OccurredAt: e.OccurredAt,
 	}
+	latePinned := false
+	if e.AuthorizationID != "" && e.BillingSnapshotID != "" && b.outboxDB != nil {
+		if err := b.outboxDB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM wallet_authorization_segment WHERE authorization_id=$1 AND event_id=$2 AND billing_snapshot_id=$3 AND platform_user_id=$4 AND actual_units=$5 AND expiry_ack_at IS NOT NULL)`, e.AuthorizationID, e.EventID, e.BillingSnapshotID, e.PlatformUserID, e.AmountUnits).Scan(&latePinned); err != nil {
+			_ = b.outbox.MarkOutboxEventFailed(ctx, e.ID, b.workerID, b.clock())
+			return
+		}
+	}
 	// (0) §11.3: a pending release is owed to the bound lease — pay it
 	// BEFORE anything else reserves again. The partial form is gated on its
 	// own release marker, so a replay answers {7} (counted) and writes
@@ -1926,6 +1945,13 @@ func (b *CanonicalWalletBridge) deliverOutboxEvent(ctx context.Context, e Canoni
 		// reach here (the dispatcher ensures with purpose = settle); if it
 		// ever did, it would retry as today.
 		_ = b.outbox.MarkOutboxEventFailed(ctx, e.ID, b.workerID, b.clock())
+		return
+	}
+	// A late pinned root must retain its complete amount and identity. A
+	// partial funding grant becomes a full proven-cost receivable, never a
+	// rewritten root plus children that cannot satisfy its pin proof.
+	if latePinned && e.LeaseID == "" && lease.RemainingUnits() < e.AmountUnits {
+		_ = b.outbox.MarkOutboxEventDeadLetter(ctx, e.ID, b.workerID, "balance_shortfall")
 		return
 	}
 	// (2) §11.3 proactive split: a FRESH settle-purpose lease (unbound row)
@@ -1988,6 +2014,21 @@ func (b *CanonicalWalletBridge) deliverOutboxEvent(ctx context.Context, e Canoni
 		// mechanism, not a dead-letter.
 		var se *canonicalWalletStatusError
 		if errors.As(err, &se) && se.Reason == "lease_over_capture" {
+			if latePinned {
+				if _, releaseErr := b.store.ReleaseCanonicalWalletReservation(ctx, event.PlatformUserID, event.LeaseID, event.EventID, event.AmountUnits, true); releaseErr != nil {
+					_ = b.outbox.MarkOutboxEventFailed(ctx, e.ID, b.workerID, b.clock())
+					return
+				}
+				if bindErr := b.outbox.BindOutboxEventLease(ctx, e.ID, b.workerID, ""); bindErr != nil {
+					return
+				}
+				if _, _, sealErr := b.store.SealCanonicalWalletLease(ctx, event.PlatformUserID, event.LeaseID); sealErr != nil && !errors.Is(sealErr, ErrCanonicalWalletLeaseMissing) {
+					_ = b.outbox.MarkOutboxEventFailed(ctx, e.ID, b.workerID, b.clock())
+					return
+				}
+				_ = b.outbox.MarkOutboxEventDeadLetter(ctx, e.ID, b.workerID, "balance_shortfall")
+				return
+			}
 			headroomUnits := int64(0)
 			if se.HeadroomUnits != nil {
 				headroomUnits = *se.HeadroomUnits
@@ -2228,7 +2269,7 @@ func (b *CanonicalWalletBridge) resolveOutboxEventLease(ctx context.Context, e C
 
 func (b *CanonicalWalletBridge) protectedSettlementBinding(ctx context.Context, e CanonicalWalletOutboxEvent) (bool, error) {
 	var protected bool
-	err := b.outboxDB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM wallet_authorization_segment a JOIN wallet_settlement_outbox o ON o.event_id=a.event_id AND o.authorization_id=a.authorization_id AND o.billing_snapshot_id=a.billing_snapshot_id WHERE a.authorization_id=$1 AND a.platform_user_id=$2 AND a.lease_id=$3 AND a.event_id=$4 AND o.id=$5 AND a.actual_units=$6 AND o.amount_units=a.actual_units AND o.lease_id=a.lease_id AND a.actual_units>0 AND (a.kind='media' OR a.state IN ('settling','finished')))`, e.AuthorizationID, e.PlatformUserID, e.LeaseID, e.EventID, e.ID, e.AmountUnits).Scan(&protected)
+	err := b.outboxDB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM wallet_authorization_segment a JOIN wallet_settlement_outbox o ON o.event_id=a.event_id AND o.authorization_id=a.authorization_id AND o.billing_snapshot_id=a.billing_snapshot_id WHERE a.authorization_id=$1 AND a.platform_user_id=$2 AND a.lease_id=$3 AND a.event_id=$4 AND o.id=$5 AND a.actual_units=$6 AND o.amount_units=a.actual_units AND o.lease_id=a.lease_id AND a.actual_units>0 AND a.expiry_ack_at IS NULL AND (a.kind='media' OR a.state IN ('settling','finished')))`, e.AuthorizationID, e.PlatformUserID, e.LeaseID, e.EventID, e.ID, e.AmountUnits).Scan(&protected)
 	return protected, err
 }
 
@@ -2253,7 +2294,7 @@ func (b *CanonicalWalletBridge) ensureLease(ctx context.Context, platformUserID,
 }
 
 // USD authorization confirms the policy through the signed control plane even
-// when a pre-rollout lease is cached. Amount objects and Redis remain cny-e8-v1.
+// when a pre-rollout lease is cached. Amount objects and Redis remain usd-e8-v1.
 func (b *CanonicalWalletBridge) ensureLeaseWithPolicy(ctx context.Context, platformUserID, currency string, amountUnits int64, purpose canonicalWalletLeasePurpose, preferLeaseID, policyVersion string) (*CanonicalWalletLease, error) {
 	if policyVersion != "" && policyVersion != config.CanonicalUSDWalletPolicyVersion {
 		return nil, ErrCanonicalUSDWalletPolicy
@@ -2391,36 +2432,36 @@ func CanonicalWalletSettlementEventID(requestID, platformUserID, currency string
 	return "gwusg_" + hex.EncodeToString(sum[:])
 }
 
-// canonicalWalletUnitsFromCNY converts a CNY float64 to cny-e8-v1 units
-// (1 CNY = 100,000,000 units — canonicalWalletUnitsPerCNY from
+// canonicalWalletUnitsFromUSD converts a USD float64 to usd-e8-v1 units
+// (1 USD = 100,000,000 units — canonicalWalletUnitsPerUSD from
 // canonical_wallet_units.go; do NOT redeclare it here). Rejects non-finite
 // and negative inputs, and rejects any scaled value at or beyond int64's
 // ceiling BEFORE converting — a bare int64(...) cast of an out-of-range
 // float64 is implementation-defined behavior in Go, not a panic.
-func canonicalWalletUnitsFromCNY(amount float64) (int64, error) {
+func canonicalWalletUnitsFromUSD(amount float64) (int64, error) {
 	if amount < 0 || math.IsNaN(amount) || math.IsInf(amount, 0) {
 		return 0, errors.New("canonical wallet amount must be a finite, non-negative number")
 	}
-	scaled := amount * canonicalWalletUnitsPerCNY
+	scaled := amount * canonicalWalletUnitsPerUSD
 	if scaled >= math.MaxInt64 {
 		return 0, ErrCanonicalWalletUnitsOverflow
 	}
 	return int64(math.Round(scaled)), nil
 }
 
-// RequireCNYBillingCurrency is the STRICT counterpart to
+// RequireUSDBillingCurrency is the STRICT counterpart to
 // NormalizeUserBillingCurrency, exported so other packages (repository,
 // same as CanonicalWalletLeaseStore's other cross-package uses) and other
 // call sites in this package can reject an invalid currency outright
-// instead of silently treating it as CNY. NormalizeUserBillingCurrency
-// coerces ANY unrecognized value to CNY (confirmed by reading currency.go's
+// instead of silently treating it as USD. NormalizeUserBillingCurrency
+// coerces ANY unrecognized value to USD (confirmed by reading currency.go's
 // normalizeBillingCurrencyOrDefault), so a check performed AFTER that
 // coercion can never observe an invalid currency — every genuine
 // admission/reservation/settlement boundary must reject BEFORE coercing.
-func RequireCNYBillingCurrency(value string) (string, error) {
+func RequireUSDBillingCurrency(value string) (string, error) {
 	normalized := strings.ToUpper(strings.TrimSpace(value))
-	if normalized != CurrencyCNY {
-		return "", fmt.Errorf("cny-e8-v1 requires CNY, got %q", value)
+	if normalized != CurrencyUSD {
+		return "", fmt.Errorf("usd-e8-v1 requires USD, got %q", value)
 	}
 	return normalized, nil
 }
@@ -2481,7 +2522,7 @@ func observeCanonicalWalletSettlement(bridge *CanonicalWalletBridge, requestID s
 	if subscriptionBilling || !billingApplied || cost.ActualCost <= 0 {
 		return releaseZeroCost()
 	}
-	amountUnits, err := canonicalWalletUnitsFromCNY(cost.ActualCost)
+	amountUnits, err := canonicalWalletUnitsFromUSD(cost.ActualCost)
 	if err != nil || amountUnits <= 0 {
 		return releaseZeroCost()
 	}
@@ -2489,15 +2530,15 @@ func observeCanonicalWalletSettlement(bridge *CanonicalWalletBridge, requestID s
 	if billingResult != nil && billingResult.NewBalance != nil {
 		localBalance = *billingResult.NewBalance
 	}
-	localBalanceAfterUnits, balanceErr := canonicalWalletUnitsFromCNY(localBalance)
+	localBalanceAfterUnits, balanceErr := canonicalWalletUnitsFromUSD(localBalance)
 	var localBalanceAfterPtr *int64
 	if balanceErr == nil {
 		localBalanceAfterPtr = &localBalanceAfterUnits
 	}
 	// Pass the raw BillingCurrency through and let ObserveSettlement's own
-	// RequireCNYBillingCurrency be the single authoritative boundary —
-	// coercing here first would force every value to "CNY" before that
-	// check ever runs, so it could never reject a real non-CNY user.
+	// RequireUSDBillingCurrency be the single authoritative boundary —
+	// coercing here first would force every value to "USD" before that
+	// check ever runs, so it could never reject a real non-USD user.
 	return bridge.ObserveSettlement(CanonicalWalletSettlementEvent{
 		GatewayRequestID: requestID, PlatformUserID: user.PlatformUserID, Currency: user.BillingCurrency,
 		AmountUnits: amountUnits, LocalBalanceAfterUnits: localBalanceAfterPtr, OccurredAt: time.Now().UTC(),

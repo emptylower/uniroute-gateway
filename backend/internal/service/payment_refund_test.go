@@ -23,6 +23,7 @@ func TestValidateRefundRequestRejectsLegacyGuessedProviderInstance(t *testing.T)
 		SetEmail("refund-legacy@example.com").
 		SetPasswordHash("hash").
 		SetUsername("refund-legacy-user").
+		SetBillingCurrency(CurrencyCNY).
 		Save(ctx)
 	require.NoError(t, err)
 
@@ -74,6 +75,7 @@ func TestPrepareRefundRejectsLegacyGuessedProviderInstance(t *testing.T) {
 		SetEmail("refund-legacy-admin@example.com").
 		SetPasswordHash("hash").
 		SetUsername("refund-legacy-admin-user").
+		SetBillingCurrency(CurrencyCNY).
 		Save(ctx)
 	require.NoError(t, err)
 
@@ -127,6 +129,7 @@ func TestGwRefundRejectsAlipayMerchantIdentitySnapshotMismatch(t *testing.T) {
 		SetEmail("refund-snapshot-mismatch@example.com").
 		SetPasswordHash("hash").
 		SetUsername("refund-snapshot-mismatch-user").
+		SetBillingCurrency(CurrencyCNY).
 		Save(ctx)
 	require.NoError(t, err)
 
@@ -257,6 +260,7 @@ func TestFinishRefundPendingMarksOrderPendingAndRollsBackDeduction(t *testing.T)
 		SetEmail("refund-pending@example.com").
 		SetPasswordHash("hash").
 		SetUsername("refund-pending-user").
+		SetBillingCurrency(CurrencyCNY).
 		Save(ctx)
 	require.NoError(t, err)
 
@@ -334,6 +338,7 @@ func TestFinishRefundSuccessStatusesFinalize(t *testing.T) {
 				SetEmail("refund-success-" + status + "@example.com").
 				SetPasswordHash("hash").
 				SetUsername("refund-success-" + status).
+				SetBillingCurrency(CurrencyCNY).
 				Save(ctx)
 			require.NoError(t, err)
 
@@ -454,6 +459,7 @@ func createPendingRefundOrderForTest(t *testing.T, ctx context.Context, client *
 		SetEmail(suffix + "@example.com").
 		SetPasswordHash("hash").
 		SetUsername(suffix).
+		SetBillingCurrency(CurrencyCNY).
 		Save(ctx)
 	require.NoError(t, err)
 

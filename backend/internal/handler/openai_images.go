@@ -228,6 +228,7 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 			if selection.ReleaseFunc != nil {
 				selection.ReleaseFunc()
 			}
+			h.errorResponse(c, http.StatusServiceUnavailable, "billing_service_error", "Billing service temporarily unavailable. Please retry later.")
 			return
 		}
 

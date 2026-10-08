@@ -27,30 +27,21 @@ func BillingCurrencyUpdateRequested(ctx context.Context) bool {
 
 func NormalizeBillingCurrency(value string) (string, error) {
 	currency := strings.ToUpper(strings.TrimSpace(value))
-	if currency == "" {
-		return CurrencyCNY, nil
+	if currency == "" || currency == CurrencyUSD {
+		return CurrencyUSD, nil
 	}
-	switch currency {
-	case CurrencyCNY, CurrencyUSD:
-		return currency, nil
-	default:
-		return "", fmt.Errorf("unsupported currency %q: allowed values are CNY and USD", value)
-	}
+	return "", fmt.Errorf("unsupported currency %q: only USD is supported", value)
 }
-
 func IsSupportedBillingCurrency(value string) bool {
-	value = strings.ToUpper(strings.TrimSpace(value))
-	return value == CurrencyCNY || value == CurrencyUSD
+	return strings.EqualFold(strings.TrimSpace(value), CurrencyUSD)
 }
+func NormalizeUserBillingCurrency(_ string) string { return CurrencyUSD }
 
-func normalizeBillingCurrencyOrDefault(value string) string {
-	currency, err := NormalizeBillingCurrency(value)
-	if err != nil {
+// NormalizeHistoricalBillingCurrency is only for retired native ledger audit paths.
+func NormalizeHistoricalBillingCurrency(raw string) string {
+	currency := strings.ToUpper(strings.TrimSpace(raw))
+	if currency == "" {
 		return CurrencyCNY
 	}
 	return currency
-}
-
-func NormalizeUserBillingCurrency(value string) string {
-	return normalizeBillingCurrencyOrDefault(value)
 }

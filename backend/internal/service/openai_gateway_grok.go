@@ -963,11 +963,13 @@ func (s *OpenAIGatewayService) describeGrokComposerImage(
 	if err := json.Unmarshal(respBody, &parsed); err != nil {
 		return "", OpenAIUsage{}, fmt.Errorf("parse grok composer image bridge response: %w", err)
 	}
+	usage := copyOpenAIUsageFromResponsesUsage(parsed.Usage)
+	normalizeGrokChatCompletionUsage(account, gjson.GetBytes(respBody, "usage"), &usage)
 	description := strings.TrimSpace(grokResponsesOutputText(&parsed))
 	if description == "" {
-		return "", copyOpenAIUsageFromResponsesUsage(parsed.Usage), fmt.Errorf("grok composer image bridge returned empty description")
+		return "", usage, fmt.Errorf("grok composer image bridge returned empty description")
 	}
-	return description, copyOpenAIUsageFromResponsesUsage(parsed.Usage), nil
+	return description, usage, nil
 }
 
 func buildGrokComposerImageDescriptionBody(imageURL string, index int) ([]byte, error) {

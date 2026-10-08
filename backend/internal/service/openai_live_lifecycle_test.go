@@ -336,7 +336,7 @@ func TestFinalizeLiveCallAggregatesTokensAndBillsOnce(t *testing.T) {
 		ExpiresAt:              time.Now().Add(time.Hour),
 		Controller:             LiveControllerPending,
 		InboundEndpoint:        "/v1/live",
-		BillingCurrency:        CurrencyCNY,
+		BillingCurrency:        CurrencyUSD,
 		RateMultiplier:         0.5,
 		GroupRateMultiplier:    0.5,
 		AccountRateMultiplier:  1,
@@ -389,18 +389,18 @@ func TestFinalizeLiveCallAggregatesTokensAndBillsOnce(t *testing.T) {
 	require.Equal(t, 25, log.OutputTokens)
 	require.Equal(t, 10, log.CacheReadTokens)
 	require.InDelta(t, 0.191, log.TotalCost, 1e-12)
-	require.InDelta(t, 1.3752, log.BaseCost, 1e-12)
-	require.InDelta(t, 0.6876, log.ActualCost, 1e-12)
+	require.InDelta(t, 0.191, log.BaseCost, 1e-12)
+	require.InDelta(t, 0.0955, log.ActualCost, 1e-12)
 	require.Equal(t, CurrencyUSD, log.SourceCurrency)
-	require.Equal(t, CurrencyCNY, log.SettlementCurrency)
-	require.InDelta(t, 7.2, log.ExchangeRate, 1e-12)
-	require.Equal(t, "test_live", log.ExchangeRateSource)
+	require.Equal(t, CurrencyUSD, log.SettlementCurrency)
+	require.InDelta(t, 1.0, log.ExchangeRate, 1e-12)
+	require.Equal(t, "usd-e8-v1", log.ExchangeRateSource)
 	require.NotNil(t, log.ExchangeRateAsOf)
 	require.Equal(t, asOf, *log.ExchangeRateAsOf)
 	require.Equal(t, 1, billingRepo.calls)
 	require.NotNil(t, billingRepo.lastCmd)
-	require.Equal(t, CurrencyCNY, billingRepo.lastCmd.SettlementCurrency)
-	require.InDelta(t, 0.6876, billingRepo.lastCmd.BalanceCost, 1e-12)
+	require.Equal(t, CurrencyUSD, billingRepo.lastCmd.SettlementCurrency)
+	require.InDelta(t, 0.0955, billingRepo.lastCmd.WalletCostUSD, 1e-12)
 }
 
 func TestFinalizeLiveCallRetriesBillingBeforeClosing(t *testing.T) {

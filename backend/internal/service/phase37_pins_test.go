@@ -90,7 +90,7 @@ func TestPhase37DispatcherStopsOnClose(t *testing.T) {
 	// the hanging transport until the per-event context cancels, so a
 	// delivery is in flight across the Close that follows.
 	require.True(t, b.ObserveSettlement(CanonicalWalletSettlementEvent{
-		GatewayRequestID: "req-37a-stop-in-flight", PlatformUserID: user, Currency: "CNY", AmountUnits: 1_000_000, OccurredAt: now,
+		GatewayRequestID: "req-37a-stop-in-flight", PlatformUserID: user, Currency: "USD", AmountUnits: 1_000_000, OccurredAt: now,
 	}))
 	select {
 	case <-hanging.entered:
@@ -173,7 +173,7 @@ func p37Authorize(t *testing.T, ctx context.Context, mode string, b *CanonicalWa
 	require.NoError(t, err)
 	require.NotNil(t, snap)
 	apiKey.User.PlatformUserID = user
-	apiKey.User.BillingCurrency = "CNY"
+	apiKey.User.BillingCurrency = "USD"
 	cfg := &config.Config{}
 	cfg.CanonicalWallet = p34bHoldsConfig(mode)
 	cfg.CanonicalWallet.RequestTimeoutMS = 300
@@ -238,7 +238,7 @@ func TestPhase37StreamingInvariant(t *testing.T) {
 	convertedBase := canonicalWalletBridgeMetrics.holdConverted.Load()
 	overrunBase := canonicalWalletBridgeMetrics.holdConvertOverrunReleased.Load()
 	releasedBefore := p34bHashField(t, ctx, store, user, h1.LeaseID, "released_units")
-	require.True(t, b.ObserveSettlement(CanonicalWalletSettlementEvent{GatewayRequestID: "req-46", PlatformUserID: user, Currency: "CNY", AmountUnits: A, OccurredAt: now, AuthorizationID: h1.ID}))
+	require.True(t, b.ObserveSettlement(CanonicalWalletSettlementEvent{GatewayRequestID: "req-46", PlatformUserID: user, Currency: "USD", AmountUnits: A, OccurredAt: now, AuthorizationID: h1.ID}))
 	hold1, err := store.GetCanonicalWalletHold(ctx, user, h1.ID)
 	require.NoError(t, err)
 	require.Equal(t, "settled", hold1.State)
@@ -270,7 +270,7 @@ func TestPhase37StreamingInvariant(t *testing.T) {
 
 	// §10.5's priced excess, within budget (the lease was funded so A' fits):
 	// consumed += excess → consumed == A', the hold settles, nothing releases.
-	require.True(t, b.ObserveSettlement(CanonicalWalletSettlementEvent{GatewayRequestID: "req-46-overrun", PlatformUserID: user2, Currency: "CNY", AmountUnits: A2, OccurredAt: now, AuthorizationID: h2.ID}))
+	require.True(t, b.ObserveSettlement(CanonicalWalletSettlementEvent{GatewayRequestID: "req-46-overrun", PlatformUserID: user2, Currency: "USD", AmountUnits: A2, OccurredAt: now, AuthorizationID: h2.ID}))
 	require.Equal(t, A2, mustHashUnits(t, p34bHashField(t, ctx, store, user2, h2.LeaseID, "consumed_units")), "consumed_units == A' — the excess was priced, never refused")
 	hold2, err := store.GetCanonicalWalletHold(ctx, user2, h2.ID)
 	require.NoError(t, err)
@@ -292,9 +292,9 @@ func mustHashUnits(t *testing.T, v string) int64 {
 // pinned FX, then canonicalWalletUnitsFromSnapshot converts to units.
 func p37SettledUnits(t *testing.T, svc *BillingSnapshotService, snap *BillingSnapshot, cost *CostBreakdown) int64 {
 	t.Helper()
-	_, err := ResolveCostSettlement(SettlementContextFromSnapshot(context.Background(), snap), cost, &User{BillingCurrency: "CNY"}, false, svc.exchangeRates, svc.cfg)
+	_, err := ResolveCostSettlement(SettlementContextFromSnapshot(context.Background(), snap), cost, &User{BillingCurrency: "USD"}, false, svc.exchangeRates, svc.cfg)
 	require.NoError(t, err)
-	units, err := canonicalWalletUnitsFromCNY(cost.ActualCost)
+	units, err := canonicalWalletUnitsFromUSD(cost.ActualCost)
 	require.NoError(t, err)
 	return units
 }
@@ -345,7 +345,7 @@ func TestPhase37TwoDispatchersDeliverExactlyOnce(t *testing.T) {
 			bridge = b // 20 on A, 20 on B
 		}
 		require.True(t, bridge.ObserveSettlement(CanonicalWalletSettlementEvent{
-			GatewayRequestID: "req-48-" + itoa(i), PlatformUserID: u, Currency: "CNY", AmountUnits: amt, OccurredAt: now,
+			GatewayRequestID: "req-48-" + itoa(i), PlatformUserID: u, Currency: "USD", AmountUnits: amt, OccurredAt: now,
 		}))
 	}
 
@@ -378,7 +378,7 @@ func TestPhase37TwoDispatchersDeliverExactlyOnce(t *testing.T) {
 	}
 	for i := 0; i < n; i++ {
 		u := users[i%(n/4)]
-		eventID := CanonicalWalletSettlementEventID("req-48-"+itoa(i), u, "CNY")
+		eventID := CanonicalWalletSettlementEventID("req-48-"+itoa(i), u, "USD")
 		ev, ok := fake.events[u][eventID]
 		require.True(t, ok, "event %s captured", eventID)
 		require.Equal(t, int64(1_000_000)*int64(i+1), ev.Units, "event %s captured at its exact amount", eventID)

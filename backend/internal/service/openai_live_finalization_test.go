@@ -31,7 +31,7 @@ func newLiveFinalizationFixture(t *testing.T, mode string) (*liveAuthTestFixture
 		AuthorizationID:   authID,
 		UserID:            f.user.ID,
 		PlatformUserID:    f.user.PlatformUserID,
-		BillingCurrency:   "CNY",
+		BillingCurrency:   "USD",
 		BillingSnapshotID: "bsnap_test_1",
 		EstimatedUnits:    10_000,
 		Status:            LiveProvisionalStatusActive,
@@ -53,11 +53,11 @@ func newLiveFinalizationFixture(t *testing.T, mode string) (*liveAuthTestFixture
 		AuthorizationToken:     authID + ".1",
 		AuthorizationID:        authID,
 		BillingSnapshotID:      "bsnap_test_1",
-		BillingCurrency:        "CNY",
+		BillingCurrency:        "USD",
 		Model:                  "claude-sonnet-4",
 		RateMultiplier:         1.5,
 		AccountRateMultiplier:  1.25,
-		ExchangeRate:           7.0,
+		ExchangeRate:           1.0,
 		ExchangeRateSource:     "test",
 		ExchangeRateAsOf:       now,
 		InputTokens:            100,
@@ -109,8 +109,8 @@ func TestTryFinalizeLiveCallSettlesTheLastWindow(t *testing.T) {
 	// amount is the remainder. liveUsageUnits prices (InputTokens −
 	// CacheReadTokens) at the input price: 100 − 10 = 90.
 	inputTokens := 100 - 10
-	actualCost := (float64(inputTokens)*3e-6 + 50*15e-6 + 10*1e-6) * 7.0 * 1.5
-	totalUnits, err := canonicalWalletUnitsFromCNY(actualCost)
+	actualCost := (float64(inputTokens)*3e-6 + 50*15e-6 + 10*1e-6) * 1.5
+	totalUnits, err := canonicalWalletUnitsFromUSD(actualCost)
 	require.NoError(t, err)
 	require.Greater(t, totalUnits, a1+a2)
 	f.provStore.mu.Lock()
@@ -189,7 +189,7 @@ func TestTryFinalizeLiveCallIdleLastWindow(t *testing.T) {
 }
 
 // Execution review MINOR-2: a finalization whose usage cannot be priced (a
-// non-finite cost reaching canonicalWalletUnitsFromCNY) retries instead of
+// non-finite cost reaching canonicalWalletUnitsFromUSD) retries instead of
 // finalizing as idle — idleFinalized unmoved, no settlement observed.
 func TestTryFinalizeLiveCallUnpriceableUsageRetriesNotIdle(t *testing.T) {
 	f, rec := newLiveFinalizationFixture(t, config.CanonicalWalletModeShadow)
@@ -258,8 +258,8 @@ func TestTryFinalizeLiveCallTransitionsProvisionalToFinalizedWhenEnqueueSucceeds
 	require.Equal(t, rec.AuthorizationToken, observedEvent.AuthorizationToken)
 	require.Equal(t, rec.AuthorizationID, observedEvent.AuthorizationID)
 	require.Equal(t, rec.CallHash, observedEvent.GatewayRequestID)
-	actualCost := ((100-10)*3e-6 + 50*15e-6 + 10*1e-6) * 7.0 * 1.5
-	expectedUnits, err := canonicalWalletUnitsFromCNY(actualCost)
+	actualCost := ((100-10)*3e-6 + 50*15e-6 + 10*1e-6) * 1.5
+	expectedUnits, err := canonicalWalletUnitsFromUSD(actualCost)
 	require.NoError(t, err)
 	require.Equal(t, expectedUnits, observedEvent.AmountUnits)
 	require.Nil(t, observedEvent.LocalBalanceAfterUnits, "Live local balance after units must be nil")

@@ -124,8 +124,8 @@ func TestModelChannelPreferenceCompositeFamilyPreservesKeyAuthorization(t *testi
 func TestModelChannelPreferenceUsesUSDOverridesAndPeakMultiplier(t *testing.T) {
 	usdDiscount, usdOfficial := 0.4, 1.0
 	groups := []Group{
-		{ID: 1, Platform: PlatformOpenAI, RateMultiplier: 1, RateMultiplierUSD: &usdDiscount, Status: StatusActive},
-		{ID: 2, Platform: PlatformOpenAI, RateMultiplier: 0.2, RateMultiplierUSD: &usdOfficial, Status: StatusActive},
+		{ID: 1, Platform: PlatformOpenAI, RateMultiplier: usdDiscount, RateMultiplierUSD: &usdDiscount, Status: StatusActive},
+		{ID: 2, Platform: PlatformOpenAI, RateMultiplier: usdOfficial, RateMultiplierUSD: &usdOfficial, Status: StatusActive},
 		{ID: 3, Platform: PlatformOpenAI, RateMultiplier: 1, Status: StatusActive},
 	}
 	selector := NewChannelRoutingSelector(&channelRoutingCatalogFake{}, &channelRoutingAccessFake{groups: groups, rates: map[int64]float64{3: 0.5}}, channelRoutingConfig(true, 3))

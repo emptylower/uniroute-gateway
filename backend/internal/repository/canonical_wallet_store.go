@@ -28,9 +28,9 @@ const canonicalWalletCurrentPrefix = "canonical_wallet:current:"
 // values are checked against this bound in Go BEFORE either script ever
 // runs — this is a real, disclosed limitation, the same kind already
 // accepted elsewhere in this project (lease.ts's planAllocation().limit(1000),
-// MySQL's CHECK-constraint version dependency): at ~90,071,992 CNY per
+// MySQL's CHECK-constraint version dependency): at ~90,071,992 USD per
 // value, it is far beyond any realistic single lease/reservation amount
-// (the default lease budget is 5 CNY — see Task 5), so this guard is not
+// (the default lease budget is 5 USD — see Task 5), so this guard is not
 // expected to ever fire in real operation, only to fail loudly instead of
 // silently corrupting a value in the pathological case that it would.
 const redisLuaMaxSafeInt64 = 9007199254740991
@@ -411,7 +411,7 @@ func (c *canonicalWalletRedisStore) InstallCanonicalWalletLease(ctx context.Cont
 	if err := ensureRedisLuaSafeInt64(lease.BudgetUnits, lease.ConsumedUnits, lease.ReleasedUnits); err != nil {
 		return err
 	}
-	currency, err := service.RequireCNYBillingCurrency(lease.Currency)
+	currency, err := service.RequireUSDBillingCurrency(lease.Currency)
 	if err != nil {
 		return err
 	}
@@ -473,7 +473,7 @@ func (c *canonicalWalletRedisStore) ReserveCanonicalWalletLease(ctx context.Cont
 	if err := ensureRedisLuaSafeInt64(amountUnits); err != nil {
 		return nil, err
 	}
-	strictCurrency, err := service.RequireCNYBillingCurrency(currency)
+	strictCurrency, err := service.RequireUSDBillingCurrency(currency)
 	if err != nil {
 		return nil, err
 	}
@@ -535,7 +535,7 @@ func (c *canonicalWalletRedisStore) ArmCanonicalWalletHold(ctx context.Context, 
 	if err := ensureRedisLuaSafeInt64(units); err != nil {
 		return "", 0, false, err
 	}
-	strictCurrency, err := service.RequireCNYBillingCurrency(currency)
+	strictCurrency, err := service.RequireUSDBillingCurrency(currency)
 	if err != nil {
 		return "", 0, false, err
 	}

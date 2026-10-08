@@ -31,6 +31,12 @@ type PaginatedData struct {
 
 // Success 返回成功响应
 func Success(c *gin.Context, data any) {
+	normalized, err := usdResponseData(data)
+	if err != nil {
+		InternalError(c, "Unable to serialize USD amounts")
+		return
+	}
+	data = normalized
 	c.JSON(http.StatusOK, Response{
 		Code:    0,
 		Message: "success",
@@ -40,6 +46,12 @@ func Success(c *gin.Context, data any) {
 
 // Created 返回创建成功响应
 func Created(c *gin.Context, data any) {
+	normalized, err := usdResponseData(data)
+	if err != nil {
+		InternalError(c, "Unable to serialize USD amounts")
+		return
+	}
+	data = normalized
 	c.JSON(http.StatusCreated, Response{
 		Code:    0,
 		Message: "success",
@@ -49,6 +61,12 @@ func Created(c *gin.Context, data any) {
 
 // Accepted 返回异步接受响应 (HTTP 202)
 func Accepted(c *gin.Context, data any) {
+	normalized, err := usdResponseData(data)
+	if err != nil {
+		InternalError(c, "Unable to serialize USD amounts")
+		return
+	}
+	data = normalized
 	c.JSON(http.StatusAccepted, Response{
 		Code:    0,
 		Message: "accepted",

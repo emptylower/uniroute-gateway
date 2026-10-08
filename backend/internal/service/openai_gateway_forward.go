@@ -89,6 +89,10 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	originalModel := reqModel
 
 	if account.Platform == PlatformGrok {
+		if account.Type == AccountTypeAPIKey &&
+			openai_compat.NormalizeResponsesSupportMode(account.GetExtraString(openai_compat.ExtraKeyResponsesMode)) == openai_compat.ResponsesSupportModeForceChatCompletions {
+			return s.forwardResponsesViaRawChatCompletions(ctx, c, account, body)
+		}
 		return s.forwardGrokResponses(ctx, c, account, body, originalModel, reqStream, startTime)
 	}
 
@@ -647,6 +651,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				&agentTaskRecoveryTried,
 			)
 			if wsErr == nil {
+				break
+			}
+			if !WalletAttemptMayRetry(ctx) {
 				break
 			}
 			if c != nil && c.Writer != nil && c.Writer.Written() {

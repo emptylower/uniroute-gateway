@@ -49,12 +49,12 @@ func TestBuildUsageBillingCommand_SubscriptionAppliesRateMultiplier(t *testing.T
 			wantBalance:    0,
 		},
 		{
-			name:           "balance billing keeps using ActualCost (regression)",
+			name:           "canonical billing never debits the native gateway balance",
 			totalCost:      1.0,
 			actualCost:     2.0,
 			isSubscription: false,
 			wantSub:        0,
-			wantBalance:    2.0,
+			wantBalance:    0,
 		},
 	}
 
@@ -73,6 +73,9 @@ func TestBuildUsageBillingCommand_SubscriptionAppliesRateMultiplier(t *testing.T
 			cmd := buildUsageBillingCommand("req-1", nil, p)
 			if cmd == nil {
 				t.Fatal("buildUsageBillingCommand returned nil")
+			}
+			if cmd.WalletCostUSD != tt.actualCost {
+				t.Errorf("WalletCostUSD = %v, want %v", cmd.WalletCostUSD, tt.actualCost)
 			}
 			if cmd.SubscriptionCost != tt.wantSub {
 				t.Errorf("SubscriptionCost = %v, want %v", cmd.SubscriptionCost, tt.wantSub)

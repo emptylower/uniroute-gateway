@@ -1946,6 +1946,9 @@ func (h *GatewayHandler) handleFailoverExhausted(c *gin.Context, failoverErr *se
 
 	// 使用默认的错误映射
 	status, errType, errMsg := h.mapUpstreamError(statusCode)
+	if statusCode == http.StatusServiceUnavailable && c.Request != nil && !service.WalletAttemptMayRetry(c.Request.Context()) {
+		status = statusCode
+	}
 	h.handleStreamingAwareError(c, status, errType, errMsg, streamStarted)
 }
 

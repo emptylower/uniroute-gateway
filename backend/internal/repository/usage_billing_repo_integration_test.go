@@ -147,20 +147,20 @@ func TestUsageBillingRepositoryApply_RequestFingerprintConflict(t *testing.T) {
 
 	requestID := uuid.NewString()
 	_, err := repo.Apply(ctx, &service.UsageBillingCommand{
-		SettlementCurrency: service.CurrencyCNY, // currency is required: an unknown one fails closed
+		SettlementCurrency: service.CurrencyUSD, // currency is required: an unknown one fails closed
 		RequestID:          requestID,
 		APIKeyID:           apiKey.ID,
 		UserID:             user.ID,
-		BalanceCost:        1.25,
+		WalletCostUSD:      1.25, // the fingerprint covers the USD wallet cost, not the retired native balance cost
 	})
 	require.NoError(t, err)
 
 	_, err = repo.Apply(ctx, &service.UsageBillingCommand{
-		SettlementCurrency: service.CurrencyCNY, // currency is required: an unknown one fails closed
+		SettlementCurrency: service.CurrencyUSD, // currency is required: an unknown one fails closed
 		RequestID:          requestID,
 		APIKeyID:           apiKey.ID,
 		UserID:             user.ID,
-		BalanceCost:        2.50,
+		WalletCostUSD:      2.50,
 	})
 	require.ErrorIs(t, err, service.ErrUsageBillingRequestConflict)
 }

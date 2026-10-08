@@ -1037,6 +1037,11 @@ canonical_wallet:
   orphan_sweep_interval_seconds: 60
   # Holds examined per user per reaper tick (1–1000).
   orphan_sweep_batch: 200
+  # shadow observes candidates; enabled expires unknown LLM reservations after
+  # the immutable lease deadline and owner-liveness checks. Existing receipts
+  # and late actual-cost settlement continue in every mode.
+  pool_expiry_mode: "shadow"
+  pool_expiry_grace_seconds: 1800
   # A Live window closing on accrued usage is evaluated only after this many
   # seconds since it opened; range 5–60 and ≤ lease_ttl_seconds/4 (§13.2.1).
   live_window_min_seconds: 20

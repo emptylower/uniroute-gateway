@@ -31,8 +31,8 @@ type userModelStat struct {
 	CacheCreationTokens int64   `json:"cache_creation_tokens"`
 	CacheReadTokens     int64   `json:"cache_read_tokens"`
 	TotalTokens         int64   `json:"total_tokens"`
-	Cost                float64 `json:"cost"`
-	ActualCost          float64 `json:"actual_cost"`
+	Cost                float64 `json:"cost_usd,string"`
+	ActualCost          float64 `json:"actual_cost_usd,string"`
 }
 
 type userGroupStat struct {
@@ -40,8 +40,8 @@ type userGroupStat struct {
 	GroupName   string  `json:"group_name"`
 	Requests    int64   `json:"requests"`
 	TotalTokens int64   `json:"total_tokens"`
-	Cost        float64 `json:"cost"`
-	ActualCost  float64 `json:"actual_cost"`
+	Cost        float64 `json:"cost_usd,string"`
+	ActualCost  float64 `json:"actual_cost_usd,string"`
 }
 
 // UsageHandler handles usage-related requests
@@ -142,15 +142,7 @@ func (h *UsageHandler) parseUserUsageFilters(c *gin.Context, requireRange bool) 
 		response.BadRequest(c, "Invalid billing_mode")
 		return nil, false
 	}
-	displayCurrency := strings.TrimSpace(c.Query("display_currency"))
-	if displayCurrency != "" {
-		var currencyErr error
-		displayCurrency, currencyErr = service.NormalizeBillingCurrency(displayCurrency)
-		if currencyErr != nil {
-			response.BadRequest(c, currencyErr.Error())
-			return nil, false
-		}
-	}
+	displayCurrency := service.CurrencyUSD
 
 	userTZ := c.Query("timezone")
 	now := timezone.NowInUserLocation(userTZ)

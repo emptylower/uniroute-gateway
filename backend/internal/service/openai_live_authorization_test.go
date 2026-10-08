@@ -269,7 +269,7 @@ func newLiveAuthTestFixture(t *testing.T, mode string) *liveAuthTestFixture {
 		lease: CanonicalWalletLease{
 			LeaseID:        "lease-test-1",
 			PlatformUserID: user.PlatformUserID,
-			Currency:       "CNY",
+			Currency:       "USD",
 			BudgetUnits:    100_000_000,
 			ExpiresAt:      time.Now().Add(5 * time.Minute),
 		},

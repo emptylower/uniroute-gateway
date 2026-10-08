@@ -36,6 +36,7 @@ type UsageBillingCommand struct {
 	ImageCount          int
 	MediaType           string
 
+	WalletCostUSD       float64
 	BalanceCost         float64
 	SubscriptionCost    float64
 	APIKeyQuotaCost     float64
@@ -78,7 +79,7 @@ func buildUsageBillingFingerprint(c *UsageBillingCommand) string {
 		c.ImageCount,
 		strings.TrimSpace(c.MediaType),
 		valueOrZero(c.SubscriptionID),
-		c.BalanceCost,
+		c.WalletCostUSD,
 		c.SubscriptionCost,
 		c.APIKeyQuotaCost,
 		c.APIKeyRateLimitCost,

@@ -306,12 +306,6 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 	if input.RateMultiplier <= 0 {
 		return nil, errors.New("rate_multiplier must be > 0")
 	}
-	if input.RateMultiplierCNY != nil && *input.RateMultiplierCNY <= 0 {
-		return nil, errors.New("rate_multiplier_cny must be > 0")
-	}
-	if input.RateMultiplierUSD != nil && *input.RateMultiplierUSD <= 0 {
-		return nil, errors.New("rate_multiplier_usd must be > 0")
-	}
 
 	platform := input.Platform
 	if platform == "" {
@@ -503,8 +497,8 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 	if err := s.groupRepo.Create(ctx, group); err != nil {
 		return nil, err
 	}
-	logger.LegacyPrintf("service.admin", "audit: billing group created group_id=%d rate_multiplier=%.8f rate_multiplier_cny=%v rate_multiplier_usd=%v",
-		group.ID, group.RateMultiplier, group.RateMultiplierCNY, group.RateMultiplierUSD)
+	logger.LegacyPrintf("service.admin", "audit: billing group created group_id=%d rate_multiplier=%.8f",
+		group.ID, group.RateMultiplier)
 
 	// require_oauth_only: 过滤掉 apikey 类型账号
 	if group.RequireOAuthOnly && groupSupportsOAuthOnlyFilter(group.Platform) && len(accountIDsToCopy) > 0 {
@@ -647,18 +641,6 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 			return nil, errors.New("rate_multiplier must be > 0")
 		}
 		group.RateMultiplier = *input.RateMultiplier
-	}
-	if input.RateMultiplierCNY != nil {
-		if *input.RateMultiplierCNY <= 0 {
-			return nil, errors.New("rate_multiplier_cny must be > 0")
-		}
-		group.RateMultiplierCNY = input.RateMultiplierCNY
-	}
-	if input.RateMultiplierUSD != nil {
-		if *input.RateMultiplierUSD <= 0 {
-			return nil, errors.New("rate_multiplier_usd must be > 0")
-		}
-		group.RateMultiplierUSD = input.RateMultiplierUSD
 	}
 	if input.IsExclusive != nil {
 		group.IsExclusive = *input.IsExclusive

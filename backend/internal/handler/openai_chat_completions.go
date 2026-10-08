@@ -328,7 +328,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 						if failoverErr.ShouldReportAccountScheduleFailure() {
 							h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, account.GetMappedModel(reqModel), false, nil)
 						}
-						if !failoverErr.ShouldRetryNextAccount() {
+						if !service.WalletAttemptMayRetry(c.Request.Context()) || !failoverErr.ShouldRetryNextAccount() {
 							h.handleFailoverExhausted(c, failoverErr, streamStarted)
 							return
 						}

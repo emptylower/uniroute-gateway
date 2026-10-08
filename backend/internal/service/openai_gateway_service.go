@@ -421,7 +421,7 @@ type OpenAIGatewayService struct {
 	balanceNotifyService  *BalanceNotifyService
 	settingService        *SettingService
 	userPlatformQuotaRepo UserPlatformQuotaRepository
-	exchangeRates         *ExchangeRateService
+	exchangeRates         *USDPriceService
 	canonicalWallet       *CanonicalWalletBridge
 	authorizer            *CanonicalWalletAuthorizer
 	liveProvisional       LiveProvisionalStore
@@ -534,7 +534,7 @@ func NewOpenAIGatewayService(
 		balanceNotifyService:  balanceNotifyService,
 		settingService:        settingService,
 		userPlatformQuotaRepo: userPlatformQuotaRepo,
-		exchangeRates:         NewExchangeRateService(cfg),
+		exchangeRates:         NewUSDPriceService(cfg),
 		liveAttestation:       liveattestation.NewProvider(),
 		liveAttestationCipher: newLiveAttestationCipher(cfg),
 		responseHeaderFilter:  compileResponseHeaderFilter(cfg),
@@ -691,12 +691,16 @@ func (s *OpenAIGatewayService) billingDeps() *billingDeps {
 	}
 }
 
-// CloseOpenAIWSPool 关闭 OpenAI WebSocket 连接池的后台 worker 和空闲连接。
+// CloseOpenAIWSPool stops the owned WebSocket pool and wallet background loops.
 // 应在应用优雅关闭时调用。
 func (s *OpenAIGatewayService) CloseOpenAIWSPool() {
-	if s != nil && s.openaiWSPool != nil {
+	if s == nil {
+		return
+	}
+	if s.openaiWSPool != nil {
 		s.openaiWSPool.Close()
 	}
+	s.canonicalWallet.Close()
 }
 
 func (s *OpenAIGatewayService) InvalidateAgentIdentityWSConnections(accountID int64) {

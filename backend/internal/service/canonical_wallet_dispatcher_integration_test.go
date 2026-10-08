@@ -25,7 +25,7 @@ import (
 // (speaking ShipAny's *_micros wire format), reserves against a real Redis
 // lease store (the same gatewayCacheAdapterForTest used by the admission
 // tests), submits the settlement back to the control plane, and marks the
-// row delivered. A non-CNY event must leave NO durable row at all.
+// row delivered. A non-USD event must leave NO durable row at all.
 func TestCanonicalWalletOutboxDispatcherDeliversEndToEnd(t *testing.T) {
 	ctx := context.Background()
 	db := startCanonicalWalletTestPostgres(t, ctx)
@@ -44,8 +44,8 @@ func TestCanonicalWalletOutboxDispatcherDeliversEndToEnd(t *testing.T) {
 			var req canonicalWalletEnsureRequest
 			require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
 			receivedEnsureRequests = append(receivedEnsureRequests, req)
-			require.Equal(t, "CNY", req.Currency)
-			_, _ = w.Write([]byte(`{"data":{"lease_id":"lease-e2e","platform_user_id":"` + req.PlatformUserID + `","currency":"CNY","unit_version":"cny-e8-v1","scale":8,"budget":{"amount_units":"500000000","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"reserved":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"captured":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"released":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"headroom":{"amount_units":"500000000","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"capture_seq":0,"status":"active","expires_at":"2030-01-01T00:00:00Z","outcome":"issued","clamped_by":"none"}}`))
+			require.Equal(t, "USD", req.Currency)
+			_, _ = w.Write([]byte(`{"data":{"lease_id":"lease-e2e","platform_user_id":"` + req.PlatformUserID + `","currency":"USD","unit_version":"usd-e8-v1","scale":8,"budget":{"amount_units":"500000000","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"reserved":{"amount_units":"0","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"captured":{"amount_units":"0","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"released":{"amount_units":"0","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"headroom":{"amount_units":"500000000","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"capture_seq":0,"status":"active","expires_at":"2030-01-01T00:00:00Z","outcome":"issued","clamped_by":"none"}}`))
 		case "/api/internal/v2/wallet/settlements":
 			var req canonicalWalletSettlementWireRequest
 			require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
@@ -54,7 +54,7 @@ func TestCanonicalWalletOutboxDispatcherDeliversEndToEnd(t *testing.T) {
 			case settlementSignal <- struct{}{}:
 			default:
 			}
-			_, _ = w.Write([]byte(`{"data":{"accepted":true,"duplicate":false,"named_lease_id":null,"event":{"event_id":"` + req.EventID + `","lease_id":"lease-e2e","amount":{"amount_units":"30000000","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"lease_capture_seq":1,"lease_captured_before":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"lease_captured_after":{"amount_units":"30000000","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"occurred_at":"2026-01-01T00:00:00Z"},"lease":{"lease_id":"lease-e2e","platform_user_id":"user-1","currency":"CNY","unit_version":"cny-e8-v1","scale":8,"budget":{"amount_units":"500000000","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"reserved":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"captured":{"amount_units":"30000000","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"released":{"amount_units":"0","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"},"capture_seq":1,"status":"active","expires_at":"2030-01-01T00:00:00Z"},"canonical_balance":{"amount_units":"497000000","currency":"CNY","scale":8,"unit_version":"cny-e8-v1"}}}`))
+			_, _ = w.Write([]byte(`{"data":{"accepted":true,"duplicate":false,"named_lease_id":null,"event":{"event_id":"` + req.EventID + `","lease_id":"lease-e2e","amount":{"amount_units":"30000000","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"lease_capture_seq":1,"lease_captured_before":{"amount_units":"0","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"lease_captured_after":{"amount_units":"30000000","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"occurred_at":"2026-01-01T00:00:00Z"},"lease":{"lease_id":"lease-e2e","platform_user_id":"user-1","currency":"USD","unit_version":"usd-e8-v1","scale":8,"budget":{"amount_units":"500000000","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"reserved":{"amount_units":"0","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"captured":{"amount_units":"30000000","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"released":{"amount_units":"0","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"capture_seq":1,"status":"active","expires_at":"2030-01-01T00:00:00Z"},"canonical_balance":{"amount_units":"497000000","currency":"USD","scale":8,"unit_version":"usd-e8-v1"}}}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -63,28 +63,29 @@ func TestCanonicalWalletOutboxDispatcherDeliversEndToEnd(t *testing.T) {
 
 	cfg := canonicalWalletTestConfig(config.CanonicalWalletModeEnforce)
 	cfg.ControlPlaneURL, cfg.Secret = controlPlane.URL, strings.Repeat("s", 32)
-	cfg.RequestTimeoutMS = 100 // dispatcher tick interval for this test
+	cfg.LeaseBudgetUnits = 500_000_000 // above the 0.30 USD settlement, so requested_budget stays the configured budget
+	cfg.RequestTimeoutMS = 100         // dispatcher tick interval for this test
 
 	client := newCanonicalWalletHTTPClient(cfg, controlPlane.Client())
 	bridge := newCanonicalWalletBridge(cfg, store, client, db, outbox, 0, nil)
 	t.Cleanup(bridge.Close)
 	require.NotNil(t, bridge)
 
-	amountUnits := int64(30_000000) // 0.30 CNY in cny-e8-v1 units
+	amountUnits := int64(30_000000) // 0.30 USD in usd-e8-v1 units
 	bridge.ObserveSettlement(CanonicalWalletSettlementEvent{
 		GatewayRequestID: "req-e2e-1", PlatformUserID: platformUserID,
-		Currency: "CNY", AmountUnits: amountUnits,
+		Currency: "USD", AmountUnits: amountUnits,
 	})
 
-	// A non-CNY event must be rejected at the strict boundary and never
+	// A non-USD event must be rejected at the strict boundary and never
 	// reach the durable store.
 	bridge.ObserveSettlement(CanonicalWalletSettlementEvent{
 		GatewayRequestID: "req-e2e-usd", PlatformUserID: platformUserID,
-		Currency: "USD", AmountUnits: 1_000000,
+		Currency: "CNY", AmountUnits: 1_000000,
 	})
 	var usdRows int
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT COUNT(*) FROM wallet_settlement_outbox WHERE gateway_request_id = 'req-e2e-usd'`).Scan(&usdRows))
-	require.Equal(t, 0, usdRows, "a non-CNY settlement event must never be durably recorded")
+	require.Equal(t, 0, usdRows, "a non-USD settlement event must never be durably recorded")
 
 	// Wait for the dispatcher to deliver (first tick fires one
 	// RequestTimeoutMS after construction).
@@ -164,7 +165,7 @@ func TestDeliverOutboxEventRecordsFailureWhenTheAttemptConsumedItsBudget(t *test
 
 	platformUserID := "shipany-user-" + uuid.NewString()
 	control := &budgetConsumingControlPlane{canonicalWalletControlStub{lease: CanonicalWalletLease{
-		LeaseID: "lease-budget-" + uuid.NewString(), PlatformUserID: platformUserID, Currency: "CNY",
+		LeaseID: "lease-budget-" + uuid.NewString(), PlatformUserID: platformUserID, Currency: "USD",
 		BudgetUnits: 500_000000, ExpiresAt: time.Now().UTC().Add(time.Minute),
 	}}}
 	cfg := canonicalWalletTestConfig(config.CanonicalWalletModeEnforce)
@@ -174,7 +175,7 @@ func TestDeliverOutboxEventRecordsFailureWhenTheAttemptConsumedItsBudget(t *test
 
 	require.True(t, bridge.ObserveSettlement(CanonicalWalletSettlementEvent{
 		GatewayRequestID: "req-budget-1", PlatformUserID: platformUserID,
-		Currency: "CNY", AmountUnits: 10_000000,
+		Currency: "USD", AmountUnits: 10_000000,
 	}))
 	claimed, err := outbox.ClaimPendingOutboxEvents(ctx, bridge.workerID, 1)
 	require.NoError(t, err)

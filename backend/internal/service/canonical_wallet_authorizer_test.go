@@ -27,9 +27,9 @@ func newAuthorizerFixture(t *testing.T, mode string) (*CanonicalWalletAuthorizer
 	require.NoError(t, err)
 	require.NotNil(t, snap)
 	apiKey.User.PlatformUserID = "platform-user-1"
-	apiKey.User.BillingCurrency = "CNY"
+	apiKey.User.BillingCurrency = "USD"
 	bridge, store, control := newBridgeForEnsureLeaseTest(t)
-	control.lease = CanonicalWalletLease{LeaseID: "lease-1", Currency: "CNY", BudgetUnits: 500_000_000, ExpiresAt: time.Now().Add(5 * time.Minute)}
+	control.lease = CanonicalWalletLease{LeaseID: "lease-1", Currency: "USD", BudgetUnits: 500_000_000, ExpiresAt: time.Now().Add(5 * time.Minute)}
 	cfg := &config.Config{}
 	cfg.CanonicalWallet.Mode = mode
 	cfg.CanonicalWallet.RequestTimeoutMS = 300
@@ -74,10 +74,10 @@ func TestAuthorizeDisabledModeMintsOnly(t *testing.T) {
 	require.Equal(t, 0, control.ensureCalls)
 }
 
-func TestAuthorizeNilAuthorizerMintsOnly(t *testing.T) {
+func TestAuthorizeNilAuthorizerRefuses(t *testing.T) {
 	var auth *CanonicalWalletAuthorizer
 	h, err := auth.Authorize(context.Background(), AuthorizeInput{})
-	require.NoError(t, err)
+	require.Error(t, err)
 	require.NotEmpty(t, h.ID)
 }
 
@@ -118,10 +118,11 @@ func TestAuthorizeEnforceRefusesWithTheNamedReason(t *testing.T) {
 	}{
 		{"missing snapshot", func(in *AuthorizeInput, _ *canonicalWalletControlStub) { in.Snapshot = nil }, AuthorizationRefusalSnapshotMissing},
 		{"missing identity", func(in *AuthorizeInput, _ *canonicalWalletControlStub) { in.User = &User{} }, AuthorizationRefusalIdentityMissing},
-		{"non-CNY", func(in *AuthorizeInput, _ *canonicalWalletControlStub) {
-			u := *in.User
-			u.BillingCurrency = "USD"
-			in.User = &u
+		{"legacy CNY user", func(in *AuthorizeInput, _ *canonicalWalletControlStub) {
+			// Settlement would reject this currency after the request was served.
+			user := *in.User
+			user.BillingCurrency = "CNY"
+			in.User = &user
 		}, AuthorizationRefusalCurrency},
 		{"balance shortfall", func(_ *AuthorizeInput, c *canonicalWalletControlStub) {
 			// §9.3: the server's insufficient_balance refusal.
@@ -130,7 +131,7 @@ func TestAuthorizeEnforceRefusesWithTheNamedReason(t *testing.T) {
 		{"under-grant (local guard)", func(_ *AuthorizeInput, c *canonicalWalletControlStub) {
 			// §9.3: a grant below the amount is now its own TRANSIENT sentinel,
 			// mapped lease_unavailable — never balance_shortfall.
-			c.lease = CanonicalWalletLease{LeaseID: "l", Currency: "CNY", BudgetUnits: 1, ExpiresAt: time.Now().Add(time.Minute)}
+			c.lease = CanonicalWalletLease{LeaseID: "l", Currency: "USD", BudgetUnits: 1, ExpiresAt: time.Now().Add(time.Minute)}
 		}, AuthorizationRefusalLeaseUnavailable},
 		{"control plane down", func(_ *AuthorizeInput, c *canonicalWalletControlStub) { c.leaseErr = errors.New("503") }, AuthorizationRefusalLeaseUnavailable},
 	}
@@ -223,13 +224,13 @@ func benchmarkAuthorize(b *testing.B, leaseOnStore bool) {
 		b.Fatal(err)
 	}
 	apiKey.User.PlatformUserID = "platform-user-1"
-	apiKey.User.BillingCurrency = "CNY"
+	apiKey.User.BillingCurrency = "USD"
 
 	store := &canonicalWalletStoreStub{}
 	if leaseOnStore {
 		// Current lease covers any estimate this body produces → the fast path:
 		// one store read, no EnsureLease, no install.
-		store.lease = &CanonicalWalletLease{LeaseID: "lease-hit", Currency: "CNY", BudgetUnits: 500_000_000, ExpiresAt: time.Now().Add(time.Hour)}
+		store.lease = &CanonicalWalletLease{LeaseID: "lease-hit", Currency: "USD", BudgetUnits: 500_000_000, ExpiresAt: time.Now().Add(time.Hour)}
 	} else {
 		// Review note M3: keep the store empty on every iteration — without
 		// this the first install would turn iterations 2..N into hits.
@@ -237,7 +238,7 @@ func benchmarkAuthorize(b *testing.B, leaseOnStore bool) {
 	}
 	control := &canonicalWalletControlStub{}
 	if !leaseOnStore {
-		control.lease = CanonicalWalletLease{LeaseID: "lease-miss", Currency: "CNY", BudgetUnits: 500_000_000, ExpiresAt: time.Now().Add(time.Hour)}
+		control.lease = CanonicalWalletLease{LeaseID: "lease-miss", Currency: "USD", BudgetUnits: 500_000_000, ExpiresAt: time.Now().Add(time.Hour)}
 	}
 	bridgeCfg := canonicalWalletTestConfig(config.CanonicalWalletModeShadow)
 	bridgeCfg.LeaseBudgetUnits = 500_000_000
@@ -320,17 +321,17 @@ func TestAuthorizationHandleRemainingGuardBranches(t *testing.T) {
 	require.Equal(t, 300*time.Millisecond, nilAuth.requestTimeout())
 }
 
-func TestAuthorizeBillableAttemptFacadesAreNilSafe(t *testing.T) {
+func TestAuthorizeBillableAttemptFacadesRefuseWithoutWallet(t *testing.T) {
 	// Services built by tests without an authorizer degrade to token-only handles.
 	gw := &GatewayService{}
 	h, err := gw.AuthorizeBillableAttempt(context.Background(), nil, nil, EstimateInput{})
-	require.NoError(t, err)
+	require.Error(t, err)
 	require.NotEmpty(t, h.ID)
-	require.Nil(t, h.Refusal)
+	require.NotNil(t, h.Refusal)
 
 	ogw := &OpenAIGatewayService{}
 	h2, err := ogw.AuthorizeBillableAttempt(context.Background(), nil, nil, EstimateInput{})
-	require.NoError(t, err)
+	require.Error(t, err)
 	require.NotEmpty(t, h2.ID)
 	// userOfAPIKey derives the user from the key when one exists.
 	require.Nil(t, userOfAPIKey(nil))
@@ -341,13 +342,13 @@ func TestAuthorizeBillableAttemptFacadesAreNilSafe(t *testing.T) {
 func TestEnsureLeaseRejectsMissingDependenciesAndNilGrant(t *testing.T) {
 	// A bridge without its store/control dependencies fails closed.
 	broken := &CanonicalWalletBridge{}
-	_, err := broken.ensureLease(context.Background(), "user-1", "CNY", 1, canonicalWalletLeasePurposeAuthorize, "")
+	_, err := broken.ensureLease(context.Background(), "user-1", "USD", 1, canonicalWalletLeasePurposeAuthorize, "")
 	require.Error(t, err)
 
 	// A (nil, nil) grant from the control plane is named, not a nil deref.
 	b, store, control := newBridgeForEnsureLeaseTest(t)
 	control.nilLease = true
-	_, err = b.ensureLease(context.Background(), "user-1", "CNY", 1, canonicalWalletLeasePurposeAuthorize, "")
+	_, err = b.ensureLease(context.Background(), "user-1", "USD", 1, canonicalWalletLeasePurposeAuthorize, "")
 	require.ErrorIs(t, err, ErrCanonicalWalletLeaseMissing)
 	require.Equal(t, 0, store.installCalls)
 }

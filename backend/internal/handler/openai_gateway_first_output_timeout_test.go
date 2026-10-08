@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 
@@ -48,4 +49,31 @@ func TestOpenAIRequestAllowsFailoverReplayStopsCanceledClient(t *testing.T) {
 	require.True(t, openAIRequestAllowsFailoverReplay(c))
 	cancel()
 	require.False(t, openAIRequestAllowsFailoverReplay(c))
+}
+
+func TestFailoverRenderersAcceptWriterOnlyContext(t *testing.T) {
+	cases := []struct {
+		name   string
+		render func(*gin.Context, *service.UpstreamFailoverError)
+	}{
+		{"openai", func(c *gin.Context, err *service.UpstreamFailoverError) {
+			(&OpenAIGatewayHandler{}).handleFailoverExhausted(c, err, false)
+		}},
+		{"anthropic", func(c *gin.Context, err *service.UpstreamFailoverError) {
+			(&OpenAIGatewayHandler{}).handleAnthropicFailoverExhausted(c, err, false)
+		}},
+		{"gateway", func(c *gin.Context, err *service.UpstreamFailoverError) {
+			(&GatewayHandler{}).handleFailoverExhausted(c, err, service.PlatformAnthropic, false)
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			require.Nil(t, c.Request)
+			tc.render(c, &service.UpstreamFailoverError{StatusCode: http.StatusServiceUnavailable})
+			require.Equal(t, http.StatusBadGateway, rec.Code)
+			require.Contains(t, rec.Body.String(), "temporarily unavailable")
+		})
+	}
 }

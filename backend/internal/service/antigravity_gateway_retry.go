@@ -565,6 +565,9 @@ urlFallbackLoop:
 					Kind:               "request_error",
 					Message:            safeErr,
 				})
+				if !WalletAttemptMayRetry(p.ctx) {
+					return nil, err
+				}
 				if shouldAntigravityFallbackToNextURL(err, 0) && urlIdx < len(availableURLs)-1 {
 					logger.LegacyPrintf("service.antigravity_gateway", "%s URL fallback (connection error): %s -> %s", p.prefix, baseURL, availableURLs[urlIdx+1])
 					continue urlFallbackLoop
@@ -609,6 +612,11 @@ urlFallbackLoop:
 					break urlFallbackLoop
 				}
 
+				// Internal URL/smart retries obey the same known-cost boundary.
+				if !WalletAttemptMayRetry(p.ctx) {
+					resp.Body = io.NopCloser(bytes.NewReader(respBody))
+					break urlFallbackLoop
+				}
 				// 429/503 限流处理：区分 URL 级别限流、智能重试和账户配额限流
 				if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable {
 					// 尝试智能重试处理（OAuth 账号专用）

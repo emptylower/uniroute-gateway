@@ -177,7 +177,7 @@ func liveCallIdentity(
 	}
 	multiplier := 1.0
 	if apiKey.Group != nil {
-		multiplier = apiKey.Group.RateMultiplierForCurrency(currency)
+		multiplier = apiKey.Group.EffectiveRateMultiplier()
 	}
 	return service.LiveCallIdentity{
 		APIKeyID:            apiKey.ID,

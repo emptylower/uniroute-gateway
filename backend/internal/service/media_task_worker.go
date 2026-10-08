@@ -399,6 +399,7 @@ type mediaPinRequest struct {
 	Held               canonicalWalletAmountObject  `json:"held"`
 	BillingSnapshotID  string                       `json:"billing_snapshot_id"`
 	SettlementEventID  string                       `json:"settlement_event_id"`
+	AuthorizationKind  string                       `json:"authorization_kind,omitempty"`
 	USDPolicyVersion   string                       `json:"usd_wallet_policy_version"`
 	Resolution         string                       `json:"resolution,omitempty"`
 	SettlementEventIDs []string                     `json:"settlement_event_ids,omitempty"`
@@ -410,7 +411,7 @@ func (s *MediaTaskService) pinSingle(ctx context.Context, r *mediaTaskRecord, fi
 	if !ok {
 		return errors.New("media task pin control plane unavailable")
 	}
-	request := mediaPinRequest{AuthorizationID: r.AuthorizationID, GatewayJobID: r.ID, PlatformUserID: r.PlatformUserID, LeaseID: r.LeaseID, Held: newCanonicalWalletAmountObject(r.HeldUnits), BillingSnapshotID: r.SnapshotID, SettlementEventID: r.EventID, USDPolicyVersion: "usd-wallet-v1"}
+	request := mediaPinRequest{AuthorizationKind: r.AuthorizationKind, AuthorizationID: r.AuthorizationID, GatewayJobID: r.ID, PlatformUserID: r.PlatformUserID, LeaseID: r.LeaseID, Held: newCanonicalWalletAmountObject(r.HeldUnits), BillingSnapshotID: r.SnapshotID, SettlementEventID: r.EventID, USDPolicyVersion: "usd-wallet-v1"}
 	path := "/api/internal/v2/wallet/task-pins/create"
 	if finish {
 		path = "/api/internal/v2/wallet/task-pins/finish"
@@ -476,7 +477,7 @@ func (s *MediaTaskService) pinSingle(ctx context.Context, r *mediaTaskRecord, fi
 			if r.LeaseBasis.ExpiresAt.Before(expiry) {
 				expiry = r.LeaseBasis.ExpiresAt
 			}
-			r.LeaseBasis = &CanonicalWalletLease{LeaseID: r.LeaseID, PlatformUserID: r.PlatformUserID, Currency: CurrencyCNY, BudgetUnits: budget, ConsumedUnits: captured, ExpiresAt: expiry, Sealed: true}
+			r.LeaseBasis = &CanonicalWalletLease{LeaseID: r.LeaseID, PlatformUserID: r.PlatformUserID, Currency: CurrencyUSD, BudgetUnits: budget, ConsumedUnits: captured, ExpiresAt: expiry, Sealed: true}
 		}
 		r.CapturedEventIDs = response.CapturedEventIDs
 	}
@@ -508,18 +509,18 @@ func (s *MediaTaskService) settle(ctx context.Context, r *mediaTaskRecord) error
 	}
 	defer tx.Rollback()
 	for _, segment := range r.Segments {
-		event := CanonicalWalletSettlementEvent{EventID: segment.EventID, GatewayRequestID: r.ID, PlatformUserID: r.PlatformUserID, LeaseID: segment.LeaseID, Currency: CurrencyCNY, AmountUnits: segment.ActualUnits, OccurredAt: r.CreatedAt, AuthorizationID: segment.AuthorizationID, AuthorizationToken: r.AuthorizationToken, BillingSnapshotID: r.SnapshotID}
+		event := CanonicalWalletSettlementEvent{EventID: segment.EventID, GatewayRequestID: r.ID, PlatformUserID: r.PlatformUserID, LeaseID: segment.LeaseID, Currency: CurrencyUSD, AmountUnits: segment.ActualUnits, OccurredAt: r.CreatedAt, AuthorizationID: segment.AuthorizationID, AuthorizationToken: r.AuthorizationToken, BillingSnapshotID: r.SnapshotID}
 		if err = s.bridge.outbox.InsertOutboxEventTx(ctx, tx, event); err != nil {
 			return err
 		}
 	}
 
 	usd := mediaUSD(actual)
-	cny := strconv.FormatFloat(float64(actual)/100000000, 'f', 8, 64)
+	amountUSD := strconv.FormatFloat(float64(actual)/100000000, 'f', 8, 64)
 	// Usage and outbox are one durable terminal transaction. No native user
 	// balance or legacy credit path is involved in media settlement.
 	_, err = tx.ExecContext(ctx, `INSERT INTO usage_logs(user_id,api_key_id,account_id,request_id,model,requested_model,billing_snapshot_id,billing_mode,media_type,total_cost,actual_cost,source_currency,settlement_currency,exchange_rate,exchange_rate_source,exchange_rate_as_of,source_cost,base_cost,rate_multiplier,image_count,video_count,video_duration_seconds,image_size,created_at)
- SELECT $1,$2,$3,$4::text,$5::text,$5::text,$6,'per_request',$7,$8::numeric,$8::numeric,'USD','CNY',7.2,'usd-wallet-v1',$9,$10::numeric,$8::numeric,1,$11,$12,$13,$14,$9 WHERE NOT EXISTS(SELECT 1 FROM usage_logs WHERE request_id=$4::text AND api_key_id=$2)`, r.UserID, r.APIKeyID, s.accountID, r.ID, r.Model, r.SnapshotID, r.MediaType, cny, r.CreatedAt, usd, mediaImageCount(r), mediaVideoCount(r), mediaDuration(r), mediaImageSize(r))
+ SELECT $1,$2,$3,$4::text,$5::text,$5::text,$6,'per_request',$7,$8::numeric,$8::numeric,'USD','USD',1,'usd-e8-v1',$9,$10::numeric,$8::numeric,1,$11,$12,$13,$14,$9 WHERE NOT EXISTS(SELECT 1 FROM usage_logs WHERE request_id=$4::text AND api_key_id=$2)`, r.UserID, r.APIKeyID, s.accountID, r.ID, r.Model, r.SnapshotID, r.MediaType, amountUSD, r.CreatedAt, usd, mediaImageCount(r), mediaVideoCount(r), mediaDuration(r), mediaImageSize(r))
 	if err != nil {
 		return err
 	}
@@ -553,13 +554,12 @@ func mediaDuration(r *mediaTaskRecord) any {
 	if r.MediaType != "video" {
 		return nil
 	}
-	n, _ := strconv.Atoi(r.Option)
-	return n
+	return int(mediaOptionSeconds(r.Option))
 }
 func mediaImageSize(r *mediaTaskRecord) any {
 	if r.MediaType == "image" {
-		if len(r.Option) >= 2 && r.Option[:2] == "2K" {
-			return "2K"
+		if len(r.Option) >= 2 && (r.Option[:2] == "2K" || r.Option[:2] == "4K") {
+			return r.Option[:2]
 		}
 		return "1K"
 	}

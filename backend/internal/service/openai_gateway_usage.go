@@ -163,10 +163,6 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	tokens := openAIUsageTokens(result.Usage)
 	actualInputTokens := tokens.InputTokens
 	isSubscriptionBilling := subscription != nil && apiKey.Group != nil && apiKey.Group.IsSubscriptionType()
-	multiplierCurrency := CurrencyUSD
-	if !isSubscriptionBilling {
-		multiplierCurrency = NormalizeUserBillingCurrency(user.BillingCurrency)
-	}
 
 	// Get rate multiplier
 	multiplier := 1.0
@@ -174,7 +170,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		multiplier = s.cfg.Default.RateMultiplier
 	}
 	if apiKey.GroupID != nil && apiKey.Group != nil {
-		multiplier = s.ResolveUserGroupRateMultiplier(ctx, user.ID, *apiKey.GroupID, apiKey.Group.RateMultiplierForCurrency(multiplierCurrency))
+		multiplier = s.ResolveUserGroupRateMultiplier(ctx, user.ID, *apiKey.GroupID, apiKey.Group.EffectiveRateMultiplier())
 	}
 	// token 倍率叠加高峰因子（token 计费含图片 token，图片按次倍率不受影响）。高峰因子按请求时刻现算，
 	// 不并入上面的 Resolve，以免污染 user:group 倍率缓存。

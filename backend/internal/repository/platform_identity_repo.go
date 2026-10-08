@@ -53,6 +53,7 @@ func (r *platformIdentityRepository) CreatePlatformUser(ctx context.Context, pla
 		SetUsername(username).
 		SetPasswordHash(platformManagedPasswordSentinel).
 		SetPlatformUserID(platformUserID).
+		SetBillingCurrency(service.CurrencyUSD).
 		SetRole(domain.RoleUser).
 		SetStatus(domain.StatusActive).
 		SetConcurrency(r.defaultConcurrency).

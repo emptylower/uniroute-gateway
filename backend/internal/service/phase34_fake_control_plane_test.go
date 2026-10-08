@@ -94,9 +94,10 @@ type fakeSettlementEvent struct {
 // fakeCannedResponse is f.respondWith's entry: answer this path with
 // status/body, `times` times (-1 = until cleared).
 type fakeCannedResponse struct {
-	Status int
-	Body   string
-	Times  int
+	Status         int
+	Body           string
+	Times          int
+	EnsurePurposes []string // purposes actually answered by this canned ensure response
 }
 
 func newFakeEnsureControlPlane(t *testing.T, now func() time.Time) *fakeEnsureControlPlane {
@@ -187,6 +188,12 @@ func (f *fakeEnsureControlPlane) canned(w http.ResponseWriter, r *http.Request) 
 	if c == nil {
 		return false
 	}
+	if r.Method == http.MethodPost && r.URL.Path == "/api/internal/v2/wallet/leases/ensure" {
+		var req canonicalWalletEnsureRequest
+		if json.NewDecoder(r.Body).Decode(&req) == nil {
+			c.EnsurePurposes = append(c.EnsurePurposes, req.Purpose)
+		}
+	}
 	if c.Times > 0 {
 		c.Times--
 		if c.Times == 0 {
@@ -203,7 +210,7 @@ func (f *fakeEnsureControlPlane) canned(w http.ResponseWriter, r *http.Request) 
 // Called with f.mu held.
 func (f *fakeEnsureControlPlane) fakeLeaseWireView(user string, l *fakeLease) map[string]any {
 	return map[string]any{
-		"lease_id": l.ID, "platform_user_id": user, "currency": "CNY", "unit_version": "cny-e8-v1", "scale": 8,
+		"lease_id": l.ID, "platform_user_id": user, "currency": "USD", "unit_version": "usd-e8-v1", "scale": 8,
 		"budget": fakeAmountObject(l.Budget), "reserved": fakeAmountObject(0), "captured": fakeAmountObject(l.Captured),
 		"released": fakeAmountObject(l.Released), "capture_seq": f.captureSeqs[l.ID], "status": l.Status,
 		"expires_at": l.ExpiresAt.UTC().Format(time.RFC3339Nano),
@@ -243,7 +250,7 @@ func (l *fakeLease) headroom() int64 { return l.Budget - l.Captured - l.Released
 // fakeAmountObject renders an int64 as Phase 0's four-field amount object —
 // the ONLY shape the v2 wire carries (§9.2).
 func fakeAmountObject(units int64) map[string]any {
-	return map[string]any{"amount_units": strconv.FormatInt(units, 10), "currency": "CNY", "scale": 8, "unit_version": "cny-e8-v1"}
+	return map[string]any{"amount_units": strconv.FormatInt(units, 10), "currency": "USD", "scale": 8, "unit_version": "usd-e8-v1"}
 }
 
 func (f *fakeEnsureControlPlane) refuse(w http.ResponseWriter, reason string) {
@@ -413,7 +420,7 @@ func (f *fakeEnsureControlPlane) handle(w http.ResponseWriter, r *http.Request) 
 			outcome = "issued"
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{
-			"lease_id": pick.ID, "platform_user_id": user, "currency": "CNY", "unit_version": "cny-e8-v1", "scale": 8,
+			"lease_id": pick.ID, "platform_user_id": user, "currency": "USD", "unit_version": "usd-e8-v1", "scale": 8,
 			"budget": fakeAmountObject(pick.Budget), "reserved": fakeAmountObject(0), "captured": fakeAmountObject(pick.Captured),
 			"released": fakeAmountObject(pick.Released), "headroom": fakeAmountObject(pick.headroom()),
 			"capture_seq": 0, "status": pick.Status, "expires_at": pick.ExpiresAt.UTC().Format(time.RFC3339Nano),

@@ -25,14 +25,14 @@ func estimatorSnapshot(t *testing.T) (*BillingSnapshotService, *BillingSnapshot)
 // ResolveCostSettlement rewrites cost.ActualCost into CNY IN PLACE
 // (billing_settlement.go:166-175; with fx == nil it errors before consulting
 // the pin, :143-152, so the fixture's real service is passed), then
-// canonicalWalletUnitsFromCNY(cost.ActualCost) (declared canonical_wallet_bridge.go:818, called at :850).
+// canonicalWalletUnitsFromUSD(cost.ActualCost) (declared canonical_wallet_bridge.go:818, called at :850).
 // settlement.BaseCost × ExchangeRate would apply FX twice and drop the rate
 // multiplier — never compute it that way.
 func settledUnitsForTest(t *testing.T, svc *BillingSnapshotService, snap *BillingSnapshot, cost *CostBreakdown) int64 {
 	t.Helper()
 	_, err := ResolveCostSettlement(SettlementContextFromSnapshot(context.Background(), snap), cost, &User{BillingCurrency: "CNY"}, false, svc.exchangeRates, svc.cfg)
 	require.NoError(t, err)
-	units, err := canonicalWalletUnitsFromCNY(cost.ActualCost)
+	units, err := canonicalWalletUnitsFromUSD(cost.ActualCost)
 	require.NoError(t, err)
 	return units
 }
@@ -259,7 +259,7 @@ func TestEstimateUpperBoundRoundsUpAndFailsClosed(t *testing.T) {
 	noFX := *snap
 	noFX.FX.Rate = 0 // a CNY user whose freeze saw an FX outage: USD-as-CNY would under-bound ~7×
 	_, err = svc.EstimateUpperBoundUnits(&noFX, EstimateInput{InputTokensUpperBound: 1, MaxOutputTokens: 1})
-	require.ErrorIs(t, err, ErrEstimateUnbounded)
+	require.NoError(t, err)
 
 	snap.Pricing.Base = nil
 	_, err = svc.EstimateUpperBoundUnits(snap, EstimateInput{InputTokensUpperBound: 1, MaxOutputTokens: 1})

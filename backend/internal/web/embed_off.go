@@ -1,4 +1,4 @@
-//go:build !embed
+//go:build !embed || !legacy_gateway_frontend
 
 // Package web provides embedded web assets for the application.
 package web

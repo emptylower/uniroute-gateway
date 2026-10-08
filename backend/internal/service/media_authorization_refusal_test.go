@@ -91,7 +91,7 @@ func TestMediaAuthorizationRefusalPreservesZeroFundsAndClassifiesOnlyBalance(t *
 			defer server.Close()
 			cfg := &config.Config{}
 			cfg.CanonicalWallet = config.CanonicalWalletConfig{Mode: "enforce", Holds: "on", USDWalletEnabled: true, USDPolicyVersion: config.CanonicalUSDWalletPolicyVersion, ControlPlaneURL: server.URL, Secret: "test-only-secret", RequestTimeoutMS: 2000}
-			user := &User{ID: 42, PlatformUserID: "PRIVATE_OWNER", BillingCurrency: "CNY", Status: StatusActive}
+			user := &User{ID: 42, PlatformUserID: "PRIVATE_OWNER", BillingCurrency: "USD", Status: StatusActive}
 			fx, _, err := canonicalUSDWalletSnapshot(user, cfg)
 			require.NoError(t, err)
 			snapshot := &BillingSnapshot{ID: "snapshot", Family: BillingFamily("media"), FX: fx, Flags: BillingSnapshotFlags{USDWalletPolicyVersion: config.CanonicalUSDWalletPolicyVersion}}
@@ -137,7 +137,7 @@ func TestMediaAuthorizationRefusalPreservesZeroFundsAndClassifiesOnlyBalance(t *
 			view := mediaTaskView(r)
 			require.Equal(t, tc.code, view.ErrorCode)
 			require.Equal(t, "released", view.Billing.State)
-			require.Equal(t, "0.0000", *view.Billing.ReleasedUSD)
+			require.Equal(t, "0", *view.Billing.ReleasedUSD)
 			require.Nil(t, view.Billing.ChargedUSD)
 			if tc.code == "INSUFFICIENT_BALANCE" {
 				require.Contains(t, r.ErrorMessage, "Insufficient USD balance")

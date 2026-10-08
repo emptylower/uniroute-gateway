@@ -63,7 +63,7 @@ func TestApplyBillingSnapshotToSettlementModes(t *testing.T) {
 	svc.cfg.CanonicalWallet.BillingSnapshotMode = "settle"
 	got, ctx := settler.applyBillingSnapshotToSettlement(context.Background(), snap, live, in, "claude-sonnet-4")
 	require.Equal(t, fromSnap.ActualCost, got.ActualCost)
-	pinned, ok := pinnedBillingSettlementSnapshot(ctx, CurrencyUSD, "CNY")
+	pinned, ok := pinnedBillingSettlementSnapshot(ctx, CurrencyUSD, "USD")
 	require.True(t, ok)
 	require.Equal(t, snap.FX.Rate, pinned.Rate)
 
@@ -82,13 +82,13 @@ func TestApplyBillingSnapshotToSettlementModes(t *testing.T) {
 func TestSettlementContextFromSnapshotUsesAFreshHolder(t *testing.T) {
 	_, snap, _, _, _ := freezeForSettleTest(t, BillingFamilyGeneric, "claude-sonnet-4")
 	outer := WithBillingSettlementContext(context.Background())
-	storeBillingSettlementSnapshot(outer, ExchangeRateSnapshot{BaseCurrency: "USD", QuoteCurrency: "CNY", Rate: 6.5})
+	storeBillingSettlementSnapshot(outer, ExchangeRateSnapshot{BaseCurrency: "USD", QuoteCurrency: "USD", Rate: 6.5})
 	snap.FX.Rate = 7.25
 	inner := SettlementContextFromSnapshot(outer, snap)
-	got, ok := pinnedBillingSettlementSnapshot(inner, CurrencyUSD, "CNY")
+	got, ok := pinnedBillingSettlementSnapshot(inner, CurrencyUSD, "USD")
 	require.True(t, ok)
 	require.Equal(t, 7.25, got.Rate)
-	still, ok := pinnedBillingSettlementSnapshot(outer, CurrencyUSD, "CNY")
+	still, ok := pinnedBillingSettlementSnapshot(outer, CurrencyUSD, "USD")
 	require.True(t, ok)
 	require.Equal(t, 6.5, still.Rate, "the caller's holder is untouched")
 }

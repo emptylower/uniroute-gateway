@@ -127,7 +127,7 @@ func validateBalanceSettlementCurrency(user *User, orderType, paymentCurrency st
 	if orderType != payment.OrderTypeBalance || user == nil {
 		return nil
 	}
-	settlementCurrency := NormalizeUserBillingCurrency(user.BillingCurrency)
+	settlementCurrency := NormalizeHistoricalBillingCurrency(user.BillingCurrency)
 	paymentCurrency = strings.ToUpper(strings.TrimSpace(paymentCurrency))
 	if paymentCurrency == "" {
 		paymentCurrency = payment.DefaultPaymentCurrency
@@ -243,7 +243,7 @@ func (s *PaymentService) createOrderInTx(ctx context.Context, req CreateOrderReq
 		SetClientIP(req.ClientIP).
 		SetSrcHost(req.SrcHost)
 	if req.OrderType == payment.OrderTypeBalance {
-		b.SetSettlementCurrency(NormalizeUserBillingCurrency(orderUser.BillingCurrency))
+		b.SetSettlementCurrency(NormalizeHistoricalBillingCurrency(orderUser.BillingCurrency))
 	}
 	if req.SrcURL != "" {
 		b.SetSrcURL(req.SrcURL)

@@ -173,6 +173,22 @@ func (s *MediaTaskService) internalKey(ctx context.Context, user *User) (*APIKey
 	}
 	return key, nil
 }
+
+// PlaygroundKey resolves a non-exportable, user-owned key projection. The
+// caller must still run the ordinary gateway authentication and wallet gates.
+func (s *MediaTaskService) PlaygroundKey(ctx context.Context, userID int64) (*APIKey, error) {
+	if s == nil || s.users == nil || s.keys == nil || s.apiKeys == nil {
+		return nil, ErrMediaUnavailable
+	}
+	user, err := s.users.GetByID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if !user.IsActive() || strings.TrimSpace(user.PlatformUserID) == "" {
+		return nil, ErrMediaUnavailable
+	}
+	return s.internalKey(ctx, user)
+}
 func (s *MediaTaskService) Create(ctx context.Context, userID int64, idempotency string, in MediaCreateInput) (MediaTaskView, error) {
 	if !s.Enabled() {
 		return MediaTaskView{}, ErrMediaUnavailable
@@ -205,10 +221,10 @@ func (s *MediaTaskService) Create(ctx context.Context, userID int64, idempotency
 		return MediaTaskView{}, err
 	}
 	jobID := "media_" + strings.TrimPrefix(authID, "auth_")
-	snap := &BillingSnapshot{ID: snapshotID, Version: BillingSnapshotVersion, FrozenAt: time.Now().UTC(), Family: BillingFamily("media"), UserID: user.ID, APIKeyID: key.ID, AccountID: s.accountID, RequestedModel: in.Model, BillingModel: in.Model, Pricing: BillingSnapshotPricing{Mode: BillingModePerRequest, Source: mediaPricingVersion, DefaultPerRequestPrice: float64(units) / float64(mediaUnitsPerUSD)}, Multipliers: BillingSnapshotMultipliers{Base: 1, Text: 1, Image: 1, Video: 1, WebSearch: 1, Account: 1}, FX: fx, Flags: BillingSnapshotFlags{USDWalletPolicyVersion: config.CanonicalUSDWalletPolicyVersion, BillingCurrency: CurrencyCNY, MultiplierCurrency: CurrencyUSD}}
+	snap := &BillingSnapshot{ID: snapshotID, Version: BillingSnapshotVersion, FrozenAt: time.Now().UTC(), Family: BillingFamily("media"), UserID: user.ID, APIKeyID: key.ID, AccountID: s.accountID, RequestedModel: in.Model, BillingModel: in.Model, Pricing: BillingSnapshotPricing{Mode: BillingModePerRequest, Source: mediaPricingVersion, DefaultPerRequestPrice: float64(units) / float64(mediaUnitsPerUSD)}, Multipliers: BillingSnapshotMultipliers{Base: 1, Text: 1, Image: 1, Video: 1, WebSearch: 1, Account: 1}, FX: fx, Flags: BillingSnapshotFlags{USDWalletPolicyVersion: config.CanonicalUSDWalletPolicyVersion, BillingCurrency: CurrencyUSD, MultiplierCurrency: CurrencyUSD}}
 	normalized, _ := json.Marshal(in)
 	requestHash := sha256.Sum256(normalized)
-	r, err := s.store.create(ctx, &mediaTaskRecord{ID: jobID, UserID: userID, PlatformUserID: user.PlatformUserID, APIKeyID: key.ID, IdempotencyKey: idempotency, RequestHash: hex.EncodeToString(requestHash[:]), Model: in.Model, MediaType: in.MediaType, Option: in.Option, Prompt: in.Prompt, RequestPayload: input, SnapshotID: snapshotID, QuotedUnits: units, AuthorizationID: authID, EventID: CanonicalWalletSettlementEventID(jobID, user.PlatformUserID, CurrencyCNY), DeadlineAt: time.Now().UTC().Add(time.Duration(s.cfg.MediaTasks.DeadlineSeconds) * time.Second)}, snap)
+	r, err := s.store.create(ctx, &mediaTaskRecord{ID: jobID, UserID: userID, PlatformUserID: user.PlatformUserID, APIKeyID: key.ID, IdempotencyKey: idempotency, RequestHash: hex.EncodeToString(requestHash[:]), Model: in.Model, MediaType: in.MediaType, Option: in.Option, Prompt: in.Prompt, RequestPayload: input, SnapshotID: snapshotID, QuotedUnits: units, AuthorizationID: authID, EventID: CanonicalWalletSettlementEventID(jobID, user.PlatformUserID, CurrencyUSD), DeadlineAt: time.Now().UTC().Add(time.Duration(s.cfg.MediaTasks.DeadlineSeconds) * time.Second)}, snap)
 	if err != nil {
 		return MediaTaskView{}, err
 	}

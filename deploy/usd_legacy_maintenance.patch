@@ -1,0 +1,83 @@
+--- a/backend/internal/server/router.go
++++ b/backend/internal/server/router.go
+@@ -57,6 +57,7 @@
+ 	refreshFrameOrigins() // 启动时初始化
+ 
+ 	// 应用中间件
++	r.Use(middleware2.LegacyUsdCutoverMaintenance())
+ 	r.Use(middleware2.RequestLogger())
+ 	// 将客户端 IP + UA 注入 request context，供 token 签发/会话绑定/审计日志统一读取。
+ 	// 解析模式按请求快照：兼容开关开启时信任原始转发头，关闭时使用 server.trusted_proxies。
+--- /dev/null
++++ b/backend/internal/server/middleware/legacy_usd_cutover.go
+@@ -0,0 +1,34 @@
++// Temporary admission-only patch for the PRE-USD version; does not change money or protocols.
++package middleware
++
++import (
++	"github.com/gin-gonic/gin"
++	"net/http"
++	"os"
++	"strings"
++)
++
++func LegacyUsdCutoverMaintenance() gin.HandlerFunc {
++	return func(c *gin.Context) {
++		if !strings.EqualFold(os.Getenv("USD_LEDGER_MAINTENANCE"), "true") {
++			c.Next()
++			return
++		}
++		p := c.Request.URL.Path
++		writing := strings.HasPrefix(p, "/api/v1/auth/oauth/") || c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead && c.Request.Method != http.MethodOptions
++		websocket := strings.EqualFold(c.GetHeader("Upgrade"), "websocket")
++		if !writing && !websocket {
++			c.Next()
++			return
++		}
++		// Existing internal settlement/reconciliation and payment completion remain live.
++		draining := strings.HasPrefix(p, "/api/internal/") && !(strings.Contains(p, "/inference/") && (strings.HasSuffix(p, "/tasks") || strings.HasSuffix(p, "/quote")))
++		draining = draining || strings.HasPrefix(p, "/api/v1/payment/webhook/") || strings.HasPrefix(p, "/api/v1/admin/wallet/reconciliation/")
++		if draining && !websocket {
++			c.Next()
++			return
++		}
++		c.Header("Retry-After", "60")
++		c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{"type": "maintenance", "message": "Wallet cutover maintenance"}})
++	}
++}
+--- /dev/null
++++ b/backend/internal/server/middleware/legacy_usd_cutover_test.go
+@@ -0,0 +1,33 @@
++package middleware
++
++import (
++	"github.com/gin-gonic/gin"
++	"net/http/httptest"
++	"testing"
++)
++
++func TestLegacyUsdCutoverPreservesOnlyDrain(t *testing.T) {
++	t.Setenv("USD_LEDGER_MAINTENANCE", "true")
++	for _, tc := range []struct {
++		method, path, upgrade string
++		want                  int
++	}{
++		{"GET", "/api/v1/auth/oauth/oidc/callback", "", 503}, {"GET", "/api/v1/payment/webhook/alipay", "", 204}, {"POST", "/v1/chat/completions", "", 503}, {"GET", "/v1/responses", "websocket", 503},
++		{"POST", "/api/internal/v1/users/x/inference/tasks", "", 503}, {"POST", "/api/internal/v1/users/x/inference/quote", "", 503},
++		{"POST", "/api/internal/v1/users/x/inference/legacy-read", "", 204}, {"POST", "/api/internal/v1/wallet/settlements", "", 204},
++		{"POST", "/api/v1/payment/webhook/stripe", "", 204}, {"GET", "/v1/images/tasks/old", "", 204},
++	} {
++		t.Run(tc.method+tc.path, func(t *testing.T) {
++			r := gin.New()
++			r.Use(LegacyUsdCutoverMaintenance())
++			r.Any("/*path", func(c *gin.Context) { c.Status(204) })
++			req := httptest.NewRequest(tc.method, tc.path, nil)
++			req.Header.Set("Upgrade", tc.upgrade)
++			w := httptest.NewRecorder()
++			r.ServeHTTP(w, req)
++			if w.Code != tc.want {
++				t.Fatalf("status=%d want%d", w.Code, tc.want)
++			}
++		})
++	}
++}

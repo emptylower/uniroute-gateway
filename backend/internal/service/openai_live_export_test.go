@@ -93,7 +93,7 @@ type LiveRestartServiceOptions struct {
 	UsageLogRepo       UsageLogRepository
 	BillingService     *BillingService
 	Resolver           *ModelPricingResolver
-	ExchangeRates      *ExchangeRateService
+	ExchangeRates      *USDPriceService
 	Snapshots          *BillingSnapshotService
 	Attestation        liveattestation.Provider
 	AttestationCipher  SecretEncryptor
@@ -339,20 +339,19 @@ func (r *LiveRestartChannelRepoStub) GetGroupPlatforms(_ context.Context, _ []in
 	return map[int64]string{7: "openai"}, nil
 }
 
-func NewSnapshotTestFixtureForTest(t testing.TB) (*BillingSnapshotService, *APIKey, *User, *Account, *BillingService, *ModelPricingResolver, *ExchangeRateService) {
+func NewSnapshotTestFixtureForTest(t testing.TB) (*BillingSnapshotService, *APIKey, *User, *Account, *BillingService, *ModelPricingResolver, *USDPriceService) {
 	cfg := &config.Config{}
 	cfg.Default.RateMultiplier = 1
 	cfg.CanonicalWallet.BillingSnapshotMode = "record"
-	cfg.Billing.ExchangeRate.BootstrapUSDToCNY = 7.0
 	billing := NewBillingService(&config.Config{}, nil)
 	cs := NewChannelService(&LiveRestartChannelRepoStub{}, nil, nil, nil)
 	resolver := NewModelPricingResolver(cs, billing)
-	fx := NewExchangeRateService(cfg)
+	fx := NewUSDPriceService(cfg)
 	svc := NewBillingSnapshotService(cfg, resolver, billing, fx, nil)
 	svc.now = func() time.Time { return time.Date(2026, 8, 27, 3, 0, 0, 0, time.UTC) }
 	group := &Group{ID: 7, RateMultiplier: 1.5, ImageRateIndependent: true, ImageRateMultiplier: 2.5}
 	gid := int64(7)
-	user := &User{ID: 42, BillingCurrency: "CNY"}
+	user := &User{ID: 42, BillingCurrency: "USD"}
 	apiKey := &APIKey{ID: 11, GroupID: &gid, Group: group, User: user}
 	rate := 1.25
 	account := &Account{

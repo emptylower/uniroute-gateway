@@ -56,6 +56,7 @@ func (s *UsageLogRepoSuite) createUsageLog(user *service.User, apiKey *service.A
 		InputTokens:  inputTokens,
 		OutputTokens: outputTokens,
 		TotalCost:    cost,
+		BaseCost:     cost,
 		ActualCost:   cost,
 		CreatedAt:    createdAt,
 	}
@@ -79,6 +80,7 @@ func (s *UsageLogRepoSuite) TestCreate() {
 		InputTokens:  10,
 		OutputTokens: 20,
 		TotalCost:    0.5,
+		BaseCost:     0.5,
 		ActualCost:   0.4,
 	}
 
@@ -168,6 +170,7 @@ func TestUsageLogRepositoryCreate_BatchPathConcurrent(t *testing.T) {
 			InputTokens:  10 + i,
 			OutputTokens: 20 + i,
 			TotalCost:    0.5,
+			BaseCost:     0.5,
 			ActualCost:   0.5,
 			CreatedAt:    time.Now().UTC(),
 		}
@@ -208,6 +211,7 @@ func TestUsageLogRepositoryCreate_BatchPathDuplicateRequestID(t *testing.T) {
 		InputTokens:  10,
 		OutputTokens: 20,
 		TotalCost:    0.5,
+		BaseCost:     0.5,
 		ActualCost:   0.5,
 		CreatedAt:    time.Now().UTC(),
 	}
@@ -220,6 +224,7 @@ func TestUsageLogRepositoryCreate_BatchPathDuplicateRequestID(t *testing.T) {
 		InputTokens:  10,
 		OutputTokens: 20,
 		TotalCost:    0.5,
+		BaseCost:     0.5,
 		ActualCost:   0.5,
 		CreatedAt:    time.Now().UTC(),
 	}
@@ -261,6 +266,7 @@ func TestUsageLogRepositoryFlushCreateBatch_DeduplicatesSameKeyInMemory(t *testi
 			InputTokens:  10 + i,
 			OutputTokens: 20 + i,
 			TotalCost:    0.5,
+			BaseCost:     0.5,
 			ActualCost:   0.5,
 			CreatedAt:    time.Now().UTC(),
 		}
@@ -317,6 +323,7 @@ func TestUsageLogRepositoryCreateBestEffort_BatchPathDuplicateRequestID(t *testi
 		InputTokens:  10,
 		OutputTokens: 20,
 		TotalCost:    0.5,
+		BaseCost:     0.5,
 		ActualCost:   0.5,
 		CreatedAt:    time.Now().UTC(),
 	}
@@ -329,6 +336,7 @@ func TestUsageLogRepositoryCreateBestEffort_BatchPathDuplicateRequestID(t *testi
 		InputTokens:  10,
 		OutputTokens: 20,
 		TotalCost:    0.5,
+		BaseCost:     0.5,
 		ActualCost:   0.5,
 		CreatedAt:    time.Now().UTC(),
 	}
@@ -363,6 +371,7 @@ func TestUsageLogRepositoryCreateBestEffort_QueueFullBlocksUntilCtxDeadline(t *t
 		InputTokens:  10,
 		OutputTokens: 20,
 		TotalCost:    0.5,
+		BaseCost:     0.5,
 		ActualCost:   0.5,
 		CreatedAt:    time.Now().UTC(),
 	})
@@ -398,6 +407,7 @@ func TestUsageLogRepositoryCreateBestEffort_QueueFullWaitsForDrain(t *testing.T)
 		InputTokens:  10,
 		OutputTokens: 20,
 		TotalCost:    0.5,
+		BaseCost:     0.5,
 		ActualCost:   0.5,
 		CreatedAt:    time.Now().UTC(),
 	})
@@ -425,6 +435,7 @@ func TestUsageLogRepositoryCreate_BatchPathCanceledContextMarksNotPersisted(t *t
 		InputTokens:  10,
 		OutputTokens: 20,
 		TotalCost:    0.5,
+		BaseCost:     0.5,
 		ActualCost:   0.5,
 		CreatedAt:    time.Now().UTC(),
 	})
@@ -458,6 +469,7 @@ func TestUsageLogRepositoryCreate_BatchPathQueueFullMarksNotPersisted(t *testing
 		InputTokens:  10,
 		OutputTokens: 20,
 		TotalCost:    0.5,
+		BaseCost:     0.5,
 		ActualCost:   0.5,
 		CreatedAt:    time.Now().UTC(),
 	})
@@ -490,6 +502,7 @@ func TestUsageLogRepositoryCreate_BatchPathCanceledAfterQueueMarksNotPersisted(t
 			InputTokens:  10,
 			OutputTokens: 20,
 			TotalCost:    0.5,
+			BaseCost:     0.5,
 			ActualCost:   0.5,
 			CreatedAt:    time.Now().UTC(),
 		})
@@ -523,6 +536,7 @@ func TestUsageLogRepositoryFlushCreateBatch_CanceledRequestReturnsNotPersisted(t
 		InputTokens:  10,
 		OutputTokens: 20,
 		TotalCost:    0.5,
+		BaseCost:     0.5,
 		ActualCost:   0.5,
 		CreatedAt:    time.Now().UTC(),
 	}
@@ -575,6 +589,7 @@ func (s *UsageLogRepoSuite) TestGetByID_ReturnsAccountRateMultiplier() {
 		InputTokens:           10,
 		OutputTokens:          20,
 		TotalCost:             1.0,
+		BaseCost:              1.0,
 		ActualCost:            2.0,
 		AccountRateMultiplier: &m,
 		CreatedAt:             timezone.Today().Add(2 * time.Hour),
@@ -602,6 +617,7 @@ func (s *UsageLogRepoSuite) TestGetByID_ReturnsOpenAIWSMode() {
 		InputTokens:  10,
 		OutputTokens: 20,
 		TotalCost:    1.0,
+		BaseCost:     1.0,
 		ActualCost:   1.0,
 		OpenAIWSMode: true,
 		CreatedAt:    timezone.Today().Add(3 * time.Hour),
@@ -631,6 +647,7 @@ func (s *UsageLogRepoSuite) TestGetByID_ReturnsRequestTypeAndLegacyFallback() {
 		InputTokens:  10,
 		OutputTokens: 20,
 		TotalCost:    1.0,
+		BaseCost:     1.0,
 		ActualCost:   1.0,
 		CreatedAt:    timezone.Today().Add(4 * time.Hour),
 	}
@@ -784,6 +801,7 @@ func (s *UsageLogRepoSuite) TestDashboardStats_TodayTotalsAndPerformance() {
 		CacheCreationTokens: 3,
 		CacheReadTokens:     4,
 		TotalCost:           1.5,
+		BaseCost:            1.5,
 		ActualCost:          1.2,
 		DurationMs:          &d1,
 		CreatedAt:           testMaxTime(todayStart.Add(2*time.Minute), now.Add(-2*time.Minute)),
@@ -799,6 +817,7 @@ func (s *UsageLogRepoSuite) TestDashboardStats_TodayTotalsAndPerformance() {
 		InputTokens:  5,
 		OutputTokens: 6,
 		TotalCost:    0.7,
+		BaseCost:     0.7,
 		ActualCost:   0.7,
 		DurationMs:   &d2,
 		CreatedAt:    todayStart.Add(-1 * time.Hour),
@@ -814,6 +833,7 @@ func (s *UsageLogRepoSuite) TestDashboardStats_TodayTotalsAndPerformance() {
 		InputTokens:  1,
 		OutputTokens: 2,
 		TotalCost:    0.1,
+		BaseCost:     0.1,
 		ActualCost:   0.1,
 		DurationMs:   &d3,
 		CreatedAt:    now.Add(-30 * time.Second),
@@ -880,6 +900,7 @@ func (s *UsageLogRepoSuite) TestDashboardStatsWithRange_Fallback() {
 		InputTokens:  7,
 		OutputTokens: 8,
 		TotalCost:    0.8,
+		BaseCost:     0.8,
 		ActualCost:   0.7,
 		DurationMs:   &d3,
 		CreatedAt:    rangeStart.Add(-1 * time.Hour),
@@ -897,6 +918,7 @@ func (s *UsageLogRepoSuite) TestDashboardStatsWithRange_Fallback() {
 		CacheCreationTokens: 1,
 		CacheReadTokens:     2,
 		TotalCost:           1.0,
+		BaseCost:            1.0,
 		ActualCost:          0.9,
 		DurationMs:          &d1,
 		CreatedAt:           rangeStart.Add(2 * time.Hour),
@@ -913,6 +935,7 @@ func (s *UsageLogRepoSuite) TestDashboardStatsWithRange_Fallback() {
 		OutputTokens:    6,
 		CacheReadTokens: 1,
 		TotalCost:       0.5,
+		BaseCost:        0.5,
 		ActualCost:      0.5,
 		DurationMs:      &d2,
 		CreatedAt:       now,
@@ -1024,6 +1047,7 @@ func (s *UsageLogRepoSuite) TestGetAccountTodayStats() {
 		InputTokens:           10,
 		OutputTokens:          20,
 		TotalCost:             1.0,
+		BaseCost:              1.0,
 		ActualCost:            2.0,
 		AccountRateMultiplier: &m1,
 		CreatedAt:             createdAt,
@@ -1038,6 +1062,7 @@ func (s *UsageLogRepoSuite) TestGetAccountTodayStats() {
 		InputTokens:           5,
 		OutputTokens:          5,
 		TotalCost:             0.5,
+		BaseCost:              0.5,
 		ActualCost:            1.0,
 		AccountRateMultiplier: &m2,
 		CreatedAt:             createdAt,
@@ -1087,6 +1112,7 @@ func (s *UsageLogRepoSuite) TestDashboardAggregationConsistency() {
 		CacheCreationTokens: 2,
 		CacheReadTokens:     1,
 		TotalCost:           1.0,
+		BaseCost:            1.0,
 		ActualCost:          0.9,
 		DurationMs:          &d1,
 		CreatedAt:           hour1.Add(5 * time.Minute),
@@ -1102,6 +1128,7 @@ func (s *UsageLogRepoSuite) TestDashboardAggregationConsistency() {
 		InputTokens:  5,
 		OutputTokens: 5,
 		TotalCost:    0.5,
+		BaseCost:     0.5,
 		ActualCost:   0.5,
 		DurationMs:   &d2,
 		CreatedAt:    hour1.Add(20 * time.Minute),
@@ -1117,6 +1144,7 @@ func (s *UsageLogRepoSuite) TestDashboardAggregationConsistency() {
 		InputTokens:  7,
 		OutputTokens: 8,
 		TotalCost:    0.7,
+		BaseCost:     0.7,
 		ActualCost:   0.7,
 		DurationMs:   &d3,
 		CreatedAt:    hour2.Add(10 * time.Minute),
@@ -1356,6 +1384,7 @@ func (s *UsageLogRepoSuite) TestListByModelAndTimeRange() {
 		InputTokens:  10,
 		OutputTokens: 20,
 		TotalCost:    0.5,
+		BaseCost:     0.5,
 		ActualCost:   0.5,
 		CreatedAt:    base,
 	}
@@ -1370,6 +1399,7 @@ func (s *UsageLogRepoSuite) TestListByModelAndTimeRange() {
 		InputTokens:  15,
 		OutputTokens: 25,
 		TotalCost:    0.6,
+		BaseCost:     0.6,
 		ActualCost:   0.6,
 		CreatedAt:    base.Add(30 * time.Minute),
 	}
@@ -1384,6 +1414,7 @@ func (s *UsageLogRepoSuite) TestListByModelAndTimeRange() {
 		InputTokens:  20,
 		OutputTokens: 30,
 		TotalCost:    0.7,
+		BaseCost:     0.7,
 		ActualCost:   0.7,
 		CreatedAt:    base.Add(1 * time.Hour),
 	}
@@ -1471,6 +1502,7 @@ func (s *UsageLogRepoSuite) TestGetUserModelStats() {
 		InputTokens:  100,
 		OutputTokens: 200,
 		TotalCost:    0.5,
+		BaseCost:     0.5,
 		ActualCost:   0.5,
 		CreatedAt:    base,
 	}
@@ -1485,6 +1517,7 @@ func (s *UsageLogRepoSuite) TestGetUserModelStats() {
 		InputTokens:  50,
 		OutputTokens: 100,
 		TotalCost:    0.2,
+		BaseCost:     0.2,
 		ActualCost:   0.2,
 		CreatedAt:    base.Add(1 * time.Hour),
 	}
@@ -1566,6 +1599,7 @@ func (s *UsageLogRepoSuite) TestGetModelStatsWithFilters() {
 		InputTokens:  100,
 		OutputTokens: 200,
 		TotalCost:    0.5,
+		BaseCost:     0.5,
 		ActualCost:   0.5,
 		CreatedAt:    base,
 	}
@@ -1580,6 +1614,7 @@ func (s *UsageLogRepoSuite) TestGetModelStatsWithFilters() {
 		InputTokens:  50,
 		OutputTokens: 100,
 		TotalCost:    0.2,
+		BaseCost:     0.2,
 		ActualCost:   0.2,
 		CreatedAt:    base.Add(1 * time.Hour),
 	}
@@ -1623,6 +1658,7 @@ func (s *UsageLogRepoSuite) TestGetAccountUsageStats() {
 		InputTokens:  100,
 		OutputTokens: 200,
 		TotalCost:    0.5,
+		BaseCost:     0.5,
 		ActualCost:   0.4,
 		CreatedAt:    base.Add(12 * time.Hour),
 	}
@@ -1637,6 +1673,7 @@ func (s *UsageLogRepoSuite) TestGetAccountUsageStats() {
 		InputTokens:  50,
 		OutputTokens: 100,
 		TotalCost:    0.2,
+		BaseCost:     0.2,
 		ActualCost:   0.15,
 		CreatedAt:    base.Add(36 * time.Hour), // next day
 	}

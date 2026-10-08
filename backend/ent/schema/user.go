@@ -62,7 +62,7 @@ func (User) Fields() []ent.Field {
 			Default(0),
 		field.String("billing_currency").
 			MaxLen(3).
-			Default("CNY").
+			Default("USD").
 			Validate(func(value string) error {
 				if value != "CNY" && value != "USD" {
 					return fmt.Errorf("billing_currency must be CNY or USD")

@@ -141,4 +141,5 @@ func registerRoutes(
 	routes.RegisterWalletReconciliationRoutes(v1, h, auditLog, panelRateLimiter)
 	routes.RegisterGatewayRoutes(r, h, apiKeyAuth, apiKeyService, subscriptionService, opsService, settingService, compositeResolver, cfg)
 	routes.RegisterPlatformIdentityRoutes(r, h, platformIdentityService, userService, auditLog, cfg.PlatformIdentity, redisClient)
+	routes.RegisterPlatformChatRoutes(r, h, platformIdentityService, userService, apiKeyService, subscriptionService, opsService, settingService, compositeResolver, cfg, redisClient)
 }

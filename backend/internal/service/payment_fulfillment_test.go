@@ -849,6 +849,7 @@ func createPaymentFulfillmentSubscriptionOrder(
 		SetEmail("fulfillment-" + strconv.FormatInt(time.Now().UnixNano(), 10) + "@example.com").
 		SetPasswordHash("hash").
 		SetUsername("payment-fulfillment-user").
+		SetBillingCurrency(CurrencyCNY).
 		Save(ctx)
 	require.NoError(t, err)
 
@@ -894,6 +895,7 @@ func TestExecuteSubscriptionFulfillmentAppliesAffiliateRebate(t *testing.T) {
 		SetEmail("subscription-affiliate@example.com").
 		SetPasswordHash("hash").
 		SetUsername("subscription-affiliate-user").
+		SetBillingCurrency(CurrencyCNY).
 		Save(ctx)
 	require.NoError(t, err)
 
@@ -980,6 +982,7 @@ func TestExecuteSubscriptionFulfillmentDoesNotDuplicateWorkAfterLegacySuccessAud
 		SetEmail("subscription-affiliate-idempotent@example.com").
 		SetPasswordHash("hash").
 		SetUsername("subscription-affiliate-idempotent-user").
+		SetBillingCurrency(CurrencyCNY).
 		Save(ctx)
 	require.NoError(t, err)
 

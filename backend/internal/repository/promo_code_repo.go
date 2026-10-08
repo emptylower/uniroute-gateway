@@ -27,7 +27,7 @@ func (r *promoCodeRepository) Create(ctx context.Context, code *service.PromoCod
 	builder := client.PromoCode.Create().
 		SetCode(code.Code).
 		SetBonusAmount(code.BonusAmount).
-		SetCurrency(service.NormalizeUserBillingCurrency(code.Currency)).
+		SetCurrency(service.NormalizeHistoricalBillingCurrency(code.Currency)).
 		SetMaxUses(code.MaxUses).
 		SetUsedCount(code.UsedCount).
 		SetStatus(code.Status).
@@ -95,7 +95,7 @@ func (r *promoCodeRepository) Update(ctx context.Context, code *service.PromoCod
 	builder := client.PromoCode.UpdateOneID(code.ID).
 		SetCode(code.Code).
 		SetBonusAmount(code.BonusAmount).
-		SetCurrency(service.NormalizeUserBillingCurrency(code.Currency)).
+		SetCurrency(service.NormalizeHistoricalBillingCurrency(code.Currency)).
 		SetMaxUses(code.MaxUses).
 		SetUsedCount(code.UsedCount).
 		SetStatus(code.Status).

@@ -39,7 +39,10 @@ func querySingleInt(t *testing.T, ctx context.Context, client *dbent.Client, que
 	return value
 }
 
-func TestAffiliateRepository_TransferQuotaToBalance_UsesClaimedQuotaBeforeClear(t *testing.T) {
+// Wallets are USD-only now while the existing affiliate quota is denominated in
+// CNY, so a transfer is refused instead of crediting the same number 1:1. The
+// quota, the balance and the ledger must all stay untouched.
+func TestAffiliateRepository_TransferQuotaToBalance_RefusedForUSDWallet(t *testing.T) {
 	ctx := context.Background()
 	tx := testEntTx(t)
 	txCtx := dbent.NewTxContext(ctx, tx)
@@ -63,41 +66,21 @@ VALUES ($1, $2, $3, $3, NOW(), NOW())`, u.ID, affCode, 12.34)
 	require.NoError(t, err)
 
 	transferred, balance, err := repo.TransferQuotaToBalance(txCtx, u.ID)
-	require.NoError(t, err)
-	require.InDelta(t, 12.34, transferred, 1e-9)
-	require.InDelta(t, 17.84, balance, 1e-9)
+	require.ErrorIs(t, err, service.ErrAffiliateCurrencyMismatch)
+	require.InDelta(t, 0.0, transferred, 1e-9)
+	require.InDelta(t, 0.0, balance, 1e-9)
 
 	affQuota := querySingleFloat(t, txCtx, client,
 		"SELECT aff_quota::double precision FROM user_affiliates WHERE user_id = $1", u.ID)
-	require.InDelta(t, 0.0, affQuota, 1e-9)
+	require.InDelta(t, 12.34, affQuota, 1e-9, "a refused transfer must not clear the quota")
 
 	persistedBalance := querySingleFloat(t, txCtx, client,
 		"SELECT balance::double precision FROM users WHERE id = $1", u.ID)
-	require.InDelta(t, 17.84, persistedBalance, 1e-9)
+	require.InDelta(t, 5.5, persistedBalance, 1e-9)
 
 	ledgerCount := querySingleInt(t, txCtx, client,
 		"SELECT COUNT(*) FROM user_affiliate_ledger WHERE user_id = $1 AND action = 'transfer'", u.ID)
-	require.Equal(t, 1, ledgerCount)
-
-	rows, err := client.QueryContext(txCtx, `
-SELECT amount::double precision,
-       balance_after::double precision,
-       aff_quota_after::double precision,
-       aff_frozen_quota_after::double precision,
-       aff_history_quota_after::double precision
-FROM user_affiliate_ledger
-WHERE user_id = $1 AND action = 'transfer'
-LIMIT 1`, u.ID)
-	require.NoError(t, err)
-	defer func() { _ = rows.Close() }()
-	require.True(t, rows.Next(), "expected transfer ledger")
-	var amount, balanceAfter, quotaAfter, frozenAfter, historyAfter float64
-	require.NoError(t, rows.Scan(&amount, &balanceAfter, &quotaAfter, &frozenAfter, &historyAfter))
-	require.InDelta(t, 12.34, amount, 1e-9)
-	require.InDelta(t, 17.84, balanceAfter, 1e-9)
-	require.InDelta(t, 0.0, quotaAfter, 1e-9)
-	require.InDelta(t, 0.0, frozenAfter, 1e-9)
-	require.InDelta(t, 12.34, historyAfter, 1e-9)
+	require.Equal(t, 0, ledgerCount)
 }
 
 // TestAffiliateRepository_AccrueQuota_ReusesOuterTransaction guards the
@@ -170,7 +153,7 @@ func TestAffiliateRepository_AccrueQuota_ReusesOuterTransaction(t *testing.T) {
 		"AccrueQuota must propagate the outer tx — found persisted rows after rollback")
 }
 
-func TestAffiliateRepository_TransferQuotaToBalance_EmptyQuota(t *testing.T) {
+func TestAffiliateRepository_TransferQuotaToBalance_EmptyQuotaRefusedForUSDWallet(t *testing.T) {
 	ctx := context.Background()
 	tx := testEntTx(t)
 	txCtx := dbent.NewTxContext(ctx, tx)
@@ -194,7 +177,8 @@ VALUES ($1, $2, 0, 0, NOW(), NOW())`, u.ID, affCode)
 	require.NoError(t, err)
 
 	transferred, balance, err := repo.TransferQuotaToBalance(txCtx, u.ID)
-	require.ErrorIs(t, err, service.ErrAffiliateQuotaEmpty)
+	// The currency guard runs before the empty-quota check on a USD-only wallet.
+	require.ErrorIs(t, err, service.ErrAffiliateCurrencyMismatch)
 	require.InDelta(t, 0.0, transferred, 1e-9)
 	require.InDelta(t, 0.0, balance, 1e-9)
 

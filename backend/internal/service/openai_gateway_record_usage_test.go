@@ -99,8 +99,8 @@ func TestRecordCyberPolicyUsageLog_BillsRealUpstreamTokens(t *testing.T) {
 	expected := expectedOpenAICost(t, svc, "gpt-5.1", usage, 1.1)
 	require.Greater(t, usageRepo.lastLog.ActualCost, 0.0, "流式 cyber 有真实 token，须计费")
 	require.InDelta(t, expected.ActualCost, usageRepo.lastLog.ActualCost, 1e-12)
-	require.Equal(t, 1, userRepo.deductCalls, "按真实 token 扣费，与 WS/正常请求一致")
-	require.InDelta(t, expected.ActualCost, userRepo.lastAmount, 1e-12)
+	require.Zero(t, userRepo.deductCalls, "canonical USD wallet is the only debit ledger")
+	require.Zero(t, userRepo.lastAmount, "native balance must never be debited")
 }
 
 func TestRecordCyberPolicyUsageLog_NonStreamZeroTokensZeroCost(t *testing.T) {
@@ -136,7 +136,7 @@ func TestRecordCyberPolicyUsageLog_SeparatesGovernanceEvidenceFromBaselineQuotaP
 	groupID := int64(805)
 
 	svc.RecordCyberPolicyUsageLog(context.Background(), CyberPolicyUsageInput{
-		APIKey:                   &APIKey{ID: 2, User: &User{ID: 1}, GroupID: &groupID, Group: &Group{ID: groupID, Platform: PlatformComposite, RateMultiplier: 1.1}},
+		APIKey:                   &APIKey{ID: 2, User: &User{ID: 1, BillingCurrency: CurrencyCNY}, GroupID: &groupID, Group: &Group{ID: groupID, Platform: PlatformComposite, RateMultiplier: 1.1}},
 		Account:                  &Account{ID: 3, Platform: PlatformAntigravity, Extra: map[string]any{"mixed_scheduling": true}},
 		RequestID:                "rid-cyber-composite-target",
 		Model:                    "gpt-5.1",
@@ -157,6 +157,7 @@ func TestRecordCyberPolicyUsageLog_SeparatesGovernanceEvidenceFromBaselineQuotaP
 	expected := expectedOpenAICost(t, svc, "gpt-5.1", OpenAIUsage{InputTokens: 1200, OutputTokens: 300}, 1.1)
 	require.InDelta(t, expected.ActualCost, usageRepo.lastLog.ActualCost, 1e-12)
 	require.Equal(t, 1, platformQuotaRepo.calls)
+	require.InDelta(t, usageRepo.lastLog.ActualCost, platformQuotaRepo.lastCost, 1e-12)
 	require.Equal(t, PlatformComposite, platformQuotaRepo.lastPlatform, "cyber billing must retain the fb280639 group-platform fallback")
 }
 
@@ -200,11 +201,13 @@ type openAIRecordUsagePlatformQuotaRepoStub struct {
 	UserPlatformQuotaRepository
 	calls        int
 	lastPlatform string
+	lastCost     float64
 }
 
-func (s *openAIRecordUsagePlatformQuotaRepoStub) IncrementUsageWithReset(_ context.Context, _ int64, platform string, _ float64, _ time.Time) error {
+func (s *openAIRecordUsagePlatformQuotaRepoStub) IncrementUsageWithReset(_ context.Context, _ int64, platform string, cost float64, _ time.Time) error {
 	s.calls++
 	s.lastPlatform = platform
+	s.lastCost = cost
 	return nil
 }
 
@@ -291,11 +294,7 @@ func newOpenAIRecordUsageServiceForTest(usageRepo UsageLogRepository, userRepo U
 		nil,
 		"service.openai_gateway.test",
 	)
-	svc.exchangeRates = &ExchangeRateService{
-		bootstrapRate: 1, ttl: time.Minute, staleTTL: time.Hour,
-		minUSDToCNY: 0.5, maxUSDToCNY: 2, maxAge: time.Hour, maxFuture: time.Minute,
-		cache: make(map[string]ExchangeRateSnapshot),
-	}
+	svc.exchangeRates = &USDPriceService{}
 	return svc
 }
 
@@ -368,7 +367,7 @@ func TestOpenAIGatewayServiceRecordUsage_ZeroUsageStillWritesUsageLog(t *testing
 	require.Zero(t, usageRepo.lastLog.ActualCost)
 
 	require.NotNil(t, billingRepo.lastCmd)
-	require.Zero(t, billingRepo.lastCmd.BalanceCost)
+	require.Zero(t, billingRepo.lastCmd.WalletCostUSD)
 	require.Zero(t, billingRepo.lastCmd.SubscriptionCost)
 	require.Zero(t, billingRepo.lastCmd.APIKeyQuotaCost)
 	require.Zero(t, billingRepo.lastCmd.APIKeyRateLimitCost)
@@ -451,8 +450,8 @@ func TestOpenAIGatewayServiceRecordUsage_UsesUserSpecificGroupRate(t *testing.T)
 
 	expected := expectedOpenAICost(t, svc, "gpt-5.1", usage, userRate)
 	require.InDelta(t, expected.ActualCost, usageRepo.lastLog.ActualCost, 1e-12)
-	require.InDelta(t, expected.ActualCost, userRepo.lastAmount, 1e-12)
-	require.Equal(t, 1, userRepo.deductCalls)
+	require.Zero(t, userRepo.lastAmount, "native balance must never be debited")
+	require.Zero(t, userRepo.deductCalls, "canonical USD wallet is the only debit ledger")
 }
 
 func TestOpenAIGatewayServiceRecordUsage_PeakRateAffectsTokenModeImageOutputTokens(t *testing.T) {
@@ -518,7 +517,7 @@ func TestOpenAIGatewayServiceRecordUsage_PeakRateAffectsTokenModeImageOutputToke
 	require.InDelta(t, expected.TotalCost, usageRepo.lastLog.TotalCost, 1e-12)
 	require.InDelta(t, expected.ImageOutputCost, usageRepo.lastLog.ImageOutputCost, 1e-12)
 	require.InDelta(t, expectedActual, usageRepo.lastLog.ActualCost, 1e-12)
-	require.InDelta(t, expectedActual, userRepo.lastAmount, 1e-12)
+	require.Zero(t, userRepo.lastAmount, "native balance must never be debited")
 }
 
 func TestOpenAIGatewayServiceRecordUsage_IncludesEndpointMetadata(t *testing.T) {
@@ -592,7 +591,8 @@ func TestOpenAIGatewayServiceRecordUsage_FallsBackToGroupDefaultRateOnResolverEr
 	require.Equal(t, groupRate, usageRepo.lastLog.RateMultiplier)
 
 	expected := expectedOpenAICost(t, svc, "gpt-5.1", usage, groupRate)
-	require.InDelta(t, expected.ActualCost, userRepo.lastAmount, 1e-12)
+	require.InDelta(t, expected.ActualCost, usageRepo.lastLog.ActualCost, 1e-12)
+	require.Zero(t, userRepo.lastAmount, "native balance must never be debited")
 }
 
 func TestOpenAIGatewayServiceRecordUsage_FallsBackToGroupDefaultRateWhenResolverMissing(t *testing.T) {
@@ -715,7 +715,7 @@ func TestOpenAIGatewayServiceRecordUsage_BillsWhenUsageLogCreateReturnsError(t *
 
 	require.NoError(t, err)
 	require.Equal(t, 1, usageRepo.calls)
-	require.Equal(t, 1, userRepo.deductCalls)
+	require.Zero(t, userRepo.deductCalls, "canonical USD wallet is the only debit ledger")
 	require.Equal(t, 0, subRepo.incrementCalls)
 }
 
@@ -747,7 +747,7 @@ func TestOpenAIGatewayServiceRecordUsage_UsageLogWriteErrorDoesNotSkipBilling(t 
 
 	require.NoError(t, err)
 	require.Equal(t, 1, usageRepo.calls)
-	require.Equal(t, 1, userRepo.deductCalls)
+	require.Zero(t, userRepo.deductCalls, "canonical USD wallet is the only debit ledger")
 	require.Equal(t, 0, subRepo.incrementCalls)
 	require.Equal(t, 1, quotaSvc.quotaCalls)
 }
@@ -780,7 +780,7 @@ func TestOpenAIGatewayServiceRecordUsage_BillingUsesDetachedContext(t *testing.T
 	})
 
 	require.NoError(t, err)
-	require.Equal(t, 1, userRepo.deductCalls)
+	require.Zero(t, userRepo.deductCalls, "canonical USD wallet is the only debit ledger")
 	require.NoError(t, userRepo.lastCtxErr)
 	require.Equal(t, 1, quotaSvc.quotaCalls)
 	require.NoError(t, quotaSvc.lastQuotaCtxErr)
@@ -1180,7 +1180,7 @@ func TestOpenAIGatewayServiceRecordUsage_Gpt54LongContextBillingDisabledByDefaul
 	require.InDelta(t, expectedInput+expectedOutput, usageRepo.lastLog.TotalCost, 1e-10)
 	require.InDelta(t, (expectedInput+expectedOutput)*1.1, usageRepo.lastLog.ActualCost, 1e-10)
 	require.False(t, usageRepo.lastLog.LongContextBillingApplied)
-	require.Equal(t, 1, userRepo.deductCalls)
+	require.Zero(t, userRepo.deductCalls, "canonical USD wallet is the only debit ledger")
 }
 
 func TestOpenAIGatewayServiceRecordUsage_Gpt54LongContextBillingEnabledPerAccount(t *testing.T) {
@@ -1425,7 +1425,7 @@ func TestOpenAIGatewayServiceRecordUsage_UsesRequestedModelAndUpstreamModelMetad
 	require.Equal(t, "127.0.0.1", *usageRepo.lastLog.IPAddress)
 	require.NotNil(t, usageRepo.lastLog.GroupID)
 	require.Equal(t, int64(11), *usageRepo.lastLog.GroupID)
-	require.Equal(t, 1, userRepo.deductCalls)
+	require.Zero(t, userRepo.deductCalls, "canonical USD wallet is the only debit ledger")
 }
 
 func TestOpenAIGatewayServiceRecordUsage_PreservesChannelMappedUpstreamModel(t *testing.T) {
@@ -1526,7 +1526,7 @@ func TestOpenAIGatewayServiceRecordUsage_BillsMappedRequestsUsingRequestedModel(
 	require.Equal(t, "gpt-5.1", usageRepo.lastLog.Model)
 	require.Equal(t, expectedCost.ActualCost, usageRepo.lastLog.ActualCost)
 	require.Equal(t, expectedCost.TotalCost, usageRepo.lastLog.TotalCost)
-	require.Equal(t, expectedCost.ActualCost, userRepo.lastAmount)
+	require.Zero(t, userRepo.lastAmount, "native balance must never be debited")
 }
 
 func TestOpenAIGatewayServiceRecordUsage_ChannelMappedDoesNotOverrideBillingModelWhenUnmapped(t *testing.T) {
@@ -1665,7 +1665,7 @@ func TestOpenAIGatewayServiceRecordUsage_ResponsesMappedBillingModelHonorsBillin
 			require.NotNil(t, usageRepo.lastLog)
 			require.Equal(t, "gpt-5.4", usageRepo.lastLog.Model)
 			require.InDelta(t, expectedCost.ActualCost, usageRepo.lastLog.ActualCost, 1e-12)
-			require.InDelta(t, expectedCost.ActualCost, userRepo.lastAmount, 1e-12)
+			require.Zero(t, userRepo.lastAmount, "native balance must never be debited")
 			require.True(t, usageRepo.lastLog.ActualCost > 0, "cost must not be zero")
 		})
 	}
@@ -1704,7 +1704,7 @@ func TestOpenAIGatewayServiceRecordUsage_BillsCompactOpenAIModelAlias(t *testing
 	require.Equal(t, "gpt-5.4", *usageRepo.lastLog.UpstreamModel)
 	require.InDelta(t, expectedCost.ActualCost, usageRepo.lastLog.ActualCost, 1e-12)
 	require.True(t, usageRepo.lastLog.ActualCost > 0, "cost must not be zero")
-	require.InDelta(t, expectedCost.ActualCost, userRepo.lastAmount, 1e-12)
+	require.Zero(t, userRepo.lastAmount, "native balance must never be debited")
 }
 
 func TestOpenAIGatewayServiceRecordUsage_FallsBackToUpstreamModelWhenPrimaryUnpriceable(t *testing.T) {
@@ -1738,7 +1738,7 @@ func TestOpenAIGatewayServiceRecordUsage_FallsBackToUpstreamModelWhenPrimaryUnpr
 	require.NotNil(t, usageRepo.lastLog)
 	require.InDelta(t, expectedCost.ActualCost, usageRepo.lastLog.ActualCost, 1e-12)
 	require.True(t, usageRepo.lastLog.ActualCost > 0, "cost must not be zero")
-	require.InDelta(t, expectedCost.ActualCost, userRepo.lastAmount, 1e-12)
+	require.Zero(t, userRepo.lastAmount, "native balance must never be debited")
 }
 
 func TestOpenAIGatewayServiceRecordUsage_UnpricedTokenModelFailsClosed(t *testing.T) {
@@ -2720,15 +2720,14 @@ func TestGatewayServiceCalculateRecordUsageCost_ChannelImageBillingNormalizesMis
 	require.InDelta(t, 0.44, cost.ActualCost, 1e-12)
 }
 
-func TestOpenAIGatewayServiceRecordUsage_UserCurrencyModeWithoutRateFailsClosed(t *testing.T) {
+func TestOpenAIGatewayServiceRecordUsage_USDOnlyDoesNotDependOnExchangeRates(t *testing.T) {
 	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
 	billingRepo := &openAIRecordUsageBillingRepoStub{result: &UsageBillingApplyResult{Applied: true}}
 	userRepo := &openAIRecordUsageUserRepoStub{}
 	subRepo := &openAIRecordUsageSubRepoStub{}
 	svc := newOpenAIRecordUsageServiceWithBillingRepoForTest(usageRepo, billingRepo, userRepo, subRepo, nil)
-	svc.cfg.Billing.Settlement.CurrencyMode = SettlementCurrencyModeUser
 	// bootstrap 0 + no provider → no obtainable USD/CNY rate
-	svc.exchangeRates = NewExchangeRateService(&config.Config{})
+	svc.exchangeRates = NewUSDPriceService(&config.Config{})
 
 	err := svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{
 		Result: &OpenAIForwardResult{
@@ -2742,8 +2741,8 @@ func TestOpenAIGatewayServiceRecordUsage_UserCurrencyModeWithoutRateFailsClosed(
 		Account: &Account{ID: 3000, Type: AccountTypeAPIKey},
 	})
 
-	require.Error(t, err)
-	require.Equal(t, 0, usageRepo.calls)
-	require.Equal(t, 0, billingRepo.calls)
+	require.NoError(t, err)
+	require.Equal(t, 1, usageRepo.calls)
+	require.Equal(t, 1, billingRepo.calls)
 	require.Equal(t, 0, userRepo.deductCalls)
 }

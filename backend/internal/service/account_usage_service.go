@@ -140,9 +140,9 @@ func NewUsageCache() *UsageCache {
 type WindowStats struct {
 	Requests     int64   `json:"requests"`
 	Tokens       int64   `json:"tokens"`
-	Cost         float64 `json:"cost"`
-	StandardCost float64 `json:"standard_cost"`
-	UserCost     float64 `json:"user_cost"`
+	Cost         float64 `json:"cost_usd,string"`
+	StandardCost float64 `json:"standard_cost_usd,string"`
+	UserCost     float64 `json:"user_cost_usd,string"`
 }
 
 // UsageProgress 使用量进度

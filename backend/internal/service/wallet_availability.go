@@ -139,7 +139,7 @@ func (s *MediaTaskService) Availability(ctx context.Context, userID int64, in Wa
 	if err != nil {
 		return out, nil
 	}
-	rows, err = tx.QueryContext(ctx, `SELECT a.authorization_id,COALESCE(a.event_id,''),a.lease_id,CASE WHEN a.state='settling' THEN a.actual_units ELSE a.held_units END,COALESCE(o.status,'') FROM wallet_authorization_segment a LEFT JOIN wallet_settlement_outbox o ON o.event_id=a.event_id WHERE a.platform_user_id=$1 AND a.kind<>'media' AND a.state NOT IN ('finished','released')`, user.PlatformUserID)
+	rows, err = tx.QueryContext(ctx, `SELECT a.authorization_id,COALESCE(a.event_id,''),COALESCE(NULLIF(o.lease_id,''),a.lease_id),CASE WHEN a.state='settling' OR a.expiry_ack_at IS NOT NULL THEN a.actual_units ELSE a.held_units END,COALESCE(o.status,'') FROM wallet_authorization_segment a LEFT JOIN wallet_settlement_outbox o ON o.event_id=a.event_id WHERE a.platform_user_id=$1 AND a.kind<>'media' AND a.state NOT IN ('finished','released','expired_unknown') AND (a.expiry_ack_at IS NULL OR a.actual_units>0)`, user.PlatformUserID)
 	if err != nil {
 		return out, nil
 	}
@@ -206,7 +206,7 @@ func (s *MediaTaskService) Availability(ctx context.Context, userID int64, in Wa
 	if err != nil {
 		return out, nil
 	}
-	rows, err = tx.QueryContext(ctx, `SELECT authorization_id,lease_id,held_units FROM wallet_hold_outcome WHERE platform_user_id=$1 AND resolution IS NULL`, user.PlatformUserID)
+	rows, err = tx.QueryContext(ctx, `SELECT authorization_id,lease_id,held_units FROM wallet_hold_outcome h WHERE platform_user_id=$1 AND resolution IS NULL AND NOT EXISTS(SELECT 1 FROM wallet_authorization_segment a WHERE a.authorization_id=h.authorization_id AND a.expiry_ack_at IS NOT NULL)`, user.PlatformUserID)
 	if err != nil {
 		return out, nil
 	}

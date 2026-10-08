@@ -96,11 +96,7 @@ func (f *driftFixture) freeze(t *testing.T) *BillingSnapshot {
 // read now (gateway_usage_billing.go:716-780, :868-873).
 func (f *driftFixture) liveCost(t *testing.T, in SnapshotSettlementInput) *CostBreakdown {
 	t.Helper()
-	currency := CurrencyUSD
-	if f.sub == nil {
-		currency = NormalizeUserBillingCurrency(f.user.BillingCurrency)
-	}
-	base := f.apiKey.Group.RateMultiplierForCurrency(currency) // group.go:113 — CNY reads RateMultiplierCNY when set
+	base := f.apiKey.Group.EffectiveRateMultiplier() // group.go:113 — CNY reads RateMultiplierCNY when set
 	text, image := computePeakAwareMultipliers(f.apiKey, base, f.svc.now())
 	if in.ImageCount > 0 {
 		// The REAL live helper (gateway_usage_billing.go:950-986), never a
@@ -137,7 +133,7 @@ func TestCalculateCostFromSnapshotIsImmuneToEveryDriftClass(t *testing.T) {
 				f.svc.billing.fallbackPrices["claude-sonnet-4"].InputPricePerTokenPriority = 1e-3
 			}},
 		{"user/group multiplier", SnapshotSettlementInput{Tokens: tokens}, nil,
-			func(f *driftFixture) { f.apiKey.Group.RateMultiplierCNY = floatPtr(4.5) }}, // the CNY user's multiplier source (group.go:113-125)
+			func(f *driftFixture) { f.apiKey.Group.RateMultiplier = 4.5 }}, // the CNY user's multiplier source (group.go:113-125)
 		// PeakMultiplierAt applies only to subscription groups (group.go:271), so
 		// this row freezes under subscription billing.
 		{"peak-hour multiplier", SnapshotSettlementInput{Tokens: tokens},
@@ -285,7 +281,7 @@ func TestCalculateCostFromSnapshotFXIsPinnedFromSnapshot(t *testing.T) {
 	require.NoError(t, err)
 	settlement, err := ResolveCostSettlement(SettlementContextFromSnapshot(context.Background(), snap), cost, user, false, svc.exchangeRates, svc.cfg)
 	require.NoError(t, err)
-	require.Equal(t, 6.25, settlement.ExchangeRate)
+	require.Equal(t, 1.0, settlement.ExchangeRate)
 }
 
 func TestCalculateCostFromSnapshotWebSearchAndImageModes(t *testing.T) {

@@ -55,7 +55,7 @@ type liveWindowShared struct {
 	account     *Account
 	resolver    *ModelPricingResolver
 	billing     *BillingService
-	fx          *ExchangeRateService
+	fx          *USDPriceService
 	fixtureSeq  atomic.Int64
 	callSeq     atomic.Int64
 }
@@ -87,7 +87,6 @@ func newLiveWindowShared(t *testing.T) *liveWindowShared {
 	snapCfg := &config.Config{}
 	snapCfg.Default.RateMultiplier = 1
 	snapCfg.CanonicalWallet.BillingSnapshotMode = "record"
-	snapCfg.Billing.ExchangeRate.BootstrapUSDToCNY = 7.0
 	snapService := NewBillingSnapshotService(snapCfg, resolver, billing, fx, NewBillingSnapshotStoreForTest(t, db))
 
 	account.Platform = PlatformOpenAI
@@ -335,7 +334,7 @@ func (f *liveWindowFixture) createSessionFunded(t *testing.T, fundUnits int64) (
 		APIKey:          f.apiKey,
 		User:            f.user,
 		GroupID:         f.apiKey.GroupID,
-		BillingCurrency: "CNY",
+		BillingCurrency: "USD",
 		RateMultiplier:  1.0,
 		BillingModel:    "claude-sonnet-4",
 	}, 5)
@@ -360,13 +359,13 @@ func (f *liveWindowFixture) fund(units int64) {
 // Usage pumping. The units formula (recorded per the plan): one output token
 // prices to OutputPricePerToken × ExchangeRate × RateMultiplier × 1e8 units
 // (the same arithmetic liveUsageUnits runs: sourceCost × fx × rate →
-// canonicalWalletUnitsFromCNY, units per CNY = 1e8).
+// canonicalWalletUnitsFromUSD, units per CNY = 1e8).
 // ---------------------------------------------------------------------------
 
 func (f *liveWindowFixture) unitsPerOutputToken(t *testing.T, callHash string) float64 {
 	t.Helper()
 	rec := f.recordByHash(t, callHash)
-	return rec.OutputPricePerToken * rec.ExchangeRate * rec.RateMultiplier * float64(canonicalWalletUnitsPerCNY)
+	return rec.OutputPricePerToken * rec.ExchangeRate * rec.RateMultiplier * float64(canonicalWalletUnitsPerUSD)
 }
 
 func (f *liveWindowFixture) unitsForTokens(t *testing.T, rec *LiveCallRecord, input, output, cacheRead int) int64 {
@@ -376,7 +375,7 @@ func (f *liveWindowFixture) unitsForTokens(t *testing.T, rec *LiveCallRecord, in
 		inputTokens = 0
 	}
 	source := float64(inputTokens)*rec.InputPricePerToken + float64(output)*rec.OutputPricePerToken + float64(cacheRead)*rec.CacheReadPricePerToken
-	units, err := canonicalWalletUnitsFromCNY(source * rec.ExchangeRate * rec.RateMultiplier)
+	units, err := canonicalWalletUnitsFromUSD(source * rec.ExchangeRate * rec.RateMultiplier)
 	require.NoError(t, err)
 	return units
 }
@@ -573,7 +572,7 @@ func TestPhase37bWindowsCloseSettleAndReauthorize(t *testing.T) {
 		// The outbox row: window 1's event id is the session id, the amount is
 		// A_1, the authorization is T(1), delivered through the fake.
 		T1 := prov.Token
-		eventID := CanonicalWalletSettlementEventID(callHash, f.user.PlatformUserID, "CNY")
+		eventID := CanonicalWalletSettlementEventID(callHash, f.user.PlatformUserID, "USD")
 		f.waitDeliveredThroughFake(t, eventID, 15*time.Second)
 		row := f.outboxRow(t, eventID)
 		require.Equal(t, callHash, row.GatewayID)
@@ -607,7 +606,7 @@ func TestPhase37bWindowsCloseSettleAndReauthorize(t *testing.T) {
 		require.Equal(t, int64(0), prov.Windows[0].PendingUnits)
 
 		// No outbox row for the idle window — none is expected (§13.2.3).
-		eventID := CanonicalWalletSettlementEventID(callHash, f.user.PlatformUserID, "CNY")
+		eventID := CanonicalWalletSettlementEventID(callHash, f.user.PlatformUserID, "USD")
 		require.Equal(t, 0, f.outboxRowCount(t, eventID))
 		require.Equal(t, int64(0), canonicalWalletBridgeMetrics.outboxPayloadConflict.Load()-conflictsBefore)
 
@@ -680,9 +679,9 @@ func TestPhase37bWindowsCloseSettleAndReauthorize(t *testing.T) {
 			"Σ settled == units(total)")
 
 		// Three distinct event ids: window 1 = the session id, 2–3 = :window:n.
-		id1 := CanonicalWalletSettlementEventID(callHash, f.user.PlatformUserID, "CNY")
-		id2 := CanonicalWalletSettlementEventID(liveWindowRequestID(callHash, 2), f.user.PlatformUserID, "CNY")
-		id3 := CanonicalWalletSettlementEventID(liveWindowRequestID(callHash, 3), f.user.PlatformUserID, "CNY")
+		id1 := CanonicalWalletSettlementEventID(callHash, f.user.PlatformUserID, "USD")
+		id2 := CanonicalWalletSettlementEventID(liveWindowRequestID(callHash, 2), f.user.PlatformUserID, "USD")
+		id3 := CanonicalWalletSettlementEventID(liveWindowRequestID(callHash, 3), f.user.PlatformUserID, "USD")
 		require.Equal(t, 1, f.outboxRowCount(t, id1))
 		require.Equal(t, 1, f.outboxRowCount(t, id2))
 		require.Equal(t, 1, f.outboxRowCount(t, id3))
@@ -742,7 +741,7 @@ func TestPhase37bLastWindowSettlesAtFinalization(t *testing.T) {
 	require.NoError(t, err)
 	remainder := totalUnits - prov.Windows[0].SettledUnits - prov.Windows[1].SettledUnits
 	require.Equal(t, f.unitsForTokens(t, rec, 0, tailTokens, 0), remainder)
-	id3 := CanonicalWalletSettlementEventID(liveWindowRequestID(callHash, 3), f.user.PlatformUserID, "CNY")
+	id3 := CanonicalWalletSettlementEventID(liveWindowRequestID(callHash, 3), f.user.PlatformUserID, "USD")
 	f.waitDeliveredThroughFake(t, id3, 15*time.Second)
 	row := f.outboxRow(t, id3)
 	require.Equal(t, liveWindowRequestID(callHash, 3), row.GatewayID)
@@ -812,7 +811,7 @@ func TestPhase37bCrashBetweenPendingAndAdvanceReissuesSameAmount(t *testing.T) {
 	require.Equal(t, int64(0), prov.Windows[0].PendingUnits)
 
 	// Exactly one outbox row for window 1 — the duplicate submission deduped.
-	eventID := CanonicalWalletSettlementEventID(callHash, f.user.PlatformUserID, "CNY")
+	eventID := CanonicalWalletSettlementEventID(callHash, f.user.PlatformUserID, "USD")
 	require.Equal(t, 1, f.outboxRowCount(t, eventID))
 	require.Equal(t, persisted, f.outboxRow(t, eventID).Amount)
 	require.Equal(t, int64(0), canonicalWalletBridgeMetrics.outboxPayloadConflict.Load()-conflictsBefore, "no payload conflict from the re-issue")
@@ -1010,7 +1009,7 @@ func TestPhase37bRefusedReauthorizations(t *testing.T) {
 
 		// The row finalizes; the last window settles the tail with no hold.
 		require.Equal(t, LiveProvisionalStatusFinalized, prov.Status)
-		eventID1 := CanonicalWalletSettlementEventID(callHash1, f1.user.PlatformUserID, "CNY")
+		eventID1 := CanonicalWalletSettlementEventID(callHash1, f1.user.PlatformUserID, "USD")
 		f1.waitDeliveredThroughFake(t, eventID1, 5*time.Second)
 		require.Empty(t, f1.holdIDs(t), "no armed hold remains — the last window settled with no hold")
 
@@ -1077,12 +1076,11 @@ func TestPhase37bRefusedReauthorizations(t *testing.T) {
 
 func TestPhase37bControllerLossAndTakeover(t *testing.T) {
 	sh := newLiveWindowShared(t)
-	// The exactly-E lease shape (requested budget 0) on BOTH instances: the
-	// session's one lease ends with zero remaining, so the boundary's ensure
-	// must ISSUE — and the fake's canned refusal answers it. Window 1's
-	// over-estimate amount then converts through the {4} overrun path (the
-	// hold released, the event unbound) — money-safe, and the over-budget
-	// shape is exactly what this test exists to drive.
+	// The exactly-E lease shape (requested budget 0) on BOTH instances
+	// drives window 1 through the {4} overrun path: the hold is released and
+	// the event proceeds unbound. That release restores E of legal cached
+	// headroom, so an overrun alone does not force remote re-authorization.
+	// Seal the old lease below to explicitly model budget no longer usable.
 	shBudget := func(c *config.CanonicalWalletConfig) { c.LeaseBudgetUnits = 0 }
 	fA := sh.newFixtureCfg(t, config.CanonicalWalletModeEnforce, shBudget)
 	callHash, _ := fA.createSession(t)
@@ -1094,12 +1092,22 @@ func TestPhase37bControllerLossAndTakeover(t *testing.T) {
 	fA.pumpUsage("resp-52a", 0, tokens)
 	time.Sleep(300 * time.Millisecond) // let the frame be read and accumulated
 	fA.cancel()
+	platformUserID := fA.recordByHash(t, callHash).PlatformUserID
+	initialHold, err := fA.store.GetCanonicalWalletHold(context.Background(), platformUserID, prov.Token)
+	require.NoError(t, err)
+	require.NotNil(t, initialHold)
+	// Sealing removes the current lease and prevents new holds even when
+	// conversion releases E. The initial hold still follows the same
+	// overrun settlement path; B must now ask the control plane to authorize.
+	_, _, err = fA.store.SealCanonicalWalletLease(context.Background(), platformUserID, initialHold.LeaseID)
+	require.NoError(t, err)
 
 	// B on the same stores: its observer loops on the takeover interval.
 	fB := sh.newFixtureCfg(t, config.CanonicalWalletModeEnforce, shBudget)
 	// The fake refuses the re-authorization (balance shortfall): the hard
 	// stop must fire from B after it closes the window. The canned response
-	// is path-scoped — the settlements route (window 1's settle) is untouched.
+	// is path-scoped and can also refuse unbound settlement ensure requests;
+	// assert the authorize purpose was refused, rather than relying on those.
 	fB.fake.respondWith("/api/internal/v2/wallet/leases/ensure", 409,
 		`{"code":-1,"message":"balance_shortfall","data":{"reason":"balance_shortfall"}}`, -1)
 	go fB.svc.observeLiveCall(fB.ctx, callHash)
@@ -1127,6 +1135,14 @@ func TestPhase37bControllerLossAndTakeover(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	require.Equal(t, LiveControllerClosed, fA.recordByHash(t, callHash).Controller, "the hard stop fired from B")
+	fB.fake.mu.Lock()
+	refusedPurposes := append([]string(nil), fB.fake.responses["/api/internal/v2/wallet/leases/ensure"].EnsurePurposes...)
+	fB.fake.mu.Unlock()
+	require.Contains(t, refusedPurposes, "authorize", "B re-authorization actually received the canned 409")
+	initialHold, err = fA.store.GetCanonicalWalletHold(context.Background(), platformUserID, prov.Token)
+	require.NoError(t, err)
+	require.NotNil(t, initialHold)
+	require.Equal(t, "released", initialHold.State, "the initial hold still converted through the overrun release path")
 	select {
 	case frame := <-fB.conn.writes:
 		require.JSONEq(t, `{"type":"session.close"}`, string(frame.payload))
@@ -1189,7 +1205,7 @@ func TestPhase37bDisconnectedSideband(t *testing.T) {
 		require.Equal(t, int64(0), p.Windows[0].PendingUnits)
 		time.Sleep(200 * time.Millisecond)
 	}
-	require.Zero(t, f.outboxRowCount(t, CanonicalWalletSettlementEventID(callHash, f.user.PlatformUserID, "CNY")), "no settlement during the outage")
+	require.Zero(t, f.outboxRowCount(t, CanonicalWalletSettlementEventID(callHash, f.user.PlatformUserID, "USD")), "no settlement during the outage")
 	attempts := atomic.LoadInt32(&flaky.attempts)
 	require.GreaterOrEqual(t, attempts, int32(5), "the observer keeps retrying (under-runs are diagnosable)")
 	require.LessOrEqual(t, attempts, int32(9), "the retry cadence is the one-second waitForLiveObserverRetry")
@@ -1241,9 +1257,10 @@ func TestPhase37bLiveClockSeam(t *testing.T) {
 // driven) time sites. With a fixture whose liveClock is advanced by one hour,
 // driving a session far enough to write a provisional record, a settlement,
 // and a heartbeat proves that:
-//   1. wallet_live_provisional.created_at (openai_live.go:390)
-//   2. the controller heartbeat (openai_live.go:1030)
-//   3. the settlement's occurred_at (openai_live.go:1608)
+//  1. wallet_live_provisional.created_at (openai_live.go:390)
+//  2. the controller heartbeat (openai_live.go:1030)
+//  3. the settlement's occurred_at (openai_live.go:1608)
+//
 // all remain within a few seconds of wall-clock time.Now(), NOT of the
 // advanced fake clock (+1 hour).
 //
@@ -1333,7 +1350,7 @@ func TestPhase37bLiveClockSplitIsPinned(t *testing.T) {
 	require.Equal(t, LiveProvisionalStatusFinalized, prov.Status, "the row finalizes after session.closed")
 
 	// 3. Settlement occurred_at stays wall-clock (openai_live.go:1608)
-	id2 := CanonicalWalletSettlementEventID(liveWindowRequestID(callHash, 2), f.user.PlatformUserID, "CNY")
+	id2 := CanonicalWalletSettlementEventID(liveWindowRequestID(callHash, 2), f.user.PlatformUserID, "USD")
 	f.waitDeliveredThroughFake(t, id2, 15*time.Second)
 
 	var occurredAt time.Time

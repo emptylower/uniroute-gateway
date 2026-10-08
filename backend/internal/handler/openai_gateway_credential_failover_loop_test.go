@@ -377,7 +377,7 @@ func (u *grokCredentialHandlerUpstream) Do(req *http.Request, _ string, accountI
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
 			Body: io.NopCloser(bytes.NewBufferString(
-				`{"id":"chatcmpl_healthy","object":"chat.completion","model":"grok-4.5","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`,
+				`{"id":"chatcmpl_healthy","object":"chat.completion","model":"grok-4.5","max_output_tokens":32,"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`,
 			)),
 		}, nil
 	}
@@ -385,7 +385,7 @@ func (u *grokCredentialHandlerUpstream) Do(req *http.Request, _ string, accountI
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
 		Body: io.NopCloser(bytes.NewBufferString(
-			`{"id":"resp_healthy","object":"response","model":"grok-4.5","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1}}`,
+			`{"id":"resp_healthy","object":"response","model":"grok-4.5","max_output_tokens":32,"status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1}}`,
 		)),
 	}, nil
 }
@@ -411,7 +411,7 @@ func TestResponsesCredentialFailoverLoop(t *testing.T) {
 		_ = h
 
 		recorder := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", bytes.NewBufferString(`{"model":"grok","input":"hello","stream":false}`))
+		req := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", bytes.NewBufferString(`{"model":"grok","max_output_tokens":32,"input":"hello","stream":false}`))
 		req.Header.Set("Content-Type", "application/json")
 		router.ServeHTTP(recorder, req)
 
@@ -429,7 +429,7 @@ func TestResponsesCredentialFailoverLoop(t *testing.T) {
 		defer cleanup()
 
 		recorder := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", bytes.NewBufferString(`{"model":"grok","input":"hello","stream":false}`))
+		req := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", bytes.NewBufferString(`{"model":"grok","max_output_tokens":32,"input":"hello","stream":false}`))
 		req.Header.Set("Content-Type", "application/json")
 		router.ServeHTTP(recorder, req)
 
@@ -447,7 +447,7 @@ func TestResponsesCredentialFailoverLoop(t *testing.T) {
 		defer cleanup()
 
 		ctx, cancel := context.WithCancel(context.Background())
-		req := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", bytes.NewBufferString(`{"model":"grok","input":"hello","stream":false}`)).WithContext(ctx)
+		req := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", bytes.NewBufferString(`{"model":"grok","max_output_tokens":32,"input":"hello","stream":false}`)).WithContext(ctx)
 		req.Header.Set("Content-Type", "application/json")
 		recorder := httptest.NewRecorder()
 		done := make(chan struct{})
@@ -482,7 +482,7 @@ func TestResponsesCredentialFailoverLoop(t *testing.T) {
 		upstream.mu.Unlock()
 
 		recorder := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", bytes.NewBufferString(`{"model":"grok","input":"hello","stream":false}`)).WithContext(ctx)
+		req := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", bytes.NewBufferString(`{"model":"grok","max_output_tokens":32,"input":"hello","stream":false}`)).WithContext(ctx)
 		req.Header.Set("Content-Type", "application/json")
 		router.ServeHTTP(recorder, req)
 
@@ -499,9 +499,9 @@ func TestResponsesCredentialFailoverLoop(t *testing.T) {
 			path   string
 			body   string
 		}{
-			{name: "responses", method: http.MethodPost, path: "/openai/v1/responses", body: `{"model":"grok","input":"hello","stream":false}`},
-			{name: "messages", method: http.MethodPost, path: "/openai/v1/messages", body: `{"model":"grok","max_tokens":16,"messages":[{"role":"user","content":"hello"}]}`},
-			{name: "chat completions", method: http.MethodPost, path: "/openai/v1/chat/completions", body: `{"model":"grok","messages":[{"role":"user","content":"hello"}],"stream":false}`},
+			{name: "responses", method: http.MethodPost, path: "/openai/v1/responses", body: `{"model":"grok","max_output_tokens":32,"input":"hello","stream":false}`},
+			{name: "messages", method: http.MethodPost, path: "/openai/v1/messages", body: `{"model":"grok","max_output_tokens":32,"max_tokens":16,"messages":[{"role":"user","content":"hello"}]}`},
+			{name: "chat completions", method: http.MethodPost, path: "/openai/v1/chat/completions", body: `{"model":"grok","max_output_tokens":32,"messages":[{"role":"user","content":"hello"}],"stream":false}`},
 			{name: "grok media", method: http.MethodGet, path: "/openai/v1/videos/request-1"},
 		}
 		for _, tt := range tests {
@@ -529,7 +529,7 @@ func TestResponsesCredentialFailoverLoop(t *testing.T) {
 				defer cleanup()
 
 				recorder := httptest.NewRecorder()
-				req := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", bytes.NewBufferString(`{"model":"grok","input":"hello","stream":false}`))
+				req := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", bytes.NewBufferString(`{"model":"grok","max_output_tokens":32,"input":"hello","stream":false}`))
 				req.Header.Set("Content-Type", "application/json")
 				router.ServeHTTP(recorder, req)
 
@@ -545,7 +545,7 @@ func TestResponsesCredentialFailoverLoop(t *testing.T) {
 		_, repo, upstream, router, cleanup := newGrokCredentialFailoverHandler(t, "nil_provider")
 		defer cleanup()
 		recorder := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", bytes.NewBufferString(`{"model":"grok","input":"hello","stream":false}`))
+		req := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", bytes.NewBufferString(`{"model":"grok","max_output_tokens":32,"input":"hello","stream":false}`))
 		req.Header.Set("Content-Type", "application/json")
 
 		router.ServeHTTP(recorder, req)
@@ -565,7 +565,7 @@ func TestResponsesGrok429FailoverIsBounded(t *testing.T) {
 		_, repo, upstream, router, cleanup := newGrokCredentialFailoverHandler(t, "first_429")
 		defer cleanup()
 		recorder := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", bytes.NewBufferString(`{"model":"grok","input":"hello","stream":false}`))
+		req := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", bytes.NewBufferString(`{"model":"grok","max_output_tokens":32,"input":"hello","stream":false}`))
 		req.Header.Set("Content-Type", "application/json")
 
 		router.ServeHTTP(recorder, req)
@@ -580,7 +580,7 @@ func TestResponsesGrok429FailoverIsBounded(t *testing.T) {
 		_, repo, upstream, router, cleanup := newGrokCredentialFailoverHandler(t, "all_429")
 		defer cleanup()
 		recorder := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", bytes.NewBufferString(`{"model":"grok","input":"hello","stream":false}`))
+		req := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", bytes.NewBufferString(`{"model":"grok","max_output_tokens":32,"input":"hello","stream":false}`))
 		req.Header.Set("Content-Type", "application/json")
 
 		router.ServeHTTP(recorder, req)
@@ -600,7 +600,7 @@ func TestResponsesGrok402FailoverCooldown(t *testing.T) {
 	defer cleanup()
 
 	recorder := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", bytes.NewBufferString(`{"model":"grok","input":"hello","stream":false}`))
+	req := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", bytes.NewBufferString(`{"model":"grok","max_output_tokens":32,"input":"hello","stream":false}`))
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(recorder, req)
 
@@ -611,7 +611,7 @@ func TestResponsesGrok402FailoverCooldown(t *testing.T) {
 	before := repo.selectorCalls()
 
 	second := httptest.NewRecorder()
-	secondReq := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", bytes.NewBufferString(`{"model":"grok","input":"again","stream":false}`))
+	secondReq := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", bytes.NewBufferString(`{"model":"grok","max_output_tokens":32,"input":"again","stream":false}`))
 	secondReq.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(second, secondReq)
 
@@ -627,7 +627,7 @@ func TestResponsesGrok429FailoverHandlesMixedStatuses(t *testing.T) {
 		_, _, upstream, router, cleanup := newGrokCredentialFailoverHandler(t, "mixed_429_500")
 		defer cleanup()
 		recorder := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", bytes.NewBufferString(`{"model":"grok","input":"hello","stream":false}`))
+		req := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", bytes.NewBufferString(`{"model":"grok","max_output_tokens":32,"input":"hello","stream":false}`))
 		req.Header.Set("Content-Type", "application/json")
 
 		router.ServeHTTP(recorder, req)
@@ -641,7 +641,7 @@ func TestResponsesGrok429FailoverHandlesMixedStatuses(t *testing.T) {
 		_, _, upstream, router, cleanup := newGrokCredentialFailoverHandler(t, "mixed_500_429")
 		defer cleanup()
 		recorder := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", bytes.NewBufferString(`{"model":"grok","input":"hello","stream":false}`))
+		req := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", bytes.NewBufferString(`{"model":"grok","max_output_tokens":32,"input":"hello","stream":false}`))
 		req.Header.Set("Content-Type", "application/json")
 
 		router.ServeHTTP(recorder, req)
@@ -654,7 +654,7 @@ func TestResponsesGrok429FailoverHandlesMixedStatuses(t *testing.T) {
 		_, _, upstream, router, cleanup := newGrokCredentialFailoverHandler(t, "oauth_429_apikey_500")
 		defer cleanup()
 		recorder := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", bytes.NewBufferString(`{"model":"grok","input":"hello","stream":false}`))
+		req := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", bytes.NewBufferString(`{"model":"grok","max_output_tokens":32,"input":"hello","stream":false}`))
 		req.Header.Set("Content-Type", "application/json")
 
 		router.ServeHTTP(recorder, req)
@@ -671,7 +671,7 @@ func TestGrokMedia429FailoverIsBounded(t *testing.T) {
 		_, _, upstream, router, cleanup := newGrokCredentialFailoverHandler(t, "first_429")
 		defer cleanup()
 		recorder := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodPost, "/openai/v1/videos/generations", bytes.NewBufferString(`{"model":"grok-imagine-video","prompt":"waves"}`))
+		req := httptest.NewRequest(http.MethodPost, "/openai/v1/videos/generations", bytes.NewBufferString(`{"model":"grok-imagine-video","max_output_tokens":32,"prompt":"waves"}`))
 		req.Header.Set("Content-Type", "application/json")
 
 		router.ServeHTTP(recorder, req)
@@ -684,7 +684,7 @@ func TestGrokMedia429FailoverIsBounded(t *testing.T) {
 		_, _, upstream, router, cleanup := newGrokCredentialFailoverHandler(t, "all_429")
 		defer cleanup()
 		recorder := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodPost, "/openai/v1/videos/generations", bytes.NewBufferString(`{"model":"grok-imagine-video","prompt":"waves"}`))
+		req := httptest.NewRequest(http.MethodPost, "/openai/v1/videos/generations", bytes.NewBufferString(`{"model":"grok-imagine-video","max_output_tokens":32,"prompt":"waves"}`))
 		req.Header.Set("Content-Type", "application/json")
 
 		router.ServeHTTP(recorder, req)
@@ -703,10 +703,10 @@ func TestGrokOAuthCredentialFailoverAcrossHTTPHandlers(t *testing.T) {
 		path   string
 		body   string
 	}{
-		{name: "messages", method: http.MethodPost, path: "/openai/v1/messages", body: `{"model":"grok","max_tokens":16,"messages":[{"role":"user","content":"hello"}]}`},
-		{name: "chat completions", method: http.MethodPost, path: "/openai/v1/chat/completions", body: `{"model":"grok","messages":[{"role":"user","content":"hello"}],"stream":false}`},
-		{name: "chat completions raw fallback", method: http.MethodPost, path: "/openai/v1/chat/completions", body: `{"model":"grok","messages":[{"role":"user","content":"hello"}],"stop":["END"],"stream":false}`},
-		{name: "grok media", method: http.MethodPost, path: "/openai/v1/videos/generations", body: `{"model":"grok-imagine-video","prompt":"waves"}`},
+		{name: "messages", method: http.MethodPost, path: "/openai/v1/messages", body: `{"model":"grok","max_output_tokens":32,"max_tokens":16,"messages":[{"role":"user","content":"hello"}]}`},
+		{name: "chat completions", method: http.MethodPost, path: "/openai/v1/chat/completions", body: `{"model":"grok","max_output_tokens":32,"messages":[{"role":"user","content":"hello"}],"stream":false}`},
+		{name: "chat completions raw fallback", method: http.MethodPost, path: "/openai/v1/chat/completions", body: `{"model":"grok","max_output_tokens":32,"messages":[{"role":"user","content":"hello"}],"stop":["END"],"stream":false}`},
+		{name: "grok media", method: http.MethodPost, path: "/openai/v1/videos/generations", body: `{"model":"grok-imagine-video","max_output_tokens":32,"prompt":"waves"}`},
 	}
 
 	for _, endpoint := range endpoints {
@@ -748,7 +748,7 @@ func TestGrokOAuthMissingSelectedRowRetriesHealthyAccountWithoutMutation(t *test
 	_, repo, upstream, router, cleanup := newGrokCredentialFailoverHandler(t, "missing_row")
 	defer cleanup()
 	recorder := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", bytes.NewBufferString(`{"model":"grok","input":"hello","stream":false}`))
+	req := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", bytes.NewBufferString(`{"model":"grok","max_output_tokens":32,"input":"hello","stream":false}`))
 	req.Header.Set("Content-Type", "application/json")
 
 	router.ServeHTTP(recorder, req)
@@ -777,7 +777,7 @@ func TestResponsesWebSocketCredentialFailoverLoop(t *testing.T) {
 		t.Helper()
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
-		require.NoError(t, conn.Write(ctx, coderws.MessageText, []byte(`{"type":"response.create","model":"grok","input":"hello","stream":false}`)))
+		require.NoError(t, conn.Write(ctx, coderws.MessageText, []byte(`{"type":"response.create","model":"grok","max_output_tokens":32,"input":"hello","stream":false}`)))
 	}
 
 	t.Run("revoked account selects healthy account", func(t *testing.T) {
@@ -924,11 +924,39 @@ func newGrokCredentialFailoverHandler(t *testing.T, mode string) (*OpenAIGateway
 	cfg := &config.Config{RunMode: config.RunModeSimple}
 	cfg.Gateway.MaxAccountSwitches = 3
 	billingCache := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil, nil)
-	gateway := service.NewOpenAIGatewayService(
-		repo, nil, nil, nil, nil, nil, nil, cfg, nil, nil, nil, nil,
-		service.NewBillingService(cfg, nil), nil, billingCache, upstream,
-		&service.DeferredService{}, nil, provider, nil, nil, nil, nil, nil,
-		nil)
+	// The USD billing snapshot freezes before every upstream write and refuses
+	// a model without a billable price, so the Grok models need one too.
+	pricing := service.NewPricingService(cfg, nil)
+	for _, model := range []string{"grok-imagine-video", "grok-imagine-video-1.5"} {
+		pricing.SetModelPricingForTest(model, &service.LiteLLMModelPricing{InputCostPerToken: 0.000001, OutputCostPerToken: 0.000002, MaxOutputTokens: 4096, MaxInputTokens: 128000})
+	}
+	billing := service.NewBillingService(cfg, pricing)
+	usdFixtureCache1, usdFixtureSnapshots1 := newUSDHandlerTestWallet(t, cfg, billing)
+	gateway := service.NewOpenAIGatewayService(repo,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		usdFixtureCache1,
+		cfg,
+		nil,
+		nil,
+		nil,
+		nil,
+		billing,
+		nil,
+		billingCache,
+		upstream,
+		&service.DeferredService{},
+		nil,
+		provider,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		usdFixtureSnapshots1)
 	cache := &concurrencyCacheMock{
 		acquireUserSlotFn:    func(context.Context, int64, int, string) (bool, error) { return true, nil },
 		acquireAccountSlotFn: func(context.Context, int64, int, string) (bool, error) { return true, nil },
@@ -936,8 +964,8 @@ func newGrokCredentialFailoverHandler(t *testing.T, mode string) (*OpenAIGateway
 	h := NewOpenAIGatewayHandler(gateway, service.NewConcurrencyService(cache), billingCache, &service.APIKeyService{}, nil, nil, nil, nil, cfg)
 	apiKey := &service.APIKey{
 		ID: 902, GroupID: &groupID,
-		User:  &service.User{ID: 903, Status: service.StatusActive},
-		Group: &service.Group{ID: groupID, Platform: service.PlatformGrok, Status: service.StatusActive, AllowImageGeneration: true},
+		User:  &service.User{PlatformUserID: "usd-fixture-user", ID: 903, Status: service.StatusActive},
+		Group: &service.Group{RateMultiplier: 1, ID: groupID, Platform: service.PlatformGrok, Status: service.StatusActive, AllowImageGeneration: true},
 	}
 	router := gin.New()
 	router.Use(func(c *gin.Context) {
