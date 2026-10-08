@@ -9,7 +9,6 @@ import (
 	"github.com/tidwall/gjson"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 )
 
 // CanonicalWalletAuthorizer is the authorization point (spec §2.0, §4; §6 item 1):
@@ -65,6 +64,7 @@ func (a *CanonicalWalletAuthorizer) requestTimeout() time.Duration {
 // mode every failure is counted and logged and the attempt is admitted; in
 // disabled mode (or with no bridge) the handle carries only its id.
 func (a *CanonicalWalletAuthorizer) Authorize(ctx context.Context, in AuthorizeInput) (*AuthorizationHandle, error) {
+	ctx, diagnostic := newWalletAuthorizationDiagnostic(ctx)
 	mode := a.mode()
 	h, err := newAuthorizationHandle(mode)
 	if err != nil {
@@ -77,8 +77,10 @@ func (a *CanonicalWalletAuthorizer) Authorize(ctx context.Context, in AuthorizeI
 		h.ID = in.DurableAuthorizationID
 	}
 	if a == nil || a.bridge == nil || a.snapshots == nil {
+		walletAuthorizationStage(ctx, "dependencies")
 		refused := &AuthorizationRefusedError{Reason: AuthorizationRefusalLeaseUnavailable, AuthorizationID: h.ID, Detail: "USD wallet authorization dependencies unavailable"}
 		h.Refusal = refused
+		diagnostic.log(ctx, h, in, refused.Reason, nil, mode == config.CanonicalWalletModeEnforce)
 		return h, refused
 	}
 	if mode == "" || mode == config.CanonicalWalletModeDisabled {
@@ -87,6 +89,7 @@ func (a *CanonicalWalletAuthorizer) Authorize(ctx context.Context, in AuthorizeI
 	authorizationMetrics.minted.Add(1)
 	enforce := mode == config.CanonicalWalletModeEnforce
 	refuse := func(reason AuthorizationRefusalReason, detail string, cause error) (*AuthorizationHandle, error) {
+		diagnostic.log(ctx, h, in, reason, cause, enforce)
 		if enforce && a.bridge.outboxDB != nil && h.AttemptKind != "media" {
 			abortCtx, abortCancel := context.WithTimeout(context.Background(), a.requestTimeout())
 			_, _ = a.bridge.outboxDB.ExecContext(abortCtx, `UPDATE wallet_authorization_segment SET state='released',updated_at=now() WHERE parent_authorization_id=$1 AND state='prepared'`, h.ID)
@@ -98,9 +101,9 @@ func (a *CanonicalWalletAuthorizer) Authorize(ctx context.Context, in AuthorizeI
 			authorizationMetrics.refused.Add(1)
 			return h, e
 		}
-		logger.LegacyPrintf("service.authorization", "shadow: attempt admitted despite %s", e.Error())
 		return h, nil
 	}
+	walletAuthorizationStage(ctx, "snapshot_check")
 	if in.Snapshot == nil {
 		authorizationMetrics.snapshotMissing.Add(1)
 		return refuse(AuthorizationRefusalSnapshotMissing, "no billing snapshot for this attempt", nil)
@@ -114,6 +117,7 @@ func (a *CanonicalWalletAuthorizer) Authorize(ctx context.Context, in AuthorizeI
 		h.AttemptKind = "media"
 	}
 	policyVersion := in.Snapshot.Flags.USDWalletPolicyVersion
+	walletAuthorizationStage(ctx, "policy_check")
 	_, policyEnabled, policyErr := canonicalUSDWalletSnapshot(in.User, a.cfg)
 	if policyErr != nil || (policyEnabled && policyVersion == "") ||
 		(policyVersion != "" && (!policyEnabled || validateCanonicalUSDWalletSnapshot(in.Snapshot.FX, policyVersion) != nil)) {
@@ -123,6 +127,7 @@ func (a *CanonicalWalletAuthorizer) Authorize(ctx context.Context, in AuthorizeI
 	// Phase 3.7b (§13.2.1): FixedEstimateUnits > 0 replaces the estimation
 	// step ONLY — the bound is the caller's (the Live window's chunk).
 	var units int64
+	walletAuthorizationStage(ctx, "estimate")
 	if in.FixedEstimateUnits > 0 {
 		units = in.FixedEstimateUnits
 	} else {
@@ -135,12 +140,14 @@ func (a *CanonicalWalletAuthorizer) Authorize(ctx context.Context, in AuthorizeI
 	}
 	h.EstimatedUnits = units
 	h.Continuation = in.Estimate.Continuation
+	walletAuthorizationStage(ctx, "identity_check")
 	if in.User == nil || strings.TrimSpace(in.User.PlatformUserID) == "" {
 		authorizationMetrics.identityMissing.Add(1)
 		return refuse(AuthorizationRefusalIdentityMissing, "no platform user id", nil)
 	}
 	// ObserveSettlement rejects any raw non-USD currency, so a user admitted
 	// here with one would be served and never charged. Refuse before any hold.
+	walletAuthorizationStage(ctx, "currency_check")
 	if raw := strings.TrimSpace(in.User.BillingCurrency); raw != "" {
 		if _, err := RequireUSDBillingCurrency(raw); err != nil {
 			authorizationMetrics.currencyUnsupported.Add(1)
@@ -156,6 +163,7 @@ func (a *CanonicalWalletAuthorizer) Authorize(ctx context.Context, in AuthorizeI
 			// text or live snapshot is otherwise persisted only at settlement.
 			// Media persists its own in the task transaction; Persist is idempotent.
 			if h.AttemptKind != "media" {
+				walletAuthorizationStage(leaseCtx, "snapshot_persist")
 				if err = a.snapshots.Persist(leaseCtx, in.Snapshot); err != nil {
 					return refuse(AuthorizationRefusalLeaseUnavailable, "snapshot persist", err)
 				}
@@ -168,6 +176,7 @@ func (a *CanonicalWalletAuthorizer) Authorize(ctx context.Context, in AuthorizeI
 				return refuse(reason, "pool", err)
 			}
 			if h.AttemptKind != "media" {
+				walletAuthorizationStage(leaseCtx, "attempt_protection")
 				if err = a.bridge.preparePoolAttempt(leaseCtx, h, in.User.PlatformUserID); err != nil {
 					return refuse(AuthorizationRefusalLeaseUnavailable, "attempt protection", err)
 				}
@@ -197,6 +206,7 @@ func (a *CanonicalWalletAuthorizer) Authorize(ctx context.Context, in AuthorizeI
 			return h, nil
 		}
 	}
+	walletAuthorizationStage(leaseCtx, "lease_ensure")
 	lease, err := a.bridge.ensureLeaseWithPolicy(leaseCtx, in.User.PlatformUserID, currency, units, canonicalWalletLeasePurposeAuthorize, "", policyVersion)
 	if err != nil {
 		if errors.Is(err, ErrCanonicalWalletBalanceShortfall) {
@@ -211,6 +221,7 @@ func (a *CanonicalWalletAuthorizer) Authorize(ctx context.Context, in AuthorizeI
 		return refuse(AuthorizationRefusalLeaseUnavailable, "", err)
 	}
 	h.LeaseID = lease.LeaseID
+	walletAuthorizationPool(leaseCtx, []CanonicalWalletLease{*lease})
 	// Phase 3.4b (§10.4): with holds on, Authorize continues past the ensure
 	// and arms this attempt's hold at the estimate E. On the guard's {4} — a
 	// concurrent reservation took the headroom between ensureLease's covering
@@ -219,11 +230,15 @@ func (a *CanonicalWalletAuthorizer) Authorize(ctx context.Context, in AuthorizeI
 	// error) is lease_unavailable (transient class; no new refusal reason —
 	// the constant would have no distinct producer). Shadow admits either way.
 	if a.bridge.HoldsEnabled() {
+		walletAuthorizationStage(leaseCtx, "hold_arm")
 		leaseID, held, _, aerr := a.bridge.store.ArmCanonicalWalletHold(leaseCtx, in.User.PlatformUserID, lease.LeaseID, currency, h.ID, units, a.bridge.graceMS(), a.bridge.clock())
 		if errors.Is(aerr, ErrCanonicalWalletLeaseExhausted) || errors.Is(aerr, ErrCanonicalWalletLeaseMissing) || errors.Is(aerr, ErrCanonicalWalletLeaseExpired) {
 			authorizationMetrics.holdArmRetried.Add(1)
+			walletAuthorizationStage(leaseCtx, "lease_ensure_retry")
 			lease, err = a.bridge.ensureLeaseWithPolicy(leaseCtx, in.User.PlatformUserID, currency, units, canonicalWalletLeasePurposeAuthorize, "", policyVersion)
 			if err == nil {
+				walletAuthorizationPool(leaseCtx, []CanonicalWalletLease{*lease})
+				walletAuthorizationStage(leaseCtx, "hold_arm_retry")
 				leaseID, held, _, aerr = a.bridge.store.ArmCanonicalWalletHold(leaseCtx, in.User.PlatformUserID, lease.LeaseID, currency, h.ID, units, a.bridge.graceMS(), a.bridge.clock())
 			}
 		}

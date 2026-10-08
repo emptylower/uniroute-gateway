@@ -98,6 +98,7 @@ func (b *CanonicalWalletBridge) saveAuthorizationSegments(ctx context.Context, p
 	return tx.Commit()
 }
 func (b *CanonicalWalletBridge) fundingPool(ctx context.Context, user string) ([]CanonicalWalletLease, error) {
+	walletAuthorizationStage(ctx, "pool_read")
 	client, ok := b.control.(*canonicalWalletHTTPClient)
 	if !ok {
 		return nil, errors.New("canonical wallet pool control unavailable")
@@ -118,6 +119,7 @@ func (b *CanonicalWalletBridge) fundingPool(ctx context.Context, user string) ([
 	leases := []CanonicalWalletLease{}
 	seen := map[string]bool{}
 	for _, wire := range response.Leases {
+		walletAuthorizationStage(ctx, "pool_validate")
 		if wire.PlatformUserID != user || wire.LeaseID == "" || seen[wire.LeaseID] || wire.UnitVersion != CanonicalWalletUnitVersion || wire.Scale != 8 || wire.Currency != "USD" || wire.Policy != config.CanonicalUSDWalletPolicyVersion {
 			return nil, ErrCanonicalUSDWalletPolicy
 		}
@@ -133,10 +135,12 @@ func (b *CanonicalWalletBridge) fundingPool(ctx context.Context, user string) ([
 		if err != nil {
 			return nil, err
 		}
+		walletAuthorizationStage(ctx, "pool_cache_read")
 		cached, err := b.store.GetCanonicalWalletLeaseByID(ctx, user, wire.LeaseID)
 		if err != nil {
 			return nil, err
 		}
+		walletAuthorizationStage(ctx, "pool_cache_validate")
 		if cached.Currency != "USD" || cached.PlatformUserID != user || cached.BudgetUnits > budget || cached.ConsumedUnits-cached.ReleasedUnits < captured {
 			return nil, errors.New("wallet pool cache basis mismatch")
 		}
@@ -149,6 +153,7 @@ func (b *CanonicalWalletBridge) fundingPool(ctx context.Context, user string) ([
 		// Redis reads do not carry the local retention deadline. Restore the
 		// receipt window without extending the lease's authorization expiry.
 		cached.RetainUntil = cached.ExpiresAt.Add(time.Duration(b.callerSlotTTLSeconds) * time.Second)
+		walletAuthorizationStage(ctx, "pool_cache_install")
 		if err = b.store.InstallCanonicalWalletLease(ctx, *cached); err != nil {
 			return nil, err
 		}
@@ -160,15 +165,18 @@ func (b *CanonicalWalletBridge) fundingPool(ctx context.Context, user string) ([
 	return leases, nil
 }
 func (b *CanonicalWalletBridge) authorizePool(ctx context.Context, h *AuthorizationHandle, user string, units int64) error {
+	walletAuthorizationStage(ctx, "pool_store_check")
 	store, ok := b.store.(CanonicalWalletPoolStore)
 	if !ok {
 		return errors.New("wallet pool atomic authorization unavailable")
 	}
+	walletAuthorizationStage(ctx, "plan_read")
 	saved, err := b.authorizationSegments(ctx, h.ID)
 	if err != nil {
 		return err
 	}
 	if len(saved) > 0 {
+		walletAuthorizationStage(ctx, "plan_validate")
 		var total int64
 		for _, s := range saved {
 			total, err = AddUnits(total, s.HeldUnits)
@@ -179,6 +187,7 @@ func (b *CanonicalWalletBridge) authorizePool(ctx context.Context, h *Authorizat
 		if total != units {
 			return errors.New("persisted authorization bound mismatch")
 		}
+		walletAuthorizationStage(ctx, "pool_arm_saved")
 		if err = store.ArmCanonicalWalletPool(ctx, user, saved, b.graceMS(), b.clock()); err != nil {
 			return err
 		}
@@ -193,6 +202,8 @@ func (b *CanonicalWalletBridge) authorizePool(ctx context.Context, h *Authorizat
 	if err != nil {
 		return err
 	}
+	walletAuthorizationPool(ctx, leases)
+	walletAuthorizationStage(ctx, "pool_headroom")
 	var total int64
 	for _, l := range leases {
 		total, err = AddUnits(total, l.RemainingUnits())
@@ -203,6 +214,7 @@ func (b *CanonicalWalletBridge) authorizePool(ctx context.Context, h *Authorizat
 	if total < units {
 		missing := units - total
 		if len(leases) == 0 {
+			walletAuthorizationStage(ctx, "pool_ensure")
 			budget := units
 			if b.cfg.LeaseBudgetUnits > budget {
 				budget = b.cfg.LeaseBudgetUnits
@@ -211,14 +223,17 @@ func (b *CanonicalWalletBridge) authorizePool(ctx context.Context, h *Authorizat
 			var result *canonicalWalletEnsureResult
 			result, err = b.control.EnsureLease(ctx, request)
 			if err == nil {
+				walletAuthorizationStage(ctx, "pool_ensure_validate")
 				if result == nil || result.USDWalletPolicyVersion != config.CanonicalUSDWalletPolicyVersion || result.Lease.PlatformUserID != user || result.Lease.RemainingUnits() < units || b.leaseExpiredAt(&result.Lease, b.clock()) {
 					return errors.New("wallet pool funding proof mismatch")
 				}
 				result.Lease.RetainUntil = result.Lease.ExpiresAt.Add(time.Duration(b.callerSlotTTLSeconds) * time.Second)
+				walletAuthorizationStage(ctx, "pool_ensure_install")
 				err = b.store.InstallCanonicalWalletLease(ctx, result.Lease)
 			}
 
 		} else {
+			walletAuthorizationStage(ctx, "pool_topup")
 			target := leases[0]
 			minimum, e := AddUnits(target.BudgetUnits, missing)
 			if e != nil {
@@ -232,11 +247,13 @@ func (b *CanonicalWalletBridge) authorizePool(ctx context.Context, h *Authorizat
 			var result *canonicalWalletEnsureResult
 			result, err = b.control.EnsureLease(ctx, request)
 			if err == nil {
+				walletAuthorizationStage(ctx, "pool_topup_validate")
 				if result == nil || result.USDWalletPolicyVersion != config.CanonicalUSDWalletPolicyVersion || result.Lease.LeaseID != target.LeaseID || result.Lease.BudgetUnits < minimum || result.Lease.ExpiresAt.UnixMilli() > target.ExpiresAt.UnixMilli() {
 					return errors.New("wallet pool top-up proof mismatch")
 				}
 				result.Lease.RequireCachedLease = true
 				result.Lease.RetainUntil = result.Lease.ExpiresAt.Add(time.Duration(b.callerSlotTTLSeconds) * time.Second)
+				walletAuthorizationStage(ctx, "pool_topup_install")
 				err = b.store.InstallCanonicalWalletLease(ctx, result.Lease)
 			}
 		}
@@ -247,7 +264,9 @@ func (b *CanonicalWalletBridge) authorizePool(ctx context.Context, h *Authorizat
 		if err != nil {
 			return err
 		}
+		walletAuthorizationPool(ctx, leases)
 	}
+	walletAuthorizationStage(ctx, "pool_allocate")
 	segments := []AuthorizationSegment{}
 	remaining := units
 	for _, l := range leases {
@@ -275,9 +294,11 @@ func (b *CanonicalWalletBridge) authorizePool(ctx context.Context, h *Authorizat
 		return ErrCanonicalWalletBalanceShortfall
 	}
 	// This committed plan owns every hold even if the process dies after Lua.
+	walletAuthorizationStage(ctx, "plan_persist")
 	if err = b.saveAuthorizationPlan(ctx, h.ID, user, h.SnapshotID, h.AttemptKind, segments); err != nil {
 		return err
 	}
+	walletAuthorizationStage(ctx, "pool_arm")
 	if err = store.ArmCanonicalWalletPool(ctx, user, segments, b.graceMS(), b.clock()); err != nil {
 		return err
 	}

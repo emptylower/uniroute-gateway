@@ -705,6 +705,8 @@ func (c *canonicalWalletHTTPClient) SubmitSettlement(ctx context.Context, event 
 }
 
 func (c *canonicalWalletHTTPClient) doJSON(ctx context.Context, method, path, scope, idempotencyKey string, requestBody, responseBody any) error {
+	finishDiagnostic := walletAuthorizationControlStart(ctx)
+	defer finishDiagnostic()
 	payload, err := json.Marshal(requestBody)
 	if err != nil {
 		return fmt.Errorf("encode canonical wallet request: %w", err)
@@ -727,6 +729,7 @@ func (c *canonicalWalletHTTPClient) doJSON(ctx context.Context, method, path, sc
 		return fmt.Errorf("call canonical wallet control plane: %w", err)
 	}
 	defer resp.Body.Close()
+	walletAuthorizationControlResponse(ctx, resp.StatusCode, "", nil)
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return fmt.Errorf("read canonical wallet response: %w", err)
@@ -750,6 +753,7 @@ func (c *canonicalWalletHTTPClient) doJSON(ctx context.Context, method, path, sc
 				}
 			}
 		}
+		walletAuthorizationControlResponse(ctx, statusErr.Status, statusErr.Reason, statusErr.HeadroomUnits)
 		// §9.6 item 6 (PRESERVED, not replaced): a 404/405 from the ensure
 		// route at runtime means the control plane predates 3.4a-S — the
 		// status error WRAPS ErrCanonicalWalletControlPlaneIncompatible so
