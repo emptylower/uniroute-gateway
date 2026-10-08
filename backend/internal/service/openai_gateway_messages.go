@@ -18,6 +18,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 	"go.uber.org/zap"
 )
 
@@ -535,7 +536,7 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 ) (*OpenAIForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
 
-	finalResponse, usage, acc, err := s.readOpenAICompatBufferedTerminal(resp, "openai messages buffered", requestID)
+	finalResponse, usage, acc, err := s.readOpenAICompatBufferedTerminal(resp, "openai messages buffered", requestID, account)
 	if err != nil {
 		return nil, err
 	}
@@ -647,6 +648,7 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 	resp *http.Response,
 	logPrefix string,
 	requestID string,
+	account *Account,
 ) (*apicompat.ResponsesResponse, OpenAIUsage, *apicompat.BufferedResponseAccumulator, error) {
 	acc := apicompat.NewBufferedResponseAccumulator()
 	var usage OpenAIUsage
@@ -737,6 +739,11 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 							if event.Response.Usage != nil {
 								usage = copyOpenAIUsageFromResponsesUsage(event.Response.Usage)
 							}
+							rawUsage := gjson.Get(payload, "response.usage")
+							if !rawUsage.IsObject() {
+								rawUsage = gjson.Get(payload, "usage")
+							}
+							normalizeGrokChatCompletionUsage(account, rawUsage, &usage)
 							return event.Response, usage, acc, nil
 						}
 					}
@@ -784,6 +791,11 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 				if event.Response.Usage != nil {
 					usage = copyOpenAIUsageFromResponsesUsage(event.Response.Usage)
 				}
+				rawUsage := gjson.Get(payload, "response.usage")
+				if !rawUsage.IsObject() {
+					rawUsage = gjson.Get(payload, "usage")
+				}
+				normalizeGrokChatCompletionUsage(account, rawUsage, &usage)
 				return event.Response, usage, acc, nil
 			}
 
@@ -885,10 +897,12 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 				}
 				if event.Response.Usage != nil {
 					usage = copyOpenAIUsageFromResponsesUsage(event.Response.Usage)
+					normalizeGrokChatCompletionUsage(account, gjson.Get(payload, "response.usage"), &usage)
 				}
 			}
 			if event.Usage != nil {
 				usage = copyOpenAIUsageFromResponsesUsage(event.Usage)
+				normalizeGrokChatCompletionUsage(account, gjson.Get(payload, "usage"), &usage)
 			}
 			// cyber_policy 致命不可重试：标记供 handler 事后记录；以 Anthropic SSE error 事件
 			// 回写让客户端感知并停止重试（F4），丢弃后续转换输出。

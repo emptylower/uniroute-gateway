@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -214,7 +215,7 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 	if clientStream {
 		result, forwardErr = s.streamRawChatCompletions(c, resp, account, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime, len(body))
 	} else {
-		result, forwardErr = s.bufferRawChatCompletions(c, resp, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
+		result, forwardErr = s.bufferRawChatCompletions(c, resp, account, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
 	}
 	if result != nil {
 		addOpenAIUsage(&result.Usage, bridgeUsage)
@@ -304,6 +305,7 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 			if trimmedPayload != "[DONE]" {
 				usageOnlyChunk := isOpenAIChatUsageOnlyStreamChunk(payload)
 				if u := extractCCStreamUsage(payload); u != nil {
+					normalizeGrokChatCompletionUsage(account, gjson.Get(payload, "usage"), u)
 					usage = *u
 				}
 				if firstTokenMs == nil && !usageOnlyChunk {
@@ -405,10 +407,42 @@ func extractCCStreamUsage(payload string) *OpenAIUsage {
 	return &u
 }
 
+// xAI Chat Completions can report visible completion and reasoning separately.
+// Reconcile only when total_tokens proves that the reasoning is excluded;
+// proxies may already include reasoning in completion_tokens. Keep the raw
+// wire response unchanged and leave Responses output_tokens untouched.
+func normalizeGrokChatCompletionUsage(account *Account, value gjson.Result, usage *OpenAIUsage) {
+	if account == nil || account.Platform != PlatformGrok || usage == nil ||
+		value.Get("input_tokens").Exists() || value.Get("output_tokens").Exists() {
+		return
+	}
+	count := func(field string) (int, bool) {
+		v := value.Get(field)
+		if v.Type != gjson.Number {
+			return 0, false
+		}
+		n, err := strconv.ParseInt(v.Raw, 10, strconv.IntSize)
+		return int(n), err == nil && n >= 0
+	}
+	prompt, promptOK := count("prompt_tokens")
+	completion, completionOK := count("completion_tokens")
+	reasoning, reasoningOK := count("completion_tokens_details.reasoning_tokens")
+	total, totalOK := count("total_tokens")
+	if !promptOK || !completionOK || !reasoningOK || !totalOK || reasoning <= 0 || total < prompt {
+		return
+	}
+	output := total - prompt
+	// Subtract rather than adding completion+reasoning, which could overflow.
+	if output > completion && output-completion == reasoning {
+		usage.OutputTokens = output
+	}
+}
+
 // bufferRawChatCompletions 透传上游 CC 非流式 JSON 响应。
 func (s *OpenAIGatewayService) bufferRawChatCompletions(
 	c *gin.Context,
 	resp *http.Response,
+	account *Account,
 	originalModel string,
 	billingModel string,
 	upstreamModel string,
@@ -429,6 +463,7 @@ func (s *OpenAIGatewayService) bufferRawChatCompletions(
 	var usage OpenAIUsage
 	if parsedUsage, ok := extractOpenAIUsageFromJSONBytes(respBody); ok {
 		usage = parsedUsage
+		normalizeGrokChatCompletionUsage(account, gjson.GetBytes(respBody, "usage"), &usage)
 	}
 
 	if s.responseHeaderFilter != nil {

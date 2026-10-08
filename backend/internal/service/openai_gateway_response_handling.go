@@ -419,7 +419,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 				// response.failed 自带上游已消耗的 usage（input token 通常已扣）；必须先解析
 				// 再打 cyber 标记，否则 mark 记到的是解析前的 0，导致流式 cyber 按 0 token 计费
 				// 而漏记真实用量。对齐 WS V2 / Chat 流式路径（均先解析 usage 再 Mark）。
-				s.parseSSEUsageBytes(dataBytes, usage)
+				s.parseSSEUsageBytesForAccount(dataBytes, usage, account)
 				if hit, code, msg := detectOpenAICyberPolicy(dataBytes); hit {
 					MarkOpsCyberPolicy(c, CyberPolicyMark{
 						Code:           code,
@@ -543,7 +543,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 				firstTokenMs = &ms
 				stopFirstOutputTimer()
 			}
-			s.parseSSEUsageBytes(dataBytes, usage)
+			s.parseSSEUsageBytesForAccount(dataBytes, usage, account)
 			return
 		}
 
@@ -957,6 +957,10 @@ func (s *OpenAIGatewayService) parseSSEUsage(data string, usage *OpenAIUsage) {
 }
 
 func (s *OpenAIGatewayService) parseSSEUsageBytes(data []byte, usage *OpenAIUsage) {
+	s.parseSSEUsageBytesForAccount(data, usage, nil)
+}
+
+func (s *OpenAIGatewayService) parseSSEUsageBytesForAccount(data []byte, usage *OpenAIUsage, account *Account) {
 	if usage == nil || len(data) == 0 || bytes.Equal(data, []byte("[DONE]")) {
 		return
 	}
@@ -970,20 +974,26 @@ func (s *OpenAIGatewayService) parseSSEUsageBytes(data []byte, usage *OpenAIUsag
 		return
 	}
 
-	if parsedUsage, ok := extractOpenAIUsageFromJSONBytes(data); ok {
+	if parsedUsage, ok := extractOpenAIUsageFromJSONBytesForAccount(data, account); ok {
 		*usage = parsedUsage
 	}
 }
 
 func extractOpenAIUsageFromJSONBytes(body []byte) (OpenAIUsage, bool) {
+	return extractOpenAIUsageFromJSONBytesForAccount(body, nil)
+}
+
+func extractOpenAIUsageFromJSONBytesForAccount(body []byte, account *Account) (OpenAIUsage, bool) {
 	if len(body) == 0 || !gjson.ValidBytes(body) {
 		return OpenAIUsage{}, false
 	}
 	if usage, ok := openAIUsageFromGJSON(gjson.GetBytes(body, "usage")); ok {
+		normalizeGrokChatCompletionUsage(account, gjson.GetBytes(body, "usage"), &usage)
 		mergeHostedImageGenToolUsage(gjson.GetBytes(body, "tool_usage.image_gen"), &usage)
 		return usage, true
 	}
 	if usage, ok := openAIUsageFromGJSON(gjson.GetBytes(body, "response.usage")); ok {
+		normalizeGrokChatCompletionUsage(account, gjson.GetBytes(body, "response.usage"), &usage)
 		mergeHostedImageGenToolUsage(gjson.GetBytes(body, "response.tool_usage.image_gen"), &usage)
 		return usage, true
 	}
@@ -1115,7 +1125,7 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 	// Some OpenAI-compatible upstreams (including other sub2api instances)
 	// may return SSE even when stream=false was requested.
 	if isEventStreamResponse(resp.Header) {
-		return s.handleSSEToJSON(resp, c, body, originalModel, mappedModel)
+		return s.handleSSEToJSON(resp, c, body, originalModel, mappedModel, account)
 	}
 	// bodyLooksLikeSSE is a line-level heuristic: real SSE framing requires
 	// "data:"/"event:" field names at the very start of a physical line. A
@@ -1131,7 +1141,7 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 	// positives on JSON responses that coincidentally contain "data:" or
 	// "event:" in their text content.
 	if account.Type == AccountTypeOAuth && bodyLooksLikeSSE {
-		return s.handleSSEToJSON(resp, c, body, originalModel, mappedModel)
+		return s.handleSSEToJSON(resp, c, body, originalModel, mappedModel, account)
 	}
 	if account != nil && account.IsGrok() && isOpenAIResponsesCompactPath(c) {
 		body, err = convertGrokResponseToOpenAICompact(body)
@@ -1140,10 +1150,10 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 		}
 	}
 
-	usageValue, usageOK := extractOpenAIUsageFromJSONBytes(body)
+	usageValue, usageOK := extractOpenAIUsageFromJSONBytesForAccount(body, account)
 	if !usageOK {
 		if bodyLooksLikeSSE {
-			return s.handleSSEToJSON(resp, c, body, originalModel, mappedModel)
+			return s.handleSSEToJSON(resp, c, body, originalModel, mappedModel, account)
 		}
 		return nil, fmt.Errorf("parse response: invalid json response")
 	}
@@ -1204,13 +1214,13 @@ func bodyHasSSEFraming(body []byte) bool {
 	return false
 }
 
-func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Context, body []byte, originalModel, mappedModel string) (*openaiNonStreamingResult, error) {
+func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Context, body []byte, originalModel, mappedModel string, account *Account) (*openaiNonStreamingResult, error) {
 	bodyText := string(body)
 	finalResponse, ok := extractCodexFinalResponse(bodyText)
 
 	usage := &OpenAIUsage{}
 	if ok {
-		if parsedUsage, parsed := extractOpenAIUsageFromJSONBytes(finalResponse); parsed {
+		if parsedUsage, parsed := extractOpenAIUsageFromJSONBytesForAccount(finalResponse, account); parsed {
 			*usage = parsedUsage
 		}
 		// When the terminal event has an empty output array, reconstruct
@@ -1248,7 +1258,7 @@ func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Conte
 			}
 			return nil, s.writeOpenAINonStreamingProtocolError(resp, c, msg)
 		}
-		usage = s.parseSSEUsageFromBody(bodyText)
+		usage = s.parseSSEUsageFromBodyForAccount(bodyText, account)
 		if originalModel != mappedModel {
 			bodyText = s.replaceModelInSSEBody(bodyText, mappedModel, originalModel)
 		}
@@ -1717,9 +1727,13 @@ func extractImageGenerationOutputFromSSEData(data []byte, seen map[string]struct
 }
 
 func (s *OpenAIGatewayService) parseSSEUsageFromBody(body string) *OpenAIUsage {
+	return s.parseSSEUsageFromBodyForAccount(body, nil)
+}
+
+func (s *OpenAIGatewayService) parseSSEUsageFromBodyForAccount(body string, account *Account) *OpenAIUsage {
 	usage := &OpenAIUsage{}
 	forEachOpenAISSEDataPayload(body, func(data []byte) {
-		s.parseSSEUsageBytes(data, usage)
+		s.parseSSEUsageBytesForAccount(data, usage, account)
 	})
 	return usage
 }
