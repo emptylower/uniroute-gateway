@@ -16,6 +16,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 	"go.uber.org/zap"
 )
 
@@ -256,6 +257,7 @@ type ccStreamScanState struct {
 // 记入 Warn 日志。
 func (s *OpenAIGatewayService) scanCCStream(
 	resp *http.Response,
+	account *Account,
 	logPrefix string,
 	requestID string,
 	startTime time.Time,
@@ -280,6 +282,7 @@ func (s *OpenAIGatewayService) scanCCStream(
 		}
 
 		if u := extractCCStreamUsage(payload); u != nil {
+			normalizeGrokChatCompletionUsage(account, gjson.Get(payload, "usage"), u)
 			st.Usage = *u
 		}
 
@@ -323,6 +326,7 @@ func (s *OpenAIGatewayService) readCCUpstreamJSONResponse(
 	c *gin.Context,
 	resp *http.Response,
 	writeError compatErrorWriter,
+	account *Account,
 ) (*apicompat.ChatCompletionsResponse, OpenAIUsage, error) {
 	respBody, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
 	if err != nil {
@@ -339,7 +343,7 @@ func (s *OpenAIGatewayService) readCCUpstreamJSONResponse(
 	}
 
 	usage := OpenAIUsage{}
-	if parsed, ok := extractOpenAIUsageFromJSONBytes(respBody); ok {
+	if parsed, ok := extractOpenAIUsageFromJSONBytesForAccount(respBody, account); ok {
 		usage = parsed
 	}
 	return &ccResp, usage, nil
