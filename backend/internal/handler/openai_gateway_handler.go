@@ -610,6 +610,9 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 				if selection.ReleaseFunc != nil {
 					selection.ReleaseFunc()
 				}
+				if writeWalletRiskResponse(c, authErr) {
+					return
+				}
 				h.handleStreamingAwareError(c, service.AuthorizationRefusedHTTPStatus, service.AuthorizationRefusedErrorType, service.AuthorizationRefusedMessage, false)
 				return
 			}
@@ -1218,6 +1221,9 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 			if accountReleaseFunc != nil {
 				accountReleaseFunc()
 			}
+			if writeWalletRiskResponse(c, authErr) {
+				return
+			}
 			h.anthropicStreamingAwareError(c, service.AuthorizationRefusedHTTPStatus, service.AuthorizationRefusedErrorType, service.AuthorizationRefusedMessage, false)
 			return
 		}
@@ -1675,6 +1681,9 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		_ = wsConn.CloseNow()
 	}()
 	wsConn.SetReadLimit(service.ResolveOpenAIWSClientReadLimitBytes(h.cfg))
+	ctx, closeClientReader := service.WithOpenAIWSClientReadSession(ctx, wsConn)
+	defer closeClientReader()
+	c.Request = c.Request.WithContext(ctx)
 
 	firstMessageTimeout := service.ResolveOpenAIWSClientFirstMessageTimeout(h.cfg)
 	msgType, firstMessage, err := service.ReadOpenAIWSClientMessage(
@@ -2030,6 +2039,13 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 					turnChannelMapping.Store(&openAIWSTurnChannelMappingSnapshot{turn: turn, mapping: snapshot.mapping, billingSnapshot: snapshot.billingSnapshot, authHandle: handle})
 				}
 				if err != nil {
+					if status, retry, ok := service.WalletRiskRefusalDetails(err); ok {
+						event, _ := json.Marshal(gin.H{"type": "error", "error": gin.H{"type": "wallet_risk_refused", "status": status, "retry_after": retry, "message": err.Error()}})
+						writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+						_ = wsConn.Write(writeCtx, coderws.MessageText, event)
+						cancel()
+						return handle, service.NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater, fmt.Sprintf("wallet risk refused: status=%d Retry-After=%d", status, retry), err)
+					}
 					refused, _ := service.AsAuthorizationRefused(err)
 					reason := service.AuthorizationRefusedWSCloseReason
 					if refused != nil {
@@ -2430,6 +2446,12 @@ func (h *OpenAIGatewayHandler) submitUsageRecordTask(parent context.Context, tas
 	if task == nil {
 		return
 	}
+	var stageErr error
+	task, stageErr = handle.PrepareUsageTask(parent, task)
+	if stageErr != nil {
+		handle.MarkAbandoned("durable_usage_stage_failed")
+		return
+	}
 	task = wrapUsageRecordTaskContext(parent, task)
 	if h.usageRecordWorkerPool != nil {
 		if mode := h.usageRecordWorkerPool.Submit(task); mode == service.UsageRecordSubmitModeDropped {
@@ -2464,6 +2486,12 @@ func (h *OpenAIGatewayHandler) submitOpenAIUsageRecordTask(parent context.Contex
 
 func (h *OpenAIGatewayHandler) submitMandatoryUsageRecordTask(parent context.Context, task service.UsageRecordTask, handle *service.AuthorizationHandle) {
 	if task == nil {
+		return
+	}
+	var stageErr error
+	task, stageErr = handle.PrepareUsageTask(parent, task)
+	if stageErr != nil {
+		handle.MarkAbandoned("durable_usage_stage_failed")
 		return
 	}
 	task = wrapUsageRecordTaskContext(parent, task)
@@ -2903,8 +2931,7 @@ func closeOpenAIClientWS(conn *coderws.Conn, status coderws.StatusCode, reason s
 	if len(reason) > 120 {
 		reason = reason[:120]
 	}
-	_ = conn.Close(status, reason)
-	_ = conn.CloseNow()
+	service.CloseOpenAIWSClientConnection(conn, status, reason)
 }
 
 func closeOpenAIWSFailoverExhausted(conn *coderws.Conn, failoverErr *service.UpstreamFailoverError) {

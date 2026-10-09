@@ -15,10 +15,29 @@ import (
 
 var protectMediaHoldScript = redis.NewScript(`
  local restored=0
+ local revision=tonumber(ARGV[10]);local returned=tonumber(ARGV[11]);local funded=tonumber(ARGV[12])
+ local previous=tonumber(redis.call('HGET',KEYS[4],'return_revision') or redis.call('HGET',KEYS[1],'return_revision') or '0')
+ local previous_returned=tonumber(redis.call('HGET',KEYS[4],'returned_units') or redis.call('HGET',KEYS[1],'returned_units') or '0')
+ if revision<previous or returned<previous_returned or funded-returned~=tonumber(ARGV[3])
+  or ((redis.call('HGET',KEYS[4],'funding_frozen')=='1' or redis.call('HGET',KEYS[1],'funding_frozen')=='1') and ARGV[13]~='1')
+ then return redis.error_reply('stale media funding basis') end
+
  if redis.call('EXISTS',KEYS[1])==0 then
-  redis.call('HSET',KEYS[1],'lease_id',ARGV[1],'platform_user_id',ARGV[2],'currency','USD','budget_units',ARGV[3],'consumed_units',ARGV[4],'released_units',ARGV[5],'expires_at_ms',ARGV[6],'sealed','1','media_recovered','1');restored=1
+  redis.call('HSET',KEYS[1],'lease_id',ARGV[1],'platform_user_id',ARGV[2],'currency','USD','budget_units',ARGV[3],'consumed_units',ARGV[4],'released_units',ARGV[5],'expires_at_ms',ARGV[6],'sealed','1','media_recovered','1','return_revision',revision,'returned_units',returned,'funded_units',funded,'funding_frozen',ARGV[13],'funding_scope',ARGV[14],'funding_owner_id',ARGV[15],'funding_issuance_key',ARGV[16],'budget_revision',ARGV[17]);restored=1
+ end
+ if ARGV[13]=='1' then
+  if revision>previous then redis.call('HDEL',KEYS[4],'receipt_signature') end
+  redis.call('HSET',KEYS[4],'funding_frozen','1','return_revision',revision,'returned_units',returned,'funded_units',funded);redis.call('PERSIST',KEYS[4])
  end
  if redis.call('HGET',KEYS[1],'platform_user_id')~=ARGV[2] then return redis.error_reply('media lease owner mismatch') end
+ local old_scope=redis.call('HGET',KEYS[1],'funding_scope')
+ if old_scope and old_scope~='' and (old_scope~=ARGV[14] or (redis.call('HGET',KEYS[1],'funding_owner_id') or '')~=ARGV[15]
+  or (redis.call('HGET',KEYS[1],'funding_issuance_key') or '')~=ARGV[16]) then return redis.error_reply('media funding identity conflict') end
+ if ARGV[13]=='1' then
+  local net=math.max(tonumber(redis.call('HGET',KEYS[1],'consumed_units') or '0'),tonumber(ARGV[4]))-tonumber(redis.call('HGET',KEYS[1],'released_units') or '0')
+  if net>tonumber(ARGV[3]) then return redis.error_reply('media frozen backing conflict') end
+  redis.call('HSET',KEYS[1],'budget_units',ARGV[3],'return_revision',revision,'returned_units',returned,'funded_units',funded,'funding_frozen','1','budget_revision',ARGV[17])
+ end
  if redis.call('EXISTS',KEYS[2])==0 then
   redis.call('HSET',KEYS[2],'lease_id',ARGV[1],'held_units',ARGV[7],'armed_at_ms',ARGV[8],'class','indeterminate','state','armed','event_id','')
   if restored==0 then redis.call('HSET',KEYS[1],'sealed','1','media_recovered','1');local current=tonumber(redis.call('HGET',KEYS[1],'consumed_units') or '0');redis.call('HSET',KEYS[1],'consumed_units',math.max(current,tonumber(ARGV[4]))) end
@@ -36,10 +55,10 @@ func (c *canonicalWalletRedisStore) ProtectMediaHold(ctx context.Context, lease 
 	if lease.LeaseID == "" || hold.AuthorizationID == "" || hold.HeldUnits <= 0 {
 		return errors.New("invalid media protection")
 	}
-	if err := ensureRedisLuaSafeInt64(lease.BudgetUnits, lease.ConsumedUnits, lease.ReleasedUnits, hold.HeldUnits); err != nil {
+	if err := ensureRedisLuaSafeInt64(lease.BudgetUnits, lease.ConsumedUnits, lease.ReleasedUnits, hold.HeldUnits, lease.FundingPrincipalUnits(), lease.ReturnedUnits, lease.ReturnRevision, lease.BudgetRevision); err != nil {
 		return err
 	}
-	_, err := protectMediaHoldScript.Run(ctx, c.rdb, []string{canonicalWalletLeaseKey(lease.PlatformUserID, lease.LeaseID), canonicalWalletHoldKey(lease.PlatformUserID, hold.AuthorizationID), canonicalWalletHoldSetKey(lease.PlatformUserID)}, lease.LeaseID, lease.PlatformUserID, lease.BudgetUnits, lease.ConsumedUnits, lease.ReleasedUnits, lease.ExpiresAt.UnixMilli(), hold.HeldUnits, hold.ArmedAt.UnixMilli(), hold.AuthorizationID).Result()
+	_, err := protectMediaHoldScript.Run(ctx, c.rdb, []string{canonicalWalletLeaseKey(lease.PlatformUserID, lease.LeaseID), canonicalWalletHoldKey(lease.PlatformUserID, hold.AuthorizationID), canonicalWalletHoldSetKey(lease.PlatformUserID), canonicalWalletFundingTombstoneKey(lease.PlatformUserID, lease.LeaseID)}, lease.LeaseID, lease.PlatformUserID, lease.BudgetUnits, lease.ConsumedUnits, lease.ReleasedUnits, lease.ExpiresAt.UnixMilli(), hold.HeldUnits, hold.ArmedAt.UnixMilli(), hold.AuthorizationID, lease.ReturnRevision, lease.ReturnedUnits, lease.FundingPrincipalUnits(), boolWalletFlag(lease.FundingFrozen), lease.FundingScope, lease.FundingOwnerID, lease.FundingIssuanceKey, lease.BudgetRevision).Result()
 	if err == nil {
 		err = c.rdb.SAdd(ctx, canonicalWalletHoldUsersKey, lease.PlatformUserID).Err()
 	}
@@ -58,7 +77,7 @@ func (c *canonicalWalletRedisStore) UnprotectMediaLease(ctx context.Context, use
 }
 
 var readMediaWalletStateScript = redis.NewScript(`
- local count=tonumber(ARGV[2]);local out={}; for i=1,count do out[#out+1]=redis.call('HMGET',KEYS[i],'lease_id','budget_units','consumed_units','released_units','expires_at_ms','sealed','media_recovered') end
+ local count=tonumber(ARGV[2]);local out={}; for i=1,count do out[#out+1]=redis.call('HMGET',KEYS[i],'lease_id','budget_units','consumed_units','released_units','expires_at_ms','sealed','media_recovered','funded_units','returned_units','return_revision','budget_revision','funding_frozen') end
  local ids=redis.call('SMEMBERS',KEYS[count+1]);if #ids>1000 then return redis.error_reply('too many holds') end;table.sort(ids)
  local holds={};for _,id in ipairs(ids) do local h=redis.call('HMGET',ARGV[1]..id,'lease_id','held_units','armed_at_ms','class','state','event_id');h[#h+1]=id;holds[#holds+1]=h end
  local reservations={};for i=count+2,#KEYS do reservations[#reservations+1]=redis.call('GET',KEYS[i]) end
@@ -94,7 +113,7 @@ func (c *canonicalWalletRedisStore) ReadMediaWalletState(ctx context.Context, us
 	}
 	for i, item := range leases {
 		values, ok := item.([]any)
-		if !ok || len(values) != 7 {
+		if !ok || len(values) != 12 {
 			return out, errors.New("invalid wallet lease")
 		}
 		r := service.MediaWalletRawLease{LeaseID: ids[i], Present: values[0] != nil}
@@ -118,6 +137,23 @@ func (c *canonicalWalletRedisStore) ReadMediaWalletState(ctx context.Context, us
 			}
 			r.Sealed = fmt.Sprint(values[5]) == "1"
 			r.Recovered = fmt.Sprint(values[6]) == "1"
+			r.FundedUnits, e = number(values[7])
+			if e != nil {
+				return out, e
+			}
+			r.ReturnedUnits, e = number(values[8])
+			if e != nil {
+				return out, e
+			}
+			r.ReturnRevision, e = number(values[9])
+			if e != nil {
+				return out, e
+			}
+			r.BudgetRevision, e = number(values[10])
+			if e != nil {
+				return out, e
+			}
+			r.FundingFrozen = fmt.Sprint(values[11]) == "1"
 		}
 		out.Leases = append(out.Leases, r)
 	}

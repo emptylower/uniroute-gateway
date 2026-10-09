@@ -876,7 +876,7 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 			resp = rebuilt
 		}
 
-		if resp.StatusCode >= 400 && s.shouldRetryGeminiUpstreamError(account, resp.StatusCode) {
+		if resp.StatusCode >= 400 && s.shouldRetryGeminiUpstreamError(account, resp.StatusCode) && WalletAttemptMayRetry(ctx) {
 			respBody := s.readUpstreamErrorBody(resp)
 			_ = resp.Body.Close()
 			// Don't treat insufficient-scope as transient.
@@ -1358,7 +1358,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 			resp = rebuilt
 		}
 
-		if resp.StatusCode >= 400 && s.shouldRetryGeminiUpstreamError(account, resp.StatusCode) {
+		if resp.StatusCode >= 400 && s.shouldRetryGeminiUpstreamError(account, resp.StatusCode) && WalletAttemptMayRetry(ctx) {
 			respBody := s.readUpstreamErrorBody(resp)
 			_ = resp.Body.Close()
 			// Don't treat insufficient-scope as transient.

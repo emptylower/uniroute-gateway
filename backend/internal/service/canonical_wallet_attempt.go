@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -49,6 +50,7 @@ func (b *CanonicalWalletBridge) protectPoolAttempt(ctx context.Context, parent, 
 	return svc.protectSingle(ctx, record)
 }
 func (b *CanonicalWalletBridge) preparePoolAttempt(ctx context.Context, h *AuthorizationHandle, user string) error {
+	b.installImmediateEvidence(h, user)
 	for i := range h.Segments {
 		segment := &h.Segments[i]
 		basis, err := b.store.GetCanonicalWalletLeaseByID(ctx, user, segment.LeaseID)
@@ -86,6 +88,9 @@ func (b *CanonicalWalletBridge) preparePoolAttempt(ctx context.Context, h *Autho
 		return err
 	}
 	h.beforeWrite = func(ctx context.Context, token string) error {
+		if err := b.startWalletReaderJournal(ctx, h, token); err != nil {
+			return err
+		}
 		tx, err := b.outboxDB.BeginTx(ctx, nil)
 		if err != nil {
 			return err
@@ -94,7 +99,23 @@ func (b *CanonicalWalletBridge) preparePoolAttempt(ctx context.Context, h *Autho
 		if count, e := lockWalletAttempt(ctx, tx, h.ID); e != nil || count != len(h.Segments) {
 			return fmt.Errorf("wallet attempt group unavailable: %v", e)
 		}
-		result, err := tx.ExecContext(ctx, `UPDATE wallet_authorization_segment SET state='indeterminate',authorization_token=$2,updated_at=now(),first_write_at=CASE WHEN kind='llm' THEN now() ELSE first_write_at END,write_active_until=CASE WHEN kind='llm' THEN now()+interval '90 seconds' ELSE NULL END,expiry_deadline=CASE WHEN kind='llm' THEN date_trunc('milliseconds',(lease_basis->>'expires_at')::timestamptz)+($3 * interval '1 second') ELSE NULL END WHERE parent_authorization_id=$1 AND state='held' AND authorization_token IS NULL`, h.ID, token, int64(b.poolExpiryGrace()/time.Second))
+		owner, host := "", ""
+		var normalization any
+		h.mu.Lock()
+		if h.readerNormalization != nil {
+			raw, marshalErr := json.Marshal(h.readerNormalization)
+			if marshalErr != nil {
+				h.mu.Unlock()
+				return marshalErr
+			}
+			normalization = string(raw)
+		}
+		h.mu.Unlock()
+		if h.readerJournal != nil {
+			owner = h.readerJournal.record.OwnerID
+			host = h.readerJournal.record.Host
+		}
+		result, err := tx.ExecContext(ctx, `UPDATE wallet_authorization_segment SET state='indeterminate',authorization_token=$2,updated_at=now(),reader_owner_id=NULLIF($4,''),reader_journal_host=NULLIF($5,''),reader_fee_normalization=$6::jsonb,first_write_at=CASE WHEN kind='llm' THEN now() ELSE first_write_at END,write_active_until=CASE WHEN kind='llm' THEN now()+interval '90 seconds' ELSE NULL END,expiry_deadline=CASE WHEN kind='llm' THEN date_trunc('milliseconds',(lease_basis->>'expires_at')::timestamptz)+($3 * interval '1 second') ELSE NULL END WHERE parent_authorization_id=$1 AND state='held' AND authorization_token IS NULL`, h.ID, token, int64(b.poolExpiryGrace()/time.Second), owner, host, normalization)
 		if err != nil {
 			return err
 		}
@@ -107,6 +128,11 @@ func (b *CanonicalWalletBridge) preparePoolAttempt(ctx context.Context, h *Autho
 		}
 		if err = tx.Commit(); err != nil {
 			return err
+		}
+		if b.ImmediateWalletReleaseMode("llm") != "off" && h.AttemptKind == "llm" {
+			if _, err = b.outboxDB.ExecContext(ctx, `UPDATE wallet_authorization_segment SET evidence_pending=true WHERE parent_authorization_id=$1 AND authorization_token=$2`, h.ID, token); err != nil {
+				return err
+			}
 		}
 		b.startPoolWriteOwner(ctx, h, token)
 		return nil
@@ -128,8 +154,20 @@ func (b *CanonicalWalletBridge) preparePoolAttempt(ctx context.Context, h *Autho
 			!errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) &&
 			((errors.As(err, &dial) && dial.Op == "dial" && !dial.Timeout()) || (errors.As(err, &dns) && !dns.Timeout())))
 		if reliableZero {
+			if b.ImmediateWalletReleaseMode("llm") != "off" && h.AttemptKind == "llm" {
+				if e := b.sealPoolEvidence(ctx, h, "proven_not_written"); e != nil {
+					return
+				}
+				if _, e := b.outboxDB.ExecContext(ctx, `UPDATE wallet_authorization_segment SET known_fee_units=0 WHERE parent_authorization_id=$1 AND authorization_token=$2 AND NOT fee_pending`, h.ID, token); e != nil {
+					return
+				}
+			}
 			if e := b.releasePoolAttempt(ctx, h.ID, user, h.Segments, token); e != nil {
 				slog.Warn("wallet pre-write zero release deferred", "authorization_id", h.ID, "error", e)
+			} else if b.ImmediateWalletReleaseMode("llm") != "off" {
+				h.mu.Lock()
+				h.zeroAcknowledged = true
+				h.mu.Unlock()
 			}
 			return
 		}
@@ -154,6 +192,8 @@ func (b *CanonicalWalletBridge) recoverPoolAttempts(ctx context.Context) {
 	if b == nil || b.outboxDB == nil || !b.HoldsEnabled() {
 		return
 	}
+	b.recoverBillingEvidence(ctx)
+	_, _ = b.ObserveImmediateWalletRecovery(ctx)
 	rows, err := b.outboxDB.QueryContext(ctx, `SELECT parent_authorization_id,platform_user_id,billing_snapshot_id FROM wallet_authorization_segment WHERE kind<>'media' AND state<>'finished' AND (state<>'expired_unknown' OR expiry_cleanup_at IS NULL) GROUP BY parent_authorization_id,platform_user_id,billing_snapshot_id ORDER BY min(updated_at) LIMIT 32`)
 	if err != nil {
 		return
@@ -226,6 +266,26 @@ func (b *CanonicalWalletBridge) recoverPoolAttempts(ctx context.Context) {
 				}
 			}
 			if segment.State == "released" {
+				// The signed zero finalizer is for an attempt whose every share is
+				// zero. A zero share beside a charged sibling moves no money: only
+				// its capacity hold and its D1 pin end, as for any released share.
+				groupCharged := false
+				for _, sibling := range segments {
+					if sibling.ActualUnits > 0 || (sibling.Payload != nil && sibling.Payload.AmountUnits > 0) || sibling.Remainder != nil {
+						groupCharged = true
+						break
+					}
+				}
+				if segment.Kind == "llm" && !groupCharged {
+					owned, ownershipErr := b.hasDurableLLMFinancialOwnership(ctx, g.parent)
+					if ownershipErr != nil {
+						break
+					}
+					if owned {
+						_ = b.finishZeroPoolAttempt(ctx, g.parent, g.user, segments, "")
+						break
+					}
+				}
 				if _, e = b.store.ReleaseCanonicalWalletHold(ctx, g.user, segment.AuthorizationID, "released", "zero_cost"); e != nil && !isHoldNotArmed(e) && !errors.Is(e, ErrCanonicalWalletHoldMissing) {
 					continue
 				}
@@ -280,7 +340,15 @@ func (b *CanonicalWalletBridge) finishPoolSegment(ctx context.Context, user stri
 	}
 	n, _ := result.RowsAffected()
 	if n == 0 {
-		return nil
+		// PG finished may have committed before an interrupted Redis cleanup.
+		// Resume only that exact original identity, never an unrelated row.
+		var finished bool
+		if err = b.outboxDB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM wallet_authorization_segment WHERE authorization_id=$1 AND platform_user_id=$2 AND lease_id=$3 AND state='finished' AND pin_state='finished')`, segment.AuthorizationID, user, segment.LeaseID).Scan(&finished); err != nil {
+			return err
+		}
+		if !finished {
+			return nil
+		}
 	}
 	store, ok := b.store.(MediaWalletStateStore)
 	if !ok {
@@ -291,9 +359,27 @@ func (b *CanonicalWalletBridge) finishPoolSegment(ctx context.Context, user stri
 	if err != nil {
 		return err
 	}
-	return store.UnprotectMediaLease(ctx, user, segment.LeaseID, segment.AuthorizationID, segment.EventID, pending)
+	err = store.UnprotectMediaLease(ctx, user, segment.LeaseID, segment.AuthorizationID, segment.EventID, pending)
+	if err == nil {
+		_, err = b.outboxDB.ExecContext(ctx, `UPDATE wallet_authorization_segment SET funding_terminal_cleanup_at=COALESCE(funding_terminal_cleanup_at,now()) WHERE authorization_id=$1 AND platform_user_id=$2 AND lease_id=$3 AND state='finished' AND pin_state='finished'`, segment.AuthorizationID, user, segment.LeaseID)
+		b.wakeFundingTerminalRecovery()
+	}
+	return err
 }
 func (b *CanonicalWalletBridge) releasePoolAttempt(ctx context.Context, parent, user string, segments []AuthorizationSegment, writeToken ...string) error {
+	if len(segments) > 0 && segments[0].Kind == "llm" {
+		owned, err := b.hasDurableLLMFinancialOwnership(ctx, parent)
+		if err != nil {
+			return err
+		}
+		if owned || b.ImmediateWalletReleaseMode("llm") == "enabled" {
+			token := ""
+			if len(writeToken) > 0 {
+				token = writeToken[0]
+			}
+			return b.finishZeroPoolAttempt(ctx, parent, user, segments, token)
+		}
+	}
 	tx, err := b.outboxDB.BeginTx(ctx, nil)
 	if err != nil {
 		return err

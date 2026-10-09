@@ -75,30 +75,40 @@ func mediaTaskView(r *mediaTaskRecord) MediaTaskView {
 	case "failed":
 		v.Status = "failed"
 		v.Billing.State = "released"
+		v.Billing.HeldUSD = "0"
 		released := mediaUSD(r.HeldUnits)
 		v.Billing.ReleasedUSD = &released
 	case "indeterminate":
 		v.Status = "indeterminate"
 		v.Billing.State = "indeterminate"
 	}
+	if r.FinancialState == "released_unknown" || r.FinancialState == "released_zero" {
+		v.Billing.State = "released"
+		v.Billing.HeldUSD = "0"
+		released := mediaUSD(r.HeldUnits)
+		v.Billing.ReleasedUSD = &released
+	}
+
 	return v
 }
 
 type MediaTaskService struct {
-	cfg        *config.Config
-	db         *sql.DB
-	store      *mediaTaskStore
-	bridge     *CanonicalWalletBridge
-	snapshots  *BillingSnapshotService
-	authorizer *CanonicalWalletAuthorizer
-	keys       *PlatformAPIKeyService
-	apiKeys    *APIKeyService
-	users      UserRepository
-	provider   mediaProvider
-	accountID  int64
-	stop       chan struct{}
-	stopOnce   sync.Once
-	loops      sync.WaitGroup
+	cfg          *config.Config
+	db           *sql.DB
+	store        *mediaTaskStore
+	bridge       *CanonicalWalletBridge
+	snapshots    *BillingSnapshotService
+	authorizer   *CanonicalWalletAuthorizer
+	keys         *PlatformAPIKeyService
+	apiKeys      *APIKeyService
+	users        UserRepository
+	provider     mediaProvider
+	accountID    int64
+	stop         chan struct{}
+	stopOnce     sync.Once
+	loops        sync.WaitGroup
+	journalMu    sync.Mutex
+	journalOwner *walletReaderJournalOwner
 }
 
 func NewMediaTaskService(cfg *config.Config, db *sql.DB, bridge *CanonicalWalletBridge, snapshots *BillingSnapshotService, keys *PlatformAPIKeyService, apiKeys *APIKeyService, users UserRepository, upstream HTTPUpstream) (*MediaTaskService, error) {
@@ -129,6 +139,7 @@ func (s *MediaTaskService) Stop() {
 	}
 	s.stopOnce.Do(func() { close(s.stop) })
 	s.loops.Wait()
+	s.closeMediaJournalOwner()
 }
 func (s *MediaTaskService) Enabled() bool {
 	return s != nil && s.cfg != nil && s.cfg.MediaTasks.Enabled && s.provider != nil && s.bridge != nil && s.bridge.HoldsEnabled() && s.cfg.CanonicalWallet.Mode == config.CanonicalWalletModeEnforce && s.cfg.CanonicalWallet.USDWalletEnabled && s.cfg.CanonicalWallet.USDPolicyVersion == config.CanonicalUSDWalletPolicyVersion
@@ -224,7 +235,7 @@ func (s *MediaTaskService) Create(ctx context.Context, userID int64, idempotency
 	snap := &BillingSnapshot{ID: snapshotID, Version: BillingSnapshotVersion, FrozenAt: time.Now().UTC(), Family: BillingFamily("media"), UserID: user.ID, APIKeyID: key.ID, AccountID: s.accountID, RequestedModel: in.Model, BillingModel: in.Model, Pricing: BillingSnapshotPricing{Mode: BillingModePerRequest, Source: mediaPricingVersion, DefaultPerRequestPrice: float64(units) / float64(mediaUnitsPerUSD)}, Multipliers: BillingSnapshotMultipliers{Base: 1, Text: 1, Image: 1, Video: 1, WebSearch: 1, Account: 1}, FX: fx, Flags: BillingSnapshotFlags{USDWalletPolicyVersion: config.CanonicalUSDWalletPolicyVersion, BillingCurrency: CurrencyUSD, MultiplierCurrency: CurrencyUSD}}
 	normalized, _ := json.Marshal(in)
 	requestHash := sha256.Sum256(normalized)
-	r, err := s.store.create(ctx, &mediaTaskRecord{ID: jobID, UserID: userID, PlatformUserID: user.PlatformUserID, APIKeyID: key.ID, IdempotencyKey: idempotency, RequestHash: hex.EncodeToString(requestHash[:]), Model: in.Model, MediaType: in.MediaType, Option: in.Option, Prompt: in.Prompt, RequestPayload: input, SnapshotID: snapshotID, QuotedUnits: units, AuthorizationID: authID, EventID: CanonicalWalletSettlementEventID(jobID, user.PlatformUserID, CurrencyUSD), DeadlineAt: time.Now().UTC().Add(time.Duration(s.cfg.MediaTasks.DeadlineSeconds) * time.Second)}, snap)
+	r, err := s.store.create(ctx, &mediaTaskRecord{ID: jobID, UserID: userID, PlatformUserID: user.PlatformUserID, APIKeyID: key.ID, IdempotencyKey: idempotency, RequestHash: hex.EncodeToString(requestHash[:]), Model: in.Model, MediaType: in.MediaType, Option: in.Option, Prompt: in.Prompt, RequestPayload: input, SnapshotID: snapshotID, QuotedUnits: units, AuthorizationID: authID, EventID: CanonicalWalletSettlementEventID(jobID, user.PlatformUserID, CurrencyUSD), DeadlineAt: time.Now().UTC().Add(time.Duration(s.cfg.MediaTasks.DeadlineSeconds) * time.Second)}, snap, s.bridge)
 	if err != nil {
 		return MediaTaskView{}, err
 	}

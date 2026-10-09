@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"log/slog"
 	"strings"
 	"time"
@@ -82,16 +84,23 @@ type usageLogBestEffortWriter interface {
 
 // postUsageBillingParams 统一扣费所需的参数
 type postUsageBillingParams struct {
-	Cost                  *CostBreakdown
-	User                  *User
-	APIKey                *APIKey
-	Account               *Account
-	Subscription          *UserSubscription
-	RequestPayloadHash    string
-	IsSubscriptionBill    bool
-	AccountRateMultiplier float64
-	APIKeyService         APIKeyQuotaUpdater
-	Platform              string // 来自 APIKey 关联 Group 的平台标识
+	WalletBridge                *CanonicalWalletBridge
+	AuthorizationID             string
+	AuthorizationToken          string
+	BillingSnapshotID           string
+	WalletEvidenceSource        string
+	WalletEvidencePolicyVersion string
+	WalletEvidenceKind          string
+	Cost                        *CostBreakdown
+	User                        *User
+	APIKey                      *APIKey
+	Account                     *Account
+	Subscription                *UserSubscription
+	RequestPayloadHash          string
+	IsSubscriptionBill          bool
+	AccountRateMultiplier       float64
+	APIKeyService               APIKeyQuotaUpdater
+	Platform                    string // 来自 APIKey 关联 Group 的平台标识
 }
 
 // PlatformFromAPIKey 从 APIKey 关联的 Group 推导 platform 名称。
@@ -358,10 +367,145 @@ func applyUsageBillingDetailed(ctx context.Context, requestID string, usageLog *
 		return false, nil, nil
 	}
 
+	stage, _ := ctx.Value(walletUsageStageKey{}).(*walletUsageStage)
+	bridge := p.WalletBridge
+	if stage != nil {
+		bridge = stage.bridge
+	}
+	eligible := bridge != nil && bridge.outboxDB != nil && p.AuthorizationID != "" && p.AuthorizationToken != "" && p.WalletEvidenceKind != "live"
+	durable := eligible && (stage != nil || bridge.ImmediateWalletReleaseMode("llm") != "off" || p.WalletEvidencePolicyVersion == WalletImmediateReleasePolicyVersion)
+	if eligible && !durable {
+		if err := bridge.outboxDB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM wallet_authorization_segment a WHERE a.parent_authorization_id=$1 AND a.authorization_token=$2 AND a.kind='llm' AND (a.reader_owner_id IS NOT NULL OR a.zero_intent_at IS NOT NULL OR a.expiry_intent_version=2 OR EXISTS(SELECT 1 FROM wallet_risk_admission r WHERE r.parent_authorization_id=a.parent_authorization_id AND r.kind='llm' AND r.policy_version='wallet-immediate-v5') OR EXISTS(SELECT 1 FROM wallet_billing_pending bp WHERE bp.parent_authorization_id=a.parent_authorization_id AND bp.authorization_token=a.authorization_token)))`, p.AuthorizationID, p.AuthorizationToken).Scan(&durable); err != nil {
+			return false, nil, err
+		}
+	}
 	cmd := buildUsageBillingCommand(requestID, usageLog, p)
 	if cmd == nil || cmd.RequestID == "" || repo == nil {
+		if durable {
+			err := errors.New("wallet durable billing repository or command unavailable")
+			if stage != nil {
+				stage.err = err
+			}
+			return false, nil, err
+		}
 		postUsageBilling(ctx, p, deps)
 		return true, nil, nil
+	}
+	if durable {
+		bridge.SetBillingEvidenceRepository(repo)
+		if invalidator, ok := p.APIKeyService.(apiKeyAuthCacheInvalidator); ok {
+			bridge.billingEvidenceMu.Lock()
+			bridge.billingEvidenceInvalidator = invalidator
+			bridge.billingEvidenceMu.Unlock()
+		}
+		units, unitsErr := canonicalWalletUnitsFromUSD(p.Cost.ActualCost)
+		if unitsErr != nil {
+			if stage != nil {
+				stage.err = unitsErr
+			}
+			return false, nil, unitsErr
+		}
+		var evidenceRaw []byte
+		readErr := bridge.outboxDB.QueryRowContext(ctx, `SELECT reader_evidence FROM wallet_authorization_segment WHERE parent_authorization_id=$1 AND authorization_token=$2 AND ordinal=0`, p.AuthorizationID, p.AuthorizationToken).Scan(&evidenceRaw)
+		var evidence WalletReaderEvidence
+		trustedUsage := readErr == nil && json.Unmarshal(evidenceRaw, &evidence) == nil && walletReaderEvidenceTrusted(evidence)
+		// A mutable/free current price cannot conceal changed positive usage
+		// after the original signed zero. This candidate is platform evidence,
+		// and is never adopted as a trusted fee or sent to Apply.
+		positiveCandidate := units > 0 || p.Cost.TotalCost > 0 || cmd.InputTokens > 0 || cmd.OutputTokens > 0 || cmd.CacheCreationTokens > 0 || cmd.CacheReadTokens > 0 || cmd.ImageCount > 0
+		if usageLog != nil {
+			positiveCandidate = positiveCandidate || usageLog.ImageInputTokens > 0 || usageLog.ImageOutputTokens > 0 || usageLog.VideoCount > 0
+		}
+		if positiveCandidate && units == 0 {
+			quarantined, lateErr := bridge.quarantineLateWalletUsage(ctx, p.AuthorizationID, p.AuthorizationToken, p.BillingSnapshotID, p.User.PlatformUserID, cmd, evidence)
+			if lateErr != nil || quarantined {
+				if lateErr == nil {
+					lateErr = ErrWalletPositiveAfterZero
+				}
+				if stage != nil {
+					stage.seen, stage.err = true, lateErr
+				}
+				return false, nil, lateErr
+			}
+		}
+		if trustedUsage {
+			readErr = bridge.validateWalletReaderFee(ctx, p.AuthorizationID, p.AuthorizationToken, p.BillingSnapshotID, evidence, units)
+			trustedUsage = readErr == nil
+		}
+		if !trustedUsage && (units > 0 || evidence.ObservedPositive) {
+			quarantined, lateErr := bridge.quarantineLateWalletUsage(ctx, p.AuthorizationID, p.AuthorizationToken, p.BillingSnapshotID, p.User.PlatformUserID, cmd, evidence)
+			if lateErr != nil || quarantined {
+				if lateErr == nil {
+					lateErr = ErrWalletPositiveAfterZero
+				}
+				if stage != nil {
+					stage.seen, stage.err = true, lateErr
+				}
+				return false, nil, lateErr
+			}
+			// A permissive provider parser's computed number is not durable
+			// billable evidence. Preserve an unresolved barrier before returning
+			// instead of charging coerced strings/fractions or releasing unknown.
+			_, protectErr := bridge.outboxDB.ExecContext(ctx, `UPDATE wallet_authorization_segment SET fee_pending=true,evidence_pending=true WHERE parent_authorization_id=$1 AND authorization_token=$2 AND terminal_sealed_at IS NULL AND zero_intent_at IS NULL`, p.AuthorizationID, p.AuthorizationToken)
+			err := errors.New("wallet positive fee lacks strict selected usage evidence")
+			if readErr != nil {
+				err = readErr
+			}
+			if protectErr != nil {
+				err = protectErr
+			}
+			if stage != nil {
+				stage.seen = true
+				stage.err = err
+			}
+			return false, nil, err
+		}
+		if !trustedUsage && units == 0 {
+			if stage != nil {
+				stage.seen = true
+			}
+			return false, &UsageBillingApplyResult{Staged: true}, nil
+		}
+		source := p.WalletEvidenceSource
+		if source != "llm_ws_usage" {
+			source = "llm_http_usage"
+		}
+		cmd.WalletBinding = &WalletBillingBinding{PendingID: p.AuthorizationID + ":" + p.AuthorizationToken, ParentAuthorizationID: p.AuthorizationID, AuthorizationToken: p.AuthorizationToken, PlatformUserID: p.User.PlatformUserID, BillingSnapshotID: p.BillingSnapshotID, EventID: CanonicalWalletSettlementEventID(p.AuthorizationID, p.User.PlatformUserID, CurrencyUSD), ProviderAccountID: cmd.AccountID, Source: source, PolicyVersion: WalletImmediateReleasePolicyVersion, FeeUnits: units}
+		cmd.RequestID = "wallet:" + p.AuthorizationID
+		cmd.RequestFingerprint = ""
+		cmd.Normalize()
+		cmd.WalletBillingPlatform = p.Platform
+		cmd.WalletSubscriptionBill = p.IsSubscriptionBill
+		if usageLog != nil {
+			copy := *usageLog
+			copy.User = nil
+			copy.APIKey = nil
+			copy.Account = nil
+			copy.Group = nil
+			copy.Subscription = nil
+			cmd.WalletUsageLog = &copy
+		}
+		id, stageErr := bridge.stageWalletBilling(ctx, cmd)
+		if stage != nil {
+			stage.seen = true
+			stage.err = stageErr
+			if id != "" {
+				stage.ids = append(stage.ids, id)
+				if units == 0 {
+					stage.zeroIDs = append(stage.zeroIDs, id)
+				}
+			}
+		}
+		if stageErr != nil {
+			return false, nil, stageErr
+		}
+		if stage != nil {
+			return false, &UsageBillingApplyResult{Staged: true}, nil
+		}
+		if applyErr := bridge.ApplyPendingWalletBilling(ctx, id); applyErr != nil {
+			return false, nil, applyErr
+		}
+		return false, &UsageBillingApplyResult{Staged: true}, nil
 	}
 
 	billingCtx, cancel := detachedBillingContext(ctx)
@@ -854,20 +998,30 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	quotaPlatform := resolveGenericUsageQuotaPlatform(input.QuotaPlatform, apiKey, account)
 	requestID := usageLog.RequestID
 	billingApplied, billingResult, billingErr := applyUsageBillingDetailed(ctx, requestID, usageLog, &postUsageBillingParams{
-		Cost:                  cost,
-		User:                  user,
-		APIKey:                apiKey,
-		Account:               account,
-		Subscription:          subscription,
-		RequestPayloadHash:    resolveUsageBillingPayloadFingerprint(ctx, input.RequestPayloadHash),
-		IsSubscriptionBill:    isSubscriptionBilling,
-		AccountRateMultiplier: accountRateMultiplier,
-		APIKeyService:         input.APIKeyService,
-		Platform:              quotaPlatform,
+		WalletBridge:                s.canonicalWallet,
+		AuthorizationID:             input.AuthorizationID,
+		AuthorizationToken:          input.AuthorizationToken,
+		BillingSnapshotID:           snapshotIDOf(input.BillingSnapshot),
+		WalletEvidencePolicyVersion: walletEvidencePolicyOf(input.BillingSnapshot),
+		WalletEvidenceKind:          walletEvidenceKindOf(input.BillingSnapshot),
+		WalletEvidenceSource:        "llm_http_usage",
+		Cost:                        cost,
+		User:                        user,
+		APIKey:                      apiKey,
+		Account:                     account,
+		Subscription:                subscription,
+		RequestPayloadHash:          resolveUsageBillingPayloadFingerprint(ctx, input.RequestPayloadHash),
+		IsSubscriptionBill:          isSubscriptionBilling,
+		AccountRateMultiplier:       accountRateMultiplier,
+		APIKeyService:               input.APIKeyService,
+		Platform:                    quotaPlatform,
 	}, s.billingDeps(), s.usageBillingRepo)
 
 	if billingErr != nil {
 		return billingErr
+	}
+	if billingResult != nil && billingResult.Staged {
+		return nil
 	}
 	observeCanonicalWalletSettlement(s.canonicalWallet, requestID, user, cost, isSubscriptionBilling, billingApplied, billingResult, input.AuthorizationToken, input.AuthorizationID, snapshotIDOf(input.BillingSnapshot))
 	writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.gateway")

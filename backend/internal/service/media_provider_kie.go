@@ -17,12 +17,13 @@ type MediaURL struct {
 	URL  string `json:"url"`
 }
 type MediaProviderResult struct {
-	Status       string     `json:"status"`
-	URLs         []MediaURL `json:"urls"`
-	Title        string     `json:"title,omitempty"`
-	CoverURL     string     `json:"cover_url,omitempty"`
-	ErrorCode    string     `json:"error_code,omitempty"`
-	ErrorMessage string     `json:"error_message,omitempty"`
+	ProviderTaskID string     `json:"provider_task_id,omitempty"`
+	Status         string     `json:"status"`
+	URLs           []MediaURL `json:"urls"`
+	Title          string     `json:"title,omitempty"`
+	CoverURL       string     `json:"cover_url,omitempty"`
+	ErrorCode      string     `json:"error_code,omitempty"`
+	ErrorMessage   string     `json:"error_message,omitempty"`
 }
 type mediaProvider interface {
 	Create(context.Context, string, map[string]any, *AuthorizationHandle) (string, bool, error)
@@ -116,16 +117,20 @@ func (p *kieMediaProvider) Read(ctx context.Context, taskID, kind string) (Media
 	if err := json.Unmarshal(envelope.Data, &record); err != nil || record.State == "" || record.TaskID != taskID {
 		return MediaProviderResult{}, errors.New("provider query identity or state invalid")
 	}
-	r := MediaProviderResult{Status: "processing", URLs: []MediaURL{}}
+	r := MediaProviderResult{ProviderTaskID: taskID, URLs: []MediaURL{}}
 	switch record.State {
 	case "waiting", "queuing":
 		r.Status = "pending"
+	case "generating":
+		r.Status = "processing"
 	case "success":
 		r.Status = "success"
 	case "fail":
 		r.Status = "failed"
 		r.ErrorCode = strings.Trim(string(record.FailCode), "\"")
 		r.ErrorMessage = record.FailMessage
+	default:
+		return MediaProviderResult{}, errors.New("provider query state is unrecognized")
 	}
 	if r.Status != "success" {
 		return r, nil

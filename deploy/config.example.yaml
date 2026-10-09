@@ -1042,6 +1042,12 @@ canonical_wallet:
   # and late actual-cost settlement continue in every mode.
   pool_expiry_mode: "shadow"
   pool_expiry_grace_seconds: 1800
+  # Independent v5 modes; keep off until their acceptance tests pass.
+  llm_immediate_release_mode: "off"
+  media_immediate_release_mode: "off"
+  # Explicit persistent mount; empty keeps enabled reader admission unavailable.
+  # Environment alias: GATEWAY_WALLET_READER_JOURNAL_DIR
+  reader_journal_directory: ""
   # A Live window closing on accrued usage is evaluated only after this many
   # seconds since it opened; range 5–60 and ≤ lease_ttl_seconds/4 (§13.2.1).
   live_window_min_seconds: 20

@@ -86,7 +86,15 @@ func startCanonicalWalletTestPostgres(t *testing.T, ctx context.Context) *sql.DB
 	// cleanup columns. Apply the actual additive migration to the legacy fixture.
 	p34bApplyMigration(t, ctx, db, "222_wallet_unknown_expiry.sql")
 	createWalletMediaTaskTableForTest(t, ctx, db)
+	applyWalletV5MigrationsForTest(t, ctx, db)
 	return db
+}
+
+// CreateWalletMediaTaskTableForTest is createWalletMediaTaskTableForTest for the
+// external service_test package (the ForTest export convention of this directory).
+func CreateWalletMediaTaskTableForTest(t testing.TB, ctx context.Context, db *sql.DB) {
+	t.Helper()
+	createWalletMediaTaskTableForTest(t, ctx, db)
 }
 
 // createWalletMediaTaskTableForTest mirrors migration 217's gateway_media_task without its

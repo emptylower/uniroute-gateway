@@ -52,6 +52,9 @@ func (h *PlatformInferenceHandler) Create(c *gin.Context) {
 	}
 	task, err := h.service.Create(c.Request.Context(), subject.UserID, c.GetHeader("Idempotency-Key"), in)
 	if err != nil {
+		if writeWalletRiskResponse(c, err) {
+			return
+		}
 		response.ErrorFrom(c, err)
 		return
 	}

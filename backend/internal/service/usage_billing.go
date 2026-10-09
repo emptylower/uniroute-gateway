@@ -15,10 +15,16 @@ var ErrBillingCurrencyChanged = errors.New("wallet billing currency changed duri
 
 // UsageBillingCommand describes one billable request that must be applied at most once.
 type UsageBillingCommand struct {
-	RequestID          string
-	APIKeyID           int64
-	RequestFingerprint string
-	RequestPayloadHash string
+	// WalletBinding is frozen before the usage queue. It contains billing
+	// identity only, never API credentials or a request/response body.
+	WalletBinding          *WalletBillingBinding `json:"wallet_binding,omitempty"`
+	WalletUsageLog         *UsageLog             `json:"wallet_usage_log,omitempty"`
+	WalletBillingPlatform  string                `json:"wallet_billing_platform,omitempty"`
+	WalletSubscriptionBill bool                  `json:"wallet_subscription_bill,omitempty"`
+	RequestID              string
+	APIKeyID               int64
+	RequestFingerprint     string
+	RequestPayloadHash     string
 
 	UserID              int64
 	SettlementCurrency  string
@@ -119,6 +125,9 @@ type AccountQuotaState struct {
 }
 
 type UsageBillingApplyResult struct {
+	OriginalCharge       *WalletBillingChargeReceipt
+	Staged               bool
+	Quarantined          bool
 	Applied              bool
 	APIKeyQuotaExhausted bool
 	NewBalance           *float64           // post-deduction balance (nil = no balance deduction)

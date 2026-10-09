@@ -764,10 +764,7 @@ func newE2EServiceFixture(t *testing.T, mode, holds, surface, platformUser strin
 	rdb := startCanonicalWalletTestRedis(t, ctxBg)
 	db := startCanonicalWalletTestPostgres(t, ctxBg)
 	for _, migration := range []string{"209_wallet_billing_snapshot.sql", "211_wallet_live_provisional.sql"} {
-		content, err := os.ReadFile(filepath.Join("..", "..", "migrations", migration))
-		require.NoError(t, err)
-		_, err = db.ExecContext(ctxBg, string(content))
-		require.NoError(t, err)
+		applyMigrationOnceForTest(t, ctxBg, db, migration)
 	}
 
 	snapCfg := &config.Config{}

@@ -82,11 +82,16 @@ type BillingSnapshotMedia struct {
 }
 
 type BillingSnapshotFlags struct {
-	SubscriptionBilling       bool   `json:"subscription_billing"`
-	USDWalletPolicyVersion    string `json:"usd_wallet_policy_version,omitempty"`
-	BillingCurrency           string `json:"billing_currency"`
-	MultiplierCurrency        string `json:"multiplier_currency"`
-	LongContextBillingEnabled bool   `json:"long_context_billing_enabled"` // OpenAI account flag; generic families ignore it
+	WalletImmediateReleasePolicyVersion string `json:"wallet_immediate_release_policy_version,omitempty"`
+	APIKeyQuotaEnabled                  bool   `json:"api_key_quota_enabled,omitempty"`
+	APIKeyRateLimitEnabled              bool   `json:"api_key_rate_limit_enabled,omitempty"`
+	AccountQuotaEnabled                 bool   `json:"account_quota_enabled,omitempty"`
+	AccountType                         string `json:"account_type,omitempty"`
+	SubscriptionBilling                 bool   `json:"subscription_billing"`
+	USDWalletPolicyVersion              string `json:"usd_wallet_policy_version,omitempty"`
+	BillingCurrency                     string `json:"billing_currency"`
+	MultiplierCurrency                  string `json:"multiplier_currency"`
+	LongContextBillingEnabled           bool   `json:"long_context_billing_enabled"` // OpenAI account flag; generic families ignore it
 	// resolveCacheTTLUsageOverrideTarget returns (target, ok) and ok can be true
 	// with an EMPTY target (gateway_upstream_response.go:1325-1336), which the live
 	// path applies as the 5m default — so both halves are frozen, never a bare string.
@@ -341,6 +346,7 @@ func (s *BillingSnapshotService) Freeze(ctx context.Context, in FreezeInput) (*B
 		Media:       mediaPricingFromGroup(apiKey.Group),
 		FX:          fx,
 		Flags: BillingSnapshotFlags{
+			APIKeyQuotaEnabled: apiKey.Quota > 0, APIKeyRateLimitEnabled: apiKey.HasRateLimits(), AccountQuotaEnabled: in.Account.IsAPIKeyOrBedrock() && in.Account.HasAnyQuotaLimit(), AccountType: in.Account.Type,
 			USDWalletPolicyVersion: walletPolicyVersion, SubscriptionBilling: isSubscription, BillingCurrency: NormalizeUserBillingCurrency(in.User.BillingCurrency), MultiplierCurrency: multiplierCurrency,
 			LongContextBillingEnabled: flagsAccount.IsOpenAILongContextBillingEnabled(), CacheTTLOverrideEnabled: in.CacheTTLOverride.Enabled, CacheTTLOverrideTarget: in.CacheTTLOverride.Target,
 			LongContextThreshold: in.LongContextThreshold, LongContextMultiplier: in.LongContextMultiplier,
@@ -349,7 +355,24 @@ func (s *BillingSnapshotService) Freeze(ctx context.Context, in FreezeInput) (*B
 	if snap.Pricing.Mode == "" {
 		snap.Pricing.Mode = BillingModeToken
 	}
+	if walletPolicyVersion == config.CanonicalUSDWalletPolicyVersion && in.Family != BillingFamilyLive && s.cfg != nil && (s.cfg.CanonicalWallet.LLMImmediateReleaseMode == "enabled" || s.cfg.CanonicalWallet.LLMImmediateReleaseMode == "shadow") {
+		snap.Flags.WalletImmediateReleasePolicyVersion = WalletImmediateReleasePolicyVersion
+	}
 	return snap, nil
+}
+
+func walletEvidencePolicyOf(snapshot *BillingSnapshot) string {
+	if snapshot == nil {
+		return ""
+	}
+	return snapshot.Flags.WalletImmediateReleasePolicyVersion
+}
+
+func walletEvidenceKindOf(snapshot *BillingSnapshot) string {
+	if snapshot != nil && snapshot.Family == BillingFamilyLive {
+		return "live"
+	}
+	return "llm"
 }
 
 func clonePricing(p *ModelPricing) *ModelPricing {

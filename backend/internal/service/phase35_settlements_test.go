@@ -1275,11 +1275,22 @@ func TestPhase35ZeroCostAbortPointsReleaseTheHold(t *testing.T) {
 		cost *CostBreakdown
 		sub  bool
 		appl bool
+		// A usage record that billing did not apply and that carries no original
+		// receipt is a replay whose first outcome is unknown. It is unresolved, never
+		// confirmed zero: its hold stays armed for the settlement or expiry path
+		// instead of being released as a zero-cost request.
+		unresolved bool
 	}{
-		{"subscription-billed releases", &CostBreakdown{ActualCost: 1}, true, true},
-		{"billing not applied releases", &CostBreakdown{ActualCost: 1}, false, false},
-		{"zero cost releases", &CostBreakdown{ActualCost: 0}, false, true},
-		{"rounds to zero releases", &CostBreakdown{ActualCost: 0.000000004}, false, true},
+		{"subscription-billed releases", &CostBreakdown{ActualCost: 1}, true, true, false},
+		{"billing not applied without an original receipt stays unresolved", &CostBreakdown{ActualCost: 1}, false, false, true},
+		{"zero cost releases", &CostBreakdown{ActualCost: 0}, false, true, false},
+		{"rounds to zero releases", &CostBreakdown{ActualCost: 0.000000004}, false, true, false},
+	}
+	released := 0
+	for _, leg := range legs {
+		if !leg.unresolved {
+			released++
+		}
 	}
 	for i, leg := range legs {
 		t.Run(leg.name, func(t *testing.T) {
@@ -1290,11 +1301,15 @@ func TestPhase35ZeroCostAbortPointsReleaseTheHold(t *testing.T) {
 			require.False(t, observeCanonicalWalletSettlement(b, "req-39-"+itoa(i), user, leg.cost, leg.sub, leg.appl, nil, "tok", authID, ""))
 			hold, err := store.GetCanonicalWalletHold(ctx, user.PlatformUserID, authID)
 			require.NoError(t, err)
+			if leg.unresolved {
+				require.Equal(t, "armed", hold.State, "an unresolved replay must not free the hold as a confirmed zero")
+				return
+			}
 			require.Equal(t, "released", hold.State)
 			require.Equal(t, "zero_cost", hold.Class)
 		})
 	}
-	require.Equal(t, int64(len(legs)), canonicalWalletBridgeMetrics.holdReleasedZeroCost.Load()-zeroCostBase, "each abort point released exactly one hold")
+	require.Equal(t, int64(released), canonicalWalletBridgeMetrics.holdReleasedZeroCost.Load()-zeroCostBase, "each releasing abort point released exactly one hold, and the unresolved one none")
 
 	// holds OFF: nothing is written — the manually-armed hold stays armed.
 	t.Run("holds off writes nothing", func(t *testing.T) {

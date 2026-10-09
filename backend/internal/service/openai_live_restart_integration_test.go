@@ -58,11 +58,23 @@ func startLiveRestartPostgres(t *testing.T, ctx context.Context) *sql.DB {
 
 	// Migrations 209 + 218 + 219: ObserveSettlement reads wallet_authorization_segment before
 	// it settles (209 is the billing-snapshot table 218 references).
-	for _, migration := range []string{"209_wallet_billing_snapshot.sql", "218_wallet_authorization_segments.sql", "219_wallet_attempt_protection.sql", "222_wallet_unknown_expiry.sql"} {
+	for _, migration := range []string{"209_wallet_billing_snapshot.sql", "213_wallet_hold_outcome.sql", "218_wallet_authorization_segments.sql", "219_wallet_attempt_protection.sql", "222_wallet_unknown_expiry.sql"} {
 		content, readErr := os.ReadFile(filepath.Join("..", "..", "migrations", migration))
 		require.NoError(t, readErr)
 		_, err = db.ExecContext(ctx, string(content))
 		require.NoError(t, err)
+	}
+	// The settlement delivery path reads the immediate-release columns and joins
+	// gateway_media_task (lateFundingExclusions), so the fixture carries 223-233 and the
+	// media table they extend. 217 itself needs users/api_keys, hence the mirrored table.
+	service.CreateWalletMediaTaskTableForTest(t, ctx, db)
+	for _, migration := range []string{"223_wallet_immediate_release.sql", "224_wallet_billing_evidence.sql", "225_media_immediate_finance.sql", "226_wallet_reader_journal_volume.sql",
+		"227_wallet_reader_fee_normalization.sql", "228_wallet_funding_freeze.sql", "229_media_durable_handoff.sql", "230_wallet_funding_pending_request.sql",
+		"231_wallet_funding_requested_mode.sql", "232_wallet_funding_source_intent.sql", "233_wallet_funding_terminal_recovery.sql"} {
+		content, readErr := os.ReadFile(filepath.Join("..", "..", "migrations", migration))
+		require.NoError(t, readErr)
+		_, err = db.ExecContext(ctx, string(content))
+		require.NoError(t, err, migration)
 	}
 
 	return db

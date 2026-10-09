@@ -47,7 +47,7 @@ func TestCanonicalWalletSignedPoolRefreshRetainsExpiredReceiptsWithoutExtendingA
 			if signedExpires.Before(effectiveExpires) {
 				effectiveExpires = signedExpires
 			}
-			lease := service.CanonicalWalletLease{LeaseID: leaseID, PlatformUserID: user, Currency: "USD", BudgetUnits: 1000, ExpiresAt: expires, RetainUntil: expires.Add(1800 * time.Second)}
+			lease := service.CanonicalWalletLease{LeaseID: leaseID, PlatformUserID: user, Currency: "USD", FundingScope: "legacy", BudgetUnits: 1000, ExpiresAt: expires, RetainUntil: expires.Add(1800 * time.Second)}
 			require.NoError(t, store.InstallCanonicalWalletLease(ctx, lease))
 			_, err := store.ReserveCanonicalWalletLease(ctx, user, leaseID, "USD", "prior-usage", 100, now)
 			require.NoError(t, err)
@@ -78,6 +78,7 @@ func TestCanonicalWalletSignedPoolRefreshRetainsExpiredReceiptsWithoutExtendingA
 				view := map[string]any{
 					"lease_id": leaseID, "platform_user_id": user, "currency": "USD", "unit_version": "usd-e8-v1", "scale": 8,
 					"usd_wallet_policy_version": config.CanonicalUSDWalletPolicyVersion,
+					"funding_scope":             "legacy",
 					"budget":                    amount(1200), "reserved": amount(0), "captured": amount(100), "released": amount(0),
 					"capture_seq": 1, "status": "active", "expires_at": signedExpires,
 				}
@@ -90,6 +91,8 @@ func TestCanonicalWalletSignedPoolRefreshRetainsExpiredReceiptsWithoutExtendingA
 			db, mock, err := sqlmock.New()
 			require.NoError(t, err)
 			defer db.Close()
+			mock.ExpectQuery("SELECT receipt,funded_units,returned_units,return_revision,funding_scope,funding_owner_id,funding_issuance_key,pending_request FROM wallet_funding_freeze").WithArgs(user, leaseID).WillReturnRows(sqlmock.NewRows([]string{"receipt", "funded_units", "returned_units", "return_revision", "funding_scope", "funding_owner_id", "funding_issuance_key", "pending_request"}))
+			mock.ExpectQuery("SELECT returned_units,return_revision,funded_units,funding_scope,funding_owner_id,funding_issuance_key FROM wallet_funding_freeze").WithArgs(user, leaseID).WillReturnRows(sqlmock.NewRows([]string{"returned_units", "return_revision", "funded_units", "funding_scope", "funding_owner_id", "funding_issuance_key"}))
 			bridge := service.NewCanonicalWalletBridge(cfg, store, db, nil)
 			defer bridge.Close()
 			available, err := bridge.HasCanonicalWalletHeadroom(ctx, user, "USD")

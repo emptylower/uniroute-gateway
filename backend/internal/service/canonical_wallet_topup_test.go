@@ -18,6 +18,7 @@ import (
 func canonicalWalletTopUpWire(budget, consumed int64, expires time.Time) canonicalWalletEnsureWireResponse {
 	return canonicalWalletEnsureWireResponse{
 		USDWalletPolicyVersion: config.CanonicalUSDWalletPolicyVersion,
+		FundingScope:           "legacy",
 		LeaseID:                "lease-topup", PlatformUserID: "user-topup", Currency: "USD", UnitVersion: CanonicalWalletUnitVersion, Scale: 8,
 		Budget: newCanonicalWalletAmountObject(budget), Reserved: newCanonicalWalletAmountObject(0),
 		Captured: newCanonicalWalletAmountObject(consumed), Released: newCanonicalWalletAmountObject(0),
@@ -213,12 +214,25 @@ func TestCanonicalWalletColdBootstrapTopUpArmsPoolOnlyAfterValidFunding(t *testi
 				require.NoError(t, mock.ExpectationsWereMet(), "durable funding plan must commit before any hold")
 			}}
 			bridge := &CanonicalWalletBridge{cfg: cfg, store: store, control: newCanonicalWalletHTTPClient(cfg, server.Client()), outboxDB: db, callerSlotTTLSeconds: 1800}
+			expectRegistry := func() {
+				mock.ExpectQuery("SELECT returned_units,return_revision,funded_units,funding_scope,funding_owner_id,funding_issuance_key FROM wallet_funding_freeze").WithArgs("user-topup", "lease-topup").WillReturnRows(sqlmock.NewRows([]string{"returned_units", "return_revision", "funded_units", "funding_scope", "funding_owner_id", "funding_issuance_key"}))
+			}
+			expectPoolRegistry := func() {
+				mock.ExpectQuery("SELECT receipt,funded_units,returned_units,return_revision,funding_scope,funding_owner_id,funding_issuance_key,pending_request FROM wallet_funding_freeze").WithArgs("user-topup", "lease-topup").WillReturnRows(sqlmock.NewRows([]string{"receipt", "funded_units", "returned_units", "return_revision", "funding_scope", "funding_owner_id", "funding_issuance_key", "pending_request"}))
+				expectRegistry()
+			}
+			expectRegistry()
 			require.NoError(t, bridge.EnsureCanonicalWalletLeaseForAdmission(ctx, "user-topup", "USD"))
 			require.Equal(t, int64(100), store.lease.BudgetUnits)
 			require.Zero(t, store.armCalls, "bootstrap is not authorization")
 			h := &AuthorizationHandle{ID: "auth-topup", SnapshotID: "snapshot-topup", AttemptKind: "ordinary"}
 			mock.ExpectQuery("SELECT authorization_id,lease_id,held_units").WithArgs(h.ID).WillReturnRows(sqlmock.NewRows([]string{"authorization_id", "lease_id", "held_units", "lease_basis", "event_id", "actual_units", "pin_state", "kind", "state", "settlement_payload", "remainder_payload"}))
+			expectPoolRegistry()
+			if tc.valid || tc.name == "expired funding" {
+				expectRegistry()
+			}
 			if tc.valid {
+				expectPoolRegistry()
 				mock.ExpectBegin()
 				mock.ExpectExec("INSERT INTO wallet_authorization_segment").WithArgs(h.ID, 0, h.ID, "user-topup", h.SnapshotID, "lease-topup", int64(300), sqlmock.AnyArg(), h.AttemptKind, sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
 				mock.ExpectCommit()

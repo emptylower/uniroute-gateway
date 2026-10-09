@@ -238,10 +238,61 @@ func TestPhase34bReaper(t *testing.T) {
 // database (constraint 6's direct-read pattern, shared by 211 and 213).
 func p34bApplyMigration(t *testing.T, ctx context.Context, db *sql.DB, name string) {
 	t.Helper()
+	applyMigrationOnceForTest(t, ctx, db, name)
+}
+
+// applyMigrationOnceForTest applies a shipped migration file to a throwaway test
+// database unless this helper already applied it there. The wallet fixtures are
+// assembled from a hand-built base plus real migrations, and several tests add the
+// same prerequisite (209, 211, 213) on top of a base that now carries it already,
+// so applying must be idempotent per database. A marker table records what ran.
+func applyMigrationOnceForTest(t testing.TB, ctx context.Context, db *sql.DB, name string) {
+	t.Helper()
+	_, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS test_applied_migration (name TEXT PRIMARY KEY)`)
+	require.NoError(t, err)
+	res, err := db.ExecContext(ctx, `INSERT INTO test_applied_migration (name) VALUES ($1) ON CONFLICT DO NOTHING`, name)
+	require.NoError(t, err)
+	if inserted, rowsErr := res.RowsAffected(); rowsErr == nil && inserted == 0 {
+		return
+	}
 	sqlContent, err := os.ReadFile(filepath.Join("..", "..", "migrations", name))
 	require.NoError(t, err)
 	_, err = db.ExecContext(ctx, string(sqlContent))
-	require.NoError(t, err)
+	require.NoError(t, err, name)
+}
+
+// walletV5MigrationsForTest are the additive migrations of the immediate-release
+// batch, in order. Every hand-assembled wallet fixture applies them after 222:
+// the delivery, attempt-recovery and funding code reads their columns and tables
+// (lateFundingExclusions, for example, reads zero_ack_at and expiry_ack_at and
+// joins gateway_media_task), so a fixture that stops at 222 no longer matches the
+// schema production runs and every settlement fails to deliver.
+var walletV5MigrationsForTest = []string{
+	"223_wallet_immediate_release.sql",
+	"224_wallet_billing_evidence.sql",
+	"225_media_immediate_finance.sql",
+	"226_wallet_reader_journal_volume.sql",
+	"227_wallet_reader_fee_normalization.sql",
+	"228_wallet_funding_freeze.sql",
+	"229_media_durable_handoff.sql",
+	"230_wallet_funding_pending_request.sql",
+	"231_wallet_funding_requested_mode.sql",
+	"232_wallet_funding_source_intent.sql",
+	"233_wallet_funding_terminal_recovery.sql",
+}
+
+// applyWalletV5MigrationsForTest brings a fixture that carries migrations up to
+// 222 to the current schema. 223 onward reference the billing-snapshot, live
+// provisional and hold-outcome tables, so those prerequisites are ensured first
+// (a no-op where the fixture already has them).
+func applyWalletV5MigrationsForTest(t testing.TB, ctx context.Context, db *sql.DB) {
+	t.Helper()
+	for _, name := range []string{"209_wallet_billing_snapshot.sql", "211_wallet_live_provisional.sql", "213_wallet_hold_outcome.sql"} {
+		applyMigrationOnceForTest(t, ctx, db, name)
+	}
+	for _, name := range walletV5MigrationsForTest {
+		applyMigrationOnceForTest(t, ctx, db, name)
+	}
 }
 
 // p34bApplyHoldOutcomeMigration applies 213 to the dispatcher harness's

@@ -85,7 +85,7 @@ func TestWalletAuthorizationDiagnosticsPoolFailureStages(t *testing.T) {
 			require.NoError(t, err)
 			defer db.Close()
 			const secret = "sk_response_body_must_not_be_logged"
-			lease := CanonicalWalletLease{LeaseID: "lease-1", PlatformUserID: "user-1", Currency: "USD", BudgetUnits: 200, ConsumedUnits: 150, ExpiresAt: time.Now().Add(time.Hour)}
+			lease := CanonicalWalletLease{LeaseID: "lease-1", PlatformUserID: "user-1", Currency: "USD", FundingScope: "legacy", BudgetUnits: 200, ConsumedUnits: 150, ExpiresAt: time.Now().Add(time.Hour)}
 			store := &diagnosticPoolStore{canonicalWalletStoreStub: &canonicalWalletStoreStub{lease: &lease}, armError: ErrCanonicalWalletLeaseExhausted}
 			calls := 0
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -100,7 +100,7 @@ func TestWalletAuthorizationDiagnosticsPoolFailureStages(t *testing.T) {
 					_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"reason": "insufficient_balance", "headroom": newCanonicalWalletAmountObject(7), "message": secret}})
 					return
 				}
-				view := map[string]any{"lease_id": lease.LeaseID, "platform_user_id": lease.PlatformUserID, "currency": "USD", "unit_version": CanonicalWalletUnitVersion, "scale": 8, "usd_wallet_policy_version": config.CanonicalUSDWalletPolicyVersion, "status": "active", "expires_at": lease.ExpiresAt, "budget": newCanonicalWalletAmountObject(200), "captured": newCanonicalWalletAmountObject(150)}
+				view := map[string]any{"lease_id": lease.LeaseID, "platform_user_id": lease.PlatformUserID, "currency": "USD", "unit_version": CanonicalWalletUnitVersion, "scale": 8, "usd_wallet_policy_version": config.CanonicalUSDWalletPolicyVersion, "funding_scope": "legacy", "status": "active", "expires_at": lease.ExpiresAt, "budget": newCanonicalWalletAmountObject(200), "captured": newCanonicalWalletAmountObject(150), "released": newCanonicalWalletAmountObject(0)}
 				views := []any{view}
 				if stage == "pool_ensure" {
 					views = []any{}
@@ -117,6 +117,10 @@ func TestWalletAuthorizationDiagnosticsPoolFailureStages(t *testing.T) {
 			} else {
 				query.WillReturnRows(sqlmock.NewRows([]string{"authorization_id", "lease_id", "held_units", "lease_basis", "event_id", "actual_units", "pin_state", "kind", "state", "settlement_payload", "remainder_payload"}))
 			}
+			if stage == "pool_topup" || stage == "plan_persist" || stage == "pool_arm" {
+				mock.ExpectQuery("SELECT receipt,funded_units,returned_units,return_revision,funding_scope,funding_owner_id,funding_issuance_key,pending_request FROM wallet_funding_freeze").WithArgs("user-1", "lease-1").WillReturnRows(sqlmock.NewRows([]string{"receipt", "funded_units", "returned_units", "return_revision", "funding_scope", "funding_owner_id", "funding_issuance_key", "pending_request"}))
+				mock.ExpectQuery("SELECT returned_units,return_revision,funded_units,funding_scope,funding_owner_id,funding_issuance_key FROM wallet_funding_freeze").WithArgs("user-1", "lease-1").WillReturnRows(sqlmock.NewRows([]string{"returned_units", "return_revision", "funded_units", "funding_scope", "funding_owner_id", "funding_issuance_key"}))
+			}
 			if stage == "plan_persist" {
 				mock.ExpectBegin().WillReturnError(errors.New(secret))
 			}
@@ -124,6 +128,7 @@ func TestWalletAuthorizationDiagnosticsPoolFailureStages(t *testing.T) {
 				mock.ExpectBegin()
 				mock.ExpectExec("INSERT INTO wallet_authorization_segment").WillReturnResult(sqlmock.NewResult(1, 1))
 				mock.ExpectCommit()
+				mock.ExpectBegin().WillReturnError(ErrCanonicalWalletLeaseExhausted)
 			}
 			h := &AuthorizationHandle{ID: "auth_" + strings.Repeat("a", 32), SnapshotID: "bsnap_" + strings.Repeat("b", 32), AttemptKind: "llm", EstimatedUnits: 40}
 			if stage == "pool_topup" {

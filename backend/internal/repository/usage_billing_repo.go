@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"strings"
 
@@ -47,12 +48,85 @@ func (r *usageBillingRepository) Apply(ctx context.Context, cmd *service.UsageBi
 		return nil, err
 	}
 	if !applied {
-		return &service.UsageBillingApplyResult{Applied: false}, nil
+		result := &service.UsageBillingApplyResult{Applied: false}
+		if cmd.WalletBinding != nil {
+			var raw []byte
+			if err = tx.QueryRowContext(ctx, `SELECT receipt FROM wallet_billing_charge_receipt WHERE request_id=$1 AND api_key_id=$2`, cmd.RequestID, cmd.APIKeyID).Scan(&raw); err != nil {
+				return nil, err
+			}
+			var receipt service.WalletBillingChargeReceipt
+			if err = json.Unmarshal(raw, &receipt); err != nil {
+				return nil, err
+			}
+			if receipt.Command.RequestFingerprint != cmd.RequestFingerprint || receipt.Binding != *cmd.WalletBinding {
+				return nil, service.ErrUsageBillingRequestConflict
+			}
+			result.OriginalCharge = &receipt
+		}
+		return result, nil
 	}
 
 	result := &service.UsageBillingApplyResult{Applied: true}
+	if cmd.WalletBinding != nil {
+		binding := cmd.WalletBinding
+		// Serialize with the same segment locks as zero/expiry finalizers.
+		rows, lockErr := tx.QueryContext(ctx, `SELECT authorization_id FROM wallet_authorization_segment WHERE parent_authorization_id=$1 ORDER BY ordinal FOR UPDATE`, binding.ParentAuthorizationID)
+		if lockErr != nil {
+			return nil, lockErr
+		}
+		count := 0
+		for rows.Next() {
+			var id string
+			if lockErr = rows.Scan(&id); lockErr != nil {
+				break
+			}
+			count++
+		}
+		if lockErr == nil {
+			lockErr = rows.Err()
+		}
+		_ = rows.Close()
+		if lockErr != nil || count == 0 {
+			return nil, errors.New("wallet billing group unavailable")
+		}
+		var valid, knownZero bool
+		if err = tx.QueryRowContext(ctx, `SELECT bool_and(platform_user_id=$2 AND billing_snapshot_id=$3 AND authorization_token=$4 AND kind='llm'),bool_or(zero_ack_at IS NOT NULL OR zero_intent_at IS NOT NULL) FROM wallet_authorization_segment WHERE parent_authorization_id=$1`, binding.ParentAuthorizationID, binding.PlatformUserID, binding.BillingSnapshotID, binding.AuthorizationToken).Scan(&valid, &knownZero); err != nil {
+			return nil, err
+		}
+		if !valid {
+			return nil, service.ErrUsageBillingRequestConflict
+		}
+		if knownZero && binding.FeeUnits > 0 {
+			return nil, service.ErrWalletPositiveAfterZero
+		}
+		var pendingCommand []byte
+		if err = tx.QueryRowContext(ctx, `SELECT command FROM wallet_billing_pending WHERE id=$1 FOR UPDATE`, binding.PendingID).Scan(&pendingCommand); err != nil {
+			return nil, err
+		}
+		var persisted service.UsageBillingCommand
+		if err = json.Unmarshal(pendingCommand, &persisted); err != nil {
+			return nil, err
+		}
+		if persisted.WalletBinding == nil || *persisted.WalletBinding != *binding || persisted.RequestFingerprint != cmd.RequestFingerprint {
+			return nil, service.ErrUsageBillingRequestConflict
+		}
+	}
 	if err := r.applyUsageBillingEffects(ctx, tx, cmd, result); err != nil {
 		return nil, err
+	}
+	if cmd.WalletBinding != nil {
+		receipt := service.WalletBillingChargeReceipt{ReceiptID: cmd.WalletBinding.PendingID + ":charge:1", Binding: *cmd.WalletBinding, Command: *cmd}
+		raw, marshalErr := json.Marshal(receipt)
+		if marshalErr != nil {
+			return nil, marshalErr
+		}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO wallet_billing_charge_receipt(request_id,api_key_id,request_fingerprint,pending_id,receipt) VALUES($1,$2,$3,$4,$5::jsonb)`, cmd.RequestID, cmd.APIKeyID, cmd.RequestFingerprint, cmd.WalletBinding.PendingID, string(raw)); err != nil {
+			return nil, err
+		}
+		if _, err = tx.ExecContext(ctx, `UPDATE wallet_billing_pending SET charge_receipt=$2::jsonb,apply_ack_at=COALESCE(apply_ack_at,now()),updated_at=now() WHERE id=$1`, cmd.WalletBinding.PendingID, string(raw)); err != nil {
+			return nil, err
+		}
+		result.OriginalCharge = &receipt
 	}
 
 	if err := tx.Commit(); err != nil {

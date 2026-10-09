@@ -109,6 +109,24 @@ func (a *CanonicalWalletAuthorizer) Authorize(ctx context.Context, in AuthorizeI
 		return refuse(AuthorizationRefusalSnapshotMissing, "no billing snapshot for this attempt", nil)
 	}
 	h.SnapshotID = in.Snapshot.ID
+	h.readerBillingFamily = in.Snapshot.Family
+	h.readerTokenOnly = in.Snapshot.Pricing.Mode == BillingModeToken && in.Estimate.ImageCount == 0 && in.Estimate.VideoCount == 0 && in.Estimate.WebSearchCalls == 0
+	switch {
+	case in.Estimate.WebSearchCalls > 0:
+		h.readerCountKind = "alpha_search"
+	case in.Estimate.VideoCount > 0 && in.Estimate.GrokVideo:
+		h.readerCountKind = "grok_video"
+	case in.Snapshot.Family == BillingFamilyGeneric && (in.Estimate.ImageCount > 0 || isImageGenerationModel(in.Snapshot.RequestedModel)):
+		h.readerCountKind = "gemini_image"
+	case in.Estimate.ImageCount > 0:
+		h.readerCountKind = "openai_images"
+	case in.Snapshot.Pricing.Mode == BillingModePerRequest:
+		h.readerCountKind = "request"
+	case in.Snapshot.Family == BillingFamilyOpenAI:
+		// Responses can emit an image call even without the request's advisory
+		// estimate predicting it. Freeze the output parser, never that estimate.
+		h.readerCountKind = "openai_images"
+	}
 	h.AttemptKind = "llm"
 	if in.Snapshot.Family == BillingFamilyLive {
 		h.AttemptKind = "live"
@@ -169,6 +187,13 @@ func (a *CanonicalWalletAuthorizer) Authorize(ctx context.Context, in AuthorizeI
 				}
 			}
 			if err = a.bridge.authorizePool(leaseCtx, h, in.User.PlatformUserID, units); err != nil {
+				if _, _, riskRefused := WalletRiskRefusalDetails(err); riskRefused {
+					// Preserve 429/503 and prevent an ignored admission error from
+					// allowing this handle to cross the upstream write boundary.
+					riskErr := err
+					h.beforeWrite = func(context.Context, string) error { return riskErr }
+					return h, riskErr
+				}
 				reason := AuthorizationRefusalLeaseUnavailable
 				if errors.Is(err, ErrCanonicalWalletBalanceShortfall) {
 					reason = AuthorizationRefusalBalanceShortfall
@@ -186,6 +211,12 @@ func (a *CanonicalWalletAuthorizer) Authorize(ctx context.Context, in AuthorizeI
 					segments, e := a.bridge.authorizationSegments(ctx, h.ID)
 					if e != nil || len(segments) != len(h.Segments) {
 						return &AuthorizationRefusedError{Reason: AuthorizationRefusalLeaseUnavailable, AuthorizationID: h.ID, Detail: "previous zero resolution unavailable", Cause: e}
+					}
+					if mode := a.bridge.ImmediateWalletReleaseMode("llm"); mode == "enabled" || mode == "shadow" {
+						var acknowledged bool
+						if e = a.bridge.outboxDB.QueryRowContext(ctx, `SELECT COALESCE(bool_and(zero_ack_at IS NOT NULL),false) FROM wallet_authorization_segment WHERE parent_authorization_id=$1`, h.ID).Scan(&acknowledged); e != nil || !acknowledged {
+							return &AuthorizationRefusedError{Reason: AuthorizationRefusalLeaseUnavailable, AuthorizationID: h.ID, Detail: "previous signed zero acknowledgement unavailable", Cause: e}
+						}
 					}
 					for _, segment := range segments {
 						if segment.ActualUnits != 0 || segment.Remainder != nil || (segment.State != "released" && segment.State != "finished") {

@@ -1,6 +1,8 @@
 package service
 
 import (
+	"bytes"
+	"io"
 	"net/http"
 	"net/http/httptrace"
 	"runtime"
@@ -27,6 +29,7 @@ import (
 type AuthorizingHTTPUpstream struct {
 	inner HTTPUpstream
 	mode  func() string
+	cfg   *config.Config
 	calls atomic.Int64
 	// refusalDelayForTest lets the first-output header-guard test trip the guard
 	// before the refusal returns (Task 8). Zero in production.
@@ -41,7 +44,9 @@ func NewAuthorizingHTTPUpstream(inner HTTPUpstream, cfg *config.Config) HTTPUpst
 		}
 		return cfg.CanonicalWallet.Mode
 	}
-	return newAuthorizingHTTPUpstreamWithMode(inner, mode)
+	decorated := newAuthorizingHTTPUpstreamWithMode(inner, mode)
+	decorated.cfg = cfg
+	return decorated
 }
 
 func newAuthorizingHTTPUpstreamWithMode(inner HTTPUpstream, mode func() string) *AuthorizingHTTPUpstream {
@@ -109,6 +114,20 @@ func (a *AuthorizingHTTPUpstream) authorizedWrite(req *http.Request, handle *Aut
 		authorizationMetrics.writesRefused.Add(1)
 		return nil, handle.Refusal
 	}
+	var effectivePayload []byte
+	payloadKnown := false
+	if handle.stageUsage != nil && req.GetBody != nil {
+		if copyBody, copyErr := req.GetBody(); copyErr == nil {
+			requestLimit := int64(256 * 1024 * 1024)
+			if a.cfg != nil && a.cfg.Gateway.MaxBodySize > 0 {
+				requestLimit = a.cfg.Gateway.MaxBodySize
+			}
+			effectivePayload, copyErr = io.ReadAll(io.LimitReader(copyBody, requestLimit+1))
+			closeErr := copyBody.Close()
+			payloadKnown = copyErr == nil && closeErr == nil && int64(len(effectivePayload)) <= requestLimit
+		}
+	}
+	handle.captureWalletReaderHTTPNormalization(req, effectivePayload, payloadKnown)
 	token := handle.MintWriteToken()
 	if err := handle.prepareWrite(req.Context(), token); err != nil {
 		return nil, err
@@ -130,7 +149,7 @@ func (a *AuthorizingHTTPUpstream) authorizedWrite(req *http.Request, handle *Aut
 	// reaper must cross-check the class against the error before treating not_written
 	// as "nothing left the process" (3.4b deliverable, recorded here so it is not lost).
 	switch {
-	case err == nil && resp != nil && handle.beforeWrite != nil && (resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusRequestEntityTooLarge || resp.StatusCode == http.StatusUnsupportedMediaType || resp.StatusCode == http.StatusUnprocessableEntity):
+	case err == nil && resp != nil && handle.beforeWrite != nil && handle.consumeHTTP == nil && walletLegacyZeroStatus(resp.StatusCode):
 		handle.RecordOutcome(token, AuthorizationOutcomeRejected, nil)
 	case err == nil:
 		authorizationMetrics.outcomeResult.Add(1)
@@ -144,8 +163,28 @@ func (a *AuthorizingHTTPUpstream) authorizedWrite(req *http.Request, handle *Aut
 	}
 	if err != nil || resp == nil || resp.Body == nil {
 		handle.completeWrite()
+		if handle.consumeHTTP != nil {
+			handle.consumeHTTP(0, WalletReaderEvidence{Complete: true}, err)
+		}
 	} else {
-		resp.Body = &walletResponseBody{ReadCloser: resp.Body, handle: handle}
+		if handle.headerObserved != nil {
+			if headerErr := handle.headerObserved(resp.StatusCode); headerErr != nil {
+				handle.recordReaderEvidence(WalletReaderEvidence{}, headerErr)
+			}
+		}
+		lineLimit := int64(defaultMaxLineSize)
+		if a.cfg != nil && a.cfg.Gateway.MaxLineSize > 0 {
+			lineLimit = int64(a.cfg.Gateway.MaxLineSize)
+		}
+		body := &walletResponseBody{ReadCloser: resp.Body, handle: handle, status: resp.StatusCode, stream: strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream"), jsonLimit: resolveUpstreamResponseReadLimit(a.cfg), streamLimit: lineLimit}
+		resp.Body = body
+		if handle.consumeHTTP != nil && resp.StatusCode >= 400 {
+			// Resolve this attempt's bounded evidence before any forwarder can
+			// ask its retry gate. The transport outcome remains Result.
+			prefix, _ := io.ReadAll(io.LimitReader(body, 1<<20))
+			_ = body.Close()
+			resp.Body = io.NopCloser(bytes.NewReader(prefix))
+		}
 	}
 	return resp, err
 }

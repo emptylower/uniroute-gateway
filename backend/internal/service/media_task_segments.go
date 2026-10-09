@@ -35,6 +35,9 @@ func (s *MediaTaskService) mediaSegments(ctx context.Context, r *mediaTaskRecord
 	return nil
 }
 func (s *MediaTaskService) protect(ctx context.Context, r *mediaTaskRecord) error {
+	if r.FinancialState == "unknown_pending" || r.FinancialState == "released_unknown" || r.FinancialState == "released_zero" || r.FinancialState == "fee_pending" && r.FinancialReleasedAt != nil {
+		return nil
+	}
 	return s.mediaSegments(ctx, r, func(ctx context.Context, leaf *mediaTaskRecord) error {
 		if leaf.PinState == "finished" {
 			return nil
@@ -43,7 +46,27 @@ func (s *MediaTaskService) protect(ctx context.Context, r *mediaTaskRecord) erro
 	})
 }
 func (s *MediaTaskService) unprotect(ctx context.Context, r *mediaTaskRecord) error {
-	return s.mediaSegments(ctx, r, s.unprotectSingle)
+	if err := s.mediaSegments(ctx, r, s.unprotectSingle); err != nil {
+		return err
+	}
+	return s.closeAcknowledgedMediaFunding(ctx, r)
+}
+
+func (s *MediaTaskService) closeAcknowledgedMediaFunding(ctx context.Context, r *mediaTaskRecord) error {
+	// Historical shared bindings remain usable by their existing obligations.
+	// Their free tail is covered by the signed shared-source return planner.
+	mediaFunded := r.LeaseBasis != nil && r.LeaseBasis.FundingScope == "media"
+	for _, segment := range r.Segments {
+		mediaFunded = mediaFunded || segment.Basis.FundingScope == "media"
+	}
+	if !mediaFunded {
+		return nil
+	}
+	ids := []string{r.LeaseID}
+	for _, segment := range r.Segments {
+		ids = append(ids, segment.LeaseID)
+	}
+	return s.bridge.closeMediaFundingLeases(ctx, r.PlatformUserID, r.ID, ids)
 }
 func (s *MediaTaskService) pin(ctx context.Context, r *mediaTaskRecord, finish bool) error {
 	if len(r.Segments) == 0 {
@@ -51,7 +74,7 @@ func (s *MediaTaskService) pin(ctx context.Context, r *mediaTaskRecord, finish b
 	}
 	for i := range r.Segments {
 		segment := &r.Segments[i]
-		if finish && segment.PinState == "finished" {
+		if finish && segment.PinState == "finished" && segment.ActualUnits == 0 {
 			continue
 		}
 		leaf := *r
@@ -83,6 +106,9 @@ func (s *MediaTaskService) pin(ctx context.Context, r *mediaTaskRecord, finish b
 	return nil
 }
 func (s *MediaTaskService) mediaAuthorization(ctx context.Context, r *mediaTaskRecord, snapshot *BillingSnapshot, user *User) (*AuthorizationHandle, error) {
+	if err := s.bridge.AdmitWalletRisk(ctx, WalletRiskAdmission{ParentAuthorizationID: r.AuthorizationID, PlatformUserID: r.PlatformUserID, BillingSnapshotID: r.SnapshotID, Kind: "media"}); err != nil {
+		return nil, err
+	}
 	if len(r.Segments) > 0 {
 		for _, segment := range r.Segments {
 			_, err := s.bridge.store.GetCanonicalWalletHold(ctx, r.PlatformUserID, segment.AuthorizationID)
@@ -97,7 +123,7 @@ func (s *MediaTaskService) mediaAuthorization(ctx context.Context, r *mediaTaskR
 			}
 		}
 	}
-	handle, err := s.authorizer.Authorize(ctx, AuthorizeInput{Snapshot: snapshot, User: user, FixedEstimateUnits: r.QuotedUnits, DurableAuthorizationID: r.AuthorizationID})
+	handle, err := s.authorizer.Authorize(WithMediaFundingOwner(ctx, r.ID), AuthorizeInput{Snapshot: snapshot, User: user, FixedEstimateUnits: r.QuotedUnits, DurableAuthorizationID: r.AuthorizationID})
 	if err != nil {
 		return nil, err
 	}
@@ -171,7 +197,7 @@ func (s *MediaTaskService) mediaSettled(ctx context.Context, r *mediaTaskRecord)
 		if err != nil {
 			return false, false, err
 		}
-		if amount != segment.ActualUnits || lease != segment.LeaseID || auth != segment.AuthorizationID || snapshot != r.SnapshotID {
+		if amount != segment.ActualUnits || (segment.Payload == nil || segment.Payload.LeaseID != "") && lease != segment.LeaseID || auth != segment.AuthorizationID || snapshot != r.SnapshotID {
 			return false, false, errors.New("media settlement acknowledgement mismatch")
 		}
 		if status == "dead_letter" {
@@ -180,6 +206,19 @@ func (s *MediaTaskService) mediaSettled(ctx context.Context, r *mediaTaskRecord)
 		if status != "delivered" {
 			all = false
 		}
+	}
+	if len(segments) > 0 && segments[0].Remainder != nil {
+		event := segments[0].Remainder
+		var status, snapshot string
+		var amount int64
+		if err := s.db.QueryRowContext(ctx, `SELECT status,amount_units,COALESCE(billing_snapshot_id,'') FROM wallet_settlement_outbox WHERE event_id=$1`, event.EventID).Scan(&status, &amount, &snapshot); err != nil {
+			return false, false, err
+		}
+		if amount != event.AmountUnits || snapshot != r.SnapshotID {
+			return false, false, errors.New("media overrun acknowledgement mismatch")
+		}
+		all = all && status == "delivered"
+		dead = dead || status == "dead_letter"
 	}
 	return all, dead, nil
 }

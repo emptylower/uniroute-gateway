@@ -889,6 +889,8 @@ func NewGatewayService(
 	}
 	if walletStore, ok := requireCanonicalWalletStore(cfg, cache, "NewGatewayService"); ok {
 		svc.canonicalWallet = NewCanonicalWalletBridge(cfg, walletStore, db, outbox)
+		svc.canonicalWallet.SetBillingEvidenceRepository(usageBillingRepo)
+		svc.canonicalWallet.SetBillingEvidenceDependencies(usageLogRepo, svc.billingDeps())
 	}
 	svc.userGroupRateResolver = newUserGroupRateResolver(
 		userGroupRateRepo,

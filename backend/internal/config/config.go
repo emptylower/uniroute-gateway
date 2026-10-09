@@ -10,6 +10,7 @@ import (
 	"net/textproto"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -1581,6 +1582,14 @@ type CanonicalWalletConfig struct {
 	// Shadow reports finite-expiry candidates without changing money or pins.
 	PoolExpiryMode         string `mapstructure:"pool_expiry_mode"`
 	PoolExpiryGraceSeconds int    `mapstructure:"pool_expiry_grace_seconds"`
+	// Independent v5 cutovers. Shadow observes eligibility and changes no funds
+	// or risk counter; enabling either makes the shared prehold admission check
+	// apply to new LLM and media jobs.
+	LLMImmediateReleaseMode   string `mapstructure:"llm_immediate_release_mode"`
+	MediaImmediateReleaseMode string `mapstructure:"media_immediate_release_mode"`
+	// ReaderJournalDirectory is explicit durable storage for reader evidence.
+	// Empty disables admission into the enabled immediate-release path.
+	ReaderJournalDirectory string `mapstructure:"reader_journal_directory"`
 	// OrphanGraceSeconds (§10.7): an unclassified hold older than this with no
 	// live owner is released by the reaper. A FLOOR on the finite upstream
 	// timeouts, not a bound on attempt lifetime.
@@ -1801,6 +1810,16 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 	}
 	if err := viper.BindEnv("model_governance.authorization_mode", "MODEL_AUTHORIZATION_ENFORCE"); err != nil {
 		return nil, fmt.Errorf("bind MODEL_AUTHORIZATION_ENFORCE: %w", err)
+	}
+	if err := viper.BindEnv("canonical_wallet.llm_immediate_release_mode", "CANONICAL_WALLET_LLM_IMMEDIATE_RELEASE_MODE", "GATEWAY_WALLET_LLM_IMMEDIATE_RELEASE_MODE"); err != nil {
+		return nil, fmt.Errorf("bind wallet LLM immediate release mode: %w", err)
+	}
+	if err := viper.BindEnv("canonical_wallet.media_immediate_release_mode", "CANONICAL_WALLET_MEDIA_IMMEDIATE_RELEASE_MODE", "GATEWAY_WALLET_MEDIA_IMMEDIATE_RELEASE_MODE"); err != nil {
+		return nil, fmt.Errorf("bind wallet media immediate release mode: %w", err)
+	}
+
+	if err := viper.BindEnv("canonical_wallet.reader_journal_directory", "GATEWAY_WALLET_READER_JOURNAL_DIR", "CANONICAL_WALLET_READER_JOURNAL_DIRECTORY"); err != nil {
+		return nil, fmt.Errorf("bind wallet reader journal directory: %w", err)
 	}
 
 	// 默认值
@@ -2108,6 +2127,9 @@ func setDefaults() {
 	viper.SetDefault("canonical_wallet.holds", "off")
 	viper.SetDefault("canonical_wallet.pool_expiry_mode", "shadow")
 	viper.SetDefault("canonical_wallet.pool_expiry_grace_seconds", 1800)
+	viper.SetDefault("canonical_wallet.llm_immediate_release_mode", "off")
+	viper.SetDefault("canonical_wallet.media_immediate_release_mode", "off")
+	viper.SetDefault("canonical_wallet.reader_journal_directory", "")
 	viper.SetDefault("canonical_wallet.orphan_grace_seconds", 900)
 	viper.SetDefault("canonical_wallet.reconciliation_read_token", "")
 	viper.SetDefault("canonical_wallet.receivable_redrive_interval_seconds", 300)
@@ -2812,6 +2834,26 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("platform_identity.version is required when platform_identity.enabled=true")
 		}
 	}
+	if journalDir := c.CanonicalWallet.ReaderJournalDirectory; journalDir != "" {
+		if !filepath.IsAbs(journalDir) || filepath.Clean(journalDir) != journalDir || strings.TrimSpace(journalDir) != journalDir || strings.ContainsAny(journalDir, "\x00\r\n") {
+			return fmt.Errorf("canonical_wallet.reader_journal_directory must be a clean absolute directory path")
+		}
+	}
+	for name, mode := range map[string]*string{
+		"llm_immediate_release_mode":   &c.CanonicalWallet.LLMImmediateReleaseMode,
+		"media_immediate_release_mode": &c.CanonicalWallet.MediaImmediateReleaseMode,
+	} {
+		if *mode == "" {
+			*mode = "off"
+		}
+		if *mode != "off" && *mode != "shadow" && *mode != "enabled" {
+			return fmt.Errorf("canonical_wallet.%s must be off, shadow, or enabled", name)
+		}
+		if *mode == "enabled" && (c.CanonicalWallet.Holds != "on" || c.CanonicalWallet.Mode != CanonicalWalletModeEnforce || !c.CanonicalWallet.USDWalletEnabled) {
+			return fmt.Errorf("canonical_wallet.%s=enabled requires enforce mode, holds=on and USD wallet policy", name)
+		}
+	}
+
 	// The holds block sits before the mode switch (not inside the shadow/enforce
 	// case) so canonical_wallet.holds=on with mode=disabled is refused: the mode
 	// switch's disabled case would otherwise skip it (§10.1).
