@@ -81,20 +81,46 @@ var installCanonicalWalletLeaseScript = redis.NewScript(`
 	-- decided on that field (the reserve/arm guards, leaseCovers), never on
 	-- the key TTL.
 	local retain_until = tonumber(ARGV[8])
+ local revision=tonumber(ARGV[10]);local returned=tonumber(ARGV[11]);local funded=tonumber(ARGV[12]);local frozen=ARGV[13]
+ local budget_revision=math.max(tonumber(ARGV[17]),tonumber(redis.call('HGET',KEYS[1],'budget_revision') or '0'))
+ local previous_revision=tonumber(redis.call('HGET',KEYS[3],'return_revision') or redis.call('HGET',KEYS[1],'return_revision') or '0')
+ local previous_returned=tonumber(redis.call('HGET',KEYS[3],'returned_units') or redis.call('HGET',KEYS[1],'returned_units') or '0')
+ local previous_frozen=redis.call('HGET',KEYS[3],'funding_frozen') or redis.call('HGET',KEYS[1],'funding_frozen')
+ if revision<previous_revision or returned<previous_returned or (revision==previous_revision and returned~=previous_returned)
+  or (previous_frozen=='1' and frozen~='1') then return redis.error_reply('stale canonical wallet funding revision') end
+ if funded-returned~=incoming_budget then return redis.error_reply('canonical wallet funding does not conserve') end
+ local old_scope=redis.call('HGET',KEYS[1],'funding_scope')
+ if old_scope and old_scope~='' and (old_scope~=ARGV[14] or (redis.call('HGET',KEYS[1],'funding_owner_id') or '')~=ARGV[15]
+  or (redis.call('HGET',KEYS[1],'funding_issuance_key') or '')~=ARGV[16]) then return redis.error_reply('canonical wallet funding identity conflict') end
+ local previous_funded=tonumber(redis.call('HGET',KEYS[3],'funded_units') or redis.call('HGET',KEYS[1],'funded_units') or ARGV[12])
+ if previous_frozen=='1' and previous_funded~=funded then return redis.error_reply('canonical frozen principal conflict') end
+
 	if ARGV[9]=='1' and redis.call('EXISTS',KEYS[1])==0 then return redis.error_reply('canonical wallet cached lease disappeared') end
 	if redis.call('EXISTS', KEYS[1]) == 1 then
 		local current_consumed = tonumber(redis.call('HGET', KEYS[1], 'consumed_units') or '0')
 		if current_consumed > incoming_consumed then
 			incoming_consumed = current_consumed
 		end
-		incoming_budget = math.max(incoming_budget,tonumber(redis.call('HGET',KEYS[1],'budget_units') or '0'))
+		if frozen~='1' then incoming_budget = math.max(incoming_budget,tonumber(redis.call('HGET',KEYS[1],'budget_units') or '0'));funded=incoming_budget+returned end
+  if frozen=='1' and incoming_consumed-tonumber(redis.call('HGET',KEYS[1],'released_units') or '0')>incoming_budget then return redis.error_reply('canonical frozen backing conflict') end
 		local previous_expiry=tonumber(redis.call('HGET',KEYS[1],'expires_at_ms') or ARGV[5]); incoming_expires=math.min(previous_expiry,incoming_expires)
 	end
 	redis.call('HSET', KEYS[1],
 		'lease_id', ARGV[1], 'platform_user_id', ARGV[2], 'currency', ARGV[3],
-		'budget_units', incoming_budget, 'consumed_units', incoming_consumed, 'expires_at_ms', incoming_expires)
-	if redis.call('HGET',KEYS[1],'durable_media')=='1' then redis.call('PERSIST',KEYS[1]) else redis.call('PEXPIREAT', KEYS[1], retain_until) end
+		'budget_units', incoming_budget, 'consumed_units', incoming_consumed, 'expires_at_ms', incoming_expires,
+ 'funded_units',funded,'returned_units',returned,'return_revision',revision,'budget_revision',budget_revision,
+ 'funding_frozen',frozen,'funding_scope',ARGV[14],'funding_owner_id',ARGV[15],'funding_issuance_key',ARGV[16])
+ if frozen=='1' then
+  -- The tombstone's signature belongs to its stored revision. Moving the revision
+  -- forward without that revision's receipt must drop it, otherwise the receipt
+  -- of this very revision is later rejected as a conflicting signature.
+  if revision>previous_revision then redis.call('HDEL',KEYS[3],'receipt_signature') end
+  redis.call('HSET',KEYS[3],'funding_frozen','1','funded_units',funded,'returned_units',returned,'return_revision',revision);redis.call('PERSIST',KEYS[3])
+ end
+	if frozen=='1' or redis.call('HGET',KEYS[1],'durable_media')=='1' then redis.call('PERSIST',KEYS[1]) else redis.call('PEXPIREAT', KEYS[1], retain_until) end
 
+	if frozen=='1' or ARGV[14]=='media' or ARGV[14]=='settle' then
+ if redis.call('GET',KEYS[2])==ARGV[1] then redis.call('DEL',KEYS[2]) end;return 1 end
 	local current_pointer_lease_id = redis.call('GET', KEYS[2])
 	local should_advance_pointer = true
 	if current_pointer_lease_id ~= false and current_pointer_lease_id ~= ARGV[1] then
@@ -138,7 +164,7 @@ var reserveCanonicalWalletLeaseScript = redis.NewScript(`
 		end
 		return {6}
 	end
-	if redis.call('HGET',KEYS[1],'sealed')=='1' then return {3} end
+	if redis.call('HGET',KEYS[1],'sealed')=='1' or redis.call('HGET',KEYS[1],'funding_frozen')=='1' then return {3} end
 	if expires_at <= tonumber(ARGV[4]) then return {3} end
 	local amount = tonumber(ARGV[2])
 	if amount <= 0 or consumed - released + amount > budget then return {4} end
@@ -177,7 +203,7 @@ var sealCanonicalWalletLeaseScript = redis.NewScript(`
 	local budget = tonumber(redis.call('HGET', KEYS[1], 'budget_units') or '0')
 	local consumed = tonumber(redis.call('HGET', KEYS[1], 'consumed_units') or '0')
 	local released = tonumber(redis.call('HGET', KEYS[1], 'released_units') or '0')
-	redis.call('HSET', KEYS[1], 'consumed_units', budget, 'sealed', '1')
+	if redis.call('HGET',KEYS[1],'funding_frozen')=='1' then redis.call('HSET',KEYS[1],'sealed','1') else redis.call('HSET', KEYS[1], 'consumed_units', budget, 'sealed', '1') end
 	local current = redis.call('GET', KEYS[2])
 	if current ~= false and current == ARGV[1] then
 		redis.call('DEL', KEYS[2])
@@ -206,6 +232,7 @@ var armCanonicalWalletHoldScript = redis.NewScript(`
 	if redis.call('EXISTS', KEYS[2]) == 1 then
 		return {5, redis.call('HGET', KEYS[2], 'lease_id'), tonumber(redis.call('HGET', KEYS[2], 'held_units'))}
 	end
+	if redis.call('HGET',KEYS[1],'funding_frozen')=='1' then return {3} end
 	local units = tonumber(ARGV[2])
 	if units <= 0 or consumed - released + units > budget then return {4} end
 	redis.call('HSET', KEYS[1], 'consumed_units', consumed + units)
@@ -276,7 +303,7 @@ var convertCanonicalWalletHoldScript = redis.NewScript(`
 		local budget = tonumber(redis.call('HGET', KEYS[3], 'budget_units') or '0')
 		local consumed = tonumber(redis.call('HGET', KEYS[3], 'consumed_units') or '0')
 		local released = tonumber(redis.call('HGET', KEYS[3], 'released_units') or '0')
-		if expires_at > tonumber(ARGV[4]) and consumed - released + excess <= budget then
+		if redis.call('HGET',KEYS[3],'funding_frozen')~='1' and expires_at > tonumber(ARGV[4]) and consumed - released + excess <= budget then
 			redis.call('HINCRBY', KEYS[3], 'consumed_units', excess)
 			redis.call('SET', KEYS[4], lease_id); redis.call('PEXPIREAT', KEYS[4], expires_at)
 			redis.call('HSET', KEYS[1], 'state', 'settled', 'event_id', ARGV[2]); redis.call('SREM', KEYS[2], ARGV[1])
@@ -402,13 +429,13 @@ func (c *canonicalWalletRedisStore) InstallCanonicalWalletLease(ctx context.Cont
 	if c == nil || c.rdb == nil {
 		return errors.New("canonical wallet Redis store unavailable")
 	}
-	if strings.TrimSpace(lease.PlatformUserID) == "" || strings.TrimSpace(lease.LeaseID) == "" || lease.BudgetUnits <= 0 || lease.ExpiresAt.IsZero() {
+	if strings.TrimSpace(lease.PlatformUserID) == "" || strings.TrimSpace(lease.LeaseID) == "" || (lease.BudgetUnits < 0 || (lease.BudgetUnits == 0 && !lease.FundingFrozen)) || lease.ExpiresAt.IsZero() {
 		return errors.New("invalid canonical wallet lease")
 	}
 	if lease.ConsumedUnits < 0 || lease.ReleasedUnits < 0 || lease.ReleasedUnits > lease.ConsumedUnits || lease.ConsumedUnits-lease.ReleasedUnits > lease.BudgetUnits {
 		return errors.New("invalid canonical wallet lease consumption")
 	}
-	if err := ensureRedisLuaSafeInt64(lease.BudgetUnits, lease.ConsumedUnits, lease.ReleasedUnits); err != nil {
+	if err := ensureRedisLuaSafeInt64(lease.BudgetUnits, lease.ConsumedUnits, lease.ReleasedUnits, lease.FundingPrincipalUnits(), lease.ReturnedUnits, lease.ReturnRevision, lease.BudgetRevision); err != nil {
 		return err
 	}
 	currency, err := service.RequireUSDBillingCurrency(lease.Currency)
@@ -429,9 +456,9 @@ func (c *canonicalWalletRedisStore) InstallCanonicalWalletLease(ctx context.Cont
 		requireCached = "1"
 	}
 	return installCanonicalWalletLeaseScript.Run(ctx, c.rdb,
-		[]string{canonicalWalletLeaseKey(lease.PlatformUserID, lease.LeaseID), canonicalWalletCurrentKey(lease.PlatformUserID)},
+		[]string{canonicalWalletLeaseKey(lease.PlatformUserID, lease.LeaseID), canonicalWalletCurrentKey(lease.PlatformUserID), canonicalWalletFundingTombstoneKey(lease.PlatformUserID, lease.LeaseID)},
 		lease.LeaseID, strings.TrimSpace(lease.PlatformUserID), currency,
-		lease.ConsumedUnits, lease.ExpiresAt.UnixMilli(), lease.BudgetUnits, canonicalWalletLeaseKeyPrefix(lease.PlatformUserID), retainUntil.UnixMilli(), requireCached,
+		lease.ConsumedUnits, lease.ExpiresAt.UnixMilli(), lease.BudgetUnits, canonicalWalletLeaseKeyPrefix(lease.PlatformUserID), retainUntil.UnixMilli(), requireCached, lease.ReturnRevision, lease.ReturnedUnits, lease.FundingPrincipalUnits(), boolWalletFlag(lease.FundingFrozen), lease.FundingScope, lease.FundingOwnerID, lease.FundingIssuanceKey, lease.BudgetRevision,
 	).Err()
 }
 
@@ -979,7 +1006,20 @@ func parseCanonicalWalletLease(values map[string]string) (*service.CanonicalWall
 	if err != nil {
 		return nil, fmt.Errorf("parse canonical wallet expiry: %w", err)
 	}
+	funding := make([]int64, 4)
+	for i, key := range []string{"funded_units", "returned_units", "return_revision", "budget_revision"} {
+		if values[key] != "" {
+			funding[i], err = strconv.ParseInt(values[key], 10, 64)
+			if err != nil || funding[i] < 0 {
+				return nil, errors.New("invalid canonical funding metadata")
+			}
+		}
+	}
+	if funding[0] > 0 && funding[0]-funding[1] != budget {
+		return nil, errors.New("canonical funding principal mismatch")
+	}
 	return &service.CanonicalWalletLease{
+		FundedUnits: funding[0], ReturnedUnits: funding[1], ReturnRevision: funding[2], BudgetRevision: funding[3], FundingFrozen: values["funding_frozen"] == "1", FundingScope: values["funding_scope"], FundingOwnerID: values["funding_owner_id"], FundingIssuanceKey: values["funding_issuance_key"],
 		LeaseID: values["lease_id"], PlatformUserID: values["platform_user_id"], Currency: values["currency"],
 		BudgetUnits: budget, ConsumedUnits: consumed, ReleasedUnits: released, Sealed: values["sealed"] == "1", ExpiresAt: time.UnixMilli(expiresAtMS).UTC(),
 	}, nil

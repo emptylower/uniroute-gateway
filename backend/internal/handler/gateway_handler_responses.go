@@ -263,6 +263,9 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 				if accountReleaseFunc != nil {
 					accountReleaseFunc()
 				}
+				if writeWalletRiskResponse(c, authErr) {
+					return
+				}
 				h.handleStreamingAwareError(c, service.AuthorizationRefusedHTTPStatus, service.AuthorizationRefusedErrorType, service.AuthorizationRefusedMessage, false)
 				return
 			}

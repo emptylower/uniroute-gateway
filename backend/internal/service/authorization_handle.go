@@ -69,13 +69,30 @@ type AuthorizationHandle struct {
 	// onOutcome (§10.4): installed by Authorize when a hold was armed; invoked
 	// by RecordOutcome AFTER h.mu is released — the callback does a Redis
 	// round trip and must never re-enter the handle.
-	beforeWrite    func(context.Context, string) error
-	writeEnded     func()
-	onOutcome      func(token string, outcome AuthorizationOutcome, err error)
-	retryCheck     func(context.Context) error
-	renewAfterZero func(context.Context) (*AuthorizationHandle, error)
-	renewMu        sync.Mutex
-	renewed        atomic.Pointer[AuthorizationHandle]
+	beforeWrite           func(context.Context, string) error
+	writeEnded            func()
+	onOutcome             func(token string, outcome AuthorizationOutcome, err error)
+	retryCheck            func(context.Context) error
+	renewAfterZero        func(context.Context) (*AuthorizationHandle, error)
+	renewMu               sync.Mutex
+	renewed               atomic.Pointer[AuthorizationHandle]
+	stageUsage            func(context.Context, UsageRecordTask) (UsageRecordTask, error)
+	sealEvidence          func(context.Context, string) error
+	dispatchEvidence      func(context.Context) error
+	readerEvidence        *WalletReaderEvidence
+	readerEvidenceErr     error
+	readerJournal         *walletReaderJournal
+	readerBillingFamily   BillingFamily
+	readerTokenOnly       bool
+	readerCountKind       string
+	readerNormalization   *WalletReaderNormalization
+	requiresReaderJournal bool
+	consumeHTTP           func(int, WalletReaderEvidence, error)
+	readerStarted         func() error
+	readerObserved        func(WalletReaderEvidence) error
+	headerObserved        func(int) error
+	pendingZero           bool
+	zeroAcknowledged      bool
 }
 
 func (h *AuthorizationHandle) activeAttempt() *AuthorizationHandle {
@@ -107,7 +124,10 @@ func (h *AuthorizationHandle) nextHTTPAttempt(ctx context.Context) (*Authorizati
 		return h, nil
 	}
 	outcome := writes[len(writes)-1].Outcome
-	if outcome != AuthorizationOutcomeRejected && outcome != AuthorizationOutcomeNotWritten {
+	h.mu.Lock()
+	knownZero := h.zeroAcknowledged
+	h.mu.Unlock()
+	if !knownZero && outcome != AuthorizationOutcomeRejected && outcome != AuthorizationOutcomeNotWritten {
 		if h.beforeWrite != nil {
 			return nil, ErrWalletUnknownCostRetry
 		}
@@ -434,7 +454,10 @@ func WalletAttemptMayRetry(ctx context.Context) bool {
 		return true
 	}
 	last := writes[len(writes)-1]
-	if last.Outcome != AuthorizationOutcomeRejected && last.Outcome != AuthorizationOutcomeNotWritten {
+	h.mu.Lock()
+	knownZero := h.zeroAcknowledged
+	h.mu.Unlock()
+	if !knownZero && last.Outcome != AuthorizationOutcomeRejected && last.Outcome != AuthorizationOutcomeNotWritten {
 		return false
 	}
 	return h.retryCheck != nil && h.retryCheck(ctx) == nil

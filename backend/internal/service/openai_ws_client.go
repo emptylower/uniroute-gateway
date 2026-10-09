@@ -348,8 +348,6 @@ func (c *coderOpenAIWSClientConn) Close() error {
 	if c == nil || c.conn == nil {
 		return nil
 	}
-	// Close 为幂等，忽略重复关闭错误。
-	_ = c.conn.Close(coderws.StatusNormalClosure, "")
-	_ = c.conn.CloseNow()
+	closeOpenAIWSNativeConn(c.conn, coderws.StatusNormalClosure, "")
 	return nil
 }

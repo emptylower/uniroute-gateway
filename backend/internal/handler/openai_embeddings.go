@@ -210,6 +210,9 @@ func (h *OpenAIGatewayHandler) Embeddings(c *gin.Context) {
 			if selection.ReleaseFunc != nil {
 				selection.ReleaseFunc()
 			}
+			if writeWalletRiskResponse(c, authErr) {
+				return
+			}
 			h.errorResponse(c, service.AuthorizationRefusedHTTPStatus, service.AuthorizationRefusedErrorType, service.AuthorizationRefusedMessage)
 			return
 		}

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
+	openaiwsv2 "github.com/Wei-Shaw/sub2api/internal/service/openai_ws_v2"
 	coderws "github.com/coder/websocket"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
@@ -33,7 +34,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	token string,
 	firstClientMessage []byte,
 	hooks *OpenAIWSIngressHooks,
-) error {
+) (returnErr error) {
 	if s == nil {
 		return errors.New("service is nil")
 	}
@@ -49,6 +50,33 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	if err := validateOpenAIWSBearerToken(account, token); err != nil {
 		return err
 	}
+
+	// Ingress owns one synchronous reader per turn. Retain every accepted
+	// attempt so read/write errors and panics still seal after that reader ends.
+	pendingHandles := make(map[string]*AuthorizationHandle)
+	var currentIngressHandle *AuthorizationHandle
+	retainIngressHandle := func(handle *AuthorizationHandle) {
+		if handle != nil {
+			pendingHandles[handle.ID] = handle
+		}
+	}
+	finishIngressHandle := func(handle *AuthorizationHandle, reason string) error {
+		if err := finalizeOpenAIWSTurnEvidence(ctx, handle, reason); err != nil {
+			return err
+		}
+		if handle != nil {
+			delete(pendingHandles, handle.ID)
+		}
+		return nil
+	}
+	defer func() {
+		for _, handle := range pendingHandles {
+			if err := finalizeOpenAIWSTurnEvidence(ctx, handle, "ws_ingress_reader_ended"); err != nil && returnErr == nil {
+				returnErr = err
+			}
+		}
+	}()
+	terminalResponseIDs := make(map[string]struct{})
 
 	// 预取一次 OpenAI Fast Policy settings，绑定到 ctx，让该 WS session
 	// 内所有帧的 evaluateOpenAIFastPolicy 调用复用同一份快照，避免每帧
@@ -548,9 +576,10 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			if hooks != nil && hooks.AuthorizeTurn != nil {
 				h, authErr := hooks.AuthorizeTurn(turn, bridgeEst)
 				if authErr != nil {
-					return wrapOpenAIWSIngressTurnError("authorize", authErr, false)
+					return wrapOpenAIWSIngressTurnError("authorize", openAIWSWalletRiskError(authErr), false)
 				}
 				bridgeTurnHandle = h
+				retainIngressHandle(h)
 			}
 			// The bridge call carries the PER-TURN derived context, never the
 			// connection-scoped ctx (spec §2.0, the pooled-ingress row).
@@ -571,6 +600,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			)
 			if hooks != nil && hooks.AfterTurn != nil {
 				hooks.AfterTurn(turn, result, bridgeErr)
+			}
+			if err := finishIngressHandle(bridgeTurnHandle, "ws_http_bridge_reader_ended"); err != nil {
+				return err
 			}
 			if bridgeErr != nil {
 				return bridgeErr
@@ -823,10 +855,12 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			if authErr != nil {
 				// stage "authorize" is not retryable (isOpenAIWSIngressTurnRetryable's
 				// default arm) and the refusal surfaces as the named close status.
-				return nil, wrapOpenAIWSIngressTurnError("authorize", authErr, false)
+				return nil, wrapOpenAIWSIngressTurnError("authorize", openAIWSWalletRiskError(authErr), false)
 			}
 			turnHandle = h
+			retainIngressHandle(h)
 		}
+		currentIngressHandle = turnHandle
 		lease.ArmAuthorization(turnHandle)
 		turnCtx := WithAuthorizationHandle(ctx, turnHandle)
 		if err := lease.WriteJSONWithContextTimeout(turnCtx, json.RawMessage(payload), s.openAIWSWriteTimeout()); err != nil {
@@ -848,6 +882,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 
 		responseID := ""
 		usage := OpenAIUsage{}
+		usageEvidence := openaiwsv2.Usage{}
 		imageCounter := newOpenAIImageOutputCounter()
 		var firstTokenMs *int
 		reqStream := openAIWSPayloadBoolFromRaw(payload, "stream", true)
@@ -890,6 +925,14 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			}
 
 			eventType, eventResponseID, _ := parseOpenAIWSEventEnvelope(upstreamMessage)
+			// A delayed terminal from a prior turn cannot become this turn's
+			// result, usage, image count or authorization outcome.
+			if isOpenAIWSTerminalEvent(eventType) && eventResponseID != "" {
+				if _, duplicate := terminalResponseIDs[eventResponseID]; duplicate {
+					continue
+				}
+				terminalResponseIDs[eventResponseID] = struct{}{}
+			}
 			if responseID == "" && eventResponseID != "" {
 				responseID = eventResponseID
 			}
@@ -984,7 +1027,10 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				firstTokenMs = &ms
 			}
 			if openAIWSEventShouldParseUsage(eventType) {
-				parseOpenAIWSResponseUsageFromCompletedEvent(upstreamMessage, &usage)
+				usageEvidence = openaiwsv2.ParseUsage(upstreamMessage)
+				if usageEvidence.Valid {
+					usage = OpenAIUsage{InputTokens: usageEvidence.InputTokens, OutputTokens: usageEvidence.OutputTokens, CacheCreationInputTokens: usageEvidence.CacheCreationInputTokens, CacheReadInputTokens: usageEvidence.CacheReadInputTokens, ImageOutputTokens: usageEvidence.ImageOutputTokens}
+				}
 			}
 			imageCounter.AddSSEData(upstreamMessage)
 
@@ -1066,6 +1112,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				result := &OpenAIForwardResult{
 					RequestID:             responseID,
 					Usage:                 usage,
+					UsagePresent:          usageEvidence.Present,
+					UsageValid:            usageEvidence.Valid,
+					UsageMalformed:        usageEvidence.Malformed,
 					Model:                 originalModel,
 					UpstreamModel:         mappedModel,
 					ServiceTier:           extractOpenAIServiceTierFromBody(payload),
@@ -1592,11 +1641,16 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		result, relayErr := sendAndRelay(turn, sessionLease, currentPayload, currentPayloadBytes, currentOriginalModel, currentImageBillingModel, currentImageSizeTier, currentImageInputSize)
 		if relayErr != nil {
 			lastTurnClean = false
-			if recoverIngressPrevResponseNotFound(relayErr, turn, connID) {
+			if err := finishIngressHandle(currentIngressHandle, "ws_ingress_error_reader_ended"); err != nil {
+				return err
+			}
+			// Finish evidence and obtain the signed zero ACK before any replay.
+			mayRetry := WalletAttemptMayRetry(WithAuthorizationHandle(ctx, currentIngressHandle))
+			if mayRetry && recoverIngressPrevResponseNotFound(relayErr, turn, connID) {
 				sessionLease.DisarmAuthorization()
 				continue
 			}
-			if retryIngressTurn(relayErr, turn, connID) {
+			if mayRetry && retryIngressTurn(relayErr, turn, connID) {
 				sessionLease.DisarmAuthorization()
 				continue
 			}
@@ -1616,14 +1670,17 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		lastTurnFinishedAt = time.Now()
 		lastTurnClean = true
 		sessionLease.DisarmAuthorization()
-		sessionHasIngressUsage = true
+		if result == nil {
+			return errors.New("websocket turn result is nil")
+		}
+		sessionHasIngressUsage = result.UsageValid
 		lastIngressTurnInput = result.Usage.InputTokens
 		lastIngressTurnOutput = result.Usage.OutputTokens
 		if hooks != nil && hooks.AfterTurn != nil {
 			hooks.AfterTurn(turn, result, nil)
 		}
-		if result == nil {
-			return errors.New("websocket turn result is nil")
+		if err := finishIngressHandle(currentIngressHandle, "ws_ingress_turn_actor_handoff"); err != nil {
+			return err
 		}
 		responseID := strings.TrimSpace(result.RequestID)
 		lastTurnResponseID = responseID

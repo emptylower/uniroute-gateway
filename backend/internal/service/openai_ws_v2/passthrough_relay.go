@@ -3,6 +3,7 @@ package openai_ws_v2
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"strconv"
@@ -22,6 +23,10 @@ type FrameConn interface {
 }
 
 type Usage struct {
+	Present                  bool
+	Valid                    bool
+	Malformed                bool
+	ObservedPositive         bool
 	InputTokens              int
 	OutputTokens             int
 	CacheCreationInputTokens int
@@ -86,14 +91,15 @@ type RelayTraceEvent struct {
 }
 
 type relayState struct {
-	usage             Usage
-	requestModelMu    sync.RWMutex
-	requestModel      string
-	lastResponseID    string
-	terminalEventType string
-	firstTokenMs      *int
-	turnTimingByID    map[string]*relayTurnTiming
-	activeTurn        *relayTurnTiming
+	usage               Usage
+	requestModelMu      sync.RWMutex
+	requestModel        string
+	lastResponseID      string
+	terminalEventType   string
+	firstTokenMs        *int
+	turnTimingByID      map[string]*relayTurnTiming
+	activeTurn          *relayTurnTiming
+	terminalResponseIDs map[string]struct{}
 }
 
 type relayExitSignal struct {
@@ -105,6 +111,7 @@ type relayExitSignal struct {
 
 type observedUpstreamEvent struct {
 	terminal   bool
+	duplicate  bool
 	eventType  string
 	responseID string
 	usage      Usage
@@ -219,40 +226,77 @@ func Relay(
 	exitCh := make(chan relayExitSignal, 3)
 	dropDownstreamWrites := atomic.Bool{}
 	clientReaderStarted := atomic.Bool{}
+	var readers sync.WaitGroup
+	var readersMu sync.Mutex
+	stoppingReaders := false
+	runReader := func(stage string, run func()) {
+		defer readers.Done()
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				exitCh <- relayExitSignal{stage: stage + "_panic", err: fmt.Errorf("websocket reader panicked: %v", recovered)}
+			}
+		}()
+		run()
+	}
+	var stopOnce sync.Once
+	stopAndJoin := func() {
+		stopOnce.Do(func() {
+			readersMu.Lock()
+			stoppingReaders = true
+			readersMu.Unlock()
+			relayCancel()
+			_ = upstreamConn.Close()
+			// Client readers honor relay cancellation. Leave the client close
+			// code to the caller on errors, and to the graceful path below.
+			readers.Wait()
+		})
+	}
+	defer stopAndJoin()
 	startClientReader := func() {
-		if !clientReaderStarted.CompareAndSwap(false, true) {
+		readersMu.Lock()
+		defer readersMu.Unlock()
+		if stoppingReaders || !clientReaderStarted.CompareAndSwap(false, true) {
 			return
 		}
-		go runClientToUpstream(relayCtx, clientConn, options.ReadClientFrame, writeClientFrameUpstream, markActivity, clientToUpstreamFrames, onTrace, exitCh)
+		readers.Add(1)
+		go runReader("read_client", func() {
+			runClientToUpstream(relayCtx, clientConn, options.ReadClientFrame, writeClientFrameUpstream, markActivity, clientToUpstreamFrames, onTrace, exitCh)
+		})
 	}
 	if !options.StartClientAfterFirstDownstream {
 		startClientReader()
 	}
-	go runUpstreamToClient(
-		relayCtx,
-		upstreamConn,
-		writeClient,
-		startAt,
-		nowFn,
-		state,
-		options.OnUsageParseFailure,
-		options.OnTurnComplete,
-		options.BeforeWriteClient,
-		options.BeforeClientWrite,
-		options.AfterClientWrite,
-		func(msgType coderws.MessageType, payload []byte) {
-			if options.StartClientAfterFirstDownstream {
-				startClientReader()
-			}
-		},
-		&dropDownstreamWrites,
-		upstreamToClientFrames,
-		droppedDownstreamFrames,
-		markActivity,
-		onTrace,
-		exitCh,
-	)
-	go runIdleWatchdog(relayCtx, nowFn, options.IdleTimeout, &lastActivity, onTrace, exitCh)
+	readers.Add(1)
+	go runReader("read_upstream", func() {
+		runUpstreamToClient(
+			relayCtx,
+			upstreamConn,
+			writeClient,
+			startAt,
+			nowFn,
+			state,
+			options.OnUsageParseFailure,
+			options.OnTurnComplete,
+			options.BeforeWriteClient,
+			options.BeforeClientWrite,
+			options.AfterClientWrite,
+			func(msgType coderws.MessageType, payload []byte) {
+				if options.StartClientAfterFirstDownstream {
+					startClientReader()
+				}
+			},
+			&dropDownstreamWrites,
+			upstreamToClientFrames,
+			droppedDownstreamFrames,
+			markActivity,
+			onTrace,
+			exitCh,
+		)
+	})
+	readers.Add(1)
+	go runReader("idle_watchdog", func() {
+		runIdleWatchdog(relayCtx, nowFn, options.IdleTimeout, &lastActivity, onTrace, exitCh)
+	})
 
 	firstExit := <-exitCh
 	// An outer ingress cancellation is a control-plane close, not a graceful
@@ -303,8 +347,10 @@ func Relay(
 		})
 	}
 
-	relayCancel()
-	_ = upstreamConn.Close()
+	// Stop startup before cancellation, then join every reader before inspecting
+	// usage. A timed drain is only a chance to collect a final frame, not proof
+	// that a reader has handed off its financial evidence.
+	stopAndJoin()
 
 	enrichResult(&result, state, nowFn().Sub(startAt))
 	result.ClientToUpstreamFrames = clientToUpstreamFrames.Load()
@@ -481,6 +527,13 @@ func runUpstreamToClient(
 			return
 		}
 		markActivity()
+		observedEvent := observedUpstreamEvent{}
+		if msgType == coderws.MessageText {
+			observedEvent = observeUpstreamMessage(state, payload, startAt, nowFn, onUsageParseFailure)
+			if observedEvent.duplicate {
+				continue
+			}
+		}
 		if beforeWriteClient != nil {
 			if err := beforeWriteClient(msgType, payload, wroteDownstream); err != nil {
 				emitRelayTrace(onTrace, RelayTraceEvent{
@@ -498,13 +551,6 @@ func runUpstreamToClient(
 				}
 				return
 			}
-		}
-		observedEvent := observedUpstreamEvent{}
-		switch msgType {
-		case coderws.MessageText:
-			observedEvent = observeUpstreamMessage(state, payload, startAt, nowFn, onUsageParseFailure)
-		case coderws.MessageBinary:
-			// binary frame 直接透传，不进入 JSON 观测路径（避免无效解析开销）。
 		}
 		emitTurnComplete(onTurnComplete, state, observedEvent)
 		if dropDownstreamWrites != nil && dropDownstreamWrites.Load() {
@@ -658,6 +704,15 @@ func observeUpstreamMessage(
 	if responseID == "" && isTerminalEvent(eventType) {
 		responseID = strings.TrimSpace(values[3].String())
 	}
+	if isTerminalEvent(eventType) && responseID != "" {
+		if state.terminalResponseIDs == nil {
+			state.terminalResponseIDs = make(map[string]struct{})
+		}
+		if _, exists := state.terminalResponseIDs[responseID]; exists {
+			return observedUpstreamEvent{duplicate: true, eventType: eventType, responseID: responseID}
+		}
+		state.terminalResponseIDs[responseID] = struct{}{}
+	}
 	now := nowFn()
 
 	if state.firstTokenMs == nil && isTokenEvent(eventType) {
@@ -772,70 +827,89 @@ func openAIWSRelayCloneIntPtr(v *int) *int {
 	return &cloned
 }
 
-func parseUsageAndAccumulate(
-	state *relayState,
-	message []byte,
-	eventType string,
-	onParseFailure func(eventType string, usageRaw string),
-) Usage {
+// ParseUsage preserves whether a terminal supplied valid accounting evidence.
+// Missing or malformed usage must not be represented as a known zero.
+func ParseUsage(message []byte) Usage {
+	parsed := Usage{}
+	usage := gjson.GetBytes(message, "response.usage")
+	if !usage.Exists() {
+		return parsed
+	}
+	parsed.Present = true
+	if !gjson.ValidBytes(message) || !usage.IsObject() {
+		parsed.Malformed = true
+		return parsed
+	}
+	read := func(required bool, paths ...string) (int, bool) {
+		value := gjson.Result{}
+		valid := true
+		for _, path := range paths {
+			candidate := usage.Get(path)
+			if !candidate.Exists() {
+				continue
+			}
+			if candidate.Type == gjson.Number && candidate.Num > 0 {
+				parsed.ObservedPositive = true
+			}
+			_, ok := parseUsageIntField(candidate, required)
+			valid = valid && ok
+			if !value.Exists() {
+				value = candidate
+			}
+		}
+		n, ok := parseUsageIntField(value, required)
+		return n, valid && ok
+	}
+	var inputOK, outputOK, cachedOK, creationOK, imageOK bool
+	parsed.InputTokens, inputOK = read(true, "input_tokens", "prompt_tokens")
+	parsed.OutputTokens, outputOK = read(true, "output_tokens", "completion_tokens")
+	parsed.CacheReadInputTokens, cachedOK = read(false, "input_tokens_details.cached_tokens", "prompt_tokens_details.cached_tokens")
+	parsed.CacheCreationInputTokens, creationOK = read(false,
+		"input_tokens_details.cache_write_tokens", "prompt_tokens_details.cache_write_tokens",
+		"input_tokens_details.cache_creation_tokens", "prompt_tokens_details.cache_creation_tokens",
+		"cache_write_tokens", "cache_creation_input_tokens", "cache_write_input_tokens", "cache_creation_tokens")
+	parsed.ImageOutputTokens, imageOK = read(false, "output_tokens_details.image_tokens", "completion_tokens_details.image_tokens")
+	parsed.Valid = inputOK && outputOK && cachedOK && creationOK && imageOK
+	parsed.Malformed = !parsed.Valid
+	if !parsed.Valid {
+		return Usage{Present: true, Malformed: true, ObservedPositive: parsed.ObservedPositive}
+	}
+	return parsed
+}
+
+func parseUsageAndAccumulate(state *relayState, message []byte, eventType string, onParseFailure func(string, string)) Usage {
 	if state == nil || len(message) == 0 || !shouldParseUsage(eventType) {
 		return Usage{}
 	}
-	usageResult := gjson.GetBytes(message, "response.usage")
-	if !usageResult.Exists() {
-		return Usage{}
-	}
-	usageRaw := strings.TrimSpace(usageResult.Raw)
-	if usageRaw == "" || !strings.HasPrefix(usageRaw, "{") {
+	parsed := ParseUsage(message)
+	state.usage.Present = state.usage.Present || parsed.Present
+	state.usage.Malformed = state.usage.Malformed || parsed.Malformed
+	state.usage.ObservedPositive = state.usage.ObservedPositive || parsed.ObservedPositive
+	if parsed.Malformed {
 		recordUsageParseFailure()
 		if onParseFailure != nil {
-			onParseFailure(eventType, usageRaw)
+			onParseFailure(eventType, gjson.GetBytes(message, "response.usage").Raw)
 		}
-		return Usage{}
+		return parsed
 	}
-
-	inputResult := gjson.GetBytes(message, "response.usage.input_tokens")
-	if !inputResult.Exists() {
-		inputResult = gjson.GetBytes(message, "response.usage.prompt_tokens")
+	if !parsed.Valid {
+		return parsed
 	}
-	outputResult := gjson.GetBytes(message, "response.usage.output_tokens")
-	if !outputResult.Exists() {
-		outputResult = gjson.GetBytes(message, "response.usage.completion_tokens")
+	current := &state.usage
+	maxInt := int(^uint(0) >> 1)
+	if parsed.InputTokens > maxInt-current.InputTokens || parsed.OutputTokens > maxInt-current.OutputTokens ||
+		parsed.CacheReadInputTokens > maxInt-current.CacheReadInputTokens || parsed.CacheCreationInputTokens > maxInt-current.CacheCreationInputTokens ||
+		parsed.ImageOutputTokens > maxInt-current.ImageOutputTokens {
+		current.Malformed = true
+		return parsed
 	}
-	cachedResult := gjson.GetBytes(message, "response.usage.input_tokens_details.cached_tokens")
-	if !cachedResult.Exists() {
-		cachedResult = gjson.GetBytes(message, "response.usage.prompt_tokens_details.cached_tokens")
-	}
-	imageTokens := usageResult.Get("output_tokens_details.image_tokens").Int()
-	if imageTokens == 0 {
-		imageTokens = usageResult.Get("completion_tokens_details.image_tokens").Int()
-	}
-
-	inputTokens, inputOK := parseUsageIntField(inputResult, true)
-	outputTokens, outputOK := parseUsageIntField(outputResult, true)
-	cachedTokens, cachedOK := parseUsageIntField(cachedResult, false)
-	if !inputOK || !outputOK || !cachedOK {
-		recordUsageParseFailure()
-		if onParseFailure != nil {
-			onParseFailure(eventType, usageRaw)
-		}
-		// 解析失败时不做部分字段累加，避免计费 usage 出现“半有效”状态。
-		return Usage{}
-	}
-	parsedUsage := Usage{
-		InputTokens:              inputTokens,
-		OutputTokens:             outputTokens,
-		CacheCreationInputTokens: openAICacheCreationTokensFromUsage(usageResult),
-		CacheReadInputTokens:     cachedTokens,
-		ImageOutputTokens:        int(imageTokens),
-	}
-
-	state.usage.InputTokens += parsedUsage.InputTokens
-	state.usage.OutputTokens += parsedUsage.OutputTokens
-	state.usage.CacheCreationInputTokens += parsedUsage.CacheCreationInputTokens
-	state.usage.CacheReadInputTokens += parsedUsage.CacheReadInputTokens
-	state.usage.ImageOutputTokens += parsedUsage.ImageOutputTokens
-	return parsedUsage
+	current.Valid = true
+	current.InputTokens += parsed.InputTokens
+	current.OutputTokens += parsed.OutputTokens
+	current.CacheCreationInputTokens += parsed.CacheCreationInputTokens
+	current.CacheReadInputTokens += parsed.CacheReadInputTokens
+	current.ImageOutputTokens += parsed.ImageOutputTokens
+	return parsed
 }
 
 func parseUsageIntField(value gjson.Result, required bool) (int, bool) {
@@ -845,28 +919,26 @@ func parseUsageIntField(value gjson.Result, required bool) (int, bool) {
 	if value.Type != gjson.Number {
 		return 0, false
 	}
-	return int(value.Int()), true
+	// Parse the integer lexeme rather than a float64; rounding a large JSON
+	// number must not silently turn malformed usage into billable tokens.
+	n, err := strconv.ParseUint(value.Raw, 10, strconv.IntSize)
+	if err != nil || n > uint64(^uint(0)>>1) {
+		return 0, false
+	}
+	return int(n), true
 }
 
 func openAICacheCreationTokensFromUsage(value gjson.Result) int {
-	for _, field := range []string{
-		"input_tokens_details.cache_write_tokens",
-		"prompt_tokens_details.cache_write_tokens",
-		"input_tokens_details.cache_creation_tokens",
-		"prompt_tokens_details.cache_creation_tokens",
+	for _, path := range []string{
+		"input_tokens_details.cache_write_tokens", "prompt_tokens_details.cache_write_tokens",
+		"input_tokens_details.cache_creation_tokens", "prompt_tokens_details.cache_creation_tokens",
+		"cache_write_tokens", "cache_creation_input_tokens", "cache_write_input_tokens", "cache_creation_tokens",
 	} {
-		result := value.Get(field)
-		if result.Exists() {
-			return max(int(result.Int()), 0)
-		}
-	}
-	for _, field := range []string{
-		"cache_write_tokens",
-		"cache_creation_input_tokens",
-		"cache_write_input_tokens",
-		"cache_creation_tokens",
-	} {
-		if tokens := int(value.Get(field).Int()); tokens > 0 {
+		if field := value.Get(path); field.Exists() {
+			tokens, ok := parseUsageIntField(field, false)
+			if !ok {
+				return 0
+			}
 			return tokens
 		}
 	}

@@ -541,6 +541,9 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				if accountReleaseFunc != nil {
 					accountReleaseFunc()
 				}
+				if writeWalletRiskResponse(c, authErr) {
+					return
+				}
 				h.handleStreamingAwareError(c, service.AuthorizationRefusedHTTPStatus, service.AuthorizationRefusedErrorType, service.AuthorizationRefusedMessage, false)
 				return
 			}
@@ -940,6 +943,9 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 				}
 				if accountReleaseFunc != nil {
 					accountReleaseFunc()
+				}
+				if writeWalletRiskResponse(c, authErr) {
+					return
 				}
 				h.handleStreamingAwareError(c, service.AuthorizationRefusedHTTPStatus, service.AuthorizationRefusedErrorType, service.AuthorizationRefusedMessage, false)
 				return
@@ -2539,6 +2545,12 @@ func (h *GatewayHandler) maybeLogCompatibilityFallbackMetrics(reqLog *zap.Logger
 
 func (h *GatewayHandler) submitUsageRecordTask(parent context.Context, task service.UsageRecordTask, handle *service.AuthorizationHandle) {
 	if task == nil {
+		return
+	}
+	var stageErr error
+	task, stageErr = handle.PrepareUsageTask(parent, task)
+	if stageErr != nil {
+		handle.MarkAbandoned("durable_usage_stage_failed")
 		return
 	}
 	task = wrapUsageRecordTaskContext(parent, task)

@@ -98,6 +98,14 @@ const (
 )
 
 type CanonicalWalletLease struct {
+	FundedUnits        int64     `json:"funded_units,omitempty"`
+	ReturnedUnits      int64     `json:"returned_units,omitempty"`
+	ReturnRevision     int64     `json:"return_revision,omitempty"`
+	BudgetRevision     int64     `json:"budget_revision,omitempty"`
+	FundingScope       string    `json:"funding_scope,omitempty"`
+	FundingOwnerID     string    `json:"funding_owner_id,omitempty"`
+	FundingIssuanceKey string    `json:"funding_issuance_key,omitempty"`
+	FundingFrozen      bool      `json:"funding_frozen,omitempty"`
 	RequireCachedLease bool      `json:"-"`
 	LeaseID            string    `json:"lease_id"`
 	PlatformUserID     string    `json:"platform_user_id"`
@@ -120,7 +128,7 @@ type CanonicalWalletLease struct {
 }
 
 func (l CanonicalWalletLease) RemainingUnits() int64 {
-	if l.Sealed {
+	if l.Sealed || l.FundingFrozen {
 		return 0
 	}
 	budget, err := AddUnits(l.BudgetUnits, l.ReleasedUnits)
@@ -408,6 +416,10 @@ func newCanonicalWalletHTTPClient(cfg config.CanonicalWalletConfig, client *http
 // every amount a Phase 0 amount object (§9.2), no bare integer crosses the
 // wire. No idempotency key: ensure is idempotent by transaction.
 type canonicalWalletEnsureRequest struct {
+	FundingScope           string                      `json:"funding_scope,omitempty"`
+	FundingOwnerID         string                      `json:"funding_owner_id,omitempty"`
+	FundingIssuanceKey     string                      `json:"funding_issuance_key,omitempty"`
+	ExcludeLeaseIDs        []string                    `json:"exclude_lease_ids,omitempty"`
 	TopUpLeaseID           string                      `json:"top_up_lease_id,omitempty"`
 	MinimumBudgetUnits     string                      `json:"minimum_budget_units,omitempty"`
 	USDWalletPolicyVersion string                      `json:"usd_wallet_policy_version,omitempty"`
@@ -434,6 +446,12 @@ type canonicalWalletDrainEntry struct {
 // canonicalWalletEnsureWireResponse is §9.2's response: leaseWireView plus
 // headroom/outcome/clamped_by, every amount an object.
 type canonicalWalletEnsureWireResponse struct {
+	FundingScope           string                      `json:"funding_scope"`
+	FundingOwnerID         string                      `json:"funding_owner_id"`
+	FundingIssuanceKey     string                      `json:"funding_issuance_key"`
+	FundingFrozenAt        *time.Time                  `json:"funding_frozen_at"`
+	ReturnRevision         int64                       `json:"return_revision"`
+	BudgetRevision         int64                       `json:"budget_revision"`
 	USDWalletPolicyVersion string                      `json:"usd_wallet_policy_version,omitempty"`
 	LeaseID                string                      `json:"lease_id"`
 	PlatformUserID         string                      `json:"platform_user_id"`
@@ -567,11 +585,16 @@ func (c *canonicalWalletHTTPClient) EnsureLease(ctx context.Context, request can
 	if _, err := parseCanonicalWalletAmountObject("reserved", wire.Reserved); err != nil {
 		return nil, err
 	}
-	if _, err := parseCanonicalWalletAmountObject("captured", wire.Captured); err != nil {
+	captured, err := parseCanonicalWalletAmountObject("captured", wire.Captured)
+	if err != nil {
 		return nil, err
 	}
-	if _, err := parseCanonicalWalletAmountObject("released", wire.Released); err != nil {
+	returned, err := parseCanonicalWalletAmountObject("released", wire.Released)
+	if err != nil {
 		return nil, err
+	}
+	if returned > budget || captured > budget-returned || wire.ReturnRevision < 0 || wire.BudgetRevision < 0 {
+		return nil, errors.New("invalid funding return basis")
 	}
 	headroom, err := parseCanonicalWalletAmountObject("headroom", wire.Headroom)
 	if err != nil {
@@ -597,15 +620,23 @@ func (c *canonicalWalletHTTPClient) EnsureLease(ctx context.Context, request can
 	if currency != strings.ToUpper(strings.TrimSpace(request.Currency)) {
 		return nil, ErrCanonicalWalletLeaseCurrencyMismatch
 	}
+	if !walletFundingMatches(wire.FundingScope, wire.FundingOwnerID, wire.FundingIssuanceKey, request) {
+		return nil, errors.New("control plane changed immutable funding identity")
+	}
+	for _, excluded := range request.ExcludeLeaseIDs {
+		if wire.LeaseID == excluded {
+			return nil, errors.New("control plane reused excluded original funding")
+		}
+	}
 	// redesign §4: consumed := budget − headroom (captured + released as the server sees them)
-	consumed, err := SubUnits(budget, headroom)
+	consumed, err := SubUnits(budget-returned, headroom)
 	if err != nil {
 		return nil, err
 	}
 	return &canonicalWalletEnsureResult{
 		Lease: CanonicalWalletLease{
 			LeaseID: wire.LeaseID, PlatformUserID: strings.TrimSpace(request.PlatformUserID), Currency: currency,
-			BudgetUnits: budget, ConsumedUnits: consumed, ExpiresAt: wire.ExpiresAt,
+			BudgetUnits: budget - returned, FundedUnits: budget, ReturnedUnits: returned, ReturnRevision: wire.ReturnRevision, BudgetRevision: wire.BudgetRevision, FundingScope: wire.FundingScope, FundingOwnerID: wire.FundingOwnerID, FundingIssuanceKey: wire.FundingIssuanceKey, FundingFrozen: wire.FundingFrozenAt != nil, ConsumedUnits: consumed, ExpiresAt: wire.ExpiresAt,
 		},
 		USDWalletPolicyVersion: wire.USDWalletPolicyVersion, Outcome: wire.Outcome, ClampedBy: wire.ClampedBy,
 	}, nil
@@ -619,18 +650,26 @@ func (c *canonicalWalletHTTPClient) EnsureLease(ctx context.Context, request can
 // reusing the ensure type here would let a zero-valued headroom leak into a
 // strict parse that this route never sends.
 type canonicalWalletLeaseWireView struct {
-	LeaseID        string                      `json:"lease_id"`
-	PlatformUserID string                      `json:"platform_user_id"`
-	Currency       string                      `json:"currency"`
-	UnitVersion    string                      `json:"unit_version"`
-	Scale          int                         `json:"scale"`
-	Budget         canonicalWalletAmountObject `json:"budget"`
-	Reserved       canonicalWalletAmountObject `json:"reserved"`
-	Captured       canonicalWalletAmountObject `json:"captured"`
-	Released       canonicalWalletAmountObject `json:"released"`
-	CaptureSeq     int64                       `json:"capture_seq"`
-	Status         string                      `json:"status"`
-	ExpiresAt      time.Time                   `json:"expires_at"`
+	ActivePinCount     *int64                      `json:"active_pin_count"`
+	ActiveLivePinCount *int64                      `json:"active_live_pin_count"`
+	FundingScope       string                      `json:"funding_scope"`
+	FundingOwnerID     string                      `json:"funding_owner_id"`
+	FundingIssuanceKey string                      `json:"funding_issuance_key"`
+	FundingFrozenAt    *time.Time                  `json:"funding_frozen_at"`
+	ReturnRevision     int64                       `json:"return_revision"`
+	BudgetRevision     int64                       `json:"budget_revision"`
+	LeaseID            string                      `json:"lease_id"`
+	PlatformUserID     string                      `json:"platform_user_id"`
+	Currency           string                      `json:"currency"`
+	UnitVersion        string                      `json:"unit_version"`
+	Scale              int                         `json:"scale"`
+	Budget             canonicalWalletAmountObject `json:"budget"`
+	Reserved           canonicalWalletAmountObject `json:"reserved"`
+	Captured           canonicalWalletAmountObject `json:"captured"`
+	Released           canonicalWalletAmountObject `json:"released"`
+	CaptureSeq         int64                       `json:"capture_seq"`
+	Status             string                      `json:"status"`
+	ExpiresAt          time.Time                   `json:"expires_at"`
 }
 
 // canonicalWalletSettlementWireRequest is Phase 3.5's request (§11.2): the
@@ -639,13 +678,15 @@ type canonicalWalletLeaseWireView struct {
 // local_balance_after is dropped (the drift comparison happens client-side
 // against the response).
 type canonicalWalletSettlementWireRequest struct {
-	PlatformUserID   string                      `json:"platform_user_id"`
-	EventID          string                      `json:"event_id"`
-	LeaseID          string                      `json:"lease_id"`
-	Currency         string                      `json:"currency"`
-	Amount           canonicalWalletAmountObject `json:"amount"`
-	GatewayRequestID string                      `json:"gateway_request_id,omitempty"`
-	OccurredAt       string                      `json:"occurred_at"`
+	OriginalSnapshotID string                      `json:"original_snapshot_id,omitempty"`
+	AuthorizationToken string                      `json:"authorization_token,omitempty"`
+	PlatformUserID     string                      `json:"platform_user_id"`
+	EventID            string                      `json:"event_id"`
+	LeaseID            string                      `json:"lease_id"`
+	Currency           string                      `json:"currency"`
+	Amount             canonicalWalletAmountObject `json:"amount"`
+	GatewayRequestID   string                      `json:"gateway_request_id,omitempty"`
+	OccurredAt         string                      `json:"occurred_at"`
 }
 
 type canonicalWalletSettlementWireEvent struct {
@@ -670,7 +711,8 @@ type canonicalWalletSettlementWireResponse struct {
 func (c *canonicalWalletHTTPClient) SubmitSettlement(ctx context.Context, event CanonicalWalletSettlementEvent) (*CanonicalWalletSettlementResult, error) {
 	wireRequest := canonicalWalletSettlementWireRequest{
 		PlatformUserID: event.PlatformUserID, EventID: event.EventID, LeaseID: event.LeaseID, Currency: event.Currency,
-		Amount:           newCanonicalWalletAmountObject(event.AmountUnits),
+		Amount:             newCanonicalWalletAmountObject(event.AmountUnits),
+		OriginalSnapshotID: event.BillingSnapshotID, AuthorizationToken: event.AuthorizationToken,
 		GatewayRequestID: event.GatewayRequestID, OccurredAt: event.OccurredAt.UTC().Format(time.RFC3339Nano),
 	}
 	var wireResponse canonicalWalletSettlementWireResponse
@@ -730,7 +772,14 @@ func (c *canonicalWalletHTTPClient) doJSON(ctx context.Context, method, path, sc
 	}
 	defer resp.Body.Close()
 	walletAuthorizationControlResponse(ctx, resp.StatusCode, "", nil)
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	responseLimit := int64(1 << 20)
+	if path == "/api/internal/v2/wallet/leases/freeze-source" || path == "/api/internal/v2/wallet/leases/return" {
+		responseLimit = walletFundingResponseLimit
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, responseLimit+1))
+	if int64(len(body)) > responseLimit {
+		return errors.New("canonical wallet response exceeds bounded protocol body")
+	}
 	if err != nil {
 		return fmt.Errorf("read canonical wallet response: %w", err)
 	}
@@ -950,12 +999,20 @@ func CanonicalWalletBridgeStats() map[string]int64 {
 }
 
 type CanonicalWalletBridge struct {
-	cfg      config.CanonicalWalletConfig
-	store    CanonicalWalletLeaseStore
-	control  canonicalWalletControlPlane
-	outboxDB *sql.DB
-	outbox   CanonicalWalletOutboxStore
-	workerID string
+	readerJournalMu            sync.Mutex
+	readerJournalOwner         *walletReaderJournalOwner
+	readerJournalLastAlert     time.Time
+	billingEvidenceMu          sync.RWMutex
+	billingEvidenceRepo        UsageBillingRepository
+	billingEvidenceLogs        UsageLogRepository
+	billingEvidenceDeps        *billingDeps
+	billingEvidenceInvalidator apiKeyAuthCacheInvalidator
+	cfg                        config.CanonicalWalletConfig
+	store                      CanonicalWalletLeaseStore
+	control                    canonicalWalletControlPlane
+	outboxDB                   *sql.DB
+	outbox                     CanonicalWalletOutboxStore
+	workerID                   string
 	// now (Phase 3.4): the injectable clock every lease-expiry decision in
 	// this file uses — ensureLease, resolveOutboxEventLease and
 	// HasCanonicalWalletHeadroom. Tests set it; production keeps UTC wall time.
@@ -979,9 +1036,10 @@ type CanonicalWalletBridge struct {
 	// waits on loops; both tick loops select on stop. Tests only — a nil
 	// stop means the bridge was built as a bare struct literal and started
 	// no loops, and Close is a no-op for it.
-	stop     chan struct{}
-	stopOnce sync.Once
-	loops    sync.WaitGroup
+	stop               chan struct{}
+	fundingCleanupWake chan struct{}
+	stopOnce           sync.Once
+	loops              sync.WaitGroup
 }
 
 // walletHoldOutcomeSink is the durable outcome row's write surface (§10.6).
@@ -1198,6 +1256,7 @@ func newCanonicalWalletBridge(cfg config.CanonicalWalletConfig, store CanonicalW
 		}(),
 	}
 	b.stop = make(chan struct{})
+	b.fundingCleanupWake = make(chan struct{}, 1)
 	b.loops.Add(1)
 	go func() {
 		defer b.loops.Done()
@@ -1223,6 +1282,13 @@ func newCanonicalWalletBridge(cfg config.CanonicalWalletConfig, store CanonicalW
 			b.runHoldReaper()
 		}()
 	}
+	if _, fundingStore := store.(CanonicalWalletFundingStore); fundingStore && outboxDB != nil {
+		if _, signedControl := control.(*canonicalWalletHTTPClient); signedControl {
+			b.loops.Add(1)
+			go func() { defer b.loops.Done(); b.runFundingRecovery() }()
+		}
+	}
+
 	return b
 }
 
@@ -1241,6 +1307,7 @@ func (b *CanonicalWalletBridge) Close() {
 	}
 	b.stopOnce.Do(func() { close(b.stop) })
 	b.loops.Wait()
+	b.closeWalletReaderJournalOwner()
 }
 
 // ObserveSettlement durably records the settlement event in the Postgres
@@ -1881,6 +1948,7 @@ func (b *CanonicalWalletBridge) deliverOutboxEvent(ctx context.Context, e Canoni
 	event := CanonicalWalletSettlementEvent{
 		EventID: e.EventID, GatewayRequestID: e.GatewayRequestID, PlatformUserID: e.PlatformUserID,
 		LeaseID: e.LeaseID, Currency: e.Currency, AmountUnits: e.AmountUnits,
+		BillingSnapshotID: e.BillingSnapshotID, AuthorizationID: e.AuthorizationID,
 		LocalBalanceAfterUnits: e.LocalBalanceAfterUnits, OccurredAt: e.OccurredAt,
 	}
 	latePinned := false
@@ -1890,6 +1958,12 @@ func (b *CanonicalWalletBridge) deliverOutboxEvent(ctx context.Context, e Canoni
 			return
 		}
 	}
+	excludedFunding, originalToken, fundingIdentityErr := b.lateFundingExclusions(ctx, e)
+	if fundingIdentityErr != nil {
+		_ = b.outbox.MarkOutboxEventFailed(ctx, e.ID, b.workerID, b.clock())
+		return
+	}
+	latePinned = latePinned || len(excludedFunding) > 0
 	// (0) §11.3: a pending release is owed to the bound lease — pay it
 	// BEFORE anything else reserves again. The partial form is gated on its
 	// own release marker, so a replay answers {7} (counted) and writes
@@ -1950,7 +2024,7 @@ func (b *CanonicalWalletBridge) deliverOutboxEvent(ctx context.Context, e Canoni
 	// A late pinned root must retain its complete amount and identity. A
 	// partial funding grant becomes a full proven-cost receivable, never a
 	// rewritten root plus children that cannot satisfy its pin proof.
-	if latePinned && e.LeaseID == "" && lease.RemainingUnits() < e.AmountUnits {
+	if latePinned && (e.LeaseID == "" || e.LeaseID != lease.LeaseID) && lease.RemainingUnits() < e.AmountUnits {
 		_ = b.outbox.MarkOutboxEventDeadLetter(ctx, e.ID, b.workerID, "balance_shortfall")
 		return
 	}
@@ -2005,6 +2079,9 @@ func (b *CanonicalWalletBridge) deliverOutboxEvent(ctx context.Context, e Canoni
 	}
 	canonicalWalletBridgeMetrics.reserveOK.Add(1)
 	event.LeaseID = reservation.Lease.LeaseID
+	if originalToken != "" {
+		event.AuthorizationToken = originalToken
+	}
 	result, err := b.control.SubmitSettlement(ctx, event)
 	if err != nil {
 		canonicalWalletBridgeMetrics.settlementError.Add(1)
@@ -2223,11 +2300,34 @@ func canonicalWalletLeaseBindingIsStale(err error) bool {
 // only when the attempt budget ran out first — which is exactly what made it
 // a money bug rather than a delay. Do not reintroduce a relative TTL here.
 func (b *CanonicalWalletBridge) resolveOutboxEventLease(ctx context.Context, e CanonicalWalletOutboxEvent) (*CanonicalWalletLease, error) {
+	excluded, _, exclusionErr := b.lateFundingExclusions(ctx, e)
+	if exclusionErr != nil {
+		return nil, exclusionErr
+	}
+	if len(excluded) > 0 {
+		if e.LeaseID != "" {
+			for _, id := range excluded {
+				if e.LeaseID == id {
+					if err := b.outbox.BindOutboxEventLease(ctx, e.ID, b.workerID, ""); err != nil {
+						return nil, err
+					}
+					e.LeaseID = ""
+					break
+				}
+			}
+		}
+		if e.LeaseID == "" {
+			return b.ensureExcludedSettlementFunding(ctx, e, excluded)
+		}
+	}
 	if e.LeaseID == "" {
 		return b.ensureLease(ctx, e.PlatformUserID, e.Currency, e.AmountUnits, canonicalWalletLeasePurposeSettle, "")
 	}
 	if b.store == nil {
 		return nil, errors.New("canonical wallet bridge dependencies unavailable")
+	}
+	if err := b.recoverFundingReturn(ctx, e.PlatformUserID, e.LeaseID); err != nil {
+		return nil, err
 	}
 	lease, err := b.store.GetCanonicalWalletLeaseByID(ctx, e.PlatformUserID, e.LeaseID)
 	if err != nil && !errors.Is(err, ErrCanonicalWalletLeaseMissing) {
@@ -2251,6 +2351,17 @@ func (b *CanonicalWalletBridge) resolveOutboxEventLease(ctx context.Context, e C
 		// this tries GetByID once more — a second harmless miss — then sends
 		// prefer_lease_id with no drain.
 		return b.ensureLease(ctx, e.PlatformUserID, e.Currency, e.AmountUnits, canonicalWalletLeasePurposeSettle, e.LeaseID)
+	}
+	if lease != nil {
+		if err := b.applyFundingRegistry(ctx, lease); err != nil {
+			return nil, err
+		}
+		if lease.FundingFrozen {
+			lease.RequireCachedLease = true
+			if err := b.store.InstallCanonicalWalletLease(ctx, *lease); err != nil {
+				return nil, err
+			}
+		}
 	}
 	if lease != nil && lease.Currency == e.Currency && (lease.Sealed || b.leaseExpiredAt(lease, b.clock())) && e.AuthorizationID != "" && b.outboxDB != nil {
 		protected, readErr := b.protectedSettlementBinding(ctx, e)
@@ -2307,9 +2418,6 @@ func (b *CanonicalWalletBridge) ensureLeaseWithPolicy(ctx context.Context, platf
 	var err error
 	if preferLeaseID != "" {
 		cached, err = b.store.GetCanonicalWalletLeaseByID(ctx, platformUserID, preferLeaseID)
-		if err == nil && cached != nil && policyVersion == "" {
-			return cached, nil // explicit-id branch: the lease exists → the reserve script decides
-		}
 	} else {
 		cached, err = b.store.GetCanonicalWalletLease(ctx, platformUserID)
 	}
@@ -2319,6 +2427,18 @@ func (b *CanonicalWalletBridge) ensureLeaseWithPolicy(ctx context.Context, platf
 	if err != nil {
 		cached = nil
 	}
+	if cached != nil {
+		if registryErr := b.applyFundingRegistry(ctx, cached); registryErr != nil {
+			return nil, registryErr
+		}
+	}
+	if preferLeaseID != "" && cached != nil && policyVersion == "" && (purpose != canonicalWalletLeasePurposeAuthorize || (cached.FundingScope != "media" && !cached.FundingFrozen)) {
+		return cached, nil // the atomic reserve resolves existing reservation duplicates
+	}
+	if cached != nil && (cached.FundingScope == "media" || cached.FundingFrozen) {
+		cached = nil
+		preferLeaseID = ""
+	}
 	covering := b.leaseCovers(cached, currency, amountUnits, now)
 	if covering && policyVersion == "" {
 		return cached, nil
@@ -2327,6 +2447,7 @@ func (b *CanonicalWalletBridge) ensureLeaseWithPolicy(ctx context.Context, platf
 		preferLeaseID = cached.LeaseID
 	}
 	request := canonicalWalletEnsureRequest{
+		FundingScope:           walletFundingScopeForPurpose(purpose),
 		USDWalletPolicyVersion: policyVersion,
 		PlatformUserID:         strings.TrimSpace(platformUserID), Currency: currency, Purpose: string(purpose),
 		MinHeadroom: newCanonicalWalletAmountObject(amountUnits), RequestedBudget: newCanonicalWalletAmountObject(b.cfg.LeaseBudgetUnits), RequestedTTLSeconds: b.cfg.LeaseTTLSeconds,
@@ -2374,7 +2495,7 @@ func (b *CanonicalWalletBridge) ensureLeaseWithPolicy(ctx context.Context, platf
 			}
 		}
 	}
-	result, err := b.control.EnsureLease(ctx, request)
+	result, err := b.ensureFundingLifecycle(ctx, request)
 	if err != nil {
 		return nil, err
 	}
@@ -2414,7 +2535,7 @@ func (b *CanonicalWalletBridge) ensureLeaseWithPolicy(ctx context.Context, platf
 	// still expires at ExpiresAt: the reserve/arm guards and leaseCovers
 	// decide on expires_at_ms, never on the key TTL.
 	lease.RetainUntil = lease.ExpiresAt.Add(time.Duration(b.callerSlotTTLSeconds) * time.Second)
-	if err := b.store.InstallCanonicalWalletLease(ctx, lease); err != nil {
+	if err := b.installFundingLease(ctx, lease); err != nil {
 		return nil, err
 	}
 	canonicalWalletBridgeMetrics.leaseAcquireOK.Add(1)
@@ -2519,7 +2640,36 @@ func observeCanonicalWalletSettlement(bridge *CanonicalWalletBridge, requestID s
 		bridge.releaseHoldZeroCost(ctx, user.PlatformUserID, authorizationID)
 		return false
 	}
-	if subscriptionBilling || !billingApplied || cost.ActualCost <= 0 {
+	if billingResult != nil && billingResult.Staged {
+		return false
+	}
+	if billingResult != nil && billingResult.OriginalCharge != nil {
+		if billingResult.Quarantined {
+			return false
+		}
+		receipt := billingResult.OriginalCharge
+		if receipt.Binding.FeeUnits == 0 {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Duration(bridge.cfg.RequestTimeoutMS)*time.Millisecond)
+			defer cancel()
+			if segments, err := bridge.authorizationSegments(ctx, receipt.Binding.ParentAuthorizationID); err == nil {
+				_ = bridge.finishZeroPoolAttempt(ctx, receipt.Binding.ParentAuthorizationID, receipt.Binding.PlatformUserID, segments, receipt.Binding.AuthorizationToken)
+			}
+			return false
+		}
+		return bridge.ObserveSettlement(CanonicalWalletSettlementEvent{
+			EventID: receipt.Binding.EventID, GatewayRequestID: receipt.Command.RequestID,
+			PlatformUserID: receipt.Binding.PlatformUserID, Currency: CurrencyUSD,
+			AmountUnits: receipt.Binding.FeeUnits, OccurredAt: time.Now().UTC(),
+			AuthorizationToken: receipt.Binding.AuthorizationToken,
+			AuthorizationID:    receipt.Binding.ParentAuthorizationID,
+			BillingSnapshotID:  receipt.Binding.BillingSnapshotID,
+		})
+	}
+	// A replay without an original receipt is unresolved, never confirmed zero.
+	if !billingApplied {
+		return false
+	}
+	if subscriptionBilling || cost.ActualCost <= 0 {
 		return releaseZeroCost()
 	}
 	amountUnits, err := canonicalWalletUnitsFromUSD(cost.ActualCost)

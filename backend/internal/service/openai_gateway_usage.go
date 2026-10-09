@@ -380,6 +380,18 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	quotaPlatform := inputQuotaPlatformOrAPIKeyPlatform(input.QuotaPlatform, apiKey)
 
 	billingApplied, billingResult, billingErr := applyUsageBillingDetailed(ctx, requestID, usageLog, &postUsageBillingParams{
+		WalletBridge:                s.canonicalWallet,
+		AuthorizationID:             input.AuthorizationID,
+		AuthorizationToken:          input.AuthorizationToken,
+		BillingSnapshotID:           snapshotIDOf(input.BillingSnapshot),
+		WalletEvidencePolicyVersion: walletEvidencePolicyOf(input.BillingSnapshot),
+		WalletEvidenceKind:          walletEvidenceKindOf(input.BillingSnapshot),
+		WalletEvidenceSource: func() string {
+			if result.OpenAIWSMode {
+				return "llm_ws_usage"
+			}
+			return "llm_http_usage"
+		}(),
 		Cost:                  cost,
 		User:                  user,
 		APIKey:                apiKey,
@@ -394,6 +406,9 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 
 	if billingErr != nil {
 		return billingErr
+	}
+	if billingResult != nil && billingResult.Staged {
+		return nil
 	}
 	observeCanonicalWalletSettlement(s.canonicalWallet, requestID, user, cost, isSubscriptionBilling, billingApplied, billingResult, input.AuthorizationToken, input.AuthorizationID, snapshotIDOf(input.BillingSnapshot))
 	writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.openai_gateway")

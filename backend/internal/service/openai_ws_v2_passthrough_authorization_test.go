@@ -35,7 +35,7 @@ type passthroughAuthCall struct {
 	estimate EstimateInput
 }
 
-func newPassthroughAuthHarness(t *testing.T, mode string, authFn func(turn int, estimate EstimateInput) (*AuthorizationHandle, error), fastPolicySettings *OpenAIFastPolicySettings) *passthroughAuthHarness {
+func newPassthroughAuthHarness(t *testing.T, mode string, authFn func(turn int, estimate EstimateInput) (*AuthorizationHandle, error), fastPolicySettings *OpenAIFastPolicySettings, extraHooks ...func(*OpenAIWSIngressHooks)) *passthroughAuthHarness {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	cfg := passthroughLifecycleConfig()
@@ -85,6 +85,9 @@ func newPassthroughAuthHarness(t *testing.T, mode string, authFn func(turn int, 
 		},
 	}
 
+	for _, extra := range extraHooks {
+		extra(hooks)
+	}
 	account := passthroughLifecycleAccount()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := coderws.Accept(w, r, &coderws.AcceptOptions{CompressionMode: coderws.CompressionContextTakeover})

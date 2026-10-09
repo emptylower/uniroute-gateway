@@ -275,6 +275,9 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 				if selection.ReleaseFunc != nil {
 					selection.ReleaseFunc()
 				}
+				if writeWalletRiskResponse(c, authErr) {
+					return
+				}
 				h.handleStreamingAwareError(c, service.AuthorizationRefusedHTTPStatus, service.AuthorizationRefusedErrorType, service.AuthorizationRefusedMessage, false)
 				return
 			}

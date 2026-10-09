@@ -1939,6 +1939,13 @@
     "note": "egress-capable import; http method/status constants only, the request goes through the canonical wallet control-plane client"
   },
   {
+    "file": "internal/service/canonical_wallet_risk.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "HTTP status constants for wallet risk refusal; no client or request constructed"
+  },
+  {
     "file": "internal/service/catalog_http_client.go",
     "kind": "construct",
     "detail": "NewCatalogHTTPClient: &http.Client{}",
@@ -2294,6 +2301,13 @@
     "detail": "net/http",
     "annotation": "non-billable",
     "note": "egress-capable import; http method/status constants only, the request goes through the canonical wallet control-plane client"
+  },
+  {
+    "file": "internal/service/media_wallet_state.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "HTTP method constant for signed zero finish through the existing canonical wallet control-plane client"
   },
   {
     "file": "internal/service/model_not_found_error.go",
@@ -2821,6 +2835,13 @@
     "note": "egress-capable import; actual wallet classification hangs on the write site / client"
   },
   {
+    "file": "internal/service/openai_ws_native_close.go",
+    "kind": "import",
+    "detail": "github.com/coder/websocket",
+    "annotation": "non-billable",
+    "note": "Close and join the existing native WebSocket connection; no dialer or client constructed"
+  },
+  {
     "file": "internal/service/openai_ws_pool.go",
     "kind": "import",
     "detail": "net/http",
@@ -2987,6 +3008,27 @@
     "detail": "net/url",
     "annotation": "non-billable",
     "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/wallet_reader_journal.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "HTTP service-unavailable status for journal ownership refusal; no client or request constructed"
+  },
+  {
+    "file": "internal/service/wallet_reader_normalization.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "HTTP request type for frozen billing normalization; no client or request constructed"
+  },
+  {
+    "file": "internal/service/wallet_zero_finalizer.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "HTTP method constant for signed zero finish through the existing canonical wallet control-plane client"
   },
   {
     "file": "internal/setup/cli.go",

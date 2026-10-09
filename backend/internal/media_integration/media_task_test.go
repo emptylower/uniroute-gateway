@@ -3,8 +3,12 @@
 package media_integration
 
 import (
+	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -127,6 +131,8 @@ func (u *mediaHTTP) Do(req *http.Request, _ string, _ int64, _ int) (*http.Respo
 }
 
 type testControl struct {
+	zeroReceipts        map[string]map[string]any
+	secret              string
 	mu                  sync.Mutex
 	budget, captured    int64
 	expires             time.Time
@@ -145,6 +151,11 @@ type testControl struct {
 	expiryRefusedAuth   string
 	forceOverCapture    bool
 	overCaptureHeadroom int64
+	fundingReturns      map[string]service.WalletFundingReturnReceipt
+	sourceReceipts      map[string]service.WalletFundingSourceReceipt
+	// survivingPin makes the signed close behave as the Worker does while a D1 pin
+	// is still active on the lease: the close is refused with a funding conflict.
+	survivingPin bool
 }
 
 func amount(n int64) map[string]any {
@@ -158,11 +169,14 @@ func units(v any) int64 {
 }
 
 type testFundingLease struct {
-	id               string
-	budget, captured int64
-	expires          time.Time
-	drained          bool
-	closed           bool
+	id                                       string
+	budget, captured                         int64
+	expires                                  time.Time
+	drained                                  bool
+	closed                                   bool
+	scope, owner, key                        string
+	returned, returnRevision, budgetRevision int64
+	frozen                                   bool
 }
 
 func (c *testControl) lease(id string) *testFundingLease {
@@ -178,7 +192,31 @@ func (c *testControl) wire(id, user string) map[string]any {
 	if l := c.lease(id); l != nil {
 		budget, captured, expiry = l.budget, l.captured, l.expires
 	}
-	return map[string]any{"lease_id": id, "platform_user_id": user, "currency": "USD", "unit_version": "usd-e8-v1", "scale": 8, "budget": amount(budget), "reserved": amount(0), "captured": amount(captured), "released": amount(0), "headroom": amount(budget - captured), "capture_seq": len(c.events), "status": "active", "expires_at": expiry, "outcome": "reused", "usd_wallet_policy_version": "usd-wallet-v1", "drained_at": nil}
+	out := map[string]any{"lease_id": id, "platform_user_id": user, "currency": "USD", "unit_version": "usd-e8-v1", "scale": 8, "budget": amount(budget), "reserved": amount(0), "captured": amount(captured), "released": amount(0), "headroom": amount(budget - captured), "capture_seq": len(c.events), "status": "active", "expires_at": expiry, "outcome": "reused", "usd_wallet_policy_version": "usd-wallet-v1", "drained_at": nil}
+	// The canonical pool view always reports the active/live pin counts from the
+	// same snapshot (the Gateway fails closed if they are absent or invalid).
+	active, live := int64(0), int64(0)
+	for auth, pin := range c.pins {
+		if pin["lease_id"] == id && c.pinStatus[auth] == "active" {
+			active++
+			if pin["authorization_kind"] == "live" {
+				live++
+			}
+		}
+	}
+	out["active_pin_count"], out["active_live_pin_count"] = active, live
+	if l := c.lease(id); l != nil {
+		out["funding_scope"], out["funding_owner_id"], out["funding_issuance_key"] = l.scope, l.owner, l.key
+		out["return_revision"], out["budget_revision"] = l.returnRevision, l.budgetRevision
+		out["released"], out["headroom"] = amount(l.returned), amount(l.budget-l.returned-l.captured)
+		if l.frozen {
+			out["funding_frozen_at"] = time.Now().UTC()
+		}
+		if l.closed {
+			out["status"] = "closed"
+		}
+	}
+	return out
 }
 func (c *testControl) handler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
@@ -199,6 +237,9 @@ func (c *testControl) handler(w http.ResponseWriter, r *http.Request) {
 		leases := []any{}
 		if len(c.pool) > 0 {
 			for _, l := range c.pool {
+				if l.closed {
+					continue // the Worker's pool view lists active leases only
+				}
 				v := c.wire(l.id, user)
 				if l.drained {
 					v["drained_at"] = time.Now()
@@ -210,6 +251,64 @@ func (c *testControl) handler(w http.ResponseWriter, r *http.Request) {
 		}
 		data = map[string]any{"leases": leases, "captured_event_ids": []string{}}
 	case "/api/internal/v2/wallet/leases/ensure":
+		scope, _ := in["funding_scope"].(string)
+		if scope == "media" || scope == "settle" {
+			owner, _ := in["funding_owner_id"].(string)
+			key, _ := in["funding_issuance_key"].(string)
+			minimum := units(in["min_headroom"])
+			excluded := map[string]bool{}
+			if ids, ok := in["exclude_lease_ids"].([]any); ok {
+				for _, id := range ids {
+					if s, ok := id.(string); ok {
+						excluded[s] = true
+					}
+				}
+			}
+			// Worker lease-ensure: only an issuance key replays one immutable grant.
+			// A keyless settle ensure reuses a covering settle/legacy lease (active,
+			// unexpired, unfrozen, not excluded, headroom >= min_headroom) or issues
+			// a fresh one; it never hands back an exhausted lease.
+			for _, l := range c.pool {
+				if key != "" && l.scope == scope && l.owner == owner && l.key == key {
+					data = c.wire(l.id, user)
+					break
+				}
+				if key == "" && scope == "settle" && (l.scope == "settle" || l.scope == "legacy") && !excluded[l.id] && !l.frozen && !l.drained && !l.closed && time.Now().Before(l.expires) && minimum > 0 && l.budget-l.returned-l.captured >= minimum {
+					data = c.wire(l.id, user)
+					break
+				}
+			}
+			if len(data) > 0 {
+				break
+			}
+			requested := units(in["requested_budget"])
+			if requested < minimum {
+				requested = minimum
+			}
+			if len(c.pool) == 0 {
+				if c.issued {
+					c.pool = append(c.pool, &testFundingLease{id: "lease-test", budget: c.budget, captured: c.captured, expires: c.expires, scope: "llm"})
+				} else {
+					c.unleased = c.budget - c.captured
+				}
+			}
+			// Worker clampBudget: grant max(requested, min_headroom) clamped to the
+			// spendable balance; refuse only when that is below min_headroom.
+			if requested > c.unleased {
+				requested = c.unleased
+			}
+			if requested <= 0 || requested < minimum {
+				w.WriteHeader(409)
+				_ = json.NewEncoder(w).Encode(map[string]any{"code": 409, "data": map[string]string{"reason": "insufficient_balance"}})
+				return
+			}
+			sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%d", user, scope, owner, key, len(c.pool))))
+			id := "lease-scoped-" + hex.EncodeToString(sum[:8])
+			c.pool = append(c.pool, &testFundingLease{id: id, budget: requested, expires: time.Now().Add(5 * time.Minute), scope: scope, owner: owner, key: key})
+			c.unleased -= requested
+			data = c.wire(id, user)
+			break
+		}
 		c.issued = true
 		id := "lease-test"
 		if target, _ := in["top_up_lease_id"].(string); target != "" {
@@ -227,7 +326,7 @@ func (c *testControl) handler(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			id = fmt.Sprintf("lease-cold-%d", len(c.pool))
-			c.pool = append(c.pool, &testFundingLease{id: id, budget: minimum, expires: time.Now().Add(5 * time.Minute)})
+			c.pool = append(c.pool, &testFundingLease{id: id, budget: minimum, expires: time.Now().Add(5 * time.Minute), scope: "llm"})
 			c.unleased -= minimum
 		}
 		if value, _ := in["minimum_budget_units"].(string); value != "" {
@@ -248,6 +347,118 @@ func (c *testControl) handler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		data = c.wire(id, user)
+	case "/api/internal/v2/wallet/leases/freeze-source":
+		// The signed source fence the Gateway commits before it asks for any
+		// return. Same wire contract as the real Worker route: an immutable freeze
+		// id per lease, replay returns the original receipt, and the allocations
+		// conserve the funded principal.
+		leaseID, _ := in["lease_id"].(string)
+		freezeID, _ := in["freeze_id"].(string)
+		l := c.lease(leaseID)
+		if l == nil {
+			w.WriteHeader(404)
+			return
+		}
+		if previous, ok := c.sourceReceipts[freezeID]; ok {
+			data = map[string]any{"receipt": previous}
+			break
+		}
+		funded := units(in["expected_funded"])
+		revision, _ := in["expected_budget_revision"].(float64)
+		if freezeID != leaseID+".source-freeze.v1" || funded <= 0 || funded != l.budget+l.returned || int64(revision) != l.budgetRevision {
+			w.WriteHeader(409)
+			_ = json.NewEncoder(w).Encode(map[string]any{"code": 409, "data": map[string]string{"reason": "funding_conflict"}})
+			return
+		}
+		text := func(n int64) string { return strconv.FormatInt(n, 10) }
+		receipt := service.WalletFundingSourceReceipt{Protocol: "wallet-funding-source-v1", FreezeID: freezeID, PlatformUserID: user, LeaseID: leaseID, FundingScope: l.scope, FundingOwnerID: l.owner, FundingIssuanceKey: l.key, FundedUnits: text(funded), BudgetRevision: l.budgetRevision, CommittedAt: time.Now().UTC().Format(time.RFC3339Nano),
+			Sources: []service.WalletFundingSource{{AllocationID: leaseID + ":original-allocation", CreditID: leaseID + ":original-credit", AllocatedUnits: text(funded)}}}
+		sources, _ := json.Marshal(receipt.Sources)
+		payload, _ := json.Marshal([]string{receipt.Protocol, receipt.FreezeID, user, leaseID, l.scope, l.owner, l.key, receipt.FundedUnits, text(receipt.BudgetRevision), receipt.CommittedAt, string(sources)})
+		secret := c.secret
+		if secret == "" {
+			secret = strings.Repeat("s", 32)
+		}
+		mac := hmac.New(sha256.New, []byte(secret))
+		_, _ = mac.Write(payload)
+		receipt.Signature = hex.EncodeToString(mac.Sum(nil))
+		l.frozen = true
+		if c.sourceReceipts == nil {
+			c.sourceReceipts = map[string]service.WalletFundingSourceReceipt{}
+		}
+		c.sourceReceipts[freezeID] = receipt
+		data = map[string]any{"receipt": receipt}
+	case "/api/internal/v2/wallet/leases/return":
+		leaseID, _ := in["lease_id"].(string)
+		l := c.lease(leaseID)
+		if l == nil {
+			w.WriteHeader(404)
+			return
+		}
+		if c.survivingPin && l.scope == "media" {
+			w.WriteHeader(409)
+			_ = json.NewEncoder(w).Encode(map[string]any{"code": 409, "data": map[string]string{"reason": "funding_conflict"}})
+			return
+		}
+		base, _ := in["base_return_revision"].(float64)
+		mode, _ := in["mode"].(string)
+		returnKey := leaseID + ":" + strconv.FormatInt(int64(base), 10)
+		if previous, ok := c.fundingReturns[returnKey]; ok {
+			data = map[string]any{"receipt": previous}
+			break
+		}
+		if int64(base) != l.returnRevision || mode != "partial" && mode != "close" {
+			w.WriteHeader(409)
+			return
+		}
+		consumed, released := units(in["gateway_consumed"]), units(in["gateway_released"])
+		held := int64(0)
+		if holds, ok := in["holds"].([]any); ok {
+			for _, raw := range holds {
+				h, _ := raw.(map[string]any)
+				held += units(h["held"])
+			}
+		}
+		activePins := int64(0)
+		for auth, pin := range c.pins {
+			if pin["lease_id"] == leaseID && c.pinStatus[auth] == "active" {
+				activePins += units(pin["held"])
+			}
+		}
+		net := consumed - released
+		if net != l.captured+held || activePins != held || mode == "close" && held != 0 {
+			w.WriteHeader(409)
+			return
+		}
+		free := l.budget - l.returned - net
+		if free < 0 {
+			w.WriteHeader(409)
+			return
+		}
+		text := func(n int64) string { return strconv.FormatInt(n, 10) }
+		receipt := service.WalletFundingReturnReceipt{Protocol: "wallet-funding-return-v1", ReceiptID: returnKey, PlatformUserID: user, LeaseID: leaseID, FundingScope: l.scope, FundingOwnerID: l.owner, FundingIssuanceKey: l.key, ReturnRevision: l.returnRevision + 1, BudgetRevision: l.budgetRevision, CaptureSeq: int64(len(c.events)), FundedUnits: text(l.budget), CapturedUnits: text(l.captured), ReturnedBeforeUnits: text(l.returned), ReturnedUnits: text(free), ReturnedAfterUnits: text(l.returned + free), CreditedUnits: text(free), WriteOffUnits: "0", HeldUnits: text(held), GatewayConsumedUnits: text(consumed), GatewayReleasedUnits: text(released), Mode: mode, CommittedAt: time.Now().UTC().Format("2006-01-02T15:04:05.000Z"), Sources: []service.WalletFundingReturnSource{}}
+		if free > 0 {
+			receipt.Sources = append(receipt.Sources, service.WalletFundingReturnSource{AllocationID: leaseID + ":original-allocation", CreditID: leaseID + ":original-credit", ReturnedUnits: text(free), CreditedUnits: text(free)})
+		}
+		sources, _ := json.Marshal(receipt.Sources)
+		payload, _ := json.Marshal([]string{receipt.Protocol, receipt.ReceiptID, user, leaseID, l.scope, l.owner, l.key, text(receipt.ReturnRevision), text(receipt.BudgetRevision), text(receipt.CaptureSeq), receipt.FundedUnits, receipt.CapturedUnits, receipt.ReturnedBeforeUnits, receipt.ReturnedUnits, receipt.ReturnedAfterUnits, receipt.CreditedUnits, receipt.WriteOffUnits, receipt.HeldUnits, receipt.GatewayConsumedUnits, receipt.GatewayReleasedUnits, mode, receipt.CommittedAt, string(sources)})
+		secret := c.secret
+		if secret == "" {
+			secret = strings.Repeat("s", 32)
+		}
+		mac := hmac.New(sha256.New, []byte(secret))
+		_, _ = mac.Write(payload)
+		receipt.Signature = hex.EncodeToString(mac.Sum(nil))
+		l.returned += free
+		l.returnRevision++
+		l.frozen = true
+		l.closed = mode == "close"
+		c.unleased += free
+		if c.fundingReturns == nil {
+			c.fundingReturns = map[string]service.WalletFundingReturnReceipt{}
+		}
+		c.fundingReturns[returnKey] = receipt
+		data = map[string]any{"receipt": receipt}
 	case "/api/internal/v2/wallet/settlements":
 		id, _ := in["event_id"].(string)
 		lease, _ := in["lease_id"].(string)
@@ -372,6 +583,46 @@ func (c *testControl) handler(w http.ResponseWriter, r *http.Request) {
 			budget, cap, expiry = l.budget, l.captured, l.expires
 		}
 		data["lease"] = map[string]any{"lease_id": lease, "budget_units": strconv.FormatInt(budget, 10), "captured_units": strconv.FormatInt(cap, 10), "released_units": "0", "reserved_units": "0", "expires_at": expiry, "status": "active"}
+		if l := c.lease(lease); l != nil {
+			view := data["lease"].(map[string]any)
+			view["funding_scope"], view["funding_owner_id"], view["funding_issuance_key"] = l.scope, l.owner, l.key
+			view["return_revision"], view["budget_revision"] = l.returnRevision, l.budgetRevision
+			view["released_units"] = strconv.FormatInt(l.returned, 10)
+			if l.frozen {
+				view["funding_frozen_at"] = time.Now().UTC()
+			}
+		}
+		if resolution == "released" && in["authorization_token"] != "" && in["authorization_token"] != nil {
+			if c.zeroReceipts == nil {
+				c.zeroReceipts = map[string]map[string]any{}
+			}
+			if original := c.zeroReceipts[auth]; original != nil {
+				data = original
+			} else {
+				for _, name := range []string{"platform_user_id", "billing_snapshot_id", "settlement_event_id", "held", "authorization_kind", "authorization_token", "usd_wallet_policy_version"} {
+					data[name] = in[name]
+				}
+				data["actual"] = amount(0)
+				data["expiry_version"] = 0
+				data["released_at"] = time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
+				data["finish_receipt_id"] = auth + ":finish:1"
+				data["reason"] = "gateway_confirmed_zero"
+				heldObject, _ := in["held"].(map[string]any)
+				parts := []string{"wallet-task-pin-receipt-v2", "released", auth, job, user, lease, in["billing_snapshot_id"].(string), in["settlement_event_id"].(string), heldObject["amount_units"].(string), in["authorization_kind"].(string), in["authorization_token"].(string), "0", "", "", "", data["released_at"].(string), auth + ":finish:1", "", "0"}
+				var buffer bytes.Buffer
+				encoder := json.NewEncoder(&buffer)
+				encoder.SetEscapeHTML(false)
+				_ = encoder.Encode(parts)
+				key := c.secret
+				if key == "" {
+					key = strings.Repeat("s", 32)
+				}
+				mac := hmac.New(sha256.New, []byte(key))
+				_, _ = mac.Write(bytes.TrimSuffix(buffer.Bytes(), []byte("\n")))
+				data["receipt_signature"] = hex.EncodeToString(mac.Sum(nil))
+				c.zeroReceipts[auth] = data
+			}
+		}
 		if c.pinAckLost && resolution == "" {
 			c.pinAckLost = false
 			if c.pinAccepted != nil {
@@ -392,26 +643,34 @@ func (c *testControl) handler(w http.ResponseWriter, r *http.Request) {
 }
 
 type mediaFixture struct {
-	db        *sql.DB
-	rdb       *redis.Client
-	cfg       *config.Config
-	bridge    *service.CanonicalWalletBridge
-	svc       *service.MediaTaskService
-	control   *testControl
-	userID    int64
-	creates   atomic.Int64
-	mode      atomic.Int64
-	upstream  *httptest.Server
-	users     *mediaUsers
-	keys      *service.PlatformAPIKeyService
-	apiKeys   *service.APIKeyService
-	snapshots *service.BillingSnapshotService
-	readHook  func(http.ResponseWriter, *http.Request)
+	db               *sql.DB
+	rdb              *redis.Client
+	cfg              *config.Config
+	bridge           *service.CanonicalWalletBridge
+	svc              *service.MediaTaskService
+	control          *testControl
+	userID           int64
+	platformUserID   string
+	creates          atomic.Int64
+	mode             atomic.Int64
+	upstream         *httptest.Server
+	users            *mediaUsers
+	keys             *service.PlatformAPIKeyService
+	apiKeys          *service.APIKeyService
+	snapshots        *service.BillingSnapshotService
+	readHook         func(http.ResponseWriter, *http.Request)
+	readerJournalDir string
 }
 
 func newMediaFixture(t *testing.T, configure ...func(*config.Config)) *mediaFixture {
+	t.Helper()
+	return newMediaFixtureForUser(t, "media-user", configure...)
+}
+
+func newMediaFixtureForUser(t *testing.T, platformUserID string, configure ...func(*config.Config)) *mediaFixture {
+	t.Helper()
 	db, rdb := mediaDatabase(t)
-	f := &mediaFixture{db: db, rdb: rdb}
+	f := &mediaFixture{db: db, rdb: rdb, platformUserID: platformUserID, readerJournalDir: t.TempDir()}
 	f.control = &testControl{budget: 72000000000, expires: time.Now().Add(5 * time.Minute), events: map[string]int64{}, pins: map[string]map[string]any{}}
 	control := httptest.NewServer(http.HandlerFunc(f.control.handler))
 	t.Cleanup(control.Close)
@@ -442,12 +701,14 @@ func newMediaFixture(t *testing.T, configure ...func(*config.Config)) *mediaFixt
 	f.cfg = &config.Config{}
 	f.cfg.PlatformIdentity.Enabled = true
 	f.cfg.CanonicalWallet = config.CanonicalWalletConfig{Mode: "enforce", Holds: "on", EnforceReady: true, BillingSnapshotMode: "settle", USDWalletEnabled: true, USDPolicyVersion: "usd-wallet-v1", ControlPlaneURL: control.URL, Issuer: "sub2api-gateway", Audience: "shipany-control-plane", Secret: strings.Repeat("s", 32), Version: "v1", RequestTimeoutMS: 1000, LeaseTTLSeconds: 300, LeaseBudgetUnits: 500000000, ExpirySkewMarginMS: 10, OrphanGraceSeconds: 2, OrphanSweepIntervalSeconds: 1, OrphanSweepBatch: 100, ReceivableRedriveIntervalSeconds: 3600, ReceivableRedriveMaxAttempts: 3, RetentionDays: 45}
+	f.cfg.CanonicalWallet.ReaderJournalDirectory = f.readerJournalDir
 	f.cfg.MediaTasks = config.MediaTasksConfig{Enabled: true, KIEAPIKey: "isolated-test-key", KIEBaseURL: f.upstream.URL, PollSeconds: 1, DeadlineSeconds: 86400}
 	f.cfg.Gateway.ConcurrencySlotTTLMinutes = 30
 	for _, configureFixture := range configure {
 		configureFixture(f.cfg)
 	}
-	require.NoError(t, db.QueryRow(`INSERT INTO users(email,password_hash,platform_user_id,billing_currency,status,balance) VALUES('media@example.test','test','media-user','USD','active',999) RETURNING id`).Scan(&f.userID))
+	f.control.secret = f.cfg.CanonicalWallet.Secret
+	require.NoError(t, db.QueryRow(`INSERT INTO users(email,password_hash,platform_user_id,billing_currency,status,balance) VALUES('media@example.test','test',$1,'USD','active',999) RETURNING id`, f.platformUserID).Scan(&f.userID))
 	f.users = &mediaUsers{db: db}
 	f.apiKeys = service.NewAPIKeyService(&mediaKeys{db: db}, f.users, nil, nil, nil, nil, f.cfg)
 	f.keys = service.NewPlatformAPIKeyService(&mediaProjection{db}, f.apiKeys)
@@ -579,10 +840,22 @@ func TestExternalMediaDefiniteFailureReleasesOnce(t *testing.T) {
 	var outbox int
 	require.NoError(t, f.db.QueryRow(`SELECT count(*) FROM wallet_settlement_outbox`).Scan(&outbox))
 	require.Zero(t, outbox)
-	lease, err := repository.NewGatewayCache(f.rdb).(service.CanonicalWalletLeaseStore).GetCanonicalWalletLeaseByID(context.Background(), "media-user", "lease-test")
-	require.NoError(t, err)
-	require.Equal(t, int64(2730000), lease.ReleasedUnits)
-	require.Equal(t, lease.BudgetUnits, lease.RemainingUnits())
+	// The quote is funded by the task's own isolated media lease. A definite
+	// provider failure must return exactly the quote, once, and close that lease.
+	f.control.mu.Lock()
+	var isolated *testFundingLease
+	for _, l := range f.control.pool {
+		if l.scope == "media" {
+			require.Nil(t, isolated, "exactly one isolated media lease funds one quote")
+			isolated = l
+		}
+	}
+	require.NotNil(t, isolated)
+	returned, closed, unleased := isolated.returned, isolated.closed, f.control.unleased
+	f.control.mu.Unlock()
+	require.Equal(t, int64(2730000), returned)
+	require.True(t, closed)
+	require.Equal(t, f.control.budget-f.control.captured, unleased, "the whole quote went back to spendable credit")
 	f.create(t, "failure", "google/nano-banana", "1:1")
 	require.Equal(t, int64(1), f.creates.Load())
 }
@@ -618,6 +891,25 @@ func TestExternalMediaDefinitePinRefusalReleasesAllUnsubmittedSegments(t *testin
 	var events int
 	require.NoError(t, f.db.QueryRow(`SELECT count(*) FROM wallet_settlement_outbox`).Scan(&events))
 	require.Zero(t, events)
+	// The Worker never created a pin, so there is no signed zero receipt to wait
+	// for. The money must still come back: the task's isolated lease is closed by
+	// the signed close and its whole quote returns to spendable credit, instead of
+	// the task being stranded with the quote tied up in an unreturned lease.
+	var quote int64
+	require.NoError(t, f.db.QueryRow(`SELECT quoted_units FROM gateway_media_task WHERE id=$1`, task.TaskID).Scan(&quote))
+	require.Eventually(t, func() bool {
+		f.control.mu.Lock()
+		defer f.control.mu.Unlock()
+		for _, l := range f.control.pool {
+			if l.scope == "media" {
+				return l.closed && l.returned == quote
+			}
+		}
+		return false
+	}, 10*time.Second, 50*time.Millisecond, "the isolated media lease is closed and returns the whole quote")
+	var unreleased int
+	require.NoError(t, f.db.QueryRow(`SELECT count(*) FROM wallet_authorization_segment WHERE parent_authorization_id=(SELECT authorization_id FROM gateway_media_task WHERE id=$1) AND NOT (state='finished' AND pin_state='finished')`, task.TaskID).Scan(&unreleased))
+	require.Zero(t, unreleased, "every share ended")
 	wallet := repository.NewGatewayCache(f.rdb).(service.CanonicalWalletLeaseStore)
 	for _, id := range []string{"lease-a", "lease-b"} {
 		l, err := wallet.GetCanonicalWalletLeaseByID(context.Background(), "media-user", id)
@@ -629,9 +921,15 @@ func TestExternalMediaFeatureDisabledKeepsAcceptedRecovery(t *testing.T) {
 	f := newMediaFixture(t)
 	f.mode.Store(3)
 	task := f.create(t, "disable", "google/nano-banana", "1:1")
+	// The view also shows "processing" for the pre-write 'submitting' checkpoint,
+	// and v5's Stop cancels in-flight lane work, so a stop there correctly ends
+	// unsent and released. The subject here is an ACCEPTED task: wait until the
+	// provider acceptance is durable before disabling.
 	require.Eventually(t, func() bool {
 		v, _ := f.svc.Get(context.Background(), f.userID, task.TaskID)
-		return v.Status == "processing"
+		var accepted bool
+		_ = f.db.QueryRow(`SELECT provider_task_id IS NOT NULL AND status='processing' FROM gateway_media_task WHERE id=$1`, task.TaskID).Scan(&accepted)
+		return v.Status == "processing" && accepted
 	}, 10*time.Second, 50*time.Millisecond)
 	f.svc.Stop()
 	copyCfg := *f.cfg
@@ -647,7 +945,9 @@ func TestExternalMediaFeatureDisabledKeepsAcceptedRecovery(t *testing.T) {
 
 func (f *mediaFixture) poolFunds(t *testing.T, a, b, direct int64) {
 	f.control.mu.Lock()
-	f.control.pool = []*testFundingLease{{id: "lease-a", budget: a, expires: f.control.expires}, {id: "lease-b", budget: b, expires: f.control.expires}}
+	// The real Worker reports a non-empty funding scope on every lease; shared
+	// leases issued before scoped funding are "legacy".
+	f.control.pool = []*testFundingLease{{id: "lease-a", budget: a, expires: f.control.expires, scope: "legacy"}, {id: "lease-b", budget: b, expires: f.control.expires, scope: "legacy"}}
 	f.control.unleased = direct
 	if b == 0 {
 		f.control.pool = f.control.pool[:1]
@@ -655,7 +955,7 @@ func (f *mediaFixture) poolFunds(t *testing.T, a, b, direct int64) {
 	f.control.mu.Unlock()
 	wallet := repository.NewGatewayCache(f.rdb).(service.CanonicalWalletLeaseStore)
 	for _, lease := range f.control.pool {
-		require.NoError(t, wallet.InstallCanonicalWalletLease(context.Background(), service.CanonicalWalletLease{LeaseID: lease.id, PlatformUserID: "media-user", Currency: "USD", BudgetUnits: lease.budget, ExpiresAt: lease.expires}))
+		require.NoError(t, wallet.InstallCanonicalWalletLease(context.Background(), service.CanonicalWalletLease{LeaseID: lease.id, PlatformUserID: "media-user", Currency: "USD", BudgetUnits: lease.budget, FundingScope: lease.scope, ExpiresAt: lease.expires}))
 	}
 }
 func (f *mediaFixture) authorize(t *testing.T, units int64, family service.BillingFamily) (*service.AuthorizationHandle, *service.BillingSnapshot) {
@@ -702,7 +1002,11 @@ func TestExternalPoolMixedLeasesAndDirectFundsReallySpend(t *testing.T) {
 }
 func TestExternalMediaSegmentsSingleProviderSingleUsageAndAtomicOutbox(t *testing.T) {
 	f := newMediaFixture(t)
-	f.poolFunds(t, 2000000, 2000000, 0)
+	// v5 funds media with isolated leases. Two shared free tails would both be
+	// reclaimed at once and fund the 2.73M quote with ONE lease, so keep two
+	// funding segments this way: the first isolated grant is clamped to 2M of
+	// unleased credit, the 0.73M rest is issued after reclaiming lease-a.
+	f.poolFunds(t, 2000000, 0, 2000000)
 	task := f.create(t, "segmented", "google/nano-banana", "1:1")
 	f.wait(t, task.TaskID, "charged")
 	require.Equal(t, int64(1), f.creates.Load())
@@ -770,8 +1074,10 @@ func TestExternalPoolUnknownRetainsEverySegmentAcrossExpiryFlushAndRestart(t *te
 
 func TestExternalMediaTerminalTransactionRollsBackEverySegment(t *testing.T) {
 	f := newMediaFixture(t)
-	f.poolFunds(t, 2000000, 2000000, 0)
-	_, err := f.db.Exec(`CREATE FUNCTION reject_media_second() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.lease_id='lease-b' THEN RAISE EXCEPTION 'isolated terminal transaction fault'; END IF; RETURN NEW; END $$; CREATE TRIGGER reject_media_second BEFORE INSERT ON wallet_settlement_outbox FOR EACH ROW EXECUTE FUNCTION reject_media_second()`)
+	// Two isolated funding segments (2M + 0.73M), as in the segmented test. The
+	// fault targets the second segment's lease, whose id is issued at runtime.
+	f.poolFunds(t, 2000000, 0, 2000000)
+	_, err := f.db.Exec(`CREATE FUNCTION reject_media_second() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.lease_id IN (SELECT lease_id FROM wallet_authorization_segment WHERE ordinal=1) THEN RAISE EXCEPTION 'isolated terminal transaction fault'; END IF; RETURN NEW; END $$; CREATE TRIGGER reject_media_second BEFORE INSERT ON wallet_settlement_outbox FOR EACH ROW EXECUTE FUNCTION reject_media_second()`)
 	require.NoError(t, err)
 	task := f.create(t, "tx-rollback", "google/nano-banana", "1:1")
 	require.Eventually(t, func() bool {
@@ -782,7 +1088,11 @@ func TestExternalMediaTerminalTransactionRollsBackEverySegment(t *testing.T) {
 	var usage, outbox int
 	require.NoError(t, f.db.QueryRow(`SELECT count(*) FROM usage_logs`).Scan(&usage))
 	require.NoError(t, f.db.QueryRow(`SELECT count(*) FROM wallet_settlement_outbox`).Scan(&outbox))
-	require.Zero(t, usage)
+	// v5 commits the usage row in the frozen fee-plan transaction together with
+	// every segment actual (persistMediaFeePlan); the outbox rows of all segments
+	// are one later transaction. So the fault leaves exactly one usage row and
+	// no outbox row for any segment.
+	require.Equal(t, 1, usage)
 	require.Zero(t, outbox)
 	_, err = f.db.Exec(`DROP TRIGGER reject_media_second ON wallet_settlement_outbox;DROP FUNCTION reject_media_second()`)
 	require.NoError(t, err)
@@ -1145,12 +1455,17 @@ func TestExternalMediaCacheLossAndDefinitePinRefusalResolveKnownZero(t *testing.
 	f.poolFunds(t, 10000000, 10000000, 0)
 	task := f.create(t, "missing-cache-pin-refused", "google/nano-banana", "1:1")
 	var auth, snapshotID, event string
-	require.NoError(t, f.db.QueryRow(`SELECT authorization_id,billing_snapshot_id,settlement_event_id FROM gateway_media_task WHERE id=$1`, task.TaskID).Scan(&auth, &snapshotID, &event))
+	var quote int64
+	require.NoError(t, f.db.QueryRow(`SELECT authorization_id,billing_snapshot_id,settlement_event_id,quoted_units FROM gateway_media_task WHERE id=$1`, task.TaskID).Scan(&auth, &snapshotID, &event, &quote))
 	snap, err := repository.ProvideBillingSnapshotStore(f.db).GetBillingSnapshot(context.Background(), snapshotID)
 	require.NoError(t, err)
 	user, err := f.users.GetByID(context.Background(), f.userID)
 	require.NoError(t, err)
-	h, err := service.NewCanonicalWalletAuthorizer(f.cfg, f.bridge, f.snapshots).Authorize(context.Background(), service.AuthorizeInput{Snapshot: snap, User: user, FixedEstimateUnits: 19656000, DurableAuthorizationID: auth})
+	// Media funding binds to the persisted task: the amount is the task's own
+	// immutable quote (PG refuses to change it) and the funding owner is the task
+	// id. The quote is funded by one isolated lease here; multi-segment funding is
+	// covered by the scoped-funding cases.
+	h, err := service.NewCanonicalWalletAuthorizer(f.cfg, f.bridge, f.snapshots).Authorize(service.WithMediaFundingOwner(context.Background(), task.TaskID), service.AuthorizeInput{Snapshot: snap, User: user, FixedEstimateUnits: quote, DurableAuthorizationID: auth})
 	require.NoError(t, err)
 	for i, segment := range h.Segments {
 		id := event
@@ -1176,6 +1491,21 @@ func TestExternalMediaCacheLossAndDefinitePinRefusalResolveKnownZero(t *testing.
 	require.NoError(t, f.db.QueryRow(`SELECT count(*) FROM wallet_settlement_outbox`).Scan(&outbox))
 	require.Zero(t, unfinished)
 	require.Zero(t, outbox)
+	// The Redis cache was wiped, so the task's isolated lease had to be rebuilt
+	// from the persisted basis before the signed close. The money must actually
+	// have come back: a rebuild that returned without closing would leave the
+	// whole quote tied up in an unreturned lease while the task still reads
+	// "released".
+	require.Eventually(t, func() bool {
+		f.control.mu.Lock()
+		defer f.control.mu.Unlock()
+		for _, l := range f.control.pool {
+			if l.scope == "media" {
+				return l.closed && l.returned == quote
+			}
+		}
+		return false
+	}, 10*time.Second, 50*time.Millisecond, "the rebuilt isolated media lease is closed and returns the whole quote")
 }
 
 func TestExternalPoolLiveNextWindowActivationSurvivesAgeAndRedisLoss(t *testing.T) {
@@ -1339,4 +1669,60 @@ func TestExternalPoolHTTPRenewalStopsWithoutOldZeroPinACK(t *testing.T) {
 	require.ErrorIs(t, err, service.ErrAuthorizationRefused)
 	require.Equal(t, int64(1), requests.Load())
 	require.Equal(t, h.ID, service.AuthorizationIDOf(h))
+}
+
+// A 409 on pin creation is not proof that no pin exists (it also answers a pin that
+// exists but conflicts). The pinless release therefore may not declare the quote
+// refunded on its own: it is final only once the signed close of the isolated lease
+// is accepted, and the Worker refuses that close while a pin is still active.
+func TestExternalMediaPinRefusalWithASurvivingPinIsNotReleasedUntilTheSignedCloseIsAccepted(t *testing.T) {
+	f := newMediaFixture(t)
+	f.poolFunds(t, 10000000, 10000000, 0)
+	f.control.mu.Lock()
+	f.control.pinRefused = true
+	f.control.survivingPin = true
+	f.control.mu.Unlock()
+	task := f.create(t, "pin-refused-survivor", "google/nano-banana", "1:1")
+	var quote int64
+	require.NoError(t, f.db.QueryRow(`SELECT quoted_units FROM gateway_media_task WHERE id=$1`, task.TaskID).Scan(&quote))
+	isolatedClosed := func() bool {
+		f.control.mu.Lock()
+		defer f.control.mu.Unlock()
+		for _, l := range f.control.pool {
+			if l.scope == "media" {
+				return l.closed
+			}
+		}
+		return false
+	}
+	// Wait until the refusal has been processed (the task left authorization), then
+	// hold the line: with a pin still alive the quote must not be reported refunded.
+	require.Eventually(t, func() bool {
+		var code string
+		_ = f.db.QueryRow(`SELECT COALESCE(error_code,'') FROM gateway_media_task WHERE id=$1`, task.TaskID).Scan(&code)
+		return code == "PIN_AUTHORIZATION_REFUSED"
+	}, 10*time.Second, 50*time.Millisecond)
+	require.Never(t, func() bool {
+		var state string
+		_ = f.db.QueryRow(`SELECT financial_state FROM gateway_media_task WHERE id=$1`, task.TaskID).Scan(&state)
+		return state == "released_zero" || isolatedClosed()
+	}, 4*time.Second, 100*time.Millisecond, "a refused close must leave the task unreleased and the lease open")
+	var unfinished int
+	require.NoError(t, f.db.QueryRow(`SELECT count(*) FROM wallet_authorization_segment WHERE parent_authorization_id=(SELECT authorization_id FROM gateway_media_task WHERE id=$1) AND state='finished'`, task.TaskID).Scan(&unfinished))
+	require.Zero(t, unfinished, "no share is finished before the signed close is accepted")
+	// The pin is gone (finished by its own recovery): the close is now accepted.
+	f.control.mu.Lock()
+	f.control.survivingPin = false
+	f.control.mu.Unlock()
+	f.wait(t, task.TaskID, "released")
+	require.Eventually(t, isolatedClosed, 10*time.Second, 50*time.Millisecond, "the isolated lease is closed once the Worker accepts the close")
+	var returned int64
+	f.control.mu.Lock()
+	for _, l := range f.control.pool {
+		if l.scope == "media" {
+			returned = l.returned
+		}
+	}
+	f.control.mu.Unlock()
+	require.Equal(t, quote, returned, "the whole quote returns to spendable credit")
 }

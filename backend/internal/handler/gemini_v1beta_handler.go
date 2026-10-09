@@ -498,6 +498,9 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 			if accountReleaseFunc != nil {
 				accountReleaseFunc()
 			}
+			if writeWalletRiskResponse(c, authErr) {
+				return
+			}
 			googleError(c, service.AuthorizationRefusedHTTPStatus, service.AuthorizationRefusedMessage+": "+refusedReasonForLog(authErr))
 			return
 		}

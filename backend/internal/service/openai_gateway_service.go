@@ -222,10 +222,13 @@ type OpenAIUsage struct {
 
 // OpenAIForwardResult represents the result of forwarding
 type OpenAIForwardResult struct {
-	RequestID  string
-	ResponseID string
-	Usage      OpenAIUsage
-	Model      string // 原始模型（用于响应和日志显示）
+	RequestID      string
+	ResponseID     string
+	Usage          OpenAIUsage
+	UsagePresent   bool
+	UsageValid     bool
+	UsageMalformed bool
+	Model          string // 原始模型（用于响应和日志显示）
 	// BillingModel is the model used for cost calculation.
 	// When non-empty, CalculateCost uses this instead of Model.
 	// This is set by the Anthropic Messages conversion path where
@@ -544,6 +547,8 @@ func NewOpenAIGatewayService(
 	}
 	if walletStore, ok := requireCanonicalWalletStore(cfg, cache, "NewOpenAIGatewayService"); ok {
 		svc.canonicalWallet = NewCanonicalWalletBridge(cfg, walletStore, db, outbox)
+		svc.canonicalWallet.SetBillingEvidenceRepository(usageBillingRepo)
+		svc.canonicalWallet.SetBillingEvidenceDependencies(usageLogRepo, svc.billingDeps())
 		svc.authorizer = NewCanonicalWalletAuthorizer(cfg, svc.canonicalWallet, billingSnapshots)
 	}
 	svc.liveProvisional = ProvideLiveProvisionalStore(cfg, db)

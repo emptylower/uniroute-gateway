@@ -404,7 +404,12 @@ func TestExternalExpiryMigrationPreservesHistoricalFinancialRowsAndGuards(t *tes
 	tx, err := f.db.Begin()
 	require.NoError(t, err)
 	defer tx.Rollback()
+	// A pre-222 schema has none of the later (233) segment triggers whose
+	// bodies read the 222 columns; DROP COLUMN does not remove them, so drop
+	// them here and restore them after 222 is re-applied.
 	_, err = tx.Exec(`DROP TRIGGER wallet_unknown_expiry_guard ON wallet_authorization_segment;
+ DROP TRIGGER wallet_funding_terminal_enqueue ON wallet_authorization_segment;
+ DROP TRIGGER wallet_funding_terminal_cleanup_identity ON wallet_authorization_segment;
  ALTER TABLE wallet_authorization_segment DROP COLUMN first_write_at,DROP COLUMN write_active_until,DROP COLUMN write_ended_at,DROP COLUMN legacy_completion_proof,DROP COLUMN expiry_deadline,DROP COLUMN expiry_intent_version,DROP COLUMN expiry_ack_at,DROP COLUMN expiry_receipt_id,DROP COLUMN expiry_cleanup_at;
  ALTER TABLE wallet_authorization_segment DROP CONSTRAINT wallet_authorization_segment_state_check;
  ALTER TABLE wallet_authorization_segment ADD CONSTRAINT wallet_authorization_segment_state_check CHECK (state IN ('prepared','held','indeterminate','settling','released','finished'));
@@ -419,6 +424,13 @@ func TestExternalExpiryMigrationPreservesHistoricalFinancialRowsAndGuards(t *tes
 	var equal bool
 	require.NoError(t, tx.QueryRow(`SELECT $1::jsonb=jsonb_agg(to_jsonb(a)-ARRAY['first_write_at','write_active_until','write_ended_at','legacy_completion_proof','expiry_deadline','expiry_intent_version','expiry_ack_at','expiry_receipt_id','expiry_cleanup_at'] ORDER BY authorization_id) FROM wallet_authorization_segment a`, string(before)).Scan(&equal))
 	require.True(t, equal, "every historical identity, snapshot, amount, payload and state survives the additive migration")
+	// Restore the later objects invalidated by the reconstruction (the 223
+	// partial index went with the dropped columns); the guard checks below then
+	// run with every current segment trigger present.
+	_, err = tx.Exec(`CREATE TRIGGER wallet_funding_terminal_cleanup_identity BEFORE UPDATE ON wallet_authorization_segment FOR EACH ROW EXECUTE FUNCTION wallet_funding_terminal_cleanup_guard();
+ CREATE TRIGGER wallet_funding_terminal_enqueue AFTER INSERT OR UPDATE ON wallet_authorization_segment FOR EACH ROW EXECUTE FUNCTION enqueue_wallet_funding_terminal();
+ CREATE INDEX IF NOT EXISTS idx_wallet_immediate_expiry_pending ON wallet_authorization_segment(updated_at) WHERE expiry_intent_version=2 AND (expiry_ack_at IS NULL OR expiry_cleanup_at IS NULL)`)
+	require.NoError(t, err)
 	require.NoError(t, tx.Commit())
 	// Guards reject incomplete intents, fabricated unknown-zero receipts, and
 	// subsequent deadline mutation, using actual PostgreSQL trigger execution.

@@ -10,56 +10,72 @@ import (
 )
 
 type mediaTaskRecord struct {
-	AuthorizationKind  string
-	Segments           []AuthorizationSegment
-	ID                 string
-	UserID             int64
-	PlatformUserID     string
-	APIKeyID           int64
-	IdempotencyKey     string
-	RequestHash        string
-	Model              string
-	MediaType          string
-	Option             string
-	Prompt             string
-	RequestPayload     map[string]any
-	SnapshotID         string
-	QuotedUnits        int64
-	AuthorizationID    string
-	LeaseID            string
-	LeaseBasis         *CanonicalWalletLease
-	HeldUnits          int64
-	ActualUnits        *int64
-	EventID            string
-	AuthorizationToken string
-	ProviderTaskID     string
-	Status             string
-	PinState           string
-	Result             MediaProviderResult
-	ErrorCode          string
-	ErrorMessage       string
-	ClaimedBy          string
-	DeadlineAt         time.Time
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
-	SettledAt          *time.Time
-	CapturedEventIDs   []string
+	journal                   *mediaDurableJournal
+	ClaimLane                 string
+	FinancialState            string
+	FinancialPolicyVersion    string
+	AcceptedAt                *time.Time
+	FinancialRuntimeDeadline  *time.Time
+	QueryEpisodeFirstFailedAt *time.Time
+	QueryUncertaintyDeadline  *time.Time
+	WriteOwner                string
+	WriteStartedAt            *time.Time
+	WriteEndedAt              *time.Time
+	FinancialTerminalProof    string
+	FinancialTerminalAt       *time.Time
+	FinancialReleasedAt       *time.Time
+	FeePendingAt              *time.Time
+	FeePlanAt                 *time.Time
+	AuthorizationKind         string
+	Segments                  []AuthorizationSegment
+	ID                        string
+	UserID                    int64
+	PlatformUserID            string
+	APIKeyID                  int64
+	IdempotencyKey            string
+	RequestHash               string
+	Model                     string
+	MediaType                 string
+	Option                    string
+	Prompt                    string
+	RequestPayload            map[string]any
+	SnapshotID                string
+	QuotedUnits               int64
+	AuthorizationID           string
+	LeaseID                   string
+	LeaseBasis                *CanonicalWalletLease
+	HeldUnits                 int64
+	ActualUnits               *int64
+	EventID                   string
+	AuthorizationToken        string
+	ProviderTaskID            string
+	Status                    string
+	PinState                  string
+	Result                    MediaProviderResult
+	ErrorCode                 string
+	ErrorMessage              string
+	ClaimedBy                 string
+	DeadlineAt                time.Time
+	CreatedAt                 time.Time
+	UpdatedAt                 time.Time
+	SettledAt                 *time.Time
+	CapturedEventIDs          []string
 }
 type mediaTaskStore struct{ db *sql.DB }
 
 func (s *mediaTaskStore) reschedule(ctx context.Context, r *mediaTaskRecord) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE gateway_media_task SET claimed_by=NULL,claim_until=NULL,next_poll_at=now()+interval '5 seconds' WHERE id=$1 AND claimed_by=$2`, r.ID, r.ClaimedBy)
+	_, err := s.db.ExecContext(ctx, `UPDATE gateway_media_task SET claimed_by=NULL,claim_until=NULL,next_poll_at=CASE WHEN $3='query' THEN now()+interval '5 seconds' ELSE next_poll_at END,next_fee_recovery_at=CASE WHEN $3='fee' THEN now()+interval '5 seconds' ELSE next_fee_recovery_at END,next_financial_recovery_at=CASE WHEN $3='finance' THEN now()+interval '5 seconds' ELSE next_financial_recovery_at END WHERE id=$1 AND claimed_by=$2`, r.ID, r.ClaimedBy, mediaClaimLane(r))
 	return err
 }
 
-const mediaTaskColumns = `id,user_id,platform_user_id,api_key_id,idempotency_key,request_hash,model,media_type,option,prompt,request_payload,billing_snapshot_id,quoted_units,authorization_id,COALESCE(lease_id,''),lease_basis,held_units,actual_units,settlement_event_id,COALESCE(authorization_token,''),COALESCE(provider_task_id,''),status,pin_state,result,COALESCE(error_code,''),COALESCE(error_message,''),COALESCE(claimed_by,''),deadline_at,created_at,updated_at,settled_at`
+const mediaTaskColumns = `id,user_id,platform_user_id,api_key_id,idempotency_key,request_hash,model,media_type,option,prompt,request_payload,billing_snapshot_id,quoted_units,authorization_id,COALESCE(lease_id,''),lease_basis,held_units,actual_units,settlement_event_id,COALESCE(authorization_token,''),COALESCE(provider_task_id,''),status,pin_state,result,COALESCE(error_code,''),COALESCE(error_message,''),COALESCE(claimed_by,''),deadline_at,created_at,updated_at,settled_at,financial_state,financial_policy_version,accepted_at,financial_runtime_deadline,query_episode_first_failed_at,query_uncertainty_deadline,COALESCE(write_owner,''),write_started_at,write_ended_at,COALESCE(financial_terminal_proof,''),financial_terminal_at,financial_released_at,fee_pending_at,fee_plan_at`
 
 type mediaScanner interface{ Scan(...any) error }
 
 func scanMediaTask(row mediaScanner) (*mediaTaskRecord, error) {
 	var r mediaTaskRecord
 	var payload, basis, result []byte
-	err := row.Scan(&r.ID, &r.UserID, &r.PlatformUserID, &r.APIKeyID, &r.IdempotencyKey, &r.RequestHash, &r.Model, &r.MediaType, &r.Option, &r.Prompt, &payload, &r.SnapshotID, &r.QuotedUnits, &r.AuthorizationID, &r.LeaseID, &basis, &r.HeldUnits, &r.ActualUnits, &r.EventID, &r.AuthorizationToken, &r.ProviderTaskID, &r.Status, &r.PinState, &result, &r.ErrorCode, &r.ErrorMessage, &r.ClaimedBy, &r.DeadlineAt, &r.CreatedAt, &r.UpdatedAt, &r.SettledAt)
+	err := row.Scan(&r.ID, &r.UserID, &r.PlatformUserID, &r.APIKeyID, &r.IdempotencyKey, &r.RequestHash, &r.Model, &r.MediaType, &r.Option, &r.Prompt, &payload, &r.SnapshotID, &r.QuotedUnits, &r.AuthorizationID, &r.LeaseID, &basis, &r.HeldUnits, &r.ActualUnits, &r.EventID, &r.AuthorizationToken, &r.ProviderTaskID, &r.Status, &r.PinState, &result, &r.ErrorCode, &r.ErrorMessage, &r.ClaimedBy, &r.DeadlineAt, &r.CreatedAt, &r.UpdatedAt, &r.SettledAt, &r.FinancialState, &r.FinancialPolicyVersion, &r.AcceptedAt, &r.FinancialRuntimeDeadline, &r.QueryEpisodeFirstFailedAt, &r.QueryUncertaintyDeadline, &r.WriteOwner, &r.WriteStartedAt, &r.WriteEndedAt, &r.FinancialTerminalProof, &r.FinancialTerminalAt, &r.FinancialReleasedAt, &r.FeePendingAt, &r.FeePlanAt)
 	if err != nil {
 		return nil, err
 	}
@@ -77,12 +93,13 @@ func scanMediaTask(row mediaScanner) (*mediaTaskRecord, error) {
 	if r.Result.URLs == nil {
 		r.Result.URLs = []MediaURL{}
 	}
+	r.AuthorizationKind = "media"
 	return &r, nil
 }
 func (s *mediaTaskStore) get(ctx context.Context, userID int64, id string) (*mediaTaskRecord, error) {
 	return scanMediaTask(s.db.QueryRowContext(ctx, `SELECT `+mediaTaskColumns+` FROM gateway_media_task WHERE user_id=$1 AND id=$2`, userID, id))
 }
-func (s *mediaTaskStore) create(ctx context.Context, r *mediaTaskRecord, snap *BillingSnapshot) (*mediaTaskRecord, error) {
+func (s *mediaTaskStore) create(ctx context.Context, r *mediaTaskRecord, snap *BillingSnapshot, bridge *CanonicalWalletBridge) (*mediaTaskRecord, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -117,13 +134,32 @@ func (s *mediaTaskStore) create(ctx context.Context, r *mediaTaskRecord, snap *B
 			return nil, err
 		}
 	}
+	if bridge != nil && bridge.WalletRiskAdmissionRequired() && (stored.Status == "queued" || stored.Status == "authorizing") {
+		if err = admitMediaRiskTx(ctx, tx, stored); err != nil {
+			return nil, err
+		}
+	}
 	if err = tx.Commit(); err != nil {
 		return nil, err
 	}
 	return stored, nil
 }
 func (s *mediaTaskStore) claim(ctx context.Context, owner string) (*mediaTaskRecord, error) {
-	return scanMediaTask(s.db.QueryRowContext(ctx, `UPDATE gateway_media_task SET claimed_by=$1,claim_until=now()+interval '90 seconds',updated_at=now() WHERE id=(SELECT id FROM gateway_media_task WHERE status NOT IN ('completed','failed') AND next_poll_at<=now() AND (claim_until IS NULL OR claim_until<now()) ORDER BY next_poll_at,id LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING `+mediaTaskColumns, owner))
+	return s.claimLane(ctx, owner, "query")
+}
+func (s *mediaTaskStore) claimLane(ctx context.Context, owner, lane string) (*mediaTaskRecord, error) {
+	column, predicate := "next_poll_at", "status NOT IN ('completed','failed','settling','releasing') AND financial_state NOT IN ('zero_pending','fee_pending') AND (financial_state<>'unknown_pending' OR provider_task_id IS NOT NULL)"
+	switch lane {
+	case "fee":
+		column, predicate = "next_fee_recovery_at", "financial_state='fee_pending'"
+	case "finance":
+		column, predicate = "next_financial_recovery_at", "financial_state IN ('unknown_pending','zero_pending') OR (status='releasing' AND financial_state='held') OR (financial_state='held' AND write_ended_at IS NOT NULL AND (provider_task_id IS NULL OR LEAST(financial_runtime_deadline,query_uncertainty_deadline)<=now()))"
+	}
+	r, err := scanMediaTask(s.db.QueryRowContext(ctx, `UPDATE gateway_media_task SET claimed_by=$1,claim_until=now()+interval '90 seconds',updated_at=now() WHERE id=(SELECT id FROM gateway_media_task WHERE (`+predicate+`) AND NOT media_journal_pending AND `+column+`<=now() AND (claim_until IS NULL OR claim_until<now()) ORDER BY `+column+`,id LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING `+mediaTaskColumns, owner))
+	if r != nil {
+		r.ClaimLane = lane
+	}
+	return r, err
 }
 func (s *mediaTaskStore) save(ctx context.Context, r *mediaTaskRecord, delay time.Duration) error {
 	result, err := json.Marshal(r.Result)
@@ -138,7 +174,7 @@ func (s *mediaTaskStore) save(ctx context.Context, r *mediaTaskRecord, delay tim
 		}
 		basis = string(raw)
 	}
-	res, err := s.db.ExecContext(ctx, `UPDATE gateway_media_task SET lease_id=NULLIF($3,''),lease_basis=$4::jsonb,held_units=$5,actual_units=$6,authorization_token=NULLIF($7,''),provider_task_id=NULLIF($8,''),status=$9,pin_state=$10,result=$11::jsonb,error_code=NULLIF($12,''),error_message=NULLIF($13,''),settled_at=$14,updated_at=now(),next_poll_at=now()+$15*interval '1 millisecond',claim_until=NULL,claimed_by=NULL WHERE id=$1 AND claimed_by=$2 AND claim_until>now()`, r.ID, r.ClaimedBy, r.LeaseID, basis, r.HeldUnits, r.ActualUnits, r.AuthorizationToken, r.ProviderTaskID, r.Status, r.PinState, string(result), r.ErrorCode, r.ErrorMessage, r.SettledAt, delay.Milliseconds())
+	res, err := s.db.ExecContext(ctx, `UPDATE gateway_media_task SET lease_id=NULLIF($3,''),lease_basis=$4::jsonb,held_units=$5,actual_units=$6,authorization_token=NULLIF($7,''),provider_task_id=NULLIF($8,''),status=$9,pin_state=$10,result=$11::jsonb,error_code=NULLIF($12,''),error_message=NULLIF($13,''),settled_at=$14,updated_at=now(),next_poll_at=CASE WHEN $16='query' THEN now()+$15*interval '1 millisecond' ELSE next_poll_at END,next_fee_recovery_at=CASE WHEN $16='fee' THEN now()+$15*interval '1 millisecond' ELSE next_fee_recovery_at END,next_financial_recovery_at=CASE WHEN $16='finance' THEN now()+$15*interval '1 millisecond' ELSE next_financial_recovery_at END,claim_until=NULL,claimed_by=NULL WHERE id=$1 AND claimed_by=$2 AND claim_until>now()`, r.ID, r.ClaimedBy, r.LeaseID, basis, r.HeldUnits, r.ActualUnits, r.AuthorizationToken, r.ProviderTaskID, r.Status, r.PinState, string(result), r.ErrorCode, r.ErrorMessage, r.SettledAt, delay.Milliseconds(), mediaClaimLane(r))
 	if err != nil {
 		return err
 	}
@@ -196,7 +232,7 @@ func nullableMediaTime(t time.Time) any {
 }
 func (s *mediaTaskStore) active(ctx context.Context, authID string) (bool, error) {
 	var yes bool
-	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM gateway_media_task WHERE (authorization_id=$1 OR authorization_id IN (SELECT parent_authorization_id FROM wallet_authorization_segment WHERE authorization_id=$1)) AND (pin_state<>'finished' OR status NOT IN ('completed','failed')))`, authID).Scan(&yes)
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM gateway_media_task WHERE (authorization_id=$1 OR authorization_id IN (SELECT parent_authorization_id FROM wallet_authorization_segment WHERE authorization_id=$1)) AND financial_state NOT IN ('released_unknown','released_zero','charged') AND (pin_state<>'finished' OR status NOT IN ('completed','failed')))`, authID).Scan(&yes)
 	return yes, err
 }
 func (s *mediaTaskStore) leasePinned(ctx context.Context, user, lease string) (bool, error) {
@@ -226,4 +262,51 @@ func (s *mediaTaskStore) fence(ctx context.Context, r *mediaTaskRecord) error {
 		return errors.New("media task claim lost")
 	}
 	return nil
+}
+
+func (s *mediaTaskStore) saveReleasedFailure(ctx context.Context, r *mediaTaskRecord) error {
+	result, err := json.Marshal(r.Result)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `UPDATE gateway_media_task SET status='failed',pin_state='finished',result=$3::jsonb,error_code=NULLIF($4,''),error_message=NULLIF($5,''),claimed_by=NULL,claim_until=NULL,updated_at=now() WHERE id=$1 AND claimed_by=$2 AND financial_state='released_unknown'`, r.ID, r.ClaimedBy, string(result), r.ErrorCode, r.ErrorMessage)
+	return err
+}
+
+// Admission and the queued task share a transaction, so a worker cannot start
+// a hold for a request whose HTTP admission was denied.
+func admitMediaRiskTx(ctx context.Context, tx *sql.Tx, r *mediaTaskRecord) error {
+	unavailable := func(err error) error { return &WalletRiskRefusedError{Status: 503, RetryAfter: 1, Cause: err} }
+	var user, snapshot, kind, policy string
+	err := tx.QueryRowContext(ctx, `SELECT platform_user_id,billing_snapshot_id,kind,policy_version FROM wallet_risk_admission WHERE parent_authorization_id=$1`, r.AuthorizationID).Scan(&user, &snapshot, &kind, &policy)
+	if err == nil {
+		if user != r.PlatformUserID || snapshot != r.SnapshotID || kind != "media" || policy != WalletImmediateReleasePolicyVersion {
+			return unavailable(errors.New("media admission identity conflict"))
+		}
+		return nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return unavailable(err)
+	}
+	if err = checkUnknownReleaseSoftLimit(ctx, tx, r.PlatformUserID); err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO wallet_risk_admission(parent_authorization_id,platform_user_id,billing_snapshot_id,kind,policy_version) VALUES($1,$2,$3,'media',$4) ON CONFLICT(parent_authorization_id) DO NOTHING`, r.AuthorizationID, r.PlatformUserID, r.SnapshotID, WalletImmediateReleasePolicyVersion)
+	if err != nil {
+		return unavailable(err)
+	}
+	if err = tx.QueryRowContext(ctx, `SELECT platform_user_id,billing_snapshot_id,kind,policy_version FROM wallet_risk_admission WHERE parent_authorization_id=$1`, r.AuthorizationID).Scan(&user, &snapshot, &kind, &policy); err != nil {
+		return unavailable(err)
+	}
+	if user != r.PlatformUserID || snapshot != r.SnapshotID || kind != "media" || policy != WalletImmediateReleasePolicyVersion {
+		return unavailable(errors.New("media admission identity conflict"))
+	}
+	return nil
+}
+
+func mediaClaimLane(r *mediaTaskRecord) string {
+	if r.ClaimLane == "fee" || r.ClaimLane == "finance" {
+		return r.ClaimLane
+	}
+	return "query"
 }

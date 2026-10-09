@@ -65,6 +65,15 @@ jobs:
 
   wallet-recovery:
     runs-on: ubuntu-latest
+    env:
+      UNIROUTE_MEDIA_TEST_POSTGRES_DSN: postgres://wallet_test:wallet_test@127.0.0.1:55432/uniroute_media_test_ci?sslmode=disable
+      UNIROUTE_MEDIA_TEST_REDIS_ADDR: 127.0.0.1:56379
+      UNIROUTE_WALLET_WIRE_FIXTURE_URL: http://127.0.0.1:62070
+      UNIROUTE_WALLET_WIRE_FIXTURE_PORT: '62070'
+      UNIROUTE_WALLET_WIRE_FIXTURE_SECRET: isolated-ci-wallet-wire-test-secret-at-least-32-bytes
+      # Four simultaneous media tasks exercise independent recovery lanes.
+      # This configures only the isolated Worker fixture, not production.
+      GATEWAY_WALLET_MAX_ACTIVE_LEASES: '4'
     services:
       postgres:
         image: postgres:16
@@ -86,6 +95,100 @@ jobs:
           --health-interval 5s --health-timeout 5s --health-retries 12
     steps:
       - uses: actions/checkout@v6
+      - name: Restore and verify the approved actual Worker source
+        env:
+          UNIROUTE_CONSOLE_FIXTURE_01: ${{ secrets.UNIROUTE_CONSOLE_FIXTURE_01 }}
+          UNIROUTE_CONSOLE_FIXTURE_02: ${{ secrets.UNIROUTE_CONSOLE_FIXTURE_02 }}
+          UNIROUTE_CONSOLE_FIXTURE_03: ${{ secrets.UNIROUTE_CONSOLE_FIXTURE_03 }}
+          UNIROUTE_CONSOLE_FIXTURE_04: ${{ secrets.UNIROUTE_CONSOLE_FIXTURE_04 }}
+          UNIROUTE_CONSOLE_FIXTURE_05: ${{ secrets.UNIROUTE_CONSOLE_FIXTURE_05 }}
+          UNIROUTE_CONSOLE_FIXTURE_06: ${{ secrets.UNIROUTE_CONSOLE_FIXTURE_06 }}
+          UNIROUTE_CONSOLE_FIXTURE_07: ${{ secrets.UNIROUTE_CONSOLE_FIXTURE_07 }}
+          UNIROUTE_CONSOLE_FIXTURE_08: ${{ secrets.UNIROUTE_CONSOLE_FIXTURE_08 }}
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib, io, json, os, pathlib, tarfile
+          commit = 'ea8291a6eb0f86124986f8c6d0e5a32d3ab0d20a'
+          expected_sha = 'a37579565ff6a8fbea27552526c6f7dc07b3be39909436bf12c0b4c15050f803'
+          chunks = []
+          for number in range(1, 9):
+              name = f'UNIROUTE_CONSOLE_FIXTURE_{number:02}'
+              chunk = os.environ.get(name, '')
+              if not chunk or len(chunk) != (40000 if number < 8 else 29848):
+                  raise SystemExit(f'{name} is required and must contain its complete approved source chunk')
+              chunks.append(chunk)
+          encoded = ''.join(chunks)
+          if len(encoded) != 309848:
+              raise SystemExit('approved Worker source archive length mismatch')
+          try:
+              raw = base64.b64decode(encoded, validate=True)
+          except ValueError:
+              raise SystemExit('approved Worker source archive is not valid base64')
+          if hashlib.sha256(raw).hexdigest() != expected_sha:
+              raise SystemExit('approved Worker source archive SHA-256 mismatch')
+          destination = pathlib.Path('wallet-wire-console')
+          if destination.exists():
+              raise SystemExit('approved Worker source destination already exists')
+          with tarfile.open(fileobj=io.BytesIO(raw), mode='r:gz') as archive:
+              if archive.pax_headers.get('comment') != commit:
+                  raise SystemExit('approved Worker source git archive commit mismatch')
+              members, names, total_bytes = archive.getmembers(), set(), 0
+              for member in members:
+                  path = pathlib.PurePosixPath(member.name)
+                  if not member.name or path.is_absolute() or '..' in path.parts or '\\' in member.name or any(ord(c) < 32 for c in member.name) or str(path) != member.name:
+                      raise SystemExit('unsafe approved Worker source archive path')
+                  if member.name in names or not (member.isdir() or member.isfile()):
+                      raise SystemExit('duplicate path, link or special file in approved Worker source archive')
+                  names.add(member.name)
+                  total_bytes += member.size
+                  if member.size < 0 or member.size > 2 * 1024 * 1024 or total_bytes > 8 * 1024 * 1024:
+                      raise SystemExit('approved Worker source archive exceeds its extraction bound')
+              files = [m for m in members if m.isfile()]
+              if len(files) != 62 or not {'drizzle/sqlite/0014_wallet_immediate_v5_receipts.sql', 'drizzle/sqlite/0015_wallet_scoped_funding_return.sql', 'package.json', 'pnpm-lock.yaml', 'scripts/wallet-wire-fixture.ts', 'src/app/api/internal/v2/wallet/leases/freeze-source/route.ts', 'src/app/api/internal/v2/wallet/leases/return/route.ts', 'src/modules/credits/lease-funding-return.ts', 'src/modules/credits/lease-funding-source.ts', 'src/modules/credits/task-pin.ts'}.issubset(names):
+                  raise SystemExit('approved actual Worker source closure is incomplete')
+              destination.mkdir()
+              for member in members:
+                  output = destination / member.name
+                  if member.isdir():
+                      output.mkdir(parents=True, exist_ok=True)
+                  else:
+                      output.parent.mkdir(parents=True, exist_ok=True)
+                      with archive.extractfile(member) as source, output.open('xb') as target:
+                          target.write(source.read())
+          provenance = {'source_commit': commit, 'archive_sha256': expected_sha, 'files': len(files), 'mock_business_routes': False}
+          (destination / 'approved-source.json').write_text(json.dumps(provenance, indent=2) + '\n')
+          print(f'Verified approved Worker source: {commit}, SHA-256 {expected_sha}, {len(files)} actual files')
+          PY
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: wallet-wire-console/pnpm-lock.yaml
+      - name: Install locked actual Worker fixture dependencies
+        working-directory: wallet-wire-console
+        run: pnpm install --frozen-lockfile
+      - name: Start actual Worker routes with isolated Miniflare D1
+        working-directory: wallet-wire-console
+        env:
+          DATABASE_PROVIDER: d1
+        run: |
+          cp src/config/db/schema.sqlite.ts src/config/db/schema.ts
+          pnpm exec node --import tsx/esm --experimental-loader=./src/modules/payment/usd-test-loader.mjs --no-warnings scripts/wallet-wire-fixture.ts > "$RUNNER_TEMP/wallet-wire-fixture.log" 2>&1 &
+          fixture_pid=$!
+          echo "$fixture_pid" > "$RUNNER_TEMP/wallet-wire-fixture.pid"
+          for _ in $(seq 1 60); do
+            kill -0 "$fixture_pid" || { cat "$RUNNER_TEMP/wallet-wire-fixture.log"; exit 1; }
+            if curl --fail --silent "$UNIROUTE_WALLET_WIRE_FIXTURE_URL/__fixture/health" > /dev/null; then
+              test "$(curl --silent --output /dev/null --write-out '%{http_code}' "$UNIROUTE_WALLET_WIRE_FIXTURE_URL/api/internal/v2/wallet/leases/ensure")" = 405
+              exit 0
+            fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/wallet-wire-fixture.log"
+          exit 1
       - uses: actions/setup-go@v6
         with:
           go-version-file: backend/go.mod
@@ -96,15 +199,30 @@ jobs:
         run: go version | grep -q 'go1.26.5'
       - name: Real PostgreSQL Redis wallet recovery regressions
         working-directory: backend
-        env:
-          UNIROUTE_MEDIA_TEST_POSTGRES_DSN: postgres://wallet_test:wallet_test@127.0.0.1:55432/uniroute_media_test_ci?sslmode=disable
-          UNIROUTE_MEDIA_TEST_REDIS_ADDR: 127.0.0.1:56379
         run: |
-          go test -tags=media_integration -p=1 -count=1 -timeout=15m ./internal/media_integration
+          # The two injected-dependency-fault recoveries wait out the real 60 s stale
+          # outbox reclaim, so the whole package needs more than the former 15 minutes.
+          go test -tags=media_integration -p=1 -count=1 -timeout=25m ./internal/media_integration
           go test -tags=media_integration -race -p=1 -count=3 -timeout=10m ./internal/media_integration -run '^(TestExternalCold|TestExternalPoolConcurrentPositiveAndZero|TestExternalPartialExpiryAck)'
       - name: Wallet owner and retry race regressions
         working-directory: backend
         run: go test -tags=unit -race -p=1 -count=10 -timeout=10m ./internal/service -run '^(TestWalletBodyOwner|TestWalletWSDisarm|TestWalletGatewayShutdown|TestWalletUnknown503|TestWalletKnownZero|TestWalletRetryGate)'
+      - name: V5 reader evidence, handoff, normalization and journal races
+        working-directory: backend
+        run: go test -tags=unit -race -p=1 -count=10 -timeout=10m ./internal/service -run '^(TestWalletReader|TestWalletUsageInteger|TestWalletPositivePersistence|TestWalletQueuedTask|TestWalletUsageStagePanic|TestWalletWSReader|TestOpenAIWSFinancial)'
+      - name: Stop isolated Worker wire fixture
+        if: ${{ always() }}
+        run: |
+          if test -f "$RUNNER_TEMP/wallet-wire-fixture.pid"; then
+            kill "$(cat "$RUNNER_TEMP/wallet-wire-fixture.pid")" 2>/dev/null || true
+          fi
+      - name: Preserve actual Worker wire diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: wallet-wire-fixture-log
+          path: ${{ runner.temp }}/wallet-wire-fixture.log
+          if-no-files-found: error
 
   frontend:
     runs-on: ubuntu-latest
