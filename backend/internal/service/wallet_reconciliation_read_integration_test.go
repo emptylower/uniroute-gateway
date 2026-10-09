@@ -5,8 +5,6 @@ package service
 import (
 	"context"
 	"database/sql"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -36,12 +34,10 @@ func startWalletReconciliationTestPostgres(t testing.TB, ctx context.Context) *s
 		"218_wallet_authorization_segments.sql",
 		"219_wallet_attempt_protection.sql", "222_wallet_unknown_expiry.sql",
 	} {
-		sqlContent, err := os.ReadFile(filepath.Join("..", "..", "migrations", migration))
-		require.NoError(t, err)
-		_, err = db.ExecContext(ctx, string(sqlContent))
-		require.NoError(t, err)
+		applyMigrationOnceForTest(t, ctx, db, migration)
 	}
 	createWalletMediaTaskTableForTest(t, ctx, db) // see its comment: 217 itself needs users/api_keys
+	applyWalletV5MigrationsForTest(t, ctx, db)
 	return db
 }
 

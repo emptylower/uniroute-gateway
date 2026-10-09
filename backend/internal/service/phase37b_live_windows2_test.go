@@ -23,8 +23,6 @@ import (
 	"io"
 	"math"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -70,10 +68,7 @@ func newLiveWindowShared(t *testing.T) *liveWindowShared {
 	rdb := startCanonicalWalletTestRedis(t, ctx)
 	db := startCanonicalWalletTestPostgres(t, ctx) // the outbox table
 	for _, migration := range []string{"209_wallet_billing_snapshot.sql", "211_wallet_live_provisional.sql"} {
-		content, err := os.ReadFile(filepath.Join("..", "..", "migrations", migration))
-		require.NoError(t, err)
-		_, err = db.ExecContext(ctx, string(content))
-		require.NoError(t, err)
+		applyMigrationOnceForTest(t, ctx, db, migration)
 	}
 
 	fake := newFakeEnsureControlPlane(t, func() time.Time { return time.Now().UTC() })
