@@ -54,8 +54,9 @@ var walletUsageLocations = []string{"usage", "response.usage", "message.usage", 
 // have response.usage:null, and Chat Completions chunks have usage:null when
 // stream_options.include_usage is on. Treating that null as a present, malformed
 // value would latch Malformed for the whole stream and make a complete, strictly
-// valid terminal usage untrusted. The live parser and the journal checkpoint
-// must select the same value, so both use this.
+// valid terminal usage untrusted. For HTTP sources the live parser and the
+// journal checkpoint must select the same value, so both use this. (The
+// WebSocket live parser reads response.usage only; see walletWSUsage.)
 func walletSelectedUsage(root gjson.Result) (string, gjson.Result) {
 	for _, candidate := range walletUsageLocations {
 		if value := root.Get(candidate); value.Exists() && value.Type != gjson.Null {

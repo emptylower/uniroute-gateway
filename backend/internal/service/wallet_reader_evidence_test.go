@@ -165,9 +165,11 @@ func TestWalletJournalCheckpointSelectsTheSameUsageAsTheLiveParser(t *testing.T)
 	frame, err := selectedWalletUsageFrame(both)
 	require.NoError(t, err)
 	require.Contains(t, string(frame), `"input_tokens":8`, "a null top-level usage must not hide response.usage from the checkpoint")
-	var live WalletReaderEvidence
+	var live, replayed WalletReaderEvidence
 	observeWalletUsage(both, &live)
 	require.Equal(t, 8, live.Tokens.InputTokens)
+	observeWalletUsage(frame, &replayed)
+	require.Equal(t, live, replayed, "replaying the checkpoint must reach the same evidence as the live frame")
 	nullOnly, err := selectedWalletUsageFrame([]byte(`{"type":"response.created","response":{"id":"r1","usage":null}}`))
 	require.NoError(t, err)
 	require.NotContains(t, string(nullOnly), "usage", "a null-only frame carries no usage to checkpoint")

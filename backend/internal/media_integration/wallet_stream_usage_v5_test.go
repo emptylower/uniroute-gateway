@@ -106,10 +106,11 @@ func TestExternalWalletAbortedSSEWithNullUsageEventsReleasesAsUnknown(t *testing
 	_, err := io.ReadFull(response.Body, make([]byte, len(walletStreamPrelude)))
 	require.NoError(t, err)
 	require.NoError(t, response.Body.Close())
-	var present, malformed bool
-	require.NoError(t, x.f.db.QueryRow(`SELECT COALESCE((reader_evidence->>'present')::boolean,false),COALESCE((reader_evidence->>'malformed')::boolean,false) FROM wallet_authorization_segment WHERE parent_authorization_id=$1 AND ordinal=0`, h.ID).Scan(&present, &malformed))
+	var handedOff, present, malformed bool
+	require.NoError(t, x.f.db.QueryRow(`SELECT reader_evidence IS NOT NULL AND reader_handoff_at IS NOT NULL,COALESCE((reader_evidence->>'present')::boolean,false),COALESCE((reader_evidence->>'malformed')::boolean,false) FROM wallet_authorization_segment WHERE parent_authorization_id=$1 AND ordinal=0`, h.ID).Scan(&handedOff, &present, &malformed))
+	require.True(t, handedOff, "closing the body hands the reader evidence to PG")
 	require.False(t, present || malformed, "usage:null events are not reported usage and not malformed usage")
-	// The recovery lane of a freshly started service releases the sealed reader.
+	// The recovery lane of a freshly started service seals and releases the handed-off reader.
 	x.f.svc = x.f.newService(t)
 	var feePending bool
 	var unknown int

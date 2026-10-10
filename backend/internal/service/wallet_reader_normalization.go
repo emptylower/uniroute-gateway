@@ -194,7 +194,7 @@ func normalizeWalletReaderFee(snapshot *BillingSnapshot, facts *WalletReaderNorm
 // like a missing usage, not a malformed one; see walletSelectedUsage. The relay's
 // own parser and its metrics are left unchanged.
 func walletWSUsage(payload []byte) openaiwsv2.Usage {
-	if usage := gjson.GetBytes(payload, "response.usage"); usage.Exists() && usage.Type == gjson.Null {
+	if usage := gjson.GetBytes(payload, "response.usage"); usage.Exists() && usage.Type == gjson.Null && gjson.ValidBytes(payload) {
 		return openaiwsv2.Usage{}
 	}
 	return openaiwsv2.ParseUsage(payload)
