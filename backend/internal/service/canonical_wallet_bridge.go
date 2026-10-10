@@ -1002,6 +1002,8 @@ type CanonicalWalletBridge struct {
 	readerJournalMu            sync.Mutex
 	readerJournalOwner         *walletReaderJournalOwner
 	readerJournalLastAlert     time.Time
+	feeBarrierMu               sync.Mutex
+	feeBarrierLastAlert        map[string]time.Time
 	billingEvidenceMu          sync.RWMutex
 	billingEvidenceRepo        UsageBillingRepository
 	billingEvidenceLogs        UsageLogRepository
