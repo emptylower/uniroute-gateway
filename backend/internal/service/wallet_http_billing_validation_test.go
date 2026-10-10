@@ -86,7 +86,7 @@ func TestWalletReaderPositiveHandlerFeeMustMatchFrozenNormalization(t *testing.T
 	snapshot.ID = "frozen-http-snapshot"
 	var evidence WalletReaderEvidence
 	observeWalletUsage([]byte(`{"usage":{"input_tokens":1000,"output_tokens":20,"input_tokens_details":{"cached_tokens":250}}}`), &evidence)
-	facts := WalletReaderNormalization{Version: 1, Family: BillingFamilyOpenAI, Ready: true, TokenOnly: true, ServiceTier: "priority"}
+	facts := WalletReaderNormalization{Version: 1, Family: BillingFamilyOpenAI, ProviderPlatform: PlatformOpenAI, Ready: true, TokenOnly: true, ServiceTier: "priority"}
 	input, err := normalizeWalletReaderFee(snapshot, &facts, evidence)
 	require.NoError(t, err)
 	cost, err := pricing.billing.CalculateCostFromSnapshot(snapshot, input)
@@ -100,7 +100,7 @@ func TestWalletReaderPositiveHandlerFeeMustMatchFrozenNormalization(t *testing.T
 		facts     *WalletReaderNormalization
 		units     int64
 		wantError bool
-	}{{"original", &facts, units, false}, {"repriced", &facts, units + 1, true}, {"missing-facts", nil, units, true}, {"unsupported-tool", &WalletReaderNormalization{Version: 1, Family: BillingFamilyOpenAI, Ready: true, TokenOnly: false}, units, true}} {
+	}{{"original", &facts, units, false}, {"repriced", &facts, units + 1, true}, {"missing-facts", nil, units, true}, {"unsupported-tool", &WalletReaderNormalization{Version: 1, Family: BillingFamilyOpenAI, ProviderPlatform: PlatformOpenAI, Ready: true, TokenOnly: false}, units, true}} {
 		t.Run(tc.name, func(t *testing.T) {
 			normalizationRaw, err := json.Marshal(tc.facts)
 			require.NoError(t, err)

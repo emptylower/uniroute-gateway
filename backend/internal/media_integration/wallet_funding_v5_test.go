@@ -300,6 +300,7 @@ func fundingV5SharedSource(t *testing.T, scenario string) {
 		require.NoError(t, err)
 		snapshot.ID = "snapshot-funding-llm-zero-" + uuid.NewString()
 		snapshot.Family = service.BillingFamilyOpenAI
+		snapshot.ProviderPlatform = service.PlatformOpenAI
 		snapshot.RequestedModel, snapshot.BillingModel = "gpt-5.1", "gpt-5.1"
 		snapshot.Candidates = []string{"gpt-5.1"}
 		snapshot.Pricing = service.BillingSnapshotPricing{Mode: service.BillingModeToken, Source: service.PricingSourceLiteLLM, Base: &service.ModelPricing{InputPricePerToken: .8}}

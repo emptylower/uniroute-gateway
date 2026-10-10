@@ -70,6 +70,7 @@ func newFundingV7FixtureWithAmounts(t *testing.T, grantUnits, budgetUnits int64)
 	require.NoError(t, err)
 	snapshot.ID = "funding-v7-llm-snapshot-" + uuid.NewString()
 	snapshot.Family = service.BillingFamilyOpenAI
+	snapshot.ProviderPlatform = service.PlatformOpenAI
 	snapshot.RequestedModel, snapshot.BillingModel, snapshot.Candidates = "gpt-5.1", "gpt-5.1", []string{"gpt-5.1"}
 	snapshot.Pricing = service.BillingSnapshotPricing{Mode: service.BillingModeToken, Source: service.PricingSourceLiteLLM, Base: &service.ModelPricing{InputPricePerToken: .8}}
 	snapshot.Multipliers = service.BillingSnapshotMultipliers{Base: 1, Text: 1, Image: 1, Video: 1, WebSearch: 1, Account: 1}

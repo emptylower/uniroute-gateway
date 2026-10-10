@@ -387,7 +387,7 @@ func selectedWalletUsageFrame(raw []byte, facts ...*WalletReaderNormalization) (
 		selected = json.RawMessage(usage.Raw)
 	} else {
 		fields := map[string]any{}
-		for _, field := range []string{"input_tokens", "output_tokens", "prompt_tokens", "completion_tokens", "inputTokens", "outputTokens", "cache_creation_input_tokens", "cache_read_input_tokens", "image_input_tokens", "image_output_tokens", "promptTokenCount", "candidatesTokenCount", "cachedContentTokenCount", "thoughtsTokenCount", "input_tokens_details.cached_tokens", "prompt_tokens_details.cached_tokens", "input_tokens_details.cache_write_tokens", "prompt_tokens_details.cache_write_tokens", "input_tokens_details.cache_creation_tokens", "prompt_tokens_details.cache_creation_tokens", "cache_write_tokens", "cache_write_input_tokens", "cache_creation_tokens", "input_tokens_details.image_tokens", "output_tokens_details.image_tokens", "cache_creation.ephemeral_5m_input_tokens", "cache_creation.ephemeral_1h_input_tokens"} {
+		for _, field := range []string{"input_tokens", "output_tokens", "prompt_tokens", "completion_tokens", "total_tokens", "completion_tokens_details.reasoning_tokens", "inputTokens", "outputTokens", "cache_creation_input_tokens", "cache_read_input_tokens", "image_input_tokens", "image_output_tokens", "promptTokenCount", "candidatesTokenCount", "cachedContentTokenCount", "thoughtsTokenCount", "totalTokenCount", "toolUsePromptTokenCount", "input_tokens_details.cached_tokens", "prompt_tokens_details.cached_tokens", "input_tokens_details.cache_write_tokens", "prompt_tokens_details.cache_write_tokens", "input_tokens_details.cache_creation_tokens", "prompt_tokens_details.cache_creation_tokens", "cache_write_tokens", "cache_write_input_tokens", "cache_creation_tokens", "input_tokens_details.image_tokens", "output_tokens_details.image_tokens", "cache_creation.ephemeral_5m_input_tokens", "cache_creation.ephemeral_1h_input_tokens"} {
 			value := usage.Get(field)
 			if !value.Exists() {
 				continue
@@ -407,6 +407,11 @@ func selectedWalletUsageFrame(raw []byte, facts ...*WalletReaderNormalization) (
 		selected = fields
 	}
 	envelope := map[string]any{"type": root.Get("type").String()}
+	for _, id := range []string{"id", "response_id", "responseId"} {
+		if value := root.Get(id); value.Type == gjson.String {
+			envelope[id] = value.String()
+		}
+	}
 	if counts != nil {
 		envelope["_wallet_selected_counts"] = counts
 	}
@@ -414,6 +419,39 @@ func selectedWalletUsageFrame(raw []byte, facts ...*WalletReaderNormalization) (
 		envelope["response"] = map[string]any{"id": root.Get("response.id").String(), "usage": selected}
 	} else if path == "message.usage" {
 		envelope["message"] = map[string]any{"usage": selected}
+	} else if path == "usageMetadata" || path == "response.usageMetadata" {
+		native := root
+		if path == "response.usageMetadata" {
+			native = root.Get("response")
+		}
+		body := map[string]any{"usageMetadata": selected}
+		if id := native.Get("id"); id.Type == gjson.String {
+			body["id"] = id.String()
+		}
+		if id := native.Get("responseId"); id.Type == gjson.String {
+			body["responseId"] = id.String()
+		}
+		if block := native.Get("promptFeedback.blockReason"); block.Exists() {
+			body["promptFeedback"] = map[string]any{"blockReason": json.RawMessage(block.Raw)}
+		}
+		if candidates := native.Get("candidates"); candidates.IsArray() {
+			var terminal []map[string]any
+			for _, candidate := range candidates.Array() {
+				proof := map[string]any{}
+				if finish := candidate.Get("finishReason"); finish.Exists() {
+					proof["finishReason"] = json.RawMessage(finish.Raw)
+				}
+				terminal = append(terminal, proof)
+			}
+			body["candidates"] = terminal
+		}
+		if path == "response.usageMetadata" {
+			envelope["response"] = body
+		} else {
+			for field, value := range body {
+				envelope[field] = value
+			}
+		}
 	} else if path != "" {
 		envelope[path] = selected
 	}
@@ -461,7 +499,7 @@ func (j *walletReaderJournal) replayCheckpointLocked() error {
 	if j.record.PendingSource == "llm_ws_usage" {
 		observeWalletWSUsage(j.record.PendingUsage, &evidence)
 	} else {
-		observeWalletUsage(j.record.PendingUsage, &evidence)
+		observeWalletUsage(j.record.PendingUsage, &evidence, j.record.Normalization)
 	}
 	if err := replayWalletReaderCounts(j.record.PendingUsage, &evidence); err != nil {
 		return err
@@ -510,14 +548,24 @@ func (j *walletReaderJournal) transfer(e WalletReaderEvidence, fn func(WalletRea
 			return err
 		}
 	}
+	replayedGemini := false
+	if facts := j.record.Normalization; facts != nil && facts.TokenOnly && facts.CountKind == "" && j.record.PendingSource == "llm_http_usage" && (facts.ProviderPlatform == PlatformGemini || facts.ProviderPlatform == PlatformAntigravity) {
+		path, _ := walletSelectedUsage(gjson.ParseBytes(j.record.PendingUsage))
+		replayedGemini = path == "usageMetadata" || path == "response.usageMetadata"
+	}
 	if err := j.replayCheckpointLocked(); err != nil {
 		return err
 	}
 	if j.record.Sealed {
 		return errWalletReaderFenced
 	}
-	if j.record.Evidence.ObservedPositive && !e.ObservedPositive {
+	if j.record.Evidence.ObservedPositive && !e.ObservedPositive || replayedGemini && !e.Malformed && (e.Counts == nil || !e.Counts.Malformed) {
+		// The failed checkpoint precedes live terminal parsing. Its replay owns
+		// the terminal proof and cumulative native cache split, even if the live
+		// partial was already positive. Keep the live reader completion flag.
+		complete := e.Complete
 		e = j.record.Evidence
+		e.Complete = e.Complete || complete
 	}
 	if err := mergeWalletReaderCounts(&e, j.record.Evidence.Counts); err != nil {
 		return err

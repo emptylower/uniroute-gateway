@@ -110,6 +110,7 @@ func (a *CanonicalWalletAuthorizer) Authorize(ctx context.Context, in AuthorizeI
 	}
 	h.SnapshotID = in.Snapshot.ID
 	h.readerBillingFamily = in.Snapshot.Family
+	h.readerPlatform = in.Snapshot.ProviderPlatform
 	h.readerTokenOnly = in.Snapshot.Pricing.Mode == BillingModeToken && in.Estimate.ImageCount == 0 && in.Estimate.VideoCount == 0 && in.Estimate.WebSearchCalls == 0
 	switch {
 	case in.Estimate.WebSearchCalls > 0:

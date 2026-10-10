@@ -118,6 +118,9 @@ type BillingSnapshot struct {
 	Media          BillingSnapshotMedia       `json:"media"`
 	FX             ExchangeRateSnapshot       `json:"fx"`
 	Flags          BillingSnapshotFlags       `json:"flags"`
+
+	// The account selected before the wire write, never recovered from mutable account data.
+	ProviderPlatform string `json:"provider_platform,omitempty"`
 }
 
 func (s *BillingSnapshot) MarshalPayload() ([]byte, error) {
@@ -333,7 +336,8 @@ func (s *BillingSnapshotService) Freeze(ctx context.Context, in FreezeInput) (*B
 	snap := &BillingSnapshot{
 		ID: id, Version: BillingSnapshotVersion, FrozenAt: now, Family: in.Family,
 		UserID: in.User.ID, APIKeyID: apiKey.ID, GroupID: groupID, AccountID: in.Account.ID,
-		RequestedModel: strings.TrimSpace(in.RequestedModel), BillingModel: billingModel,
+		ProviderPlatform: in.Account.Platform,
+		RequestedModel:   strings.TrimSpace(in.RequestedModel), BillingModel: billingModel,
 		Candidates: usageBillingModelCandidates(billingModel, strings.TrimSpace(in.RequestedModel)),
 		Pricing: BillingSnapshotPricing{
 			Mode: resolved.Mode, Source: resolved.Source, Base: clonePricing(resolved.BasePricing),
