@@ -46,7 +46,7 @@ func walletUsageInteger(value gjson.Result) (int, bool) {
 
 // walletUsageLocations are the places a provider frame can carry its usage, in
 // selection order.
-var walletUsageLocations = []string{"usage", "response.usage", "message.usage", "usageMetadata"}
+var walletUsageLocations = []string{"usage", "response.usage", "message.usage", "usageMetadata", "response.usageMetadata"}
 
 // walletSelectedUsage returns the first location that reports usage. An explicit
 // JSON null means "no usage reported", exactly like a missing field: OpenAI
@@ -66,7 +66,31 @@ func walletSelectedUsage(root gjson.Result) (string, gjson.Result) {
 	return "", gjson.Result{}
 }
 
-func observeWalletUsage(raw []byte, evidence *WalletReaderEvidence) {
+// Native Gemini can omit default-zero candidates only in a recognized terminal
+// response. Keep the same small protocol proof in the journal, never its content.
+func walletGeminiUsageTerminal(root gjson.Result, path string) bool {
+	if path == "response.usageMetadata" {
+		root = root.Get("response")
+	}
+	switch root.Get("promptFeedback.blockReason").String() {
+	case "SAFETY", "OTHER", "BLOCKLIST", "PROHIBITED_CONTENT", "IMAGE_SAFETY":
+		return true
+	}
+	candidates := root.Get("candidates")
+	if !candidates.IsArray() || len(candidates.Array()) == 0 {
+		return false
+	}
+	for _, candidate := range candidates.Array() {
+		switch candidate.Get("finishReason").String() {
+		case "STOP", "MAX_TOKENS", "SAFETY", "RECITATION", "LANGUAGE", "OTHER", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII", "MALFORMED_FUNCTION_CALL", "IMAGE_SAFETY", "IMAGE_PROHIBITED_CONTENT", "IMAGE_OTHER", "NO_IMAGE", "IMAGE_RECITATION", "UNEXPECTED_TOOL_CALL", "TOO_MANY_TOOL_CALLS":
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func observeWalletUsage(raw []byte, evidence *WalletReaderEvidence, facts ...*WalletReaderNormalization) {
 	if !gjson.ValidBytes(raw) {
 		return
 	}
@@ -75,7 +99,12 @@ func observeWalletUsage(raw []byte, evidence *WalletReaderEvidence) {
 	if path == "" {
 		return
 	}
-	gemini := path == "usageMetadata"
+	gemini := path == "usageMetadata" || path == "response.usageMetadata"
+	platform := ""
+	if len(facts) > 0 && facts[0] != nil {
+		platform = facts[0].ProviderPlatform
+	}
+	selectedGemini := gemini && (platform == PlatformGemini || platform == PlatformAntigravity)
 	evidence.Present = true
 	if !usage.IsObject() {
 		evidence.Malformed = true
@@ -84,6 +113,9 @@ func observeWalletUsage(raw []byte, evidence *WalletReaderEvidence) {
 	fields := []string{"input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "image_output_tokens"}
 	if gemini {
 		fields = []string{"promptTokenCount", "candidatesTokenCount", "cachedContentTokenCount", "thoughtsTokenCount"}
+		if selectedGemini {
+			fields = append(fields, "totalTokenCount", "toolUsePromptTokenCount")
+		}
 	}
 	values := make(map[string]int, len(fields))
 	saw := false
@@ -122,12 +154,34 @@ func observeWalletUsage(raw []byte, evidence *WalletReaderEvidence) {
 		evidence.Malformed = true
 		return
 	}
+	if selectedGemini {
+		prompt, candidates, thoughts := values["promptTokenCount"], values["candidatesTokenCount"], values["thoughtsTokenCount"]
+		if values["cachedContentTokenCount"] > prompt || thoughts > math.MaxInt-candidates || values["toolUsePromptTokenCount"] != 0 {
+			evidence.Malformed = true
+			return
+		}
+		if usage.Get("totalTokenCount").Exists() && (values["totalTokenCount"] < prompt || values["totalTokenCount"]-prompt != candidates+thoughts) {
+			evidence.Malformed = true
+			return
+		}
+	}
 	inputPresent := usage.Get("input_tokens").Exists() || usage.Get("prompt_tokens").Exists() || usage.Get("inputTokens").Exists() || usage.Get("promptTokenCount").Exists()
 	outputPresent := usage.Get("output_tokens").Exists() || usage.Get("completion_tokens").Exists() || usage.Get("outputTokens").Exists() || usage.Get("candidatesTokenCount").Exists()
+	partialGemini := false
+	if selectedGemini && !outputPresent {
+		// Proto3 omits default-zero candidates. Intermediate stream metadata is
+		// not a final output count. Preserve its proven positive buckets without
+		// poisoning a later terminal frame or allowing it to erase those buckets.
+		if !walletGeminiUsageTerminal(root, path) {
+			partialGemini = true
+		} else {
+			outputPresent = usage.Get("totalTokenCount").Exists()
+		}
+	}
 	evidence.InputPresent = evidence.InputPresent || inputPresent
 	evidence.OutputPresent = evidence.OutputPresent || outputPresent
 	partialClaude := root.Get("type").String() == "message_start" || root.Get("type").String() == "message_delta"
-	if (!inputPresent || !outputPresent) && !partialClaude {
+	if (!inputPresent || !outputPresent) && !partialClaude && (!partialGemini || !inputPresent) {
 		evidence.Malformed = true
 		return
 	}
@@ -139,6 +193,25 @@ func observeWalletUsage(raw []byte, evidence *WalletReaderEvidence) {
 			return
 		}
 		output += values["thoughtsTokenCount"]
+	} else if platform == PlatformGrok && usage.Get("prompt_tokens").Exists() && !usage.Get("input_tokens").Exists() && !usage.Get("output_tokens").Exists() {
+		// xAI may exclude reasoning from completion_tokens. The selected provider
+		// and exact total are required before either inclusive or separate output
+		// can become a fee; subtracting avoids completion+reasoning overflow.
+		total, totalOK := walletUsageInteger(usage.Get("total_tokens"))
+		reasoning, reasoningOK := walletUsageInteger(usage.Get("completion_tokens_details.reasoning_tokens"))
+		if reasoning > 0 || usage.Get("total_tokens").Num > 0 {
+			evidence.ObservedPositive = true
+		}
+		if !usage.Get("total_tokens").Exists() || !totalOK || !reasoningOK || total < input {
+			evidence.Malformed = true
+			return
+		}
+		inclusive := total - input
+		if reasoning > inclusive || inclusive < output || inclusive != output && (reasoning <= 0 || inclusive-output != reasoning) {
+			evidence.Malformed = true
+			return
+		}
+		output = inclusive
 	}
 	evidence.RawInputTokens = max(evidence.RawInputTokens, input)
 	for _, path := range []string{"input_tokens_details.cache_write_tokens", "prompt_tokens_details.cache_write_tokens", "input_tokens_details.cache_creation_tokens", "prompt_tokens_details.cache_creation_tokens", "cache_write_tokens", "cache_creation_input_tokens", "cache_write_input_tokens", "cache_creation_tokens"} {
@@ -197,11 +270,20 @@ func observeWalletUsage(raw []byte, evidence *WalletReaderEvidence) {
 	evidence.Tokens.OutputTokens = max(evidence.Tokens.OutputTokens, output)
 	evidence.Tokens.CacheCreationTokens = max(evidence.Tokens.CacheCreationTokens, cacheWrite)
 	evidence.Tokens.CacheReadTokens = max(evidence.Tokens.CacheReadTokens, cacheRead)
+	if selectedGemini {
+		// A later terminal frame may first report cached prompt tokens. Subtract
+		// the cumulative cache once instead of retaining an earlier uncached input.
+		if evidence.Tokens.CacheReadTokens > evidence.RawInputTokens || evidence.Tokens.CacheCreationTokens > evidence.RawInputTokens-evidence.Tokens.CacheReadTokens {
+			evidence.Malformed = true
+			return
+		}
+		evidence.Tokens.InputTokens = evidence.RawInputTokens - evidence.Tokens.CacheReadTokens - evidence.Tokens.CacheCreationTokens
+	}
 	evidence.Tokens.ImageOutputTokens = max(evidence.Tokens.ImageOutputTokens, image)
 	evidence.Tokens.ImageInputTokens = max(evidence.Tokens.ImageInputTokens, imageInput)
 	evidence.Tokens.CacheCreation5mTokens = max(evidence.Tokens.CacheCreation5mTokens, extra["cache_creation.ephemeral_5m_input_tokens"])
 	evidence.Tokens.CacheCreation1hTokens = max(evidence.Tokens.CacheCreation1hTokens, extra["cache_creation.ephemeral_1h_input_tokens"])
-	for _, path := range []string{"response.id", "response_id", "id"} {
+	for _, path := range []string{"response.id", "response_id", "id", "response.responseId", "responseId"} {
 		if id := root.Get(path).String(); id != "" {
 			evidence.ResponseID = id
 			break
@@ -299,7 +381,7 @@ func (b *CanonicalWalletBridge) stageReaderFee(ctx context.Context, h *Authoriza
 			return "", err
 		}
 		if len(facts) == 0 || json.Unmarshal(facts, &normalization) != nil {
-			return "", errors.New("wallet reader frozen normalization unavailable")
+			return "", errWalletReaderProviderFactsUnavailable
 		}
 	}
 	settlementInput, err := normalizeWalletReaderFee(snapshot, normalization, evidence)
@@ -329,6 +411,9 @@ func (b *CanonicalWalletBridge) stageReaderFee(ctx context.Context, h *Authoriza
 		cmd.AccountQuotaCost = cost.TotalCost * snapshot.Multipliers.Account
 	}
 	cmd.WalletUsageLog = &UsageLog{RequestID: cmd.RequestID, UserID: cmd.UserID, APIKeyID: cmd.APIKeyID, AccountID: cmd.AccountID, Model: cmd.Model, RequestedModel: snapshot.RequestedModel, GroupID: snapshot.GroupID, BillingSnapshotID: &snapshot.ID, InputTokens: cmd.InputTokens, OutputTokens: cmd.OutputTokens, CacheCreationTokens: cmd.CacheCreationTokens, CacheReadTokens: cmd.CacheReadTokens, CacheCreation5mTokens: evidence.Tokens.CacheCreation5mTokens, CacheCreation1hTokens: evidence.Tokens.CacheCreation1hTokens, ImageInputTokens: evidence.Tokens.ImageInputTokens, ImageOutputTokens: evidence.Tokens.ImageOutputTokens, InputCost: cost.InputCost, OutputCost: cost.OutputCost, ImageInputCost: cost.ImageInputCost, ImageOutputCost: cost.ImageOutputCost, CacheCreationCost: cost.CacheCreationCost, CacheReadCost: cost.CacheReadCost, TotalCost: cost.TotalCost, ActualCost: cost.ActualCost, SettlementCurrency: "USD", SourceCurrency: "USD", SourceCost: cost.ActualCost, BaseCost: cost.ActualCost, RateMultiplier: snapshot.Multipliers.Text, OpenAIWSMode: evidence.Source == "llm_ws_usage"}
+	settlement := fixedUSDSettlement(cost, CanonicalWalletUnitVersion)
+	settlement.ExchangeRateAsOf = snapshot.FrozenAt
+	applySettlementSnapshot(cmd.WalletUsageLog, settlement)
 	cmd.WalletUsageLog.ServiceTier = optionalTrimmedStringPtr(settlementInput.ServiceTier)
 	cmd.WalletUsageLog.ImageCount = settlementInput.ImageCount
 	cmd.WalletUsageLog.ImageSize = optionalTrimmedStringPtr(settlementInput.ImageSize)
@@ -557,6 +642,13 @@ func (b *CanonicalWalletBridge) recoverReaderBillingEvidence(ctx context.Context
 			}
 			id, stageErr := b.stageReaderFee(ctx, h, item.user, evidence)
 			if stageErr != nil {
+				if errors.Is(stageErr, errWalletReaderProviderFactsUnavailable) {
+					// Counts parsed before provider facts were frozen cannot prove a
+					// billable fee. Use the existing guarded unknown disposition once
+					// overdue; never reprice them from today's selected account.
+					_ = b.releaseExpiredFeeBarrier(ctx, h, item.user, item.raw, evidence)
+					continue
+				}
 				// Provable usage is never released as unknown: keep the barrier and
 				// tell an operator once the attempt is overdue.
 				if b.walletBarrierDue(ctx, item.parent, item.token) {

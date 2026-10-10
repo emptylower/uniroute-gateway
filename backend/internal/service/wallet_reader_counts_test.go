@@ -39,7 +39,7 @@ func TestWalletReaderCountsActualHTTPFrozenBillingMatrix(t *testing.T) {
 				snapshot.Pricing.Source = PricingSourceChannel
 				snapshot.Pricing.DefaultPerRequestPrice = .025
 			}
-			h := &AuthorizationHandle{ID: "count-http", readerBillingFamily: tc.family, readerCountKind: tc.kind, stageUsage: func(_ context.Context, task UsageRecordTask) (UsageRecordTask, error) { return task, nil }}
+			h := &AuthorizationHandle{ID: "count-http", readerBillingFamily: tc.family, readerPlatform: PlatformOpenAI, readerCountKind: tc.kind, stageUsage: func(_ context.Context, task UsageRecordTask) (UsageRecordTask, error) { return task, nil }}
 			journal := testWalletReaderJournal(t)
 			h.readerJournal = journal
 			h.beforeWrite = func(context.Context, string) error { return nil }
@@ -81,7 +81,7 @@ func TestWalletReaderCountsActualHTTPFrozenBillingMatrix(t *testing.T) {
 func TestWalletReaderCountsWSCheckpointDeduplicatesAndRecoversOriginalImageFee(t *testing.T) {
 	_, snapshot, _, _, _ := freezeForSettleTest(t, BillingFamilyOpenAI, "gpt-5.1")
 	snapshot.Pricing.Mode = BillingModeImage
-	facts := &WalletReaderNormalization{Version: 1, Family: BillingFamilyOpenAI, Ready: true, CountKind: "openai_images", ImageSize: "4K"}
+	facts := &WalletReaderNormalization{Version: 1, Family: BillingFamilyOpenAI, ProviderPlatform: PlatformOpenAI, Ready: true, CountKind: "openai_images", ImageSize: "4K"}
 	journal := testWalletReaderJournal(t)
 	require.NoError(t, journal.beginRead())
 	first := []byte(`{"type":"response.output_item.done","response_id":"selected-response","item":{"type":"image_generation_call","id":"selected-image-id","result":"private-bitmap","size":"1024x1024"}}`)
@@ -107,7 +107,7 @@ func TestWalletReaderCountsWSCheckpointDeduplicatesAndRecoversOriginalImageFee(t
 func TestWalletReaderCountsMalformedCannotChooseFeeOrKnownZero(t *testing.T) {
 	_, snapshot, _, _, _ := freezeForSettleTest(t, BillingFamilyOpenAI, "gpt-5.1")
 	snapshot.Pricing.Mode = BillingModeImage
-	facts := &WalletReaderNormalization{Version: 1, Family: BillingFamilyOpenAI, Ready: true, CountKind: "openai_images", ImageSize: "2K"}
+	facts := &WalletReaderNormalization{Version: 1, Family: BillingFamilyOpenAI, ProviderPlatform: PlatformOpenAI, Ready: true, CountKind: "openai_images", ImageSize: "2K"}
 	for _, raw := range []string{`{"data":"2","usage":{"input_tokens":0,"output_tokens":0}}`, `{"data":[{"b64_json":"private-bitmap","size":2048}]}`, `{"output":[{"type":"image_generation_call","id":2,"result":"private-bitmap"}]}`} {
 		var evidence WalletReaderEvidence
 		observeWalletUsage([]byte(raw), &evidence)
@@ -123,7 +123,7 @@ func TestWalletReaderCountsMalformedCannotChooseFeeOrKnownZero(t *testing.T) {
 func TestWalletReaderCountsChannelTokenStillRequiresRealTokens(t *testing.T) {
 	_, snapshot, _, _, _ := freezeForSettleTest(t, BillingFamilyOpenAI, "gpt-5.1")
 	snapshot.Pricing.Mode, snapshot.Pricing.Source = BillingModeToken, PricingSourceChannel
-	facts := &WalletReaderNormalization{Version: 1, Family: BillingFamilyOpenAI, Ready: true, CountKind: "openai_images", ImageSize: "4K"}
+	facts := &WalletReaderNormalization{Version: 1, Family: BillingFamilyOpenAI, ProviderPlatform: PlatformOpenAI, Ready: true, CountKind: "openai_images", ImageSize: "4K"}
 	var evidence WalletReaderEvidence
 	require.NoError(t, observeWalletReaderCounts([]byte(`{"data":[{"b64_json":"private-bitmap"}]}`), &evidence))
 	_, err := normalizeWalletReaderFee(snapshot, facts, evidence)
@@ -132,7 +132,7 @@ func TestWalletReaderCountsChannelTokenStillRequiresRealTokens(t *testing.T) {
 
 func TestWalletReaderOrdinarySearchToolUsesOriginalTokenBranch(t *testing.T) {
 	_, snapshot, _, _, _ := freezeForSettleTest(t, BillingFamilyOpenAI, "gpt-5.1")
-	h := &AuthorizationHandle{readerBillingFamily: BillingFamilyOpenAI, readerTokenOnly: true, stageUsage: func(_ context.Context, task UsageRecordTask) (UsageRecordTask, error) { return task, nil }}
+	h := &AuthorizationHandle{readerBillingFamily: BillingFamilyOpenAI, readerPlatform: PlatformOpenAI, readerTokenOnly: true, stageUsage: func(_ context.Context, task UsageRecordTask) (UsageRecordTask, error) { return task, nil }}
 	h.captureWalletReaderNormalization(context.Background(), []byte(`{"tools":[{"type":"web_search"}]}`), true)
 	var evidence WalletReaderEvidence
 	observeWalletUsage([]byte(`{"usage":{"input_tokens":10,"output_tokens":2}}`), &evidence)
@@ -147,7 +147,7 @@ func TestWalletReaderCountsLargeHTTPImageUsesExistingConfiguredBodyLimit(t *test
 	bitmap := strings.Repeat("a", imageBytes)
 	raw := `{"data":[{"b64_json":"` + bitmap + `","size":"1024x1024"}]}`
 	var evidence WalletReaderEvidence
-	h := &AuthorizationHandle{readerNormalization: &WalletReaderNormalization{Version: 1, Family: BillingFamilyOpenAI, Ready: true, CountKind: "openai_images", ImageSize: "4K"}, readerStarted: func() error { return nil }, readerObserved: func(WalletReaderEvidence) error { return nil }}
+	h := &AuthorizationHandle{readerNormalization: &WalletReaderNormalization{Version: 1, Family: BillingFamilyOpenAI, ProviderPlatform: PlatformOpenAI, Ready: true, CountKind: "openai_images", ImageSize: "4K"}, readerStarted: func() error { return nil }, readerObserved: func(WalletReaderEvidence) error { return nil }}
 	journal := testWalletReaderJournal(t)
 	h.readerJournal = journal
 	h.consumeHTTP = func(_ int, e WalletReaderEvidence, _ error) { evidence = e }
@@ -167,7 +167,7 @@ func TestWalletReaderCountsLargeHTTPImageUsesExistingConfiguredBodyLimit(t *test
 }
 
 func TestWalletReaderCountsUnboundWSImageCannotEnterNextTurnJournalOrFee(t *testing.T) {
-	facts := &WalletReaderNormalization{Version: 1, Family: BillingFamilyOpenAI, Ready: true, CountKind: "openai_images", ImageSize: "4K"}
+	facts := &WalletReaderNormalization{Version: 1, Family: BillingFamilyOpenAI, ProviderPlatform: PlatformOpenAI, Ready: true, CountKind: "openai_images", ImageSize: "4K"}
 	h := &AuthorizationHandle{ID: "next-turn", writes: []AuthorizationWrite{{Token: "next-turn.1"}}, readerNormalization: facts, readerStarted: func() error { return nil }}
 	var evidence WalletReaderEvidence
 	h.readerObserved = func(e WalletReaderEvidence) error { evidence = e; return nil }

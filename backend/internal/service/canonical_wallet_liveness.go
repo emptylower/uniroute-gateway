@@ -285,7 +285,7 @@ func (b *walletResponseBody) observeEvidence(raw []byte, journalLocked bool) err
 			return err
 		}
 	}
-	observeWalletUsage(raw, &b.evidence)
+	observeWalletUsage(raw, &b.evidence, b.handle.readerNormalization)
 	if err := observeWalletReaderCounts(raw, &b.evidence, b.handle.readerNormalization); err != nil {
 		return err
 	}

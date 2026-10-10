@@ -48,6 +48,7 @@ func (b *CanonicalWalletBridge) validateWalletReaderFee(ctx context.Context, par
 type WalletReaderNormalization struct {
 	Version              int           `json:"version"`
 	Family               BillingFamily `json:"family"`
+	ProviderPlatform     string        `json:"provider_platform,omitempty"`
 	Ready                bool          `json:"ready"`
 	TokenOnly            bool          `json:"token_only"`
 	ForceCacheBilling    bool          `json:"force_cache_billing"`
@@ -72,7 +73,7 @@ func (h *AuthorizationHandle) captureWalletReaderNormalization(ctx context.Conte
 	if h == nil || h.stageUsage == nil {
 		return
 	}
-	facts := &WalletReaderNormalization{Version: 1, Family: h.readerBillingFamily, TokenOnly: h.readerTokenOnly, CountKind: h.readerCountKind, ForceCacheBilling: IsForceCacheBilling(ctx)}
+	facts := &WalletReaderNormalization{Version: 1, Family: h.readerBillingFamily, ProviderPlatform: h.readerPlatform, TokenOnly: h.readerTokenOnly, CountKind: h.readerCountKind, ForceCacheBilling: IsForceCacheBilling(ctx)}
 	if payloadKnown && gjson.ValidBytes(payload) {
 		facts.Ready = facts.Family == BillingFamilyGeneric || facts.Family == BillingFamilyOpenAI
 		tier := gjson.GetBytes(payload, "service_tier")
@@ -118,7 +119,14 @@ func (h *AuthorizationHandle) captureWalletReaderNormalization(ctx context.Conte
 	h.mu.Unlock()
 }
 
+var errWalletReaderProviderFactsUnavailable = errors.New("wallet reader frozen provider facts unavailable")
+
 func normalizeWalletReaderFee(snapshot *BillingSnapshot, facts *WalletReaderNormalization, evidence WalletReaderEvidence) (SnapshotSettlementInput, error) {
+	// Historical snapshots/normalizations do not identify the selected provider.
+	// Neither a mutable account lookup nor an OpenAI-shaped usage can fill that gap.
+	if snapshot == nil || facts == nil || snapshot.ProviderPlatform == "" || facts.ProviderPlatform == "" || facts.ProviderPlatform != snapshot.ProviderPlatform {
+		return SnapshotSettlementInput{}, errWalletReaderProviderFactsUnavailable
+	}
 	if snapshot == nil || facts == nil || facts.Version != 1 || !facts.Ready || facts.Family != snapshot.Family || !walletReaderEvidenceTrusted(evidence) {
 		return SnapshotSettlementInput{}, errors.New("wallet reader fee normalization is unresolved")
 	}

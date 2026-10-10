@@ -16,13 +16,13 @@ import (
 )
 
 func TestWalletReaderNormalizationFreezesEffectiveTierAndForceCache(t *testing.T) {
-	h := &AuthorizationHandle{readerBillingFamily: BillingFamilyOpenAI, readerTokenOnly: true, stageUsage: func(_ context.Context, task UsageRecordTask) (UsageRecordTask, error) { return task, nil }}
+	h := &AuthorizationHandle{readerBillingFamily: BillingFamilyOpenAI, readerPlatform: PlatformOpenAI, readerTokenOnly: true, stageUsage: func(_ context.Context, task UsageRecordTask) (UsageRecordTask, error) { return task, nil }}
 	h.captureWalletReaderNormalization(WithForceCacheBilling(context.Background()), []byte(`{"service_tier":"fast","api_key":"never-retained"}`), true)
 	require.Equal(t, "priority", h.readerNormalization.ServiceTier)
 	require.True(t, h.readerNormalization.ForceCacheBilling)
 	h.captureWalletReaderNormalization(context.Background(), []byte(`{"service_tier":"flex"}`), true)
 	require.Equal(t, "priority", h.readerNormalization.ServiceTier, "a later write cannot replace the original attempt facts")
-	stripped := &AuthorizationHandle{readerBillingFamily: BillingFamilyOpenAI, readerTokenOnly: true, stageUsage: h.stageUsage}
+	stripped := &AuthorizationHandle{readerBillingFamily: BillingFamilyOpenAI, readerPlatform: PlatformOpenAI, readerTokenOnly: true, stageUsage: h.stageUsage}
 	stripped.captureWalletReaderNormalization(context.Background(), []byte(`{"model":"gpt-5.1"}`), true)
 	require.Empty(t, stripped.readerNormalization.ServiceTier, "post-policy removal selects the default tier")
 }
@@ -32,7 +32,7 @@ func TestWalletReaderNormalizationMatchesFrozenForceCacheAndTTLSettlement(t *tes
 	snapshot.Flags.CacheTTLOverrideEnabled = true
 	snapshot.Flags.CacheTTLOverrideTarget = "1h"
 	evidence := WalletReaderEvidence{Present: true, Valid: true, ObservedPositive: true, Tokens: UsageTokens{InputTokens: 1000, OutputTokens: 20, CacheReadTokens: 25, CacheCreationTokens: 100, CacheCreation5mTokens: 100}}
-	facts := &WalletReaderNormalization{Version: 1, Family: BillingFamilyGeneric, Ready: true, TokenOnly: true, ForceCacheBilling: true}
+	facts := &WalletReaderNormalization{Version: 1, Family: BillingFamilyGeneric, ProviderPlatform: PlatformOpenAI, Ready: true, TokenOnly: true, ForceCacheBilling: true}
 	input, err := normalizeWalletReaderFee(snapshot, facts, evidence)
 	require.NoError(t, err)
 	expected := snapshotSettlementInputFromClaudeUsage(ClaudeUsage{InputTokens: 0, OutputTokens: 20, CacheReadInputTokens: 1025, CacheCreationInputTokens: 100, CacheCreation5mTokens: 100}, snapshotCacheTTLOverride(snapshot), 0, "")
@@ -55,7 +55,7 @@ func TestWalletReaderNormalizationPreservesExactLargeCountsAndTierPrice(t *testi
 	require.Equal(t, int64(9007199254740993), int64(evidence.RawInputTokens))
 	require.Equal(t, 4, evidence.Tokens.CacheCreationTokens)
 	for _, tier := range []string{"priority", "flex", ""} {
-		facts := &WalletReaderNormalization{Version: 1, Family: BillingFamilyOpenAI, Ready: true, TokenOnly: true, ServiceTier: tier}
+		facts := &WalletReaderNormalization{Version: 1, Family: BillingFamilyOpenAI, ProviderPlatform: PlatformOpenAI, Ready: true, TokenOnly: true, ServiceTier: tier}
 		input, err := normalizeWalletReaderFee(snapshot, facts, evidence)
 		require.NoError(t, err)
 		require.Equal(t, int64(9007199254740986), int64(input.Tokens.InputTokens))
@@ -72,7 +72,7 @@ func TestWalletReaderNormalizationMissingFactsAndToolsRemainUnresolved(t *testin
 	_, snapshot, _, _, _ := freezeForSettleTest(t, BillingFamilyOpenAI, "gpt-5.1")
 	evidence := WalletReaderEvidence{Present: true, Valid: true, ObservedPositive: true, RawInputTokens: 1, Tokens: UsageTokens{InputTokens: 1}}
 	for _, payload := range [][]byte{nil, []byte(`{"service_tier":3}`), []byte(`{"tools":[{"type":"image_generation"}]}`)} {
-		h := &AuthorizationHandle{readerBillingFamily: BillingFamilyOpenAI, readerTokenOnly: true, stageUsage: func(_ context.Context, task UsageRecordTask) (UsageRecordTask, error) { return task, nil }}
+		h := &AuthorizationHandle{readerBillingFamily: BillingFamilyOpenAI, readerPlatform: PlatformOpenAI, readerTokenOnly: true, stageUsage: func(_ context.Context, task UsageRecordTask) (UsageRecordTask, error) { return task, nil }}
 		h.captureWalletReaderNormalization(context.Background(), payload, payload != nil)
 		_, err := normalizeWalletReaderFee(snapshot, h.readerNormalization, evidence)
 		require.Error(t, err, "unavailable or count-dependent normalization cannot silently select default pricing")

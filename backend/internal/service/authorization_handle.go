@@ -83,6 +83,7 @@ type AuthorizationHandle struct {
 	readerEvidenceErr     error
 	readerJournal         *walletReaderJournal
 	readerBillingFamily   BillingFamily
+	readerPlatform        string
 	readerTokenOnly       bool
 	readerCountKind       string
 	readerNormalization   *WalletReaderNormalization

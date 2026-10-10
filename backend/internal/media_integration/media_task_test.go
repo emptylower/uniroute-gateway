@@ -965,7 +965,12 @@ func (f *mediaFixture) authorize(t *testing.T, units int64, family service.Billi
 	require.NoError(t, f.db.QueryRow(`SELECT billing_snapshot_id FROM gateway_media_task WHERE id=$1`, task.TaskID).Scan(&snapshotID))
 	snap, err := repository.ProvideBillingSnapshotStore(f.db).GetBillingSnapshot(context.Background(), snapshotID)
 	require.NoError(t, err)
+	// This helper synthesizes a selected LLM account from a media template.
+	// Persist its own frozen facts without rewriting the immutable media payload.
+	snap.ID = "llm-fixture-" + uuid.NewString()
 	snap.Family = family
+	snap.ProviderPlatform = service.PlatformOpenAI
+	require.NoError(t, f.snapshots.Persist(context.Background(), snap))
 	_, err = f.db.Exec(`UPDATE gateway_media_task SET status='failed',pin_state='finished',actual_units=0 WHERE id=$1`, task.TaskID)
 	require.NoError(t, err)
 	user, err := f.users.GetByID(context.Background(), f.userID)
