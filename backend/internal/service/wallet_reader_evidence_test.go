@@ -27,6 +27,9 @@ func TestWalletReaderEvidenceRequiresSelectedValidUsage(t *testing.T) {
 		{"null-usage-is-not-reported", `{"usage":null}`, false, false, false, false, 0, 0},
 		{"responses-event-null-usage", `{"type":"response.created","response":{"id":"r1","usage":null}}`, false, false, false, false, 0, 0},
 		{"null-top-level-falls-through-to-response-usage", `{"usage":null,"response":{"usage":{"input_tokens":8,"output_tokens":2}}}`, true, true, false, true, 8, 2},
+		{"message-usage-null-is-not-reported", `{"type":"message_start","message":{"usage":null}}`, false, false, false, false, 0, 0},
+		{"gemini-usage-metadata-null-is-not-reported", `{"usageMetadata":null}`, false, false, false, false, 0, 0},
+		{"field-level-null-stays-malformed", `{"usage":{"input_tokens":null,"output_tokens":3}}`, true, false, true, true, 0, 0},
 		{"explicit-zero", `{"usage":{"input_tokens":0,"output_tokens":0}}`, true, true, false, false, 0, 0},
 		{"raw-not-billable-zero", `{"raw_tokens":0,"raw_credits":0,"source":"priced_usage"}`, false, false, false, false, 0, 0},
 		{"provider-source-does-not-select", `{"usage":{"source":"trusted","credits":0}}`, true, false, true, false, 0, 0},
@@ -90,8 +93,10 @@ func readWalletStreamEvidence(t *testing.T, body io.ReadCloser) WalletReaderEvid
 	return got
 }
 
-// OpenAI Responses and Chat streams report usage:null on every event before the
-// terminal one. That must not latch Malformed over a strictly valid final usage.
+// OpenAI Responses events that carry the whole response object (created,
+// in_progress) have response.usage:null, and Chat chunks have usage:null when
+// stream_options.include_usage is on. That must not latch Malformed over a
+// strictly valid terminal usage.
 func TestWalletResponseBodyStreamNullUsageBeforeFinalUsageIsTrusted(t *testing.T) {
 	responses := "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"r1\",\"status\":\"in_progress\",\"usage\":null}}\n\n" +
 		"event: response.in_progress\ndata: {\"type\":\"response.in_progress\",\"response\":{\"id\":\"r1\",\"usage\":null}}\n\n" +
@@ -125,6 +130,15 @@ func TestWalletResponseBodyStreamNullUsageBeforeFinalUsageIsTrusted(t *testing.T
 		require.False(t, got.ObservedPositive)
 		require.False(t, walletReaderEvidenceNeedsFeeRecovery(got), "an unfinished stream with no usage is unknown cost, not a pending fee")
 	})
+	t.Run("null-then-explicit-zero-is-a-known-zero", func(t *testing.T) {
+		zero := responses + "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\",\"usage\":{\"input_tokens\":0,\"output_tokens\":0}}}\n\n"
+		got := readWalletStreamEvidence(t, io.NopCloser(strings.NewReader(zero)))
+		require.True(t, got.Complete)
+		require.False(t, got.Malformed)
+		require.False(t, got.ObservedPositive)
+		require.True(t, walletReaderEvidenceTrusted(got))
+		require.True(t, walletReaderEvidenceNeedsFeeRecovery(got), "a strict terminal zero is persisted as a known zero fee")
+	})
 	t.Run("null-does-not-launder-a-malformed-final-usage", func(t *testing.T) {
 		bad := responses + "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\",\"usage\":{\"input_tokens\":7,\"output_tokens\":\"bad\"}}}\n\n"
 		got := readWalletStreamEvidence(t, io.NopCloser(strings.NewReader(bad)))
@@ -134,6 +148,59 @@ func TestWalletResponseBodyStreamNullUsageBeforeFinalUsageIsTrusted(t *testing.T
 		require.False(t, walletReaderEvidenceTrusted(got))
 		require.True(t, walletReaderEvidenceNeedsFeeRecovery(got), "a positive but unverifiable final usage still keeps the fee barrier")
 	})
+}
+
+func TestWalletReaderEvidencePositiveThenNullKeepsThePositive(t *testing.T) {
+	var got WalletReaderEvidence
+	observeWalletUsage([]byte(`{"type":"response.completed","response":{"id":"r1","usage":{"input_tokens":20,"output_tokens":3}}}`), &got)
+	observeWalletUsage([]byte(`{"type":"response.in_progress","response":{"id":"r1","usage":null}}`), &got)
+	require.True(t, got.Present && got.Valid && !got.Malformed && got.ObservedPositive)
+	require.Equal(t, 20, got.Tokens.InputTokens)
+	require.Equal(t, 3, got.Tokens.OutputTokens)
+}
+
+// The journal checkpoint must keep exactly the usage the live parser selects.
+func TestWalletJournalCheckpointSelectsTheSameUsageAsTheLiveParser(t *testing.T) {
+	both := []byte(`{"usage":null,"response":{"usage":{"input_tokens":8,"output_tokens":2}}}`)
+	frame, err := selectedWalletUsageFrame(both)
+	require.NoError(t, err)
+	require.Contains(t, string(frame), `"input_tokens":8`, "a null top-level usage must not hide response.usage from the checkpoint")
+	var live WalletReaderEvidence
+	observeWalletUsage(both, &live)
+	require.Equal(t, 8, live.Tokens.InputTokens)
+	nullOnly, err := selectedWalletUsageFrame([]byte(`{"type":"response.created","response":{"id":"r1","usage":null}}`))
+	require.NoError(t, err)
+	require.NotContains(t, string(nullOnly), "usage", "a null-only frame carries no usage to checkpoint")
+}
+
+func TestWalletWSNullUsageBeforeTerminalUsageIsTrusted(t *testing.T) {
+	conn := &authorizingOpenAIWSClientConn{}
+	h := &AuthorizationHandle{ID: "auth-ws-null", writes: []AuthorizationWrite{{Token: "auth-ws-null.1"}}}
+	h.readerStarted = func() error { return nil }
+	h.readerObserved = func(WalletReaderEvidence) error { return nil }
+	conn.ArmAuthorization(h)
+	require.NoError(t, conn.observeFrameEvidence([]byte(`{"type":"response.created","response":{"id":"response-null","status":"in_progress","usage":null}}`)))
+	require.NoError(t, conn.observeFrameEvidence([]byte(`{"type":"response.in_progress","response":{"id":"response-null","usage":null}}`)))
+	require.NoError(t, conn.observeFrameEvidence([]byte(`{"type":"response.completed","response":{"id":"response-null","usage":{"input_tokens":4477,"output_tokens":5}}}`)))
+	require.NotNil(t, h.readerEvidence)
+	require.True(t, h.readerEvidence.Complete)
+	require.False(t, h.readerEvidence.Malformed, "usage:null on early frames must not latch Malformed")
+	require.True(t, walletReaderEvidenceTrusted(*h.readerEvidence))
+	require.Equal(t, 4477, h.readerEvidence.Tokens.InputTokens)
+
+	// A terminal frame without reported usage (null) is a missing usage, not a malformed one.
+	failed := &AuthorizationHandle{ID: "auth-ws-failed", writes: []AuthorizationWrite{{Token: "auth-ws-failed.1"}}}
+	failed.readerStarted = func() error { return nil }
+	failed.readerObserved = func(WalletReaderEvidence) error { return nil }
+	other := &authorizingOpenAIWSClientConn{}
+	other.ArmAuthorization(failed)
+	require.NoError(t, other.observeFrameEvidence([]byte(`{"type":"response.created","response":{"id":"response-failed","usage":null}}`)))
+	require.NoError(t, other.observeFrameEvidence([]byte(`{"type":"response.failed","response":{"id":"response-failed","usage":null}}`)))
+	require.NotNil(t, failed.readerEvidence)
+	require.True(t, failed.readerEvidence.Complete)
+	require.False(t, failed.readerEvidence.Malformed)
+	require.False(t, failed.readerEvidence.Present)
+	require.False(t, walletReaderEvidenceNeedsFeeRecovery(*failed.readerEvidence))
 }
 
 type walletJoinedBody struct {

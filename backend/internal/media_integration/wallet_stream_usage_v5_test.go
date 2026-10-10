@@ -16,13 +16,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The events a Responses API stream sends before its terminal one. Every one
-// carries usage:null; only response.completed reports numbers.
+// The events a Responses API stream sends before its terminal one. The two that
+// carry the whole response object have response.usage:null; only
+// response.completed reports numbers.
 const walletStreamPrelude = "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_stream_v5\",\"status\":\"in_progress\",\"usage\":null}}\n\n" +
 	"event: response.in_progress\ndata: {\"type\":\"response.in_progress\",\"response\":{\"id\":\"resp_stream_v5\",\"status\":\"in_progress\",\"usage\":null}}\n\n"
 
 const walletStreamCompleted = "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"OK\"}\n\n" +
-	"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_stream_v5\",\"status\":\"completed\",\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n"
+	"event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_stream_v5\",\"status\":\"completed\",\"usage\":{\"input_tokens\":1,\"input_tokens_details\":{\"cached_tokens\":0},\"output_tokens\":0,\"output_tokens_details\":{\"reasoning_tokens\":0},\"total_tokens\":1}}}\n\n"
 
 func (x fundingV7Fixture) streamRequest(t *testing.T, h *service.AuthorizationHandle, provider *httptest.Server) *http.Response {
 	t.Helper()
@@ -85,9 +86,11 @@ func TestExternalWalletCompletedSSEWithNullUsageEventsIsChargedOnceAndReleased(t
 	}, 8*time.Second, 20*time.Millisecond, "the hold is settled, not left armed")
 }
 
-// The client leaves after the first events, before any numbers exist. Only
-// usage:null was seen, so nothing positive was observed and the hold must be
-// released as an unknown cost right away (platform bears it), not frozen.
+// The client leaves after the first events, before any numbers exist. Nothing
+// positive was observed, so the unfinished stream is released as an unknown cost
+// (platform bears it) by the recovery lane instead of staying frozen. This is a
+// guard: unfinished null-only streams were already unknown releases before the
+// parser change. The evidence assertions below do distinguish the parsers.
 func TestExternalWalletAbortedSSEWithNullUsageEventsReleasesAsUnknown(t *testing.T) {
 	x := newFundingV7Fixture(t)
 	h := x.authorize(t, 200000000)
@@ -99,12 +102,14 @@ func TestExternalWalletAbortedSSEWithNullUsageEventsReleasesAsUnknown(t *testing
 	}))
 	defer provider.Close()
 	response := x.streamRequest(t, h, provider)
-	buffer := make([]byte, 64)
-	_, err := io.ReadAtLeast(response.Body, buffer, 1)
+	// Read every byte of both null-usage events so the reader parses them.
+	_, err := io.ReadFull(response.Body, make([]byte, len(walletStreamPrelude)))
 	require.NoError(t, err)
 	require.NoError(t, response.Body.Close())
-	// The recovery lane of a freshly started service owns reader handoffs that no
-	// request goroutine will finish.
+	var present, malformed bool
+	require.NoError(t, x.f.db.QueryRow(`SELECT COALESCE((reader_evidence->>'present')::boolean,false),COALESCE((reader_evidence->>'malformed')::boolean,false) FROM wallet_authorization_segment WHERE parent_authorization_id=$1 AND ordinal=0`, h.ID).Scan(&present, &malformed))
+	require.False(t, present || malformed, "usage:null events are not reported usage and not malformed usage")
+	// The recovery lane of a freshly started service releases the sealed reader.
 	x.f.svc = x.f.newService(t)
 	var feePending bool
 	var unknown int
