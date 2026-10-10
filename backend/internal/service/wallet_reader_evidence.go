@@ -540,11 +540,28 @@ func (b *CanonicalWalletBridge) recoverReaderBillingEvidence(ctx context.Context
 		// A WS actor may already have sealed its joined reader after staging failed;
 		// that immutable seal does not discard its durable pending fee evidence.
 		if walletReaderEvidenceNeedsFeeRecovery(evidence) {
-			if item.owner.Valid && !b.walletReaderOwnerGone(ctx, item.owner.String) {
+			// A live reader owner normally keeps staging its own fee, so recovery
+			// waits. Its process holds the owner lock until it exits, so a barrier left
+			// behind by a LIVE process would never be revisited; once the attempt is
+			// past its deadline plus grace no staging can still be in flight, so
+			// recovery proceeds regardless of the owner.
+			if item.owner.Valid && !b.walletReaderOwnerGone(ctx, item.owner.String) && !b.walletBarrierDue(ctx, item.parent, item.token) {
+				continue
+			}
+			if !walletReaderEvidenceTrusted(evidence) {
+				// The reader's own evidence can never be priced. Past the deadline plus
+				// grace no trusted fee will arrive: release as an unknown cost that the
+				// platform bears, all-or-nothing, instead of freezing the hold forever.
+				_ = b.releaseExpiredFeeBarrier(ctx, h, item.user, item.raw, evidence)
 				continue
 			}
 			id, stageErr := b.stageReaderFee(ctx, h, item.user, evidence)
 			if stageErr != nil {
+				// Provable usage is never released as unknown: keep the barrier and
+				// tell an operator once the attempt is overdue.
+				if b.walletBarrierDue(ctx, item.parent, item.token) {
+					b.alertFeeBarrier("fee_barrier_trusted_fee_unstaged", "wallet trusted reader fee could not be staged; the hold stays until it can", item.parent, "platform_user_id", item.user, "error", stageErr.Error())
+				}
 				continue
 			}
 			if b.sealPoolEvidence(ctx, h, "recovered_reader_fee") == nil {
@@ -559,6 +576,11 @@ func (b *CanonicalWalletBridge) recoverReaderBillingEvidence(ctx context.Context
 			if err == nil && b.sealPoolEvidence(ctx, h, "recovered_legacy_zero") == nil {
 				_ = b.releasePoolAttempt(ctx, item.parent, item.user, segments, item.token)
 			}
+			continue
+		}
+		// A barrier set from the gateway's own positive number while the reader saw
+		// nothing positive is just as unresolvable once overdue.
+		if b.releaseExpiredFeeBarrier(ctx, h, item.user, item.raw, evidence) {
 			continue
 		}
 		_ = b.sealPoolEvidence(ctx, h, "recovered_reader_unknown")
