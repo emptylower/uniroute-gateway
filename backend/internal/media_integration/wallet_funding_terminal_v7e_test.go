@@ -256,6 +256,142 @@ func TestExternalFundingV7OverrunRemainderPendingKeepsSourceOpenUntilDeliveredAn
 	require.Equal(t, int64(80000000), events, "the charged fee is exactly the held 0.5 plus the 0.3 remainder")
 }
 
+func TestExternalFundingV7LowBalanceOverrunLeavesFreshLLMAuthorizable(t *testing.T) {
+	for _, sourceUnits := range []int64{1000000, 133000000} {
+		t.Run(strconv.FormatInt(sourceUnits, 10), func(t *testing.T) {
+			// The source holds 0.005 of its 0.01 backing. A trusted 0.8 fee must
+			// fund only the 0.795 remainder from the unleased 1.32, leaving spendable
+			// funds for the next request while the remainder's delivered ACK is delayed.
+			x := newFundingV7FixtureWithAmounts(t, 133000000, sourceUnits)
+			billingRepository := repository.NewUsageBillingRepository(nil, x.f.db)
+			x.f.bridge.SetBillingEvidenceRepository(billingRepository)
+			usageService := service.NewOpenAIGatewayService(nil, nil, billingRepository, x.f.users, nil, nil, repository.NewGatewayCache(x.f.rdb), x.f.cfg, x.f.db, repository.ProvideWalletOutboxStore(x.f.db), nil, nil, service.NewBillingService(x.f.cfg, nil), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, x.f.snapshots)
+			t.Cleanup(usageService.CloseOpenAIWSPool)
+			h := x.authorize(t, 500000)
+			var other *service.AuthorizationHandle
+			if sourceUnits == 133000000 {
+				other = x.authorize(t, 200000)
+			}
+			segment := h.Segments[0]
+			require.Equal(t, x.source, segment.LeaseID)
+			remainder := service.CanonicalWalletSettlementEventID(segment.AuthorizationID+":overrun", x.f.platformUserID, "USD")
+			_, err := x.f.db.Exec(`CREATE FUNCTION funding_v7_availability_delivery_fault() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.event_id='` + remainder + `' AND NEW.status='delivered' THEN RAISE EXCEPTION 'isolated remainder delivered ACK failure'; END IF; RETURN NEW; END $$; CREATE TRIGGER funding_v7_availability_delivery_fault BEFORE UPDATE ON wallet_settlement_outbox FOR EACH ROW EXECUTE FUNCTION funding_v7_availability_delivery_fault()`)
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				_, _ = x.f.db.Exec(`DROP TRIGGER IF EXISTS funding_v7_availability_delivery_fault ON wallet_settlement_outbox; DROP FUNCTION IF EXISTS funding_v7_availability_delivery_fault()`)
+			})
+			provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, `{"id":"funding-v7-availability","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":0}}`)
+			}))
+			defer provider.Close()
+			request, err := http.NewRequestWithContext(service.WithAuthorizationHandle(context.Background(), h), http.MethodPost, provider.URL+"/v1/responses", strings.NewReader(`{"model":"gpt-5.1"}`))
+			require.NoError(t, err)
+			response, err := service.NewAuthorizingHTTPUpstream(&mediaHTTP{client: provider.Client()}, x.f.cfg).Do(request, "", 0, 1)
+			require.NoError(t, err)
+			_, err = io.Copy(io.Discard, response.Body)
+			require.NoError(t, err)
+			require.NoError(t, response.Body.Close())
+			var usageErr error
+			dispatch, err := h.PrepareUsageTask(context.Background(), func(ctx context.Context) {
+				usageErr = usageService.RecordUsage(ctx, &service.OpenAIRecordUsageInput{Result: &service.OpenAIForwardResult{RequestID: "funding-v7-availability-" + h.ID, Model: "gpt-5.1", Usage: service.OpenAIUsage{InputTokens: 1}}, User: x.owner, APIKey: &service.APIKey{ID: x.snapshot.APIKeyID, Quota: 100}, Account: &service.Account{ID: x.snapshot.AccountID, Type: service.AccountTypeAPIKey, Platform: service.PlatformOpenAI}, BillingSnapshot: x.snapshot, AuthorizationID: h.ID, AuthorizationToken: h.LastWriteToken()})
+			})
+			require.NoError(t, err)
+			require.NotNil(t, dispatch)
+			dispatch(context.Background())
+			require.NoError(t, usageErr)
+			var heldDelivered, remainderPending bool
+			var settleLeaseID string
+			require.Eventually(t, func() bool {
+				return x.f.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM wallet_settlement_outbox WHERE event_id=$1 AND status='delivered'),status<>'delivered',lease_id FROM wallet_settlement_outbox WHERE event_id=$2`, segment.EventID, remainder).Scan(&heldDelivered, &remainderPending, &settleLeaseID) == nil && heldDelivered && remainderPending && settleLeaseID != ""
+			}, 8*time.Second, 20*time.Millisecond)
+			settle, err := x.wallet.GetCanonicalWalletLeaseByID(context.Background(), x.f.platformUserID, settleLeaseID)
+			require.NoError(t, err)
+			require.Equal(t, "settle", settle.FundingScope)
+			require.Equal(t, int64(79500000), settle.BudgetUnits, "settlement funding reserves only the actual overrun, not the whole available wallet")
+			source, err := x.wallet.GetCanonicalWalletLeaseByID(context.Background(), x.f.platformUserID, x.source)
+			require.NoError(t, err)
+			require.False(t, source.Sealed, "separate settlement funding must not seal the original LLM source")
+			expectedConsumed := int64(500000)
+			if other != nil {
+				expectedConsumed += other.HeldUnits
+				partial := fundingV7PrimaryReceipt(t, x.f.db, x.f.platformUserID, x.source)
+				fundingV7VerifyReturnSignature(t, x.secret, partial)
+				require.Equal(t, "partial", partial.Mode)
+				require.Equal(t, "200000", partial.HeldUnits)
+				require.Equal(t, "500000", partial.CapturedUnits)
+				require.Equal(t, "132300000", partial.ReturnedAfterUnits)
+				require.True(t, source.FundingFrozen)
+				var closed bool
+				var mode string
+				require.NoError(t, x.f.db.QueryRow(`SELECT closed,requested_mode FROM wallet_funding_freeze WHERE platform_user_id=$1 AND lease_id=$2`, x.f.platformUserID, x.source).Scan(&closed, &mode))
+				require.False(t, closed, "pending original holds and the undelivered remainder cannot close their source")
+				require.Equal(t, "partial", mode)
+				hold, err := x.wallet.GetCanonicalWalletHold(context.Background(), x.f.platformUserID, other.ID)
+				require.NoError(t, err)
+				require.Equal(t, "armed", hold.State)
+				require.Equal(t, int64(200000), hold.HeldUnits)
+			}
+			require.Equal(t, expectedConsumed, source.ConsumedUnits, "a separate settlement cannot fabricate consumption on the original source")
+			require.Zero(t, source.ReleasedUnits)
+			started := time.Now()
+			require.NoError(t, x.f.bridge.EnsureCanonicalWalletLeaseForAdmission(context.Background(), x.f.platformUserID, "USD"), "the eligibility bootstrap must not top up or spend the current settlement lease")
+			fresh, err := service.NewCanonicalWalletAuthorizer(x.f.cfg, x.f.bridge, x.f.snapshots).Authorize(context.Background(), service.AuthorizeInput{Snapshot: x.snapshot, User: x.owner, FixedEstimateUnits: 1000000})
+			require.NoError(t, err, "the next LLM authorization succeeds without waiting for a settle TTL or sweep")
+			require.True(t, fresh.HoldArmed)
+			require.Equal(t, int64(1000000), fresh.HeldUnits)
+			authorizationElapsed := time.Since(started)
+			require.Less(t, authorizationElapsed, 2*time.Second)
+			t.Logf("source budget=%d settlement budget=%d original C=%d R=%d next LLM authorization=%s", sourceUnits, settle.BudgetUnits, source.ConsumedUnits, source.ReleasedUnits, authorizationElapsed)
+			_, err = x.f.db.Exec(`DROP TRIGGER funding_v7_availability_delivery_fault ON wallet_settlement_outbox; DROP FUNCTION funding_v7_availability_delivery_fault()`)
+			require.NoError(t, err)
+			require.Eventually(t, func() bool {
+				var count int
+				return x.f.db.QueryRow(`SELECT count(*) FROM wallet_settlement_outbox WHERE platform_user_id=$1 AND status='delivered' AND ((event_id=$2 AND amount_units=500000) OR (event_id=$3 AND amount_units=79500000))`, x.f.platformUserID, segment.EventID, remainder).Scan(&count) == nil && count == 2
+			}, outboxStaleReclaimWindow(x.f.cfg.CanonicalWallet.RequestTimeoutMS), 20*time.Millisecond)
+			code, raw := immediateV5WirePost(t, x.base, x.secret, "/__fixture/snapshot", map[string]string{"platform_user_id": x.f.platformUserID}, true)
+			require.Equal(t, http.StatusOK, code, string(raw))
+			var snapshot struct {
+				Credits []struct {
+					Remaining string `json:"remainingUnits"`
+				} `json:"credits"`
+				Leases []struct {
+					ID       string `json:"id"`
+					Budget   string `json:"budgetUnits"`
+					Captured string `json:"capturedUnits"`
+					Released string `json:"releasedUnits"`
+				} `json:"leases"`
+				Events []struct {
+					Amount string `json:"amountUnits"`
+				} `json:"events"`
+			}
+			require.NoError(t, json.Unmarshal(raw, &snapshot))
+			number := func(v string) int64 {
+				n, err := strconv.ParseInt(v, 10, 64)
+				require.NoError(t, err)
+				return n
+			}
+			ledger := int64(0)
+			for _, credit := range snapshot.Credits {
+				ledger += number(credit.Remaining)
+			}
+			for _, lease := range snapshot.Leases {
+				ledger += number(lease.Budget) - number(lease.Released)
+				if lease.ID == settleLeaseID {
+					require.Equal(t, int64(79500000), number(lease.Budget))
+					require.Equal(t, int64(79500000), number(lease.Captured))
+				}
+			}
+			require.Equal(t, int64(133000000), ledger, "every remaining credit and lease allocation still has its original backing")
+			var charged int64
+			for _, event := range snapshot.Events {
+				charged += number(event.Amount)
+			}
+			require.Equal(t, int64(80000000), charged, "the held fee and remainder capture the trusted cost exactly once")
+		})
+	}
+}
+
 // An LLM attempt that spans two shared leases and is charged less than its first
 // share leaves the second share at zero. That share moves no money, but its
 // capacity hold and its D1 pin must still end; otherwise the lease it sits on can

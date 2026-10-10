@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -466,6 +467,64 @@ func TestEnsureLeaseSettlePurposeInstallsTheUnderGrant(t *testing.T) {
 	require.NotNil(t, store.lease, "its hash exists")
 	require.Equal(t, int64(100_000_000), lease.RemainingUnits(), "the returned lease's remaining is the granted budget B")
 	require.Equal(t, "lease-1", lease.LeaseID)
+}
+
+func TestEnsureLeaseSettleRequestsOnlyTheAmount(t *testing.T) {
+	b, _, control := newBridgeForEnsureLeaseTest(t)
+	control.lease = CanonicalWalletLease{LeaseID: "settle-1", Currency: "USD", FundingScope: "settle", BudgetUnits: 30_000_000, ExpiresAt: time.Now().Add(5 * time.Minute)}
+	_, err := b.ensureLease(context.Background(), "user-1", "USD", 30_000_000, canonicalWalletLeasePurposeSettle, "")
+	require.NoError(t, err)
+	require.Equal(t, newCanonicalWalletAmountObject(30_000_000), control.lastEnsure.RequestedBudget)
+	require.Equal(t, "settle", control.lastEnsure.FundingScope)
+}
+
+func TestEnsureLeaseUnboundSettlePreservesTheCurrentLLMSource(t *testing.T) {
+	for _, scope := range []string{"", "legacy", "llm"} {
+		for _, consumed := range []int64{0, 90_000_000} {
+			t.Run(scope+"/"+strconv.FormatInt(consumed, 10), func(t *testing.T) {
+				b, store, control := newBridgeForEnsureLeaseTest(t)
+				store.lease = &CanonicalWalletLease{LeaseID: "llm-source", Currency: "USD", FundingScope: scope, BudgetUnits: 100_000_000, ConsumedUnits: consumed, ExpiresAt: time.Now().Add(5 * time.Minute)}
+				control.lease = CanonicalWalletLease{LeaseID: "settle-1", Currency: "USD", FundingScope: "settle", BudgetUnits: 30_000_000, ExpiresAt: time.Now().Add(5 * time.Minute)}
+				lease, err := b.ensureLease(context.Background(), "user-1", "USD", 30_000_000, canonicalWalletLeasePurposeSettle, "")
+				require.NoError(t, err)
+				require.Equal(t, "settle-1", lease.LeaseID)
+				require.Equal(t, 1, control.ensureCalls)
+				require.Empty(t, control.lastEnsure.PreferLeaseID)
+				require.Equal(t, []string{"llm-source"}, control.lastEnsure.ExcludeLeaseIDs, "the Worker cannot reuse the same legacy source after a Redis cache exclusion")
+				require.Empty(t, control.lastEnsure.Drained, "the original source is not sealed or drained for unrelated settlement funding")
+			})
+		}
+	}
+}
+
+func TestEnsureLeaseBoundSettleRetainsTheOriginalSource(t *testing.T) {
+	b, store, control := newBridgeForEnsureLeaseTest(t)
+	store.lease = &CanonicalWalletLease{LeaseID: "llm-source", Currency: "USD", FundingScope: "llm", BudgetUnits: 100_000_000, ConsumedUnits: 90_000_000, ExpiresAt: time.Now().Add(5 * time.Minute)}
+	lease, err := b.ensureLease(context.Background(), "user-1", "USD", 30_000_000, canonicalWalletLeasePurposeSettle, "llm-source")
+	require.NoError(t, err)
+	require.Equal(t, "llm-source", lease.LeaseID)
+	require.Equal(t, int64(90_000_000), lease.ConsumedUnits)
+	require.Zero(t, control.ensureCalls, "a bound retry still resolves its original reservation")
+}
+
+func TestEnsureLeaseAuthorizeExcludesSettlementFunding(t *testing.T) {
+	for _, policy := range []string{"", config.CanonicalUSDWalletPolicyVersion} {
+		for _, consumed := range []int64{0, 30_000_000} {
+			t.Run(policy+"/"+strconv.FormatInt(consumed, 10), func(t *testing.T) {
+				b, store, control := newBridgeForEnsureLeaseTest(t)
+				store.lease = &CanonicalWalletLease{LeaseID: "settle-1", Currency: "USD", FundingScope: "settle", BudgetUnits: 30_000_000, ConsumedUnits: consumed, ExpiresAt: time.Now().Add(5 * time.Minute)}
+				control.lease = CanonicalWalletLease{LeaseID: "llm-1", Currency: "USD", FundingScope: "llm", BudgetUnits: 1_000_000, ExpiresAt: time.Now().Add(5 * time.Minute)}
+				control.policyVersion = policy
+				lease, err := b.ensureLeaseWithPolicy(context.Background(), "user-1", "USD", 1, canonicalWalletLeasePurposeAuthorize, "settle-1", policy)
+				require.NoError(t, err)
+				require.Equal(t, "llm-1", lease.LeaseID)
+				require.Equal(t, "llm", control.lastEnsure.FundingScope)
+				require.Empty(t, control.lastEnsure.PreferLeaseID)
+				require.Empty(t, control.lastEnsure.TopUpLeaseID)
+				require.Empty(t, control.lastEnsure.Drained)
+			})
+		}
+	}
 }
 
 func TestEnsureLeaseRejectsExpiredGrant(t *testing.T) {
