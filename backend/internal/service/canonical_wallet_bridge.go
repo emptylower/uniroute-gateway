@@ -2434,10 +2434,18 @@ func (b *CanonicalWalletBridge) ensureLeaseWithPolicy(ctx context.Context, platf
 			return nil, registryErr
 		}
 	}
-	if preferLeaseID != "" && cached != nil && policyVersion == "" && (purpose != canonicalWalletLeasePurposeAuthorize || (cached.FundingScope != "media" && !cached.FundingFrozen)) {
+	if preferLeaseID != "" && cached != nil && policyVersion == "" && (purpose != canonicalWalletLeasePurposeAuthorize || (cached.FundingScope != "media" && cached.FundingScope != "settle" && !cached.FundingFrozen)) {
 		return cached, nil // the atomic reserve resolves existing reservation duplicates
 	}
-	if cached != nil && (cached.FundingScope == "media" || cached.FundingFrozen) {
+	// Unbound settlement funding must not seal or reuse the current LLM source:
+	// its remaining principal still backs fresh authorizations and pending holds.
+	var excluded []string
+	if cached != nil && purpose == canonicalWalletLeasePurposeSettle && cached.FundingScope != "settle" {
+		excluded = []string{cached.LeaseID}
+		cached = nil
+		preferLeaseID = ""
+	}
+	if cached != nil && (cached.FundingScope == "media" || cached.FundingFrozen || (purpose == canonicalWalletLeasePurposeAuthorize && cached.FundingScope == "settle")) {
 		cached = nil
 		preferLeaseID = ""
 	}
@@ -2453,9 +2461,9 @@ func (b *CanonicalWalletBridge) ensureLeaseWithPolicy(ctx context.Context, platf
 		USDWalletPolicyVersion: policyVersion,
 		PlatformUserID:         strings.TrimSpace(platformUserID), Currency: currency, Purpose: string(purpose),
 		MinHeadroom: newCanonicalWalletAmountObject(amountUnits), RequestedBudget: newCanonicalWalletAmountObject(b.cfg.LeaseBudgetUnits), RequestedTTLSeconds: b.cfg.LeaseTTLSeconds,
-		PreferLeaseID: preferLeaseID, CallerSlotTTLSeconds: b.callerSlotTTLSeconds,
+		PreferLeaseID: preferLeaseID, ExcludeLeaseIDs: excluded, CallerSlotTTLSeconds: b.callerSlotTTLSeconds,
 	}
-	if amountUnits > b.cfg.LeaseBudgetUnits {
+	if purpose == canonicalWalletLeasePurposeSettle || amountUnits > b.cfg.LeaseBudgetUnits {
 		request.RequestedBudget = newCanonicalWalletAmountObject(amountUnits)
 	}
 	if cached != nil && !covering {
@@ -2498,6 +2506,16 @@ func (b *CanonicalWalletBridge) ensureLeaseWithPolicy(ctx context.Context, platf
 		}
 	}
 	result, err := b.ensureFundingLifecycle(ctx, request)
+	_, fundingStore := b.store.(CanonicalWalletFundingStore)
+	_, signedControl := b.control.(*canonicalWalletHTTPClient)
+	if purpose == canonicalWalletLeasePurposeSettle && errors.Is(err, ErrCanonicalWalletBalanceShortfall) && b.outboxDB != nil && fundingStore && signedControl {
+		// Return only signed free LLM backing; pending holds and captures remain
+		// on their original source, which is still excluded from the new funding.
+		if err = b.reclaimSharedFreeFunding(ctx, platformUserID); err != nil {
+			return nil, err
+		}
+		result, err = b.ensureFundingLifecycle(ctx, request)
+	}
 	if err != nil {
 		return nil, err
 	}

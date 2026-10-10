@@ -45,10 +45,9 @@ func p34WaitOutboxStatus(t *testing.T, ctx context.Context, db *sql.DB, requestI
 	t.Fatalf("outbox row %s never reached status %s", requestID, want)
 }
 
-// Test 16 — K = 16 dispatcher instances on one exhausted lease → one issuance
-// total; the window idempotency key is gone (no Idempotency-Key on the ensure
-// wire; the settlement client keeps its own gwusg_ key until 3.5).
-func TestPhase34Proto16SixteenDispatchersOneIssuanceNoWindowKey(t *testing.T) {
+// Test 16 — K = 16 dispatchers fund only each event's exact settlement amount.
+// Every event captures once on its own funding, with no window idempotency key.
+func TestPhase34Proto16SixteenDispatchersExactSettlementBudgetsNoWindowKey(t *testing.T) {
 	ctx := context.Background()
 	db := startCanonicalWalletTestPostgres(t, ctx)
 	rdb := startCanonicalWalletTestRedis(t, ctx)
@@ -77,10 +76,35 @@ func TestPhase34Proto16SixteenDispatchersOneIssuanceNoWindowKey(t *testing.T) {
 	}
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
-	require.Equal(t, 1, fake.issuances, "sixteen dispatchers, one exhausted lease → exactly one issuance; the rest reused")
+	require.Equal(t, 16, fake.issuances, "each exact settlement budget backs one event")
+	require.Len(t, fake.events[user], 16, "every event captured exactly once")
+	var totalCaptured int64
+	seenLeases := map[string]bool{}
+	for i := 0; i < 16; i++ {
+		eventID := CanonicalWalletSettlementEventID("req-k16-"+itoa(i), user, "USD")
+		event, ok := fake.events[user][eventID]
+		require.True(t, ok, "each durable event has a matching control-plane capture")
+		var boundLease string
+		require.NoError(t, db.QueryRowContext(ctx, `SELECT lease_id FROM wallet_settlement_outbox WHERE event_id=$1`, eventID).Scan(&boundLease))
+		require.Equal(t, boundLease, event.LeaseID, "the durable binding matches the captured funding")
+		require.Equal(t, int64(10_000_000), event.Units)
+		require.False(t, seenLeases[event.LeaseID], "exact funding cannot be charged for two events")
+		seenLeases[event.LeaseID] = true
+		lease := fake.lease(user, event.LeaseID)
+		require.Equal(t, "settle", lease.FundingScope)
+		require.Equal(t, event.Units, lease.Budget)
+		require.Equal(t, event.Units, lease.Captured)
+		totalCaptured += event.Units
+	}
+	require.Equal(t, int64(160_000_000), totalCaptured)
+	require.Equal(t, int64(100_000_000_000)-totalCaptured, fake.balance[user], "unleased balance and captured fees conserve the grant")
+	require.Equal(t, int64(495_000_000), fake.lease(user, "srv-exhausted").Captured, "the original source was not charged again")
+	require.Equal(t, int64(100_500_000_000), fake.fakeCanonicalBalance(user)+totalCaptured+fake.lease(user, "srv-exhausted").Captured, "all available credit and captured fees conserve the grant plus seeded source")
 	require.NotEmpty(t, fake.requests)
 	for _, req := range fake.requests {
 		require.Equal(t, "settle", req.Purpose, "the dispatcher ensures with purpose = settle")
+		require.Equal(t, "settle", req.FundingScope)
+		require.Equal(t, int64(10_000_000), mustUnits(req.RequestedBudget))
 	}
 	require.NotEmpty(t, fake.ensureHeaders, "the assertion below must have had something to check")
 	for _, h := range fake.ensureHeaders {

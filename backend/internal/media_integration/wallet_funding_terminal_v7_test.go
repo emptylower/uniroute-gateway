@@ -40,16 +40,21 @@ type fundingV7Fixture struct {
 
 func newFundingV7Fixture(t *testing.T) fundingV7Fixture {
 	t.Helper()
+	return newFundingV7FixtureWithAmounts(t, 1000000000, 1000000000)
+}
+
+func newFundingV7FixtureWithAmounts(t *testing.T, grantUnits, budgetUnits int64) fundingV7Fixture {
+	t.Helper()
 	base, secret := immediateV5WireConfig(t)
 	user := "funding-v7-" + uuid.NewString()
 	f := newMediaFixtureForUser(t, user)
 	f.svc.Stop()
 	f.bridge.Close()
 	source := "funding-v7-source-" + uuid.NewString()
-	code, raw := immediateV5WirePost(t, base, secret, "/__fixture/seed", map[string]string{"platform_user_id": user, "grant_units": "1000000000", "lease_id": source, "budget_units": "1000000000"}, true)
+	code, raw := immediateV5WirePost(t, base, secret, "/__fixture/seed", map[string]string{"platform_user_id": user, "grant_units": strconv.FormatInt(grantUnits, 10), "lease_id": source, "budget_units": strconv.FormatInt(budgetUnits, 10)}, true)
 	require.Equal(t, http.StatusOK, code, string(raw))
 	wallet := repository.NewGatewayCache(f.rdb).(service.CanonicalWalletLeaseStore)
-	require.NoError(t, wallet.InstallCanonicalWalletLease(context.Background(), service.CanonicalWalletLease{LeaseID: source, PlatformUserID: user, Currency: "USD", FundedUnits: 1000000000, BudgetUnits: 1000000000, FundingScope: "legacy", ExpiresAt: time.Now().Add(time.Hour)}))
+	require.NoError(t, wallet.InstallCanonicalWalletLease(context.Background(), service.CanonicalWalletLease{LeaseID: source, PlatformUserID: user, Currency: "USD", FundedUnits: budgetUnits, BudgetUnits: budgetUnits, FundingScope: "legacy", ExpiresAt: time.Now().Add(time.Hour)}))
 	f.cfg.CanonicalWallet.ControlPlaneURL, f.cfg.CanonicalWallet.Secret = base, secret
 	f.cfg.CanonicalWallet.Issuer, f.cfg.CanonicalWallet.Audience = "sub2api", "shipany-wallet"
 	f.cfg.CanonicalWallet.RequestTimeoutMS = 3000

@@ -28,13 +28,14 @@ import (
 // clamped units; §3 step 4's unitsToCreditsCeil rounding is the ShipAny half's
 // test 4, not modelled here.
 type fakeLease struct {
-	ID        string
-	Purpose   string
-	Budget    int64
-	Captured  int64
-	Released  int64
-	ExpiresAt time.Time
-	Status    string // active | closed
+	ID           string
+	Purpose      string
+	FundingScope string
+	Budget       int64
+	Captured     int64
+	Released     int64
+	ExpiresAt    time.Time
+	Status       string // active | closed
 	// DrainedAt (redesign §9.1): set when a gateway drain of this lease did
 	// NOT verify — the lease is never covering again (it stays slot-holding
 	// until captures resolve it or the grace closes it). The server's own
@@ -119,7 +120,8 @@ func (f *fakeEnsureControlPlane) fund(user string, units int64) {
 	f.mu.Unlock()
 }
 
-// seedLease installs a server-side lease directly (for cap/settle scenarios).
+// seedLease installs a legacy server-side lease directly (for cap/settle
+// scenarios). Newly issued leases carry the requested funding scope.
 func (f *fakeEnsureControlPlane) seedLease(user, id, purpose string, budget, captured int64, expires time.Time) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -205,13 +207,14 @@ func (f *fakeEnsureControlPlane) canned(w http.ResponseWriter, r *http.Request) 
 	return true
 }
 
-// fakeLeaseWireView is leaseWireView's twelve fields (lease-wire.ts) — the
+// fakeLeaseWireView includes leaseWireView's funding scope (lease-wire.ts) — the
 // same view the ensure handler builds, shared by the v2 settlements route.
 // Called with f.mu held.
 func (f *fakeEnsureControlPlane) fakeLeaseWireView(user string, l *fakeLease) map[string]any {
 	return map[string]any{
 		"lease_id": l.ID, "platform_user_id": user, "currency": "USD", "unit_version": "usd-e8-v1", "scale": 8,
-		"budget": fakeAmountObject(l.Budget), "reserved": fakeAmountObject(0), "captured": fakeAmountObject(l.Captured),
+		"funding_scope": l.FundingScope,
+		"budget":        fakeAmountObject(l.Budget), "reserved": fakeAmountObject(0), "captured": fakeAmountObject(l.Captured),
 		"released": fakeAmountObject(l.Released), "capture_seq": f.captureSeqs[l.ID], "status": l.Status,
 		"expires_at": l.ExpiresAt.UTC().Format(time.RFC3339Nano),
 	}
@@ -355,7 +358,14 @@ func (f *fakeEnsureControlPlane) handle(w http.ResponseWriter, r *http.Request) 
 			if l.Status != "active" {
 				continue
 			}
-			if l.DrainedAt == nil && l.ExpiresAt.After(now) && l.headroom() >= minHeadroom {
+			excluded := false
+			for _, id := range req.ExcludeLeaseIDs {
+				if id == l.ID {
+					excluded = true
+					break
+				}
+			}
+			if !excluded && walletFundingMatches(l.FundingScope, "", "", req) && l.DrainedAt == nil && l.ExpiresAt.After(now) && l.headroom() >= minHeadroom {
 				covering = append(covering, l)
 			}
 			if l.Purpose == "authorize" && (l.ExpiresAt.After(now) || (l.headroom() > 0 && l.ExpiresAt.After(now.Add(-f.grace)))) {
@@ -415,13 +425,14 @@ func (f *fakeEnsureControlPlane) handle(w http.ResponseWriter, r *http.Request) 
 			f.issuances++
 			f.balance[user] -= budget
 			ttl := time.Duration(req.RequestedTTLSeconds) * time.Second
-			pick = &fakeLease{ID: "srv-lease-" + itoa(f.seq), Purpose: req.Purpose, Budget: budget, ExpiresAt: now.Add(ttl), Status: "active"}
+			pick = &fakeLease{ID: "srv-lease-" + itoa(f.seq), Purpose: req.Purpose, FundingScope: req.FundingScope, Budget: budget, ExpiresAt: now.Add(ttl), Status: "active"}
 			f.leases[user] = append(f.leases[user], pick)
 			outcome = "issued"
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{
 			"lease_id": pick.ID, "platform_user_id": user, "currency": "USD", "unit_version": "usd-e8-v1", "scale": 8,
-			"budget": fakeAmountObject(pick.Budget), "reserved": fakeAmountObject(0), "captured": fakeAmountObject(pick.Captured),
+			"funding_scope": pick.FundingScope,
+			"budget":        fakeAmountObject(pick.Budget), "reserved": fakeAmountObject(0), "captured": fakeAmountObject(pick.Captured),
 			"released": fakeAmountObject(pick.Released), "headroom": fakeAmountObject(pick.headroom()),
 			"capture_seq": 0, "status": pick.Status, "expires_at": pick.ExpiresAt.UTC().Format(time.RFC3339Nano),
 			"outcome": outcome, "clamped_by": "none",
