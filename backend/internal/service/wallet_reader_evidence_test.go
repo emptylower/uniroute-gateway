@@ -24,6 +24,9 @@ func TestWalletReaderEvidenceRequiresSelectedValidUsage(t *testing.T) {
 		input, output                       int
 	}{
 		{"missing", `{"response":{"id":"r1"}}`, false, false, false, false, 0, 0},
+		{"null-usage-is-not-reported", `{"usage":null}`, false, false, false, false, 0, 0},
+		{"responses-event-null-usage", `{"type":"response.created","response":{"id":"r1","usage":null}}`, false, false, false, false, 0, 0},
+		{"null-top-level-falls-through-to-response-usage", `{"usage":null,"response":{"usage":{"input_tokens":8,"output_tokens":2}}}`, true, true, false, true, 8, 2},
 		{"explicit-zero", `{"usage":{"input_tokens":0,"output_tokens":0}}`, true, true, false, false, 0, 0},
 		{"raw-not-billable-zero", `{"raw_tokens":0,"raw_credits":0,"source":"priced_usage"}`, false, false, false, false, 0, 0},
 		{"provider-source-does-not-select", `{"usage":{"source":"trusted","credits":0}}`, true, false, true, false, 0, 0},
@@ -59,6 +62,78 @@ func TestWalletReaderEvidenceCumulativeAndMalformedNeverErasePositive(t *testing
 	observeWalletUsage([]byte(`{"usage":{"input_tokens":0,"output_tokens":"bad"}}`), &got)
 	require.True(t, got.ObservedPositive)
 	require.True(t, got.Malformed)
+}
+
+// Ends with a chosen error instead of io.EOF, like a connection that dropped.
+type walletErrAfterBody struct {
+	io.Reader
+	err error
+}
+
+func (b walletErrAfterBody) Read(p []byte) (int, error) {
+	n, err := b.Reader.Read(p)
+	if err == io.EOF {
+		return n, b.err
+	}
+	return n, err
+}
+func (walletErrAfterBody) Close() error { return nil }
+
+func readWalletStreamEvidence(t *testing.T, body io.ReadCloser) WalletReaderEvidence {
+	t.Helper()
+	h := &AuthorizationHandle{}
+	var got WalletReaderEvidence
+	h.consumeHTTP = func(_ int, e WalletReaderEvidence, _ error) { got = e }
+	reader := &walletResponseBody{ReadCloser: body, handle: h, status: 200}
+	_, _ = io.ReadAll(reader)
+	require.NoError(t, reader.Close())
+	return got
+}
+
+// OpenAI Responses and Chat streams report usage:null on every event before the
+// terminal one. That must not latch Malformed over a strictly valid final usage.
+func TestWalletResponseBodyStreamNullUsageBeforeFinalUsageIsTrusted(t *testing.T) {
+	responses := "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"r1\",\"status\":\"in_progress\",\"usage\":null}}\n\n" +
+		"event: response.in_progress\ndata: {\"type\":\"response.in_progress\",\"response\":{\"id\":\"r1\",\"usage\":null}}\n\n" +
+		"event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"OK\"}\n\n"
+	completed := "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\",\"usage\":{\"input_tokens\":4477,\"output_tokens\":5,\"total_tokens\":4482}}}\n\n"
+	chat := "data: {\"id\":\"c1\",\"choices\":[{\"delta\":{\"content\":\"OK\"}}],\"usage\":null}\n\n" +
+		"data: {\"id\":\"c1\",\"choices\":[],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":3,\"total_tokens\":15}}\n\ndata: [DONE]\n\n"
+
+	t.Run("responses-complete", func(t *testing.T) {
+		got := readWalletStreamEvidence(t, io.NopCloser(strings.NewReader(responses+completed)))
+		require.True(t, got.Complete)
+		require.False(t, got.Malformed)
+		require.True(t, walletReaderEvidenceTrusted(got))
+		require.Equal(t, 4477, got.Tokens.InputTokens)
+		require.Equal(t, 5, got.Tokens.OutputTokens)
+		require.True(t, walletReaderEvidenceNeedsFeeRecovery(got))
+	})
+	t.Run("chat-complete", func(t *testing.T) {
+		got := readWalletStreamEvidence(t, io.NopCloser(strings.NewReader(chat)))
+		require.True(t, got.Complete)
+		require.False(t, got.Malformed)
+		require.True(t, walletReaderEvidenceTrusted(got))
+		require.Equal(t, 12, got.Tokens.InputTokens)
+		require.Equal(t, 3, got.Tokens.OutputTokens)
+	})
+	t.Run("responses-aborted-before-final-usage", func(t *testing.T) {
+		got := readWalletStreamEvidence(t, walletErrAfterBody{Reader: strings.NewReader(responses), err: errors.New("client went away")})
+		require.False(t, got.Complete)
+		require.False(t, got.Present)
+		require.False(t, got.Malformed)
+		require.False(t, got.ObservedPositive)
+		require.False(t, walletReaderEvidenceNeedsFeeRecovery(got), "an unfinished stream with no usage is unknown cost, not a pending fee")
+	})
+	t.Run("null-does-not-launder-a-malformed-final-usage", func(t *testing.T) {
+		bad := responses + "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\",\"usage\":{\"input_tokens\":7,\"output_tokens\":\"bad\"}}}\n\n"
+		got := readWalletStreamEvidence(t, io.NopCloser(strings.NewReader(bad)))
+		require.True(t, got.Complete)
+		require.True(t, got.Malformed)
+		require.True(t, got.ObservedPositive)
+		require.False(t, walletReaderEvidenceTrusted(got))
+		require.True(t, walletReaderEvidenceNeedsFeeRecovery(got), "a positive but unverifiable final usage still keeps the fee barrier")
+	})
 }
 
 type walletJoinedBody struct {

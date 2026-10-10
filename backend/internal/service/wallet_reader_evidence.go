@@ -49,19 +49,25 @@ func observeWalletUsage(raw []byte, evidence *WalletReaderEvidence) {
 		return
 	}
 	root := gjson.ParseBytes(raw)
+	// An explicit JSON null is "no usage reported yet", exactly like a missing
+	// field: OpenAI Responses/Chat streams send usage:null on every event before
+	// the terminal one. Treating it as a malformed present value would latch
+	// Malformed for the whole stream and make a complete, strictly valid final
+	// usage untrusted.
+	reported := func(value gjson.Result) bool { return value.Exists() && value.Type != gjson.Null }
 	usage := root.Get("usage")
-	if !usage.Exists() {
+	if !reported(usage) {
 		usage = root.Get("response.usage")
 	}
-	if !usage.Exists() {
+	if !reported(usage) {
 		usage = root.Get("message.usage")
 	}
 	gemini := false
-	if !usage.Exists() {
+	if !reported(usage) {
 		usage = root.Get("usageMetadata")
-		gemini = usage.Exists()
+		gemini = reported(usage)
 	}
-	if !usage.Exists() {
+	if !reported(usage) {
 		return
 	}
 	evidence.Present = true
