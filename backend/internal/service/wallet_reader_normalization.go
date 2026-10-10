@@ -189,8 +189,19 @@ func normalizeWalletReaderFee(snapshot *BillingSnapshot, facts *WalletReaderNorm
 	return input, nil
 }
 
+// walletWSUsage is the wallet's view of openaiwsv2.ParseUsage. An explicit JSON
+// null response.usage (response.created/in_progress carry it) is "not reported",
+// like a missing usage, not a malformed one; see walletSelectedUsage. The relay's
+// own parser and its metrics are left unchanged.
+func walletWSUsage(payload []byte) openaiwsv2.Usage {
+	if usage := gjson.GetBytes(payload, "response.usage"); usage.Exists() && usage.Type == gjson.Null && gjson.ValidBytes(payload) {
+		return openaiwsv2.Usage{}
+	}
+	return openaiwsv2.ParseUsage(payload)
+}
+
 func observeWalletWSUsage(payload []byte, evidence *WalletReaderEvidence) {
-	parsed := openaiwsv2.ParseUsage(payload)
+	parsed := walletWSUsage(payload)
 	if !parsed.Present {
 		return
 	}

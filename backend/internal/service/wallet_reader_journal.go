@@ -378,15 +378,7 @@ func selectedWalletUsageFrame(raw []byte, facts ...*WalletReaderNormalization) (
 		kind = facts[0].CountKind
 	}
 	counts := selectedWalletImageCounts(raw, kind)
-	path := ""
-	usage := gjson.Result{}
-	for _, candidate := range []string{"usage", "response.usage", "message.usage", "usageMetadata"} {
-		if value := root.Get(candidate); value.Exists() {
-			path = candidate
-			usage = value
-			break
-		}
-	}
+	path, usage := walletSelectedUsage(root)
 	if path == "" && counts == nil {
 		return nil, nil
 	}

@@ -44,26 +44,38 @@ func walletUsageInteger(value gjson.Result) (int, bool) {
 	return int(n), true
 }
 
+// walletUsageLocations are the places a provider frame can carry its usage, in
+// selection order.
+var walletUsageLocations = []string{"usage", "response.usage", "message.usage", "usageMetadata"}
+
+// walletSelectedUsage returns the first location that reports usage. An explicit
+// JSON null means "no usage reported", exactly like a missing field: OpenAI
+// Responses events that carry the whole response object (created, in_progress)
+// have response.usage:null, and Chat Completions chunks have usage:null when
+// stream_options.include_usage is on. Treating that null as a present, malformed
+// value would latch Malformed for the whole stream and make a complete, strictly
+// valid terminal usage untrusted. For HTTP sources the live parser and the
+// journal checkpoint must select the same value, so both use this. (The
+// WebSocket live parser reads response.usage only; see walletWSUsage.)
+func walletSelectedUsage(root gjson.Result) (string, gjson.Result) {
+	for _, candidate := range walletUsageLocations {
+		if value := root.Get(candidate); value.Exists() && value.Type != gjson.Null {
+			return candidate, value
+		}
+	}
+	return "", gjson.Result{}
+}
+
 func observeWalletUsage(raw []byte, evidence *WalletReaderEvidence) {
 	if !gjson.ValidBytes(raw) {
 		return
 	}
 	root := gjson.ParseBytes(raw)
-	usage := root.Get("usage")
-	if !usage.Exists() {
-		usage = root.Get("response.usage")
-	}
-	if !usage.Exists() {
-		usage = root.Get("message.usage")
-	}
-	gemini := false
-	if !usage.Exists() {
-		usage = root.Get("usageMetadata")
-		gemini = usage.Exists()
-	}
-	if !usage.Exists() {
+	path, usage := walletSelectedUsage(root)
+	if path == "" {
 		return
 	}
+	gemini := path == "usageMetadata"
 	evidence.Present = true
 	if !usage.IsObject() {
 		evidence.Malformed = true

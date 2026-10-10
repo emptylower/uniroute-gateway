@@ -14,7 +14,6 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
-	openaiwsv2 "github.com/Wei-Shaw/sub2api/internal/service/openai_ws_v2"
 )
 
 // authorizationArmable is what the pool lease and the passthrough session use to
@@ -372,7 +371,7 @@ func (c *authorizingOpenAIWSClientConn) observeOwnedFrameEvidence(payload []byte
 		h.recordReaderEvidence(evidence, err)
 		return err
 	}
-	if !openaiwsv2.ParseUsage(payload).Present && terminal {
+	if !walletWSUsage(payload).Present && terminal {
 		evidence.Present = false
 		evidence.Valid = false
 	}
