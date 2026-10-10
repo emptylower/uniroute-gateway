@@ -1523,13 +1523,17 @@ func TestExternalPoolLiveNextWindowActivationSurvivesAgeAndRedisLoss(t *testing.
 	require.NoError(t, store.Save(ctx, row))
 	require.NoError(t, store.Activate(ctx, first.ID, "real-next-window", time.Now()))
 	require.True(t, f.bridge.ObserveSettlement(service.CanonicalWalletSettlementEvent{GatewayRequestID: "live-first-window", PlatformUserID: "media-user", Currency: "USD", AmountUnits: 72000000, AuthorizationID: first.ID, BillingSnapshotID: snap.ID}))
-	next, _ := f.authorize(t, 9*720000000, service.BillingFamilyLive)
+	// Windows in one live call share the original immutable billing snapshot.
+	user, err := f.users.GetByID(ctx, f.userID)
+	require.NoError(t, err)
+	next, err := service.NewCanonicalWalletAuthorizer(f.cfg, f.bridge, f.snapshots).Authorize(ctx, service.AuthorizeInput{Snapshot: snap, User: user, FixedEstimateUnits: 9 * 720000000})
+	require.NoError(t, err)
 	require.Len(t, next.Segments, 2)
 	window := service.LiveWindow{WindowSeq: 2, LeaseID: next.LeaseID, Token: next.ID, OpenedAtMS: time.Now().UnixMilli()}
 	require.NoError(t, store.AdvanceLiveWindow(ctx, first.ID, 1, 72000000, window))
 	// A failed repeated advance must not alter the group's activation identity.
 	require.ErrorIs(t, store.AdvanceLiveWindow(ctx, first.ID, 1, 72000000, window), service.ErrLiveWindowCASLost)
-	_, err := f.db.Exec(`UPDATE wallet_authorization_segment SET created_at=now()-interval '2 minutes',updated_at=now()-interval '1 hour' WHERE parent_authorization_id=$1`, next.ID)
+	_, err = f.db.Exec(`UPDATE wallet_authorization_segment SET created_at=now()-interval '2 minutes',updated_at=now()-interval '1 hour' WHERE parent_authorization_id=$1`, next.ID)
 	require.NoError(t, err)
 	require.NoError(t, f.rdb.FlushDB(ctx).Err())
 	f.control.mu.Lock()
