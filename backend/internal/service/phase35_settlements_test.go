@@ -152,8 +152,10 @@ func TestPhase35NamedLeaseIDReleasesTheRetryReservation(t *testing.T) {
 		LeaseID: X, PlatformUserID: user, Currency: "USD", BudgetUnits: 500_000_000, ExpiresAt: now.Add(5 * time.Minute),
 	}))
 	eventID := CanonicalWalletSettlementEventID("req-35-33", user, "USD")
+	yMarker, err := rdb.Get(ctx, testCanonicalWalletReservationKey(user, eventID)).Result()
+	require.NoError(t, err)
 	require.NoError(t, rdb.Del(ctx, testCanonicalWalletReservationKey(user, eventID)).Err())
-	_, err := store.ReserveCanonicalWalletLease(ctx, user, X, "USD", eventID, A, now)
+	_, err = store.ReserveCanonicalWalletLease(ctx, user, X, "USD", eventID, A, now)
 	require.NoError(t, err)
 
 	var id int64
@@ -186,6 +188,10 @@ func TestPhase35NamedLeaseIDReleasesTheRetryReservation(t *testing.T) {
 	fake.mu.Lock()
 	yConsumedBefore := fake.lease(user, Y).Captured
 	fake.mu.Unlock()
+	// Restore the original captured delivery's marker for this separate retry
+	// state. An exact-budget lease is exhausted; its existing marker is what
+	// makes a bound retry duplicate without reserving the same fee again.
+	require.NoError(t, rdb.Set(ctx, testCanonicalWalletReservationKey(user, eventID), yMarker, 5*time.Minute).Err())
 	var id2 int64
 	require.NoError(t, db.QueryRowContext(ctx,
 		`UPDATE wallet_settlement_outbox SET status = 'in_flight', claimed_by = $2, claimed_at = now(), lease_id = $3 WHERE event_id = $1 RETURNING id`,
@@ -1391,12 +1397,13 @@ func TestPhase35RepricingIsPinned(t *testing.T) {
 	p34WaitOutboxStatus(t, ctx, db, "req-35-40", "delivered")
 	eventID := CanonicalWalletSettlementEventID("req-35-40", user, "USD")
 	var id int64
+	var leaseID string
 	require.NoError(t, db.QueryRowContext(ctx,
-		`UPDATE wallet_settlement_outbox SET status = 'in_flight', claimed_by = $2, claimed_at = now(), amount_units = $3 WHERE event_id = $1 RETURNING id`,
-		eventID, b.workerID, A2).Scan(&id))
+		`UPDATE wallet_settlement_outbox SET status = 'in_flight', claimed_by = $2, claimed_at = now(), amount_units = $3 WHERE event_id = $1 RETURNING id, lease_id`,
+		eventID, b.workerID, A2).Scan(&id, &leaseID))
 	b.deliverOutboxEvent(ctx, CanonicalWalletOutboxEvent{
 		ID: id, EventID: eventID, GatewayRequestID: "req-35-40", PlatformUserID: user,
-		Currency: "USD", AmountUnits: A2, OccurredAt: now,
+		LeaseID: leaseID, Currency: "USD", AmountUnits: A2, OccurredAt: now,
 	})
 	var status string
 	var attempts int

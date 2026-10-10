@@ -303,7 +303,8 @@ var testInstallCanonicalWalletLeaseScript = redis.NewScript(`
 	end
 	redis.call('HSET', KEYS[1],
 		'lease_id', ARGV[1], 'platform_user_id', ARGV[2], 'currency', ARGV[3],
-		'budget_units', ARGV[6], 'consumed_units', incoming_consumed, 'expires_at_ms', ARGV[5])
+		'budget_units', ARGV[6], 'consumed_units', incoming_consumed, 'expires_at_ms', ARGV[5],
+		'funding_scope', ARGV[9])
 	redis.call('PEXPIREAT', KEYS[1], retain_until)
 
 	local current_pointer_lease_id = redis.call('GET', KEYS[2])
@@ -518,6 +519,7 @@ func testParseCanonicalWalletLease(values map[string]string) (*CanonicalWalletLe
 	return &CanonicalWalletLease{
 		LeaseID: values["lease_id"], PlatformUserID: values["platform_user_id"], Currency: values["currency"],
 		BudgetUnits: budget, ConsumedUnits: consumed, ExpiresAt: time.UnixMilli(expiresAtMS).UTC(),
+		FundingScope: values["funding_scope"],
 	}, nil
 }
 func testRedisResultInt64(value any) (int64, error) {
@@ -557,7 +559,7 @@ func (c *gatewayCacheAdapterForTest) InstallCanonicalWalletLease(ctx context.Con
 	return testInstallCanonicalWalletLeaseScript.Run(ctx, c.rdb,
 		[]string{testCanonicalWalletLeaseKey(lease.PlatformUserID, lease.LeaseID), testCanonicalWalletCurrentKey(lease.PlatformUserID)},
 		lease.LeaseID, strings.TrimSpace(lease.PlatformUserID), currency,
-		lease.ConsumedUnits, lease.ExpiresAt.UnixMilli(), lease.BudgetUnits, testCanonicalWalletLeaseKeyPrefix(lease.PlatformUserID), retainUntil.UnixMilli(),
+		lease.ConsumedUnits, lease.ExpiresAt.UnixMilli(), lease.BudgetUnits, testCanonicalWalletLeaseKeyPrefix(lease.PlatformUserID), retainUntil.UnixMilli(), lease.FundingScope,
 	).Err()
 }
 

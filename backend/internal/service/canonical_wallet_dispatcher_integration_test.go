@@ -45,7 +45,7 @@ func TestCanonicalWalletOutboxDispatcherDeliversEndToEnd(t *testing.T) {
 			require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
 			receivedEnsureRequests = append(receivedEnsureRequests, req)
 			require.Equal(t, "USD", req.Currency)
-			_, _ = w.Write([]byte(`{"data":{"lease_id":"lease-e2e","platform_user_id":"` + req.PlatformUserID + `","currency":"USD","unit_version":"usd-e8-v1","scale":8,"budget":{"amount_units":"500000000","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"reserved":{"amount_units":"0","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"captured":{"amount_units":"0","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"released":{"amount_units":"0","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"headroom":{"amount_units":"500000000","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"capture_seq":0,"status":"active","expires_at":"2030-01-01T00:00:00Z","outcome":"issued","clamped_by":"none"}}`))
+			_, _ = w.Write([]byte(`{"data":{"lease_id":"lease-e2e","platform_user_id":"` + req.PlatformUserID + `","currency":"USD","unit_version":"usd-e8-v1","scale":8,"funding_scope":"settle","budget":{"amount_units":"30000000","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"reserved":{"amount_units":"0","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"captured":{"amount_units":"0","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"released":{"amount_units":"0","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"headroom":{"amount_units":"30000000","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"capture_seq":0,"status":"active","expires_at":"2030-01-01T00:00:00Z","outcome":"issued","clamped_by":"none"}}`))
 		case "/api/internal/v2/wallet/settlements":
 			var req canonicalWalletSettlementWireRequest
 			require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
@@ -54,7 +54,7 @@ func TestCanonicalWalletOutboxDispatcherDeliversEndToEnd(t *testing.T) {
 			case settlementSignal <- struct{}{}:
 			default:
 			}
-			_, _ = w.Write([]byte(`{"data":{"accepted":true,"duplicate":false,"named_lease_id":null,"event":{"event_id":"` + req.EventID + `","lease_id":"lease-e2e","amount":{"amount_units":"30000000","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"lease_capture_seq":1,"lease_captured_before":{"amount_units":"0","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"lease_captured_after":{"amount_units":"30000000","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"occurred_at":"2026-01-01T00:00:00Z"},"lease":{"lease_id":"lease-e2e","platform_user_id":"user-1","currency":"USD","unit_version":"usd-e8-v1","scale":8,"budget":{"amount_units":"500000000","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"reserved":{"amount_units":"0","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"captured":{"amount_units":"30000000","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"released":{"amount_units":"0","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"capture_seq":1,"status":"active","expires_at":"2030-01-01T00:00:00Z"},"canonical_balance":{"amount_units":"497000000","currency":"USD","scale":8,"unit_version":"usd-e8-v1"}}}`))
+			_, _ = w.Write([]byte(`{"data":{"accepted":true,"duplicate":false,"named_lease_id":null,"event":{"event_id":"` + req.EventID + `","lease_id":"lease-e2e","amount":{"amount_units":"30000000","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"lease_capture_seq":1,"lease_captured_before":{"amount_units":"0","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"lease_captured_after":{"amount_units":"30000000","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"occurred_at":"2026-01-01T00:00:00Z"},"lease":{"lease_id":"lease-e2e","platform_user_id":"user-1","currency":"USD","unit_version":"usd-e8-v1","scale":8,"funding_scope":"settle","budget":{"amount_units":"30000000","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"reserved":{"amount_units":"0","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"captured":{"amount_units":"30000000","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"released":{"amount_units":"0","currency":"USD","scale":8,"unit_version":"usd-e8-v1"},"capture_seq":1,"status":"active","expires_at":"2030-01-01T00:00:00Z"},"canonical_balance":{"amount_units":"497000000","currency":"USD","scale":8,"unit_version":"usd-e8-v1"}}}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -63,7 +63,7 @@ func TestCanonicalWalletOutboxDispatcherDeliversEndToEnd(t *testing.T) {
 
 	cfg := canonicalWalletTestConfig(config.CanonicalWalletModeEnforce)
 	cfg.ControlPlaneURL, cfg.Secret = controlPlane.URL, strings.Repeat("s", 32)
-	cfg.LeaseBudgetUnits = 500_000_000 // above the 0.30 USD settlement, so requested_budget stays the configured budget
+	cfg.LeaseBudgetUnits = 500_000_000 // authorization budget; settlement requests only its actual amount
 	cfg.RequestTimeoutMS = 100         // dispatcher tick interval for this test
 
 	client := newCanonicalWalletHTTPClient(cfg, controlPlane.Client())
@@ -101,12 +101,12 @@ func TestCanonicalWalletOutboxDispatcherDeliversEndToEnd(t *testing.T) {
 	require.True(t, delivered, "the dispatcher must deliver the durably-recorded settlement to the control plane")
 
 	// The wire request was UNITS-NATIVE and the ensure call asked for the
-	// event's amount as min_headroom_units and the CONFIGURED lease budget as
-	// requested_budget_units — the server takes the max (§3 step 4), so the
-	// client no longer computes it.
+	// event's amount as both min_headroom_units and requested_budget_units,
+	// preserving the remaining wallet balance for fresh authorizations.
 	require.Len(t, receivedEnsureRequests, 1)
 	require.Equal(t, amountUnits, mustUnits(receivedEnsureRequests[0].MinHeadroom), "the amount is the min_headroom ask")
-	require.Equal(t, cfg.LeaseBudgetUnits, mustUnits(receivedEnsureRequests[0].RequestedBudget), "requested_budget is the configured lease budget")
+	require.Equal(t, amountUnits, mustUnits(receivedEnsureRequests[0].RequestedBudget), "settlement requests only the actual amount")
+	require.Equal(t, "settle", receivedEnsureRequests[0].FundingScope)
 	require.Len(t, receivedSettlements, 1)
 	require.Equal(t, "lease-e2e", receivedSettlements[0].LeaseID, "the settlement is anchored to the lease the reservation actually landed on")
 	require.Equal(t, "30000000", receivedSettlements[0].Amount.AmountUnits, "30,000,000 units cross the v2 wire as exactly 30,000,000")
@@ -114,6 +114,8 @@ func TestCanonicalWalletOutboxDispatcherDeliversEndToEnd(t *testing.T) {
 	// The reservation really consumed the Redis lease.
 	leased, err := store.GetCanonicalWalletLeaseByID(ctx, platformUserID, "lease-e2e")
 	require.NoError(t, err)
+	require.Equal(t, amountUnits, leased.BudgetUnits, "only the settlement principal was funded")
+	require.Equal(t, "settle", leased.FundingScope)
 	require.Equal(t, amountUnits, leased.ConsumedUnits, "the real Redis lease shows the reserved consumption")
 
 	// The outbox row is resolved as delivered once the dispatcher's own

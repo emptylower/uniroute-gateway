@@ -387,7 +387,7 @@ func p34bHashField(t *testing.T, ctx context.Context, store CanonicalWalletLease
 }
 
 // Test 22 — arm on authorize; holds off arms nothing and the dispatcher
-// reserves at delivery (3.4a byte-for-byte, §10.1).
+// reserves the actual fee on independent settlement funding at delivery.
 func TestPhase34bHoldArmedAtAuthorize(t *testing.T) {
 	ctx := context.Background()
 	rdb := startCanonicalWalletTestRedis(t, ctx)
@@ -398,8 +398,7 @@ func TestPhase34bHoldArmedAtAuthorize(t *testing.T) {
 
 	// OFF leg first, on a clean keyspace: after Authorize no hold key exists,
 	// consumed_units is unchanged and the handle arms nothing; a settlement
-	// through the dispatcher then reserves at delivery exactly as 3.4a's
-	// test 19 asserts.
+	// through the dispatcher then reserves independent settlement funding.
 	fakeOff := newFakeEnsureControlPlane(t, func() time.Time { return now })
 	userOff := "shipany-user-" + uuid.NewString()
 	fakeOff.fund(userOff, 10_000_000_000)
@@ -419,10 +418,18 @@ func TestPhase34bHoldArmedAtAuthorize(t *testing.T) {
 	require.Empty(t, keys, "no hold key is ever written with holds off")
 	require.Equal(t, "0", p34bHashField(t, ctx, store, userOff, hOff.LeaseID, "consumed_units"), "nothing was armed, nothing consumed")
 	// the settlement reserves at delivery (no AuthorizationID, no conversion):
-	// consumed on the lease rises by A only when the dispatcher delivers.
+	// consumed on the settlement lease rises by A when the dispatcher delivers.
 	bOff.ObserveSettlement(CanonicalWalletSettlementEvent{GatewayRequestID: "req-22-off", PlatformUserID: userOff, Currency: "USD", AmountUnits: 10_000_000, OccurredAt: now})
 	p34WaitOutboxStatus(t, ctx, db, "req-22-off", "delivered")
-	require.Equal(t, "10000000", p34bHashField(t, ctx, store, userOff, hOff.LeaseID, "consumed_units"), "the dispatcher reserved the settlement amount at delivery, as today")
+	require.Equal(t, "0", p34bHashField(t, ctx, store, userOff, hOff.LeaseID, "consumed_units"), "unbound settlement preserves the original authorization source")
+	var offSettlementLease string
+	require.NoError(t, db.QueryRowContext(ctx, `SELECT lease_id FROM wallet_settlement_outbox WHERE gateway_request_id='req-22-off'`).Scan(&offSettlementLease))
+	require.NotEqual(t, hOff.LeaseID, offSettlementLease)
+	offLease, err := store.GetCanonicalWalletLeaseByID(ctx, userOff, offSettlementLease)
+	require.NoError(t, err)
+	require.Equal(t, "settle", offLease.FundingScope)
+	require.Equal(t, int64(10_000_000), offLease.BudgetUnits)
+	require.Equal(t, int64(10_000_000), offLease.ConsumedUnits, "the dispatcher reserved the actual fee at delivery")
 
 	// ON leg: the hold hash exists with state=armed, held_units == E, the
 	// lease's consumed rose by E, both indexes carry the ids.
