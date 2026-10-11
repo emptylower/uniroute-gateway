@@ -337,7 +337,7 @@ func resolvedPricingIsBillable(resolved *ResolvedPricing) bool {
 
 func addCatalogModelSeed(seeds map[string]catalogModelSeed, model, platform string) {
 	key := modelCatalogKey(model)
-	if !isCatalogTextModel(key) {
+	if CheckModelAvailability(model) != nil || !isCatalogTextModel(key) {
 		return
 	}
 	if _, exists := seeds[key]; !exists {
@@ -374,12 +374,15 @@ func catalogAccountModels(account *Account) []catalogModelSeed {
 	}
 	seeds := make(map[string]catalogModelSeed)
 	for model := range mapping {
+		if checkMappedModelAvailability(account, model) != nil {
+			continue
+		}
 		addCatalogModelSeed(seeds, model, account.Platform)
 	}
 	// Platform defaults resolve concrete models covered by wildcard mappings
 	// (e.g. {"*": ...}); they never apply to unsynced accounts (handled above).
 	for _, model := range defaultModelsListCandidateIDs(account.Platform) {
-		if account.IsModelSupported(model) {
+		if checkMappedModelAvailability(account, model) == nil && account.IsModelSupported(model) {
 			addCatalogModelSeed(seeds, model, account.Platform)
 		}
 	}
@@ -390,8 +393,53 @@ func catalogAccountModels(account *Account) []catalogModelSeed {
 	return items
 }
 
+// FilterPublicSupportedModels removes commercial aliases whose serving accounts
+// in the user's visible groups resolve exclusively to suspended models. Unknown
+// and ordinarily unavailable safe models retain their existing display behavior.
+func (s *ModelCatalogService) FilterPublicSupportedModels(ctx context.Context, models []SupportedModel, groupIDs []int64) ([]SupportedModel, error) {
+	var accounts []Account
+	if s != nil && s.accounts != nil {
+		for _, groupID := range groupIDs {
+			groupAccounts, err := s.accounts.ListSchedulableByGroupID(ctx, groupID)
+			if err != nil {
+				return nil, err
+			}
+			accounts = append(accounts, groupAccounts...)
+		}
+	}
+	return filterPublicSupportedModels(models, accounts), nil
+}
+
+func filterPublicSupportedModels(models []SupportedModel, accounts []Account) []SupportedModel {
+	out := make([]SupportedModel, 0, len(models))
+	for _, model := range models {
+		if CheckModelAvailability(model.Name) != nil {
+			continue
+		}
+		blocked, safe := false, false
+		for i := range accounts {
+			account := &accounts[i]
+			if model.Platform != "" && account.Platform != model.Platform {
+				continue
+			}
+			if rawDiscoveredModelMapping(account) == nil || !account.IsModelSupported(model.Name) {
+				continue
+			}
+			if checkMappedModelAvailability(account, model.Name) != nil {
+				blocked = true
+			} else {
+				safe = true
+			}
+		}
+		if !blocked || safe {
+			out = append(out, model)
+		}
+	}
+	return out
+}
+
 func catalogAccountSupportsModel(account *Account, model string) bool {
-	if account == nil {
+	if account == nil || checkMappedModelAvailability(account, model) != nil {
 		return false
 	}
 	if rawDiscoveredModelMapping(account) == nil {
@@ -620,7 +668,17 @@ func (s *ModelCatalogService) ListText(ctx context.Context, userID int64, now ti
 		if channel.Status != StatusActive || len(channel.Groups) == 0 {
 			continue
 		}
-		for _, model := range channel.SupportedModels {
+		var sourceAccounts []Account
+		if s.accounts != nil {
+			for _, group := range channel.Groups {
+				accounts, accountErr := loadAccounts(group.ID)
+				if accountErr != nil {
+					return nil, accountErr
+				}
+				sourceAccounts = append(sourceAccounts, accounts...)
+			}
+		}
+		for _, model := range filterPublicSupportedModels(channel.SupportedModels, sourceAccounts) {
 			if model.Pricing != nil && model.Pricing.BillingMode != "" && model.Pricing.BillingMode != BillingModeToken {
 				continue
 			}
@@ -654,6 +712,7 @@ func (s *ModelCatalogService) ListText(ctx context.Context, userID int64, now ti
 			return nil, candidateErr
 		}
 		if s.accounts != nil {
+			blockedMapping, safeMapping := false, false
 			filtered := candidates[:0]
 			for _, candidate := range candidates {
 				if !groupServesModel(candidate.Group.Platform, seed.name) {
@@ -664,11 +723,21 @@ func (s *ModelCatalogService) ListText(ctx context.Context, userID int64, now ti
 					return nil, accountErr
 				}
 				for i := range accounts {
-					if catalogAccountSupportsModel(&accounts[i], seed.name) {
-						filtered = append(filtered, candidate)
-						break
+					account := &accounts[i]
+					if rawDiscoveredModelMapping(account) == nil || !account.IsModelSupported(seed.name) {
+						continue
 					}
+					if checkMappedModelAvailability(account, seed.name) != nil {
+						blockedMapping = true
+						continue
+					}
+					safeMapping = true
+					filtered = append(filtered, candidate)
+					break
 				}
+			}
+			if blockedMapping && !safeMapping {
+				continue
 			}
 			candidates = filtered
 		}

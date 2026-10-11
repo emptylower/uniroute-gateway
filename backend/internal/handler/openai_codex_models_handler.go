@@ -15,7 +15,7 @@ import (
 // Codex CLI and the Codex desktop app refresh their model picker from
 // GET {base_url}/models?client_version=... (custom provider mode) or
 // GET /backend-api/codex/models (chatgpt_base_url mode). Both routes land
-// here. The manifest is proxied verbatim from the selected account's ChatGPT
+// here. Suspended models are omitted from the selected account's ChatGPT
 // backend or custom API key upstream. API key manifests use a short-lived,
 // asynchronously revalidated cache to tolerate canceled client requests.
 func (h *OpenAIGatewayHandler) CodexModels(c *gin.Context) {
@@ -56,7 +56,8 @@ func (h *OpenAIGatewayHandler) CodexModels(c *gin.Context) {
 		// 让 ops 错误日志携带实际选中的上游账号，便于定位失效账号（#4544）。
 		setOpsSelectedAccount(c, account.ID, account.Platform)
 
-		manifest, err := h.gatewayService.FetchCodexModelsManifest(c.Request.Context(), account, c.Query("client_version"), c.GetHeader("If-None-Match"))
+		// Old client validators must not retain a pre-delisting manifest via 304.
+		manifest, err := h.gatewayService.FetchCodexModelsManifest(c.Request.Context(), account, c.Query("client_version"), "")
 		if err != nil {
 			if c.Request.Context().Err() != nil {
 				return
@@ -74,14 +75,15 @@ func (h *OpenAIGatewayHandler) CodexModels(c *gin.Context) {
 			return
 		}
 
-		if manifest.ETag != "" {
+		body, filtered := filterDiscoveryModels(manifest.Body, account)
+		if manifest.ETag != "" && !filtered {
 			c.Header("ETag", manifest.ETag)
 		}
 		if manifest.NotModified {
-			c.Status(http.StatusNotModified)
+			h.errorResponse(c, http.StatusBadGateway, "upstream_error", "Model catalog body is required")
 			return
 		}
-		c.Data(http.StatusOK, "application/json", manifest.Body)
+		c.Data(http.StatusOK, "application/json", body)
 		return
 	}
 }

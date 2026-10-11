@@ -1210,6 +1210,7 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 		availableModels := h.compositeAvailableModels(c.Request.Context(), groupID)
 		if apiKey != nil && apiKey.Group != nil && apiKey.Group.CustomModelsListEnabled() {
 			availableModels = filterModelsByCustomList(availableModels, nil, apiKey.Group.ModelsListConfig.Models)
+			availableModels = h.gatewayService.FilterPublicModelCandidates(c.Request.Context(), groupID, "", availableModels)
 			writeCustomModelsList(c, service.PlatformComposite, availableModels)
 			return
 		}
@@ -1224,16 +1225,20 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 	// Get available models from account configurations for the selected group platform.
 	availableModels := h.gatewayService.GetAvailableModels(c.Request.Context(), groupID, platform)
 	if apiKey != nil && apiKey.Group != nil && apiKey.Group.CustomModelsListEnabled() {
+		hasAccountMapping := availableModels != nil
 		fallbackModels := defaultModelIDsForPlatform(platform)
 		if platform == service.PlatformOpenAI {
 			fallbackModels = nil
 		}
 		availableModels = filterModelsByCustomList(customModelsListSource(platform, availableModels, fallbackModels), fallbackModels, apiKey.Group.ModelsListConfig.Models)
+		if hasAccountMapping {
+			availableModels = h.gatewayService.FilterPublicModelCandidates(c.Request.Context(), groupID, platform, availableModels)
+		}
 		writeCustomModelsList(c, platform, availableModels)
 		return
 	}
 
-	if len(availableModels) > 0 {
+	if availableModels != nil {
 		writeModelsList(c, platform, availableModels)
 		return
 	}
@@ -1278,7 +1283,7 @@ func (h *GatewayHandler) writeAutoChannelModels(c *gin.Context, apiKey *service.
 		group := groups[i]
 		groupID := group.ID
 		groupModels := h.gatewayService.GetAvailableModels(c.Request.Context(), &groupID, group.Platform)
-		if len(groupModels) == 0 && group.Platform != service.PlatformOpenAI {
+		if groupModels == nil && group.Platform != service.PlatformOpenAI {
 			platforms := h.gatewayService.GetSchedulablePlatforms(c.Request.Context(), &groupID)
 			if _, ok := platforms[group.Platform]; ok {
 				groupModels = defaultModelIDsForPlatform(group.Platform)
@@ -1307,7 +1312,7 @@ func (h *GatewayHandler) compositeAvailableModels(ctx context.Context, groupID *
 	schedulablePlatforms := h.gatewayService.GetSchedulablePlatforms(ctx, groupID)
 	for _, platform := range []string{service.PlatformAnthropic, service.PlatformGemini, service.PlatformOpenAI, service.PlatformAntigravity, service.PlatformGrok} {
 		platformModels := h.gatewayService.GetAvailableModels(ctx, groupID, platform)
-		if len(platformModels) == 0 && platform != service.PlatformOpenAI {
+		if platformModels == nil && platform != service.PlatformOpenAI {
 			if _, ok := schedulablePlatforms[platform]; ok {
 				platformModels = defaultModelIDsForPlatform(platform)
 			}
@@ -1337,7 +1342,7 @@ func writeModelsList(c *gin.Context, platform string, modelIDs []string) {
 		return
 	}
 	models := make([]claude.Model, 0, len(modelIDs))
-	for _, modelID := range modelIDs {
+	for _, modelID := range service.FilterAvailableModelIDs(modelIDs) {
 		models = append(models, claude.Model{
 			ID:          modelID,
 			Type:        "model",
@@ -1380,7 +1385,7 @@ func writeGrokModelsList(c *gin.Context, modelIDs []string) {
 	}
 
 	models := make([]grokModelListItem, 0, len(modelIDs))
-	for _, modelID := range modelIDs {
+	for _, modelID := range service.FilterAvailableModelIDs(modelIDs) {
 		model, ok := defaultsByID[modelID]
 		if !ok {
 			model = xai.Model{
@@ -1425,7 +1430,7 @@ func writeOpenAIModelsList(c *gin.Context, modelIDs []string) {
 	}
 
 	models := make([]openai.Model, 0, len(modelIDs))
-	for _, modelID := range modelIDs {
+	for _, modelID := range service.FilterAvailableModelIDs(modelIDs) {
 		if model, ok := defaultsByID[modelID]; ok {
 			models = append(models, model)
 			continue
@@ -1457,7 +1462,7 @@ func filterModelsByCustomList(availableModels, fallbackModels, selectedModels []
 		return availableModels
 	}
 	source := availableModels
-	if len(source) == 0 {
+	if source == nil {
 		source = fallbackModels
 	}
 	if len(source) == 0 {
@@ -1575,9 +1580,32 @@ func mergeModelIDs(primary, secondary []string) []string {
 // AntigravityModels 返回 Antigravity 支持的全部模型
 // GET /antigravity/models
 func (h *GatewayHandler) AntigravityModels(c *gin.Context) {
+	models := antigravity.DefaultModels()
+	if h.gatewayService != nil {
+		var groupID *int64
+		if apiKey, ok := middleware2.GetAPIKeyFromContext(c); ok && apiKey != nil {
+			groupID = apiKey.GroupID
+		}
+		candidates := make([]string, 0, len(models))
+		for _, model := range models {
+			candidates = append(candidates, model.ID)
+		}
+		allowed := h.gatewayService.FilterPublicModelCandidates(c.Request.Context(), groupID, service.PlatformAntigravity, candidates)
+		allowedIDs := make(map[string]struct{}, len(allowed))
+		for _, id := range allowed {
+			allowedIDs[id] = struct{}{}
+		}
+		filtered := make([]antigravity.ClaudeModel, 0, len(allowed))
+		for _, model := range models {
+			if _, ok := allowedIDs[model.ID]; ok {
+				filtered = append(filtered, model)
+			}
+		}
+		models = filtered
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"object": "list",
-		"data":   antigravity.DefaultModels(),
+		"data":   models,
 	})
 }
 

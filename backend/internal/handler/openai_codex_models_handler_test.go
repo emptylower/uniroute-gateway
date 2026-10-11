@@ -45,17 +45,19 @@ func (r codexModelsFailoverAccountRepo) ListSchedulableByPlatform(_ context.Cont
 
 type codexModelsFailoverHTTPUpstream struct {
 	service.HTTPUpstream
-	mu          sync.Mutex
-	accountIDs  []int64
-	firstErr    error
-	firstStatus int
-	firstBody   string
-	statuses    map[int64]int
+	mu               sync.Mutex
+	accountIDs       []int64
+	clientValidators []string
+	firstErr         error
+	firstStatus      int
+	firstBody        string
+	statuses         map[int64]int
 }
 
-func (u *codexModelsFailoverHTTPUpstream) Do(_ *http.Request, _ string, accountID int64, _ int) (*http.Response, error) {
+func (u *codexModelsFailoverHTTPUpstream) Do(req *http.Request, _ string, accountID int64, _ int) (*http.Response, error) {
 	u.mu.Lock()
 	u.accountIDs = append(u.accountIDs, accountID)
+	u.clientValidators = append(u.clientValidators, req.Header.Get("If-None-Match"))
 	u.mu.Unlock()
 
 	status, hasStatus := u.statuses[accountID]

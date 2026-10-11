@@ -82,6 +82,19 @@ func mediaModel(id, name, provider, kind, param string, price int64, options ...
 	return m
 }
 
+// PublicMediaTaskCatalog omits suspended models from discovery while retaining
+// the internal catalog needed to interpret existing tasks and provider models.
+func PublicMediaTaskCatalog() []MediaModel {
+	catalog := MediaTaskCatalog()
+	available := make([]MediaModel, 0, len(catalog))
+	for _, model := range catalog {
+		if CheckModelAvailability(model.ModelID, model.Slug, model.upstream) == nil {
+			available = append(available, model)
+		}
+	}
+	return available
+}
+
 func MediaTaskCatalog() []MediaModel {
 	models := []MediaModel{
 		mediaModel("nano-banana-2-lite", "Nano Banana 2 Lite", "Google", "image", "aspect_ratio", 273, "1:1", "16:9", "9:16"),

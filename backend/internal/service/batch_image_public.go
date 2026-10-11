@@ -1320,6 +1320,9 @@ func batchImageModelsFromAccountMapping(account *Account) []string {
 	}
 	out := make([]string, 0, len(models))
 	for model := range models {
+		if checkMappedModelAvailability(account, model) != nil {
+			continue
+		}
 		out = append(out, model)
 	}
 	sort.Strings(out)
