@@ -1764,6 +1764,7 @@ type openAIResponsesWSUsageLogCase struct {
 	accountModelMapping       map[string]any
 	afterFirstUpstreamRequest func(channelSvc *service.ChannelService) error
 	suspendedSecondTurn       bool
+	secondMessageType         coderws.MessageType
 }
 
 type openAIResponsesWSUsageLogResult struct {
@@ -2690,7 +2691,11 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 	readCompleted()
 	if turnCount == 2 {
 		writeCtx, cancelWrite = context.WithTimeout(context.Background(), 3*time.Second)
-		err = clientConn.Write(writeCtx, coderws.MessageText, []byte(tc.secondPayload))
+		messageType := tc.secondMessageType
+		if messageType == 0 {
+			messageType = coderws.MessageText
+		}
+		err = clientConn.Write(writeCtx, messageType, []byte(tc.secondPayload))
 		cancelWrite()
 		require.NoError(t, err)
 		if tc.suspendedSecondTurn {

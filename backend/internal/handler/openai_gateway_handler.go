@@ -1732,6 +1732,10 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "invalid JSON payload")
 		return
 	}
+	if err := service.CheckWebSocketModelAvailability(firstMessage, nil); err != nil {
+		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, service.ModelTemporarilyUnavailableMessage)
+		return
+	}
 	reqModel := strings.TrimSpace(gjson.GetBytes(firstMessage, "model").String())
 	if reqModel == "" {
 		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "model is required in first response.create payload")
@@ -2074,6 +2078,9 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				return handle, nil
 			},
 			BeforeRequest: func(turn int, payload []byte, originalModel string) error {
+				if err := service.CheckWebSocketModelAvailability(payload, account); err != nil {
+					return service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, service.ModelTemporarilyUnavailableMessage, err)
+				}
 				if turn == 1 {
 					return nil
 				}

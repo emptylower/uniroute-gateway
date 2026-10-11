@@ -249,6 +249,12 @@ func (s *OpenAIGatewayService) CreateLiveCall(
 	if err := ValidateLiveCallRequest(request); err != nil {
 		return nil, err
 	}
+	if err := CheckJSONModelAvailability(request.Session); err != nil {
+		return nil, err
+	}
+	if err := CheckModelAvailability(identity.BillingModel); err != nil {
+		return nil, err
+	}
 	store, err := s.liveStore()
 	if err != nil {
 		return nil, err
@@ -316,6 +322,10 @@ func (s *OpenAIGatewayService) CreateLiveCall(
 		}
 
 		account := selection.Account
+		if err := checkJSONModelSelectors(request.Session, account, false, false); err != nil {
+			selection.ReleaseFunc()
+			return nil, err
+		}
 		leaseID := generateRequestID()
 		acquired, acquireErr := liveCache.AcquireLiveLease(
 			ctx,
@@ -488,7 +498,7 @@ func (s *OpenAIGatewayService) CreateLiveCall(
 }
 
 func (s *OpenAIGatewayService) shouldFailoverLiveCreateError(err error) bool {
-	if errors.Is(err, ErrAuthorizationRefused) {
+	if errors.Is(err, ErrAuthorizationRefused) || errors.Is(err, ErrModelTemporarilyUnavailable) {
 		return false
 	}
 	var upstreamErr *UpstreamFailoverError
@@ -510,6 +520,9 @@ func (s *OpenAIGatewayService) createUpstreamLiveCall(
 	attestation string,
 	snap *BillingSnapshot,
 ) (*LiveCallCreated, error) {
+	if err := checkJSONModelSelectors(request.Session, account, false, false); err != nil {
+		return nil, err
+	}
 	token, _, err := s.GetAccessToken(ctx, account)
 	if err != nil {
 		logLiveCreateStageFailure(ctx, account.ID, "access_token", err)

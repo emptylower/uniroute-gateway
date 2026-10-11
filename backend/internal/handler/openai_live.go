@@ -43,6 +43,10 @@ func (h *OpenAIGatewayHandler) Live(c *gin.Context) {
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return
 	}
+	if service.CheckJSONModelAvailability(request.Session) != nil {
+		h.errorResponse(c, http.StatusServiceUnavailable, service.ModelTemporarilyUnavailableCode, service.ModelTemporarilyUnavailableMessage)
+		return
+	}
 	model := strings.TrimSpace(gjson.GetBytes(request.Session, "model").String())
 	reqLog := requestLogger(
 		c,
@@ -88,6 +92,10 @@ func (h *OpenAIGatewayHandler) Live(c *gin.Context) {
 	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, model)
 	if channelMapping.Mapped {
 		billingModel = channelMapping.MappedModel
+	}
+	if service.CheckModelAvailability(model, billingModel) != nil {
+		h.errorResponse(c, http.StatusServiceUnavailable, service.ModelTemporarilyUnavailableCode, service.ModelTemporarilyUnavailableMessage)
+		return
 	}
 	if err := h.gatewayService.EnsureModelPricing(c.Request.Context(), apiKey, billingModel); err != nil {
 		h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "Model pricing is not configured")
@@ -206,6 +214,8 @@ func (h *OpenAIGatewayHandler) writeLiveCreateError(c *gin.Context, err error) {
 		return
 	}
 	switch {
+	case errors.Is(err, service.ErrModelTemporarilyUnavailable):
+		h.errorResponse(c, http.StatusServiceUnavailable, service.ModelTemporarilyUnavailableCode, service.ModelTemporarilyUnavailableMessage)
 	case errors.Is(err, service.ErrLiveConcurrencyFull):
 		h.errorResponse(c, http.StatusTooManyRequests, "rate_limit_error", "Live concurrency limit reached")
 	case errors.Is(err, service.ErrLiveUnavailable):

@@ -50,6 +50,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	if err := validateOpenAIWSBearerToken(account, token); err != nil {
 		return err
 	}
+	if err := CheckWebSocketModelAvailability(firstClientMessage, account); err != nil {
+		return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, ModelTemporarilyUnavailableMessage, err)
+	}
 
 	// Ingress owns one synchronous reader per turn. Retain every accepted
 	// attempt so read/write errors and panics still seal after that reader ends.
@@ -198,6 +201,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		}
 		if !gjson.ValidBytes(trimmed) {
 			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket request payload", errors.New("invalid json"))
+		}
+		if err := CheckWebSocketModelAvailability(trimmed, account); err != nil {
+			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, ModelTemporarilyUnavailableMessage, err)
 		}
 
 		values := gjson.GetManyBytes(trimmed, "type", "model", "prompt_cache_key", "previous_response_id")
