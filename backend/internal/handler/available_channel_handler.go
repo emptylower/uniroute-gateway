@@ -22,9 +22,10 @@ import (
 //  4. 字段白名单：返回稳定渠道 ID 和用户需要的展示字段，省略
 //     BillingModelSource / RestrictModels / Status 等管理字段。
 type AvailableChannelHandler struct {
-	channelService *service.ChannelService
-	apiKeyService  *service.APIKeyService
-	settingService *service.SettingService
+	channelService      *service.ChannelService
+	apiKeyService       *service.APIKeyService
+	settingService      *service.SettingService
+	modelCatalogService *service.ModelCatalogService
 }
 
 // NewAvailableChannelHandler 创建用户侧可用渠道 handler。
@@ -32,11 +33,13 @@ func NewAvailableChannelHandler(
 	channelService *service.ChannelService,
 	apiKeyService *service.APIKeyService,
 	settingService *service.SettingService,
+	modelCatalogService *service.ModelCatalogService,
 ) *AvailableChannelHandler {
 	return &AvailableChannelHandler{
-		channelService: channelService,
-		apiKeyService:  apiKeyService,
-		settingService: settingService,
+		channelService:      channelService,
+		apiKeyService:       apiKeyService,
+		settingService:      settingService,
+		modelCatalogService: modelCatalogService,
 	}
 }
 
@@ -165,6 +168,15 @@ func (h *AvailableChannelHandler) List(c *gin.Context) {
 		if len(visibleGroups) == 0 {
 			continue
 		}
+		groupIDs := make([]int64, 0, len(visibleGroups))
+		for _, group := range visibleGroups {
+			groupIDs = append(groupIDs, group.ID)
+		}
+		ch.SupportedModels, err = h.modelCatalogService.FilterPublicSupportedModels(c.Request.Context(), ch.SupportedModels, groupIDs)
+		if err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
 		sections := buildPlatformSections(ch, visibleGroups)
 		if len(sections) == 0 {
 			continue
@@ -266,6 +278,9 @@ func toUserSupportedModels(
 	out := make([]userSupportedModel, 0, len(src))
 	for i := range src {
 		m := src[i]
+		if service.IsModelTemporarilyUnavailable(m.Name) {
+			continue
+		}
 		if allowedPlatforms != nil {
 			if _, ok := allowedPlatforms[m.Platform]; !ok {
 				continue

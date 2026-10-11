@@ -21,7 +21,7 @@ func (h *PlatformInferenceHandler) PlaygroundKey(ctx context.Context, userID int
 }
 
 func (h *PlatformInferenceHandler) Catalog(c *gin.Context) {
-	response.Success(c, gin.H{"models": service.MediaTaskCatalog(), "currency": "USD", "policy_version": "usd-wallet-v1", "enabled": h.service.Enabled()})
+	response.Success(c, gin.H{"models": service.PublicMediaTaskCatalog(), "currency": "USD", "policy_version": "usd-wallet-v1", "enabled": h.service.Enabled()})
 }
 func (h *PlatformInferenceHandler) Quote(c *gin.Context) {
 	var in struct {

@@ -48,6 +48,21 @@ func IsModelTemporarilyUnavailable(model string) bool {
 	}
 }
 
+// FilterAvailableModelIDs returns public discovery IDs without suspended models.
+// It preserves nil so callers retain their existing default-list behavior.
+func FilterAvailableModelIDs(models []string) []string {
+	if models == nil {
+		return nil
+	}
+	available := make([]string, 0, len(models))
+	for _, model := range models {
+		if !IsModelTemporarilyUnavailable(model) {
+			available = append(available, model)
+		}
+	}
+	return available
+}
+
 func CheckModelAvailability(models ...string) error {
 	for _, model := range models {
 		if IsModelTemporarilyUnavailable(model) {

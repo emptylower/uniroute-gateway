@@ -1278,15 +1278,53 @@ func (s *GatewayService) getOAuthToken(ctx context.Context, account *Account) (s
 	return accessToken, "oauth", nil
 }
 
-// GetAvailableModels returns the list of models available for a group
-// It aggregates model_mapping keys from all schedulable accounts in the group
+type availableModelsCacheEntry struct {
+	models     []string
+	accountIDs []int64
+	sources    map[string][]int64
+}
+
+func (s *GatewayService) validateCachedAvailableModels(ctx context.Context, entry availableModelsCacheEntry) ([]string, bool) {
+	if s.schedulerSnapshot == nil || s.schedulerSnapshot.cache == nil {
+		return nil, false
+	}
+	accounts := make(map[int64]*Account, len(entry.accountIDs))
+	for _, id := range entry.accountIDs {
+		account, err := s.schedulerSnapshot.cache.GetAccount(ctx, id)
+		if err != nil || account == nil {
+			return nil, false
+		}
+		accounts[id] = account
+		if entry.models == nil && len(account.GetModelMapping()) > 0 {
+			return nil, false
+		}
+	}
+	if entry.models == nil {
+		return nil, true
+	}
+	models := make([]string, 0, len(entry.models))
+	for _, model := range entry.models {
+		for _, id := range entry.sources[model] {
+			if checkMappedModelAvailability(accounts[id], model) == nil {
+				models = append(models, model)
+				break
+			}
+		}
+	}
+	return models, true
+}
+
+// GetAvailableModels aggregates public model IDs and validates cached sources
+// against current account snapshots before advertising a mapped model.
 func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64, platform string) []string {
 	cacheKey := modelsListCacheKey(groupID, platform)
 	if s.modelsListCache != nil {
 		if cached, found := s.modelsListCache.Get(cacheKey); found {
-			if models, ok := cached.([]string); ok {
-				modelsListCacheHitTotal.Add(1)
-				return cloneStringSlice(models)
+			if entry, ok := cached.(availableModelsCacheEntry); ok {
+				if models, valid := s.validateCachedAvailableModels(ctx, entry); valid {
+					modelsListCacheHitTotal.Add(1)
+					return models
+				}
 			}
 		}
 	}
@@ -1318,14 +1356,20 @@ func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64,
 
 	// Collect unique models from all accounts
 	modelSet := make(map[string]struct{})
+	entry := availableModelsCacheEntry{sources: make(map[string][]int64)}
 	hasAnyMapping := false
 
 	for _, acc := range accounts {
+		entry.accountIDs = append(entry.accountIDs, acc.ID)
 		mapping := acc.GetModelMapping()
 		if len(mapping) > 0 {
 			hasAnyMapping = true
 			for model := range mapping {
+				if checkMappedModelAvailability(&acc, model) != nil {
+					continue
+				}
 				modelSet[model] = struct{}{}
+				entry.sources[model] = append(entry.sources[model], acc.ID)
 			}
 		}
 	}
@@ -1333,7 +1377,7 @@ func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64,
 	// If no account has model_mapping, return nil (use default)
 	if !hasAnyMapping {
 		if s.modelsListCache != nil {
-			s.modelsListCache.Set(cacheKey, []string(nil), s.modelsListCacheTTL)
+			s.modelsListCache.Set(cacheKey, entry, s.modelsListCacheTTL)
 			modelsListCacheStoreTotal.Add(1)
 		}
 		return nil
@@ -1347,10 +1391,65 @@ func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64,
 	sort.Strings(models)
 
 	if s.modelsListCache != nil {
-		s.modelsListCache.Set(cacheKey, cloneStringSlice(models), s.modelsListCacheTTL)
+		entry.models = FilterAvailableModelIDs(models)
+		s.modelsListCache.Set(cacheKey, entry, s.modelsListCacheTTL)
 		modelsListCacheStoreTotal.Add(1)
 	}
-	return cloneStringSlice(models)
+	return FilterAvailableModelIDs(models)
+}
+
+// FilterPublicModelCandidates checks concrete fallback selectors against current
+// serving-account mappings, including exclusions inside wildcard mappings.
+func (s *GatewayService) FilterPublicModelCandidates(ctx context.Context, groupID *int64, platform string, candidates []string) []string {
+	if len(candidates) == 0 {
+		return []string{}
+	}
+	var accounts []Account
+	cachedAccounts := false
+	if s.modelsListCache != nil && s.schedulerSnapshot != nil && s.schedulerSnapshot.cache != nil {
+		cacheKey := modelsListCacheKey(groupID, platform)
+		if _, found := s.modelsListCache.Get(cacheKey); !found {
+			s.GetAvailableModels(ctx, groupID, platform)
+		}
+		if cached, found := s.modelsListCache.Get(cacheKey); found {
+			if entry, ok := cached.(availableModelsCacheEntry); ok {
+				cachedAccounts = true
+				for _, id := range entry.accountIDs {
+					account, err := s.schedulerSnapshot.cache.GetAccount(ctx, id)
+					if err != nil || account == nil {
+						cachedAccounts = false
+						break
+					}
+					accounts = append(accounts, *account)
+				}
+			}
+		}
+	}
+	if !cachedAccounts {
+		var err error
+		if groupID != nil {
+			accounts, err = s.accountRepo.ListSchedulableByGroupID(ctx, *groupID)
+		} else {
+			accounts, err = s.accountRepo.ListSchedulable(ctx)
+		}
+		if err != nil {
+			return []string{}
+		}
+	}
+	available := make([]string, 0, len(candidates))
+	for _, model := range candidates {
+		for i := range accounts {
+			account := &accounts[i]
+			if platform != "" && account.Platform != platform {
+				continue
+			}
+			if account.IsModelSupported(model) && checkMappedModelAvailability(account, model) == nil {
+				available = append(available, model)
+				break
+			}
+		}
+	}
+	return available
 }
 
 // GetSchedulablePlatforms returns the concrete platforms that currently have

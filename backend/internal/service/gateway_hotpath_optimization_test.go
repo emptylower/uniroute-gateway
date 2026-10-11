@@ -106,6 +106,16 @@ func (s *sessionLimitCacheHotpathStub) SetWindowCost(ctx context.Context, accoun
 	return nil
 }
 
+type modelsDiscoveryCacheStub struct {
+	SchedulerCache
+	accounts map[int64]*Account
+	err      error
+}
+
+func (s *modelsDiscoveryCacheStub) GetAccount(_ context.Context, id int64) (*Account, error) {
+	return s.accounts[id], s.err
+}
+
 type modelsListAccountRepoStub struct {
 	AccountRepository
 
@@ -505,6 +515,10 @@ func TestGetAvailableModels_UsesShortCacheAndSupportsInvalidation(t *testing.T) 
 		accountRepo:        repo,
 		modelsListCache:    gocache.New(time.Minute, time.Minute),
 		modelsListCacheTTL: time.Minute,
+		schedulerSnapshot: &SchedulerSnapshotService{cache: &modelsDiscoveryCacheStub{accounts: map[int64]*Account{
+			1: &repo.byGroup[groupID][0],
+			2: &repo.byGroup[groupID][1],
+		}}},
 	}
 
 	models1 := svc.GetAvailableModels(context.Background(), &groupID, PlatformAnthropic)

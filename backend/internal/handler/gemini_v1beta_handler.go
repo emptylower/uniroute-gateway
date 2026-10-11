@@ -48,7 +48,7 @@ func (h *GatewayHandler) GeminiV1BetaListModels(c *gin.Context) {
 
 	// 强制 antigravity 模式：返回 antigravity 支持的模型列表
 	if forcePlatform == service.PlatformAntigravity {
-		c.JSON(http.StatusOK, antigravity.FallbackGeminiModelsList())
+		h.writeGeminiDiscoveryFallback(c, antigravity.FallbackGeminiModelsList(), nil, apiKey.GroupID, service.PlatformAntigravity)
 		return
 	}
 
@@ -58,7 +58,7 @@ func (h *GatewayHandler) GeminiV1BetaListModels(c *gin.Context) {
 		hasAntigravity, _ := h.geminiCompatService.HasAntigravityAccounts(c.Request.Context(), apiKey.GroupID)
 		if hasAntigravity {
 			// antigravity 账户使用静态模型列表
-			c.JSON(http.StatusOK, gemini.FallbackModelsList())
+			h.writeGeminiDiscoveryFallback(c, gemini.FallbackModelsList(), nil, apiKey.GroupID, service.PlatformAntigravity)
 			return
 		}
 		markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
@@ -72,10 +72,54 @@ func (h *GatewayHandler) GeminiV1BetaListModels(c *gin.Context) {
 		return
 	}
 	if shouldFallbackGeminiModels(res) {
-		c.JSON(http.StatusOK, gemini.FallbackModelsList())
+		h.writeGeminiDiscoveryFallback(c, gemini.FallbackModelsList(), account, apiKey.GroupID, service.PlatformGemini)
 		return
 	}
+	if res != nil && res.StatusCode == http.StatusOK {
+		if body, filtered := filterDiscoveryModels(res.Body, account); filtered {
+			copy := *res
+			copy.Body = body
+			copy.Headers = res.Headers.Clone()
+			copy.Headers.Del("ETag")
+			res = &copy
+		}
+	}
 	writeUpstreamResponse(c, res)
+}
+
+// Static fallbacks obey the same current account mappings as public discovery.
+func (h *GatewayHandler) writeGeminiDiscoveryFallback(c *gin.Context, models any, account *service.Account, groupID *int64, platform string) {
+	body, err := json.Marshal(models)
+	if err != nil {
+		googleError(c, http.StatusBadGateway, "Invalid model catalog")
+		return
+	}
+	var allowedIDs []string
+	if account == nil && h.gatewayService != nil {
+		var catalog struct {
+			Models []struct {
+				Name string `json:"name"`
+			} `json:"models"`
+		}
+		if json.Unmarshal(body, &catalog) != nil {
+			googleError(c, http.StatusBadGateway, "Invalid model catalog")
+			return
+		}
+		candidates := make([]string, 0, len(catalog.Models))
+		for _, model := range catalog.Models {
+			candidates = append(candidates, strings.TrimPrefix(model.Name, "models/"))
+		}
+		allowedIDs = h.gatewayService.FilterPublicModelCandidates(c.Request.Context(), groupID, platform, candidates)
+	}
+	body, _ = filterDiscoveryModelsWithAllowedIDs(body, account, allowedIDs)
+	c.Data(http.StatusOK, "application/json", body)
+}
+
+func (h *GatewayHandler) geminiDiscoveryAllowsModel(c *gin.Context, groupID *int64, platform, model string) bool {
+	if h.gatewayService == nil {
+		return true
+	}
+	return len(h.gatewayService.FilterPublicModelCandidates(c.Request.Context(), groupID, platform, []string{model})) > 0
 }
 
 // GeminiV1BetaGetModel proxies:
@@ -102,8 +146,17 @@ func (h *GatewayHandler) GeminiV1BetaGetModel(c *gin.Context) {
 		modelName = strings.TrimSpace(resolvedModel)
 	}
 
+	if service.CheckModelAvailability(c.Param("model"), modelName) != nil {
+		googleError(c, http.StatusNotFound, "Model not found")
+		return
+	}
+
 	// 强制 antigravity 模式：返回 antigravity 模型信息
 	if forcePlatform == service.PlatformAntigravity {
+		if !h.geminiDiscoveryAllowsModel(c, apiKey.GroupID, service.PlatformAntigravity, modelName) {
+			googleError(c, http.StatusNotFound, "Model not found")
+			return
+		}
 		c.JSON(http.StatusOK, antigravity.FallbackGeminiModel(modelName))
 		return
 	}
@@ -114,11 +167,20 @@ func (h *GatewayHandler) GeminiV1BetaGetModel(c *gin.Context) {
 		hasAntigravity, _ := h.geminiCompatService.HasAntigravityAccounts(c.Request.Context(), apiKey.GroupID)
 		if hasAntigravity {
 			// antigravity 账户使用静态模型信息
+			if !h.geminiDiscoveryAllowsModel(c, apiKey.GroupID, service.PlatformAntigravity, modelName) {
+				googleError(c, http.StatusNotFound, "Model not found")
+				return
+			}
 			c.JSON(http.StatusOK, gemini.FallbackModel(modelName))
 			return
 		}
 		markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
 		googleError(c, http.StatusServiceUnavailable, "No available Gemini accounts: "+err.Error())
+		return
+	}
+
+	if service.CheckModelAvailability(account.GetMappedModel(modelName)) != nil {
+		googleError(c, http.StatusNotFound, "Model not found")
 		return
 	}
 
