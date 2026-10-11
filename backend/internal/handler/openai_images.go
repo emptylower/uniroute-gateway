@@ -220,11 +220,25 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 		sessionHash = ensureOpenAIPoolModeSessionHash(sessionHash, account)
 		reqLog.Debug("openai.images.account_selected", zap.Int64("account_id", account.ID), zap.String("account_name", account.Name))
 		setOpsSelectedAccount(c, account.ID, account.Platform)
+		if service.CheckModelAvailability(requestModel, channelMapping.MappedModel, account.GetMappedModel(channelMapping.MappedModel)) != nil {
+			if selection.ReleaseFunc != nil {
+				selection.ReleaseFunc()
+			}
+			h.errorResponse(c, http.StatusServiceUnavailable, service.ModelTemporarilyUnavailableCode, service.ModelTemporarilyUnavailableMessage)
+			return
+		}
 
 		// Phase 3.2 freeze point (row 11a, ungated): after account selection,
 		// before the upstream write; the images model is channelMapping.MappedModel.
 		billingSnapshot, freezeErr := h.gatewayService.FreezeBillingSnapshot(c.Request.Context(), apiKey, account, subscription, requestModel, account.GetMappedModel(channelMapping.MappedModel), false)
 		if freezeErr != nil {
+			if errors.Is(freezeErr, service.ErrModelTemporarilyUnavailable) {
+				if selection.ReleaseFunc != nil {
+					selection.ReleaseFunc()
+				}
+				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, service.ModelTemporarilyUnavailableCode, service.ModelTemporarilyUnavailableMessage, streamStarted)
+				return
+			}
 			if selection.ReleaseFunc != nil {
 				selection.ReleaseFunc()
 			}

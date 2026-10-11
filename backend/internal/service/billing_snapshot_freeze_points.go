@@ -15,7 +15,12 @@ import (
 // byte-for-byte what it is today); a failed freeze is counted and yields
 // (nil, nil). Only settle mode refuses on a freeze failure, because a
 // snapshot is mandatory to settle.
+// The model availability guard is independent of billing mode and runs before
+// pricing or authorization, including resolved account aliases.
 func (s *GatewayService) FreezeBillingSnapshot(ctx context.Context, apiKey *APIKey, account *Account, subscription *UserSubscription, requestedModel, billingModel string, gated bool, longContextThreshold int, longContextMultiplier float64) (*BillingSnapshot, error) {
+	if err := checkMappedModelAvailability(account, requestedModel, billingModel); err != nil {
+		return nil, err
+	}
 	if gated {
 		if err := s.EnsureModelPricing(ctx, apiKey, billingModel); err != nil {
 			return nil, err
@@ -42,6 +47,9 @@ func (s *GatewayService) FreezeBillingSnapshot(ctx context.Context, apiKey *APIK
 }
 
 func (s *OpenAIGatewayService) FreezeBillingSnapshot(ctx context.Context, apiKey *APIKey, account *Account, subscription *UserSubscription, requestedModel, billingModel string, gated bool) (*BillingSnapshot, error) {
+	if err := checkMappedModelAvailability(account, requestedModel, billingModel); err != nil {
+		return nil, err
+	}
 	if gated {
 		if err := s.EnsureModelPricing(ctx, apiKey, billingModel); err != nil {
 			return nil, err

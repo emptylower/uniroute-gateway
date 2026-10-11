@@ -68,6 +68,9 @@ func (p *kieMediaProvider) call(ctx context.Context, method, path string, body [
 }
 
 func (p *kieMediaProvider) Create(ctx context.Context, model string, input map[string]any, h *AuthorizationHandle) (string, bool, error) {
+	if err := CheckModelAvailability(model, mediaUpstreamModel(model)); err != nil {
+		return "", true, err
+	}
 	body, err := json.Marshal(map[string]any{"model": mediaUpstreamModel(model), "input": input})
 	if err != nil {
 		return "", true, err

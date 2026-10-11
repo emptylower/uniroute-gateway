@@ -179,6 +179,9 @@ type MediaQuote struct {
 }
 
 func resolveMediaQuote(model, option string) (MediaModel, string, int64, error) {
+	if err := CheckModelAvailability(model); err != nil {
+		return MediaModel{}, "", 0, err
+	}
 	for _, m := range MediaTaskCatalog() {
 		if m.ModelID != strings.TrimSpace(model) {
 			continue

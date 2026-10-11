@@ -328,6 +328,11 @@ func (s *OpenAIGatewayService) ForwardGrokMedia(
 	if account == nil {
 		return nil, fmt.Errorf("grok account is required")
 	}
+	if endpoint.IsGenerationRequest() {
+		if err := checkMappedModelAvailability(account, ExtractGrokMediaModel(contentType, body)); err != nil {
+			return nil, err
+		}
+	}
 	if account.Platform != PlatformGrok {
 		return nil, fmt.Errorf("account platform %s is not supported for grok media", account.Platform)
 	}

@@ -577,6 +577,13 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			// off/record mode a failed freeze never refuses; settle mode does.
 			billingSnapshot, err = h.gatewayService.FreezeBillingSnapshot(c.Request.Context(), routedKey, account, candidateSubscription, reqModel, account.GetMappedModel(billingModel), false)
 			if err != nil {
+				if errors.Is(err, service.ErrModelTemporarilyUnavailable) {
+					if selection.ReleaseFunc != nil {
+						selection.ReleaseFunc()
+					}
+					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, service.ModelTemporarilyUnavailableCode, service.ModelTemporarilyUnavailableMessage, streamStarted)
+					return
+				}
 				lastChannelErr = err
 				if selection.ReleaseFunc != nil {
 					selection.ReleaseFunc()
@@ -1198,6 +1205,13 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		var billingSnapshot *service.BillingSnapshot
 		billingSnapshot, err = h.gatewayService.FreezeBillingSnapshot(c.Request.Context(), apiKey, account, subscription, reqModel, account.GetMappedModel(billingModelMsg), false)
 		if err != nil {
+			if errors.Is(err, service.ErrModelTemporarilyUnavailable) {
+				if selection.ReleaseFunc != nil {
+					selection.ReleaseFunc()
+				}
+				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, service.ModelTemporarilyUnavailableCode, service.ModelTemporarilyUnavailableMessage, streamStarted)
+				return
+			}
 			h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "Model pricing is not configured")
 			return
 		}
@@ -1948,6 +1962,10 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			if selection.ReleaseFunc != nil {
 				selection.ReleaseFunc()
 			}
+			if errors.Is(err, service.ErrModelTemporarilyUnavailable) {
+				closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, service.ModelTemporarilyUnavailableMessage)
+				return
+			}
 			closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "model pricing is not configured")
 			return
 		}
@@ -2088,6 +2106,9 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 					return "", service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "Model channel changed; reconnect to continue", err)
 				}
 				mapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(ctx, apiKey.GroupID, model)
+				if err := service.CheckModelAvailability(model, mapping.MappedModel, account.GetMappedModel(mapping.MappedModel)); err != nil {
+					return "", service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, service.ModelTemporarilyUnavailableMessage, err)
+				}
 				mappedModelUnchanged := false
 				if previous := turnChannelMapping.Load(); previous != nil && previous.turn < turn {
 					mappedModelUnchanged = strings.TrimSpace(previous.mapping.MappedModel) == strings.TrimSpace(mapping.MappedModel)

@@ -453,6 +453,13 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			// candidate over to the next one.
 			billingSnapshot, freezeErr := h.gatewayService.FreezeBillingSnapshot(c.Request.Context(), apiKey, account, subscription, reqModel, account.GetMappedModel(billingModel), false, 0, 0)
 			if freezeErr != nil {
+				if errors.Is(freezeErr, service.ErrModelTemporarilyUnavailable) {
+					if selection.ReleaseFunc != nil {
+						selection.ReleaseFunc()
+					}
+					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, service.ModelTemporarilyUnavailableCode, service.ModelTemporarilyUnavailableMessage, streamStarted)
+					return
+				}
 				if selection.Acquired && selection.ReleaseFunc != nil {
 					selection.ReleaseFunc()
 				}
@@ -782,6 +789,13 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			// before the upstream write; settle mode fails the candidate over.
 			billingSnapshot, freezeErr := h.gatewayService.FreezeBillingSnapshot(c.Request.Context(), currentAPIKey, account, currentSubscription, reqModel, account.GetMappedModel(billingModel), false, 0, 0)
 			if freezeErr != nil {
+				if errors.Is(freezeErr, service.ErrModelTemporarilyUnavailable) {
+					if selection.ReleaseFunc != nil {
+						selection.ReleaseFunc()
+					}
+					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, service.ModelTemporarilyUnavailableCode, service.ModelTemporarilyUnavailableMessage, streamStarted)
+					return
+				}
 				if selection.Acquired && selection.ReleaseFunc != nil {
 					selection.ReleaseFunc()
 				}

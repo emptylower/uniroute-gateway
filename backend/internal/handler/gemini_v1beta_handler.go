@@ -476,6 +476,13 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 		// RecordUsageWithLongContext below.
 		billingSnapshot, freezeErr := h.gatewayService.FreezeBillingSnapshot(c.Request.Context(), apiKey, account, subscription, reqModel, account.GetMappedModel(modelName), true, 200000, 2.0)
 		if freezeErr != nil {
+			if errors.Is(freezeErr, service.ErrModelTemporarilyUnavailable) {
+				if accountReleaseFunc != nil {
+					accountReleaseFunc()
+				}
+				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, service.ModelTemporarilyUnavailableCode, service.ModelTemporarilyUnavailableMessage, streamStarted)
+				return
+			}
 			if accountReleaseFunc != nil {
 				accountReleaseFunc()
 			}

@@ -178,6 +178,13 @@ func (h *OpenAIGatewayHandler) Embeddings(c *gin.Context) {
 		// EnsureModelPricing — identical refusal, plus the frozen snapshot.
 		billingSnapshot, freezeErr := h.gatewayService.FreezeBillingSnapshot(c.Request.Context(), apiKey, account, subscription, reqModel, account.GetMappedModel(billingModel), true)
 		if freezeErr != nil {
+			if errors.Is(freezeErr, service.ErrModelTemporarilyUnavailable) {
+				if selection.ReleaseFunc != nil {
+					selection.ReleaseFunc()
+				}
+				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, service.ModelTemporarilyUnavailableCode, service.ModelTemporarilyUnavailableMessage, streamStarted)
+				return
+			}
 			if selection.ReleaseFunc != nil {
 				selection.ReleaseFunc()
 			}

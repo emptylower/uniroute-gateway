@@ -229,6 +229,13 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 			// EnsureModelPricing — identical refusal, plus the frozen snapshot.
 			billingSnapshot, freezeErr := h.gatewayService.FreezeBillingSnapshot(c.Request.Context(), routedKey, account, candidateSubscription, reqModel, account.GetMappedModel(billingModel), true, 0, 0)
 			if freezeErr != nil {
+				if errors.Is(freezeErr, service.ErrModelTemporarilyUnavailable) {
+					if selection.ReleaseFunc != nil {
+						selection.ReleaseFunc()
+					}
+					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, service.ModelTemporarilyUnavailableCode, service.ModelTemporarilyUnavailableMessage, streamStarted)
+					return
+				}
 				if selection.ReleaseFunc != nil {
 					selection.ReleaseFunc()
 				}
