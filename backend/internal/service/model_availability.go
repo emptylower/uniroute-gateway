@@ -1,11 +1,14 @@
 package service
 
 import (
+	"bytes"
+	"encoding/json"
 	"net/http"
 	"net/url"
 	"strings"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 )
 
 const ModelTemporarilyUnavailableCode = "MODEL_TEMPORARILY_UNAVAILABLE"
@@ -49,6 +52,90 @@ func CheckModelAvailability(models ...string) error {
 	for _, model := range models {
 		if IsModelTemporarilyUnavailable(model) {
 			return ErrModelTemporarilyUnavailable
+		}
+	}
+	return nil
+}
+
+// CheckJSONModelAvailability inspects every top-level model occurrence without
+// collapsing duplicate keys. Keys and string values are decoded so escaped
+// forms cannot differ from the provider's JSON parser. Nested input/tool data
+// is skipped as a complete value and is not a generation model selector.
+func CheckJSONModelAvailability(body []byte) error {
+	return checkJSONModelSelectors(body, nil, false, false)
+}
+
+// CheckWebSocketModelAvailability also checks session.model on session.update
+// events, including repeated type/session keys and account model aliases.
+func CheckWebSocketModelAvailability(body []byte, account *Account) error {
+	return checkJSONModelSelectors(body, account, true, true)
+}
+
+// CheckLiveCallModelAvailability checks the session object in a Live create
+// request. Other protocols' nested prompt/tool objects are not selectors.
+func CheckLiveCallModelAvailability(body []byte) error {
+	return checkJSONModelSelectors(body, nil, true, false)
+}
+
+func checkJSONModelSelectors(body []byte, account *Account, scanSessions, sessionUpdateOnly bool) error {
+	// Multipart and binary bodies are not JSON model selectors. Avoid scanning
+	// or normalizing their file bytes; keep the same leading-BOM behavior.
+	prefix := bytes.TrimLeft(bytes.TrimPrefix(body, []byte{0xef, 0xbb, 0xbf}), " \t\r\n")
+	if len(prefix) == 0 || prefix[0] != '{' {
+		return nil
+	}
+	// Match the lenient HTTP request parser, while leaving the forwarded body
+	// untouched. Six bytes per input byte bounds the normalizer's expansion;
+	// the caller remains responsible for its existing request size limit.
+	if normalized, err := pkghttputil.NormalizeLenientJSONRequestBody(body, int64(len(body))*6); err == nil {
+		body = normalized
+	}
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	token, err := decoder.Token()
+	if err != nil || token != json.Delim('{') {
+		return nil // Existing request parsers own malformed/unsupported JSON.
+	}
+	var sessions []json.RawMessage
+	sessionUpdate := !sessionUpdateOnly
+	for decoder.More() {
+		key, err := decoder.Token()
+		if err != nil {
+			break
+		}
+		var value json.RawMessage
+		if decoder.Decode(&value) != nil {
+			break
+		}
+		name, ok := key.(string)
+		if !ok {
+			continue
+		}
+		if scanSessions && strings.EqualFold(name, "session") {
+			sessions = append(sessions, value)
+			continue
+		}
+		if scanSessions && strings.EqualFold(name, "type") {
+			var eventType string
+			if json.Unmarshal(value, &eventType) == nil && strings.TrimSpace(eventType) == "session.update" {
+				sessionUpdate = true
+			}
+			continue
+		}
+		if !strings.EqualFold(name, "model") {
+			continue
+		}
+		var model string
+		if json.Unmarshal(value, &model) == nil {
+			if err := checkMappedModelAvailability(account, model); err != nil {
+				return err
+			}
+		}
+	}
+	if sessionUpdate {
+		for _, session := range sessions {
+			if err := checkJSONModelSelectors(session, account, false, false); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
