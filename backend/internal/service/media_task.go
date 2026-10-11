@@ -201,6 +201,9 @@ func (s *MediaTaskService) PlaygroundKey(ctx context.Context, userID int64) (*AP
 	return s.internalKey(ctx, user)
 }
 func (s *MediaTaskService) Create(ctx context.Context, userID int64, idempotency string, in MediaCreateInput) (MediaTaskView, error) {
+	if err := CheckModelAvailability(in.Model); err != nil {
+		return MediaTaskView{}, err
+	}
 	if !s.Enabled() {
 		return MediaTaskView{}, ErrMediaUnavailable
 	}

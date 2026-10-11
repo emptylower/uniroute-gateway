@@ -295,12 +295,26 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 		}
 		sessionHash = ensureOpenAIPoolModeSessionHash(sessionHash, account)
 		setOpsSelectedAccount(c, account.ID, account.Platform)
+		if service.CheckModelAvailability(requestModel, account.GetMappedModel(requestModel)) != nil {
+			if selection.ReleaseFunc != nil {
+				selection.ReleaseFunc()
+			}
+			h.errorResponse(c, http.StatusServiceUnavailable, service.ModelTemporarilyUnavailableCode, service.ModelTemporarilyUnavailableMessage)
+			return
+		}
 
 		// Phase 3.2 freeze point (row 11c, ungated): after account selection,
 		// before the upstream write; settle mode returns the same 503 the
 		// no-eligible-account path above produces.
 		billingSnapshot, freezeErr := h.gatewayService.FreezeBillingSnapshot(c.Request.Context(), apiKey, account, subscription, requestModel, account.GetMappedModel(requestModel), false)
 		if freezeErr != nil {
+			if errors.Is(freezeErr, service.ErrModelTemporarilyUnavailable) {
+				if selection.ReleaseFunc != nil {
+					selection.ReleaseFunc()
+				}
+				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, service.ModelTemporarilyUnavailableCode, service.ModelTemporarilyUnavailableMessage, streamStarted)
+				return
+			}
 			h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "Model pricing is not configured")
 			return
 		}

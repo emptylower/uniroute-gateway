@@ -1763,6 +1763,7 @@ type openAIResponsesWSUsageLogCase struct {
 	billingModelSource        string
 	accountModelMapping       map[string]any
 	afterFirstUpstreamRequest func(channelSvc *service.ChannelService) error
+	suspendedSecondTurn       bool
 }
 
 type openAIResponsesWSUsageLogResult struct {
@@ -2461,8 +2462,14 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 	if strings.TrimSpace(tc.secondPayload) != "" {
 		turnCount = 2
 	}
+	successfulTurns := turnCount
+	if tc.suspendedSecondTurn {
+		successfulTurns = 1
+	}
 	upstreamPayloadCh := make(chan []byte, turnCount)
 	upstreamErrCh := make(chan error, 1)
+	suspendedTurnClosed := make(chan struct{})
+	var suspendedTurnClosedOnce sync.Once
 	var channelSvc *service.ChannelService
 	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := coderws.Accept(w, r, &coderws.AcceptOptions{
@@ -2476,7 +2483,7 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 			_ = conn.CloseNow()
 		}()
 
-		for turn := 1; turn <= turnCount; turn++ {
+		for turn := 1; turn <= successfulTurns; turn++ {
 			readCtx, cancelRead := context.WithTimeout(r.Context(), 3*time.Second)
 			msgType, payload, readErr := conn.Read(readCtx)
 			cancelRead()
@@ -2509,9 +2516,31 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 				return
 			}
 		}
+		if tc.suspendedSecondTurn {
+			// The context pool keeps its upstream connection reusable after the
+			// denied client turn. End this fixture's read when the client observes
+			// the policy close, without racing two identical timeout deadlines.
+			readCtx, cancelRead := context.WithCancel(r.Context())
+			readDone := make(chan struct{})
+			go func() {
+				select {
+				case <-suspendedTurnClosed:
+					cancelRead()
+				case <-readDone:
+				}
+			}()
+			_, _, readErr := conn.Read(readCtx)
+			close(readDone)
+			cancelRead()
+			if readErr == nil {
+				upstreamErrCh <- errors.New("suspended second turn reached upstream")
+				return
+			}
+		}
 		upstreamErrCh <- nil
 	}))
 	defer upstreamServer.Close()
+	defer suspendedTurnClosedOnce.Do(func() { close(suspendedTurnClosed) })
 
 	groupID := int64(4201)
 	account := service.Account{
@@ -2664,12 +2693,23 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 		err = clientConn.Write(writeCtx, coderws.MessageText, []byte(tc.secondPayload))
 		cancelWrite()
 		require.NoError(t, err)
-		readCompleted()
+		if tc.suspendedSecondTurn {
+			readCtx, cancelRead := context.WithTimeout(context.Background(), 3*time.Second)
+			_, _, readErr := clientConn.Read(readCtx)
+			cancelRead()
+			var closeErr coderws.CloseError
+			require.ErrorAs(t, readErr, &closeErr)
+			require.Equal(t, coderws.StatusPolicyViolation, closeErr.Code)
+			require.Contains(t, closeErr.Reason, "模型暂时下架")
+			suspendedTurnClosedOnce.Do(func() { close(suspendedTurnClosed) })
+		} else {
+			readCompleted()
+		}
 	}
 	_ = clientConn.Close(coderws.StatusNormalClosure, "done")
 
 	usageLogs := make([]*service.UsageLog, 0, turnCount)
-	for len(usageLogs) < turnCount {
+	for len(usageLogs) < successfulTurns {
 		select {
 		case usageLog := <-usageRepo.created:
 			require.NotNil(t, usageLog)
@@ -2680,7 +2720,7 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 	}
 
 	upstreamPayloads := make([][]byte, 0, turnCount)
-	for len(upstreamPayloads) < turnCount {
+	for len(upstreamPayloads) < successfulTurns {
 		select {
 		case payload := <-upstreamPayloadCh:
 			upstreamPayloads = append(upstreamPayloads, payload)

@@ -3127,5 +3127,26 @@
     "detail": "net/http",
     "annotation": "non-billable",
     "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/server/routes/model_availability.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "Inbound-only suspension middleware: HTTP status constants and request body size errors; no outbound request or client."
+  },
+  {
+    "file": "internal/service/model_availability.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "Suspension error uses HTTP status constants only; no outbound request or client."
+  },
+  {
+    "file": "internal/service/model_availability.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "Parses and decodes user-supplied model IDs or model-page paths locally; no network access."
   }
 ]

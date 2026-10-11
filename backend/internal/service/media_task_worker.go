@@ -118,6 +118,9 @@ func (s *MediaTaskService) process(ctx context.Context, r *mediaTaskRecord) erro
 	deferSave := func() error { return s.store.save(ctx, r, delay) }
 	switch r.Status {
 	case "queued", "authorizing":
+		if CheckModelAvailability(r.Model, mediaUpstreamModel(r.Model)) != nil {
+			return s.failUnsubmitted(ctx, r, ModelTemporarilyUnavailableCode)
+		}
 		if s.provider == nil {
 			return ErrMediaUnavailable
 		}
@@ -375,6 +378,9 @@ func (s *MediaTaskService) failUnsubmitted(ctx context.Context, r *mediaTaskReco
 
 	r.ErrorCode = code
 	r.ErrorMessage = "The request could not be authorized."
+	if code == ModelTemporarilyUnavailableCode {
+		r.ErrorMessage = ModelTemporarilyUnavailableMessage
+	}
 	if code == "INSUFFICIENT_BALANCE" {
 		r.ErrorMessage = "Insufficient USD balance. Top up in the console and retry."
 	}

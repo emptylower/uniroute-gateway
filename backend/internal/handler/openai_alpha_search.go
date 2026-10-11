@@ -160,6 +160,13 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 		// request-failed path below produces.
 		billingSnapshot, freezeErr := h.gatewayService.FreezeBillingSnapshot(c.Request.Context(), apiKey, account, subscription, requestedModel, account.GetMappedModel(requestedModel), false)
 		if freezeErr != nil {
+			if errors.Is(freezeErr, service.ErrModelTemporarilyUnavailable) {
+				if selection.ReleaseFunc != nil {
+					selection.ReleaseFunc()
+				}
+				h.handleStreamingAwareError(c, http.StatusServiceUnavailable, service.ModelTemporarilyUnavailableCode, service.ModelTemporarilyUnavailableMessage, streamStarted)
+				return
+			}
 			h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "Model pricing is not configured")
 			return
 		}
