@@ -721,6 +721,39 @@ func (s *APIKeyService) GetByKey(ctx context.Context, key string) (*APIKey, erro
 	return apiKey, nil
 }
 
+// GetForUsage refreshes the unified Key's read-only quota view without changing
+// its shared authentication snapshot or loading another credential.
+func (s *APIKeyService) GetForUsage(ctx context.Context, key *APIKey) (*APIKey, error) {
+	if s == nil || s.apiKeyRepo == nil || key == nil || key.User == nil {
+		return nil, fmt.Errorf("usage state reader unavailable")
+	}
+	reader, ok := s.apiKeyRepo.(interface {
+		GetUsageReadState(context.Context, int64, int64) (*APIKey, error)
+	})
+	if !ok {
+		return nil, fmt.Errorf("usage state reader unavailable")
+	}
+	current, err := reader.GetUsageReadState(ctx, key.ID, key.UserID)
+	if err != nil {
+		return nil, err
+	}
+	if current == nil || current.User == nil || current.ID != key.ID || current.UserID != key.UserID ||
+		current.User.ID != key.User.ID || current.PlatformKeyID == nil || key.PlatformKeyID == nil ||
+		*current.PlatformKeyID != *key.PlatformKeyID || current.User.PlatformUserID != key.User.PlatformUserID {
+		return nil, ErrAPIKeyNotFound
+	}
+	view := *key
+	view.Status, view.Quota, view.QuotaUsed, view.ExpiresAt = current.Status, current.Quota, current.QuotaUsed, current.ExpiresAt
+	view.RoutingMode, view.GroupID, view.ChannelIDs = current.RoutingMode, current.GroupID, append([]int64(nil), current.ChannelIDs...)
+	view.RateLimit5h, view.RateLimit1d, view.RateLimit7d = current.RateLimit5h, current.RateLimit1d, current.RateLimit7d
+	view.Usage5h, view.Usage1d, view.Usage7d = current.Usage5h, current.Usage1d, current.Usage7d
+	view.Window5hStart, view.Window1dStart, view.Window7dStart = current.Window5hStart, current.Window1dStart, current.Window7dStart
+	user := *key.User
+	user.Status, user.StoredBillingCurrency, user.DeletedAt = current.User.Status, current.User.StoredBillingCurrency, current.User.DeletedAt
+	view.User = &user
+	return &view, nil
+}
+
 // Update 更新API Key
 func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req UpdateAPIKeyRequest) (*APIKey, error) {
 	apiKey, err := s.apiKeyRepo.GetByID(ctx, id)

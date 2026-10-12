@@ -30,7 +30,13 @@ type apiKeyRepository struct {
 }
 
 func NewAPIKeyRepository(client *dbent.Client, sqlDB *sql.DB) service.APIKeyRepository {
-	return newAPIKeyRepositoryWithSQL(client, sqlDB)
+	var sqlq sqlExecutor
+	if sqlDB != nil {
+		sqlq = sqlDB
+	} else if client != nil {
+		sqlq = client
+	}
+	return newAPIKeyRepositoryWithSQL(client, sqlq)
 }
 
 func newAPIKeyRepositoryWithSQL(client *dbent.Client, sqlq sqlExecutor) *apiKeyRepository {
@@ -145,6 +151,9 @@ func (r *apiKeyRepository) GetByKey(ctx context.Context, key string) (*service.A
 }
 
 func (r *apiKeyRepository) GetByKeyForAuth(ctx context.Context, key string) (*service.APIKey, error) {
+	if r == nil || r.client == nil {
+		return nil, fmt.Errorf("api key repository unavailable")
+	}
 	sum := sha256.Sum256([]byte(key))
 	keyHash := hex.EncodeToString(sum[:])
 	m, err := r.activeQuery().
@@ -155,6 +164,7 @@ func (r *apiKeyRepository) GetByKeyForAuth(ctx context.Context, key string) (*se
 		Select(
 			apikey.FieldID,
 			apikey.FieldUserID,
+			apikey.FieldPlatformKeyID,
 			apikey.FieldGroupID,
 			apikey.FieldRoutingMode,
 			apikey.FieldName,
@@ -254,9 +264,35 @@ func (r *apiKeyRepository) GetByKeyForAuth(ctx context.Context, key string) (*se
 		return nil, err
 	}
 	out := apiKeyEntityToService(m)
-	if out.RoutingMode == service.APIKeyRoutingModeChannels {
+	if service.IsChannelRoutingMode(out.RoutingMode) {
 		out.ChannelIDs, err = r.loadChannelIDs(ctx, out.ID)
 	}
+	return out, err
+}
+
+// GetUsageReadState reads only the calling Key's current public quota state and
+// eligibility metadata. It does not load the credential or mutate any counters.
+func (r *apiKeyRepository) GetUsageReadState(ctx context.Context, id, userID int64) (*service.APIKey, error) {
+	if r == nil || r.client == nil {
+		return nil, fmt.Errorf("api key repository unavailable")
+	}
+	m, err := r.activeQuery().Where(apikey.IDEQ(id), apikey.UserIDEQ(userID)).
+		Select(apikey.FieldID, apikey.FieldUserID, apikey.FieldPlatformKeyID, apikey.FieldGroupID,
+			apikey.FieldRoutingMode, apikey.FieldStatus, apikey.FieldQuota, apikey.FieldQuotaUsed,
+			apikey.FieldExpiresAt, apikey.FieldRateLimit5h, apikey.FieldRateLimit1d, apikey.FieldRateLimit7d,
+			apikey.FieldUsage5h, apikey.FieldUsage1d, apikey.FieldUsage7d,
+			apikey.FieldWindow5hStart, apikey.FieldWindow1dStart, apikey.FieldWindow7dStart).
+		WithUser(func(q *dbent.UserQuery) {
+			q.Where(user.DeletedAtIsNil()).Select(user.FieldID, user.FieldPlatformUserID, user.FieldStatus, user.FieldBillingCurrency)
+		}).Only(ctx)
+	if dbent.IsNotFound(err) || err == nil && m.Edges.User == nil {
+		return nil, service.ErrAPIKeyNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	out := apiKeyEntityToService(m)
+	out.ChannelIDs, err = r.loadChannelIDs(ctx, out.ID)
 	return out, err
 }
 
@@ -960,7 +996,10 @@ func apiKeyEntityToService(m *dbent.APIKey) *service.APIKey {
 }
 
 func (r *apiKeyRepository) loadChannelIDs(ctx context.Context, apiKeyID int64) (ids []int64, err error) {
-	if r == nil || r.sql == nil || apiKeyID <= 0 {
+	if r == nil || r.sql == nil {
+		return nil, fmt.Errorf("api key channel repository unavailable")
+	}
+	if apiKeyID <= 0 {
 		return []int64{}, nil
 	}
 	rows, err := r.sql.QueryContext(ctx,
@@ -1003,6 +1042,7 @@ func userEntityToService(u *dbent.User) *service.User {
 		Balance:                    u.Balance,
 		FrozenBalance:              u.FrozenBalance,
 		BillingCurrency:            u.BillingCurrency,
+		StoredBillingCurrency:      u.BillingCurrency,
 		Concurrency:                u.Concurrency,
 		Status:                     u.Status,
 		SignupSource:               u.SignupSource,

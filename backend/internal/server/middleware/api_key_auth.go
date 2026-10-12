@@ -121,6 +121,18 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 // validateLoadedAPIKey is shared by bearer authentication and signed platform
 // delegation. Both paths enforce the same user, key, group and billing checks.
 func validateLoadedAPIKey(c *gin.Context, apiKey *service.APIKey, apiKeyService *service.APIKeyService, subscriptionService *service.SubscriptionService, cfg *config.Config, authReadOnly bool) {
+	if platformManagedUsageRead(c, apiKey) {
+		current, err := apiKeyService.GetForUsage(c.Request.Context(), apiKey)
+		if err != nil {
+			if errors.Is(err, service.ErrAPIKeyNotFound) {
+				AbortWithError(c, 401, "API_KEY_DISABLED", "API key is unavailable")
+			} else {
+				AbortWithError(c, http.StatusServiceUnavailable, "USAGE_READ_UNAVAILABLE", "Current API key usage is temporarily unavailable")
+			}
+			return
+		}
+		apiKey = current
+	}
 
 	// apiKey 已加载（含 User/Group）。即便后续因分组停用/Key 停用/用户停用/
 	// IP 限制等早退中断，也让 Ops 错误日志能回退取到 user/group/platform。
