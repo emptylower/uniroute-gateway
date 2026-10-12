@@ -32,6 +32,16 @@ func newUserEntRepo(t *testing.T) (*userRepository, *dbent.Client) {
 	drv := entsql.OpenDB(dialect.SQLite, db)
 	client := enttest.NewClient(t, enttest.WithOptions(dbent.Driver(drv)))
 	t.Cleanup(func() { _ = client.Close() })
+	// Channels and migration 191's join are SQL-owned, outside Ent's schema.
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS channels (id BIGINT PRIMARY KEY);
+		CREATE TABLE IF NOT EXISTS api_key_channels (
+			api_key_id BIGINT NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
+			channel_id BIGINT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (api_key_id, channel_id)
+		);
+		CREATE INDEX IF NOT EXISTS idx_api_key_channels_channel_id ON api_key_channels(channel_id);`)
+	require.NoError(t, err)
 
 	return newUserRepositoryWithSQL(client, db), client
 }

@@ -37,6 +37,10 @@ type User struct {
 	UpdatedAt            time.Time
 	DeletedAt            *time.Time // 非 nil 表示用户已软删除
 
+	// StoredBillingCurrency is the unnormalized DB value retained by API Key
+	// authentication for strict eligibility checks, not settlement pricing.
+	StoredBillingCurrency string
+
 	// GroupRates 用户专属分组倍率配置
 	// map[groupID]rateMultiplier
 	GroupRates map[int64]float64

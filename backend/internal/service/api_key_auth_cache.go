@@ -4,18 +4,19 @@ import "time"
 
 // APIKeyAuthSnapshot API Key 认证缓存快照（仅包含认证所需字段）
 type APIKeyAuthSnapshot struct {
-	Version     int                      `json:"version"`
-	APIKeyID    int64                    `json:"api_key_id"`
-	UserID      int64                    `json:"user_id"`
-	GroupID     *int64                   `json:"group_id,omitempty"`
-	RoutingMode string                   `json:"routing_mode"`
-	ChannelIDs  []int64                  `json:"channel_ids,omitempty"`
-	Name        string                   `json:"name"`
-	Status      string                   `json:"status"`
-	IPWhitelist []string                 `json:"ip_whitelist,omitempty"`
-	IPBlacklist []string                 `json:"ip_blacklist,omitempty"`
-	User        APIKeyAuthUserSnapshot   `json:"user"`
-	Group       *APIKeyAuthGroupSnapshot `json:"group,omitempty"`
+	Version       int                      `json:"version"`
+	APIKeyID      int64                    `json:"api_key_id"`
+	UserID        int64                    `json:"user_id"`
+	PlatformKeyID *string                  `json:"platform_key_id,omitempty"`
+	GroupID       *int64                   `json:"group_id,omitempty"`
+	RoutingMode   string                   `json:"routing_mode"`
+	ChannelIDs    []int64                  `json:"channel_ids,omitempty"`
+	Name          string                   `json:"name"`
+	Status        string                   `json:"status"`
+	IPWhitelist   []string                 `json:"ip_whitelist,omitempty"`
+	IPBlacklist   []string                 `json:"ip_blacklist,omitempty"`
+	User          APIKeyAuthUserSnapshot   `json:"user"`
+	Group         *APIKeyAuthGroupSnapshot `json:"group,omitempty"`
 
 	// Quota fields for API Key independent quota feature
 	Quota     float64 `json:"quota"`      // Quota limit in USD (0 = unlimited)
@@ -40,13 +41,14 @@ type APIKeyAuthUserSnapshot struct {
 	// once made every real gateway request refuse identity_missing
 	// regardless of the column's DB value, because the snapshot (not the
 	// DB query) is what the hot path actually reads back.
-	PlatformUserID  string  `json:"platform_user_id,omitempty"`
-	Status          string  `json:"status"`
-	Role            string  `json:"role"`
-	Balance         float64 `json:"balance"`
-	BillingCurrency string  `json:"billing_currency"`
-	Concurrency     int     `json:"concurrency"`
-	AllowedGroups   []int64 `json:"allowed_groups,omitempty"`
+	PlatformUserID        string  `json:"platform_user_id,omitempty"`
+	Status                string  `json:"status"`
+	Role                  string  `json:"role"`
+	Balance               float64 `json:"balance"`
+	BillingCurrency       string  `json:"billing_currency"`
+	StoredBillingCurrency string  `json:"stored_billing_currency,omitempty"`
+	Concurrency           int     `json:"concurrency"`
+	AllowedGroups         []int64 `json:"allowed_groups,omitempty"`
 
 	// Balance notification fields (required for CheckBalanceAfterDeduction)
 	Email                      string             `json:"email"`

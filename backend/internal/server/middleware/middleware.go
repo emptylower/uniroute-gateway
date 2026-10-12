@@ -134,6 +134,10 @@ func RequireGroupAssignment(settingService *service.SettingService, cfg *config.
 			c.Next()
 			return
 		}
+		if platformManagedUsageRead(c, apiKey) {
+			c.Next()
+			return
+		}
 		if channelRoutedKeyMayResolveGroup(c, apiKey, cfg) {
 			c.Next()
 			return
@@ -148,6 +152,16 @@ func RequireGroupAssignment(settingService *service.SettingService, cfg *config.
 		writeError(c, http.StatusForbidden, "API Key is not assigned to any group and cannot be used. Please contact the administrator to assign it to a group.")
 		c.Abort()
 	}
+}
+
+func platformManagedUsageRead(c *gin.Context, key *service.APIKey) bool {
+	return c != nil && c.Request != nil && c.Request.URL != nil && c.Request.Method == http.MethodGet &&
+		c.Request.URL.Path == "/v1/usage" && key != nil && key.ID > 0 && key.User != nil &&
+		key.UserID > 0 && key.UserID == key.User.ID && key.User.IsActive() && key.User.DeletedAt == nil &&
+		strings.TrimSpace(key.User.PlatformUserID) != "" && key.User.StoredBillingCurrency == service.CurrencyUSD &&
+		key.PlatformKeyID != nil && strings.TrimSpace(*key.PlatformKeyID) != "" &&
+		key.RoutingMode == service.APIKeyRoutingModeAutoChannels && key.GroupID == nil && len(key.ChannelIDs) == 0 &&
+		(key.IsActive() || key.Status == service.StatusAPIKeyExpired || key.Status == service.StatusAPIKeyQuotaExhausted)
 }
 
 func channelRoutedKeyMayResolveGroup(c *gin.Context, apiKey *service.APIKey, cfg *config.Config) bool {

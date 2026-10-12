@@ -14,7 +14,7 @@ import (
 	"github.com/dgraph-io/ristretto"
 )
 
-const apiKeyAuthSnapshotVersion = 21 // v20: include User.PlatformUserID (canonical wallet identity)
+const apiKeyAuthSnapshotVersion = 22 // v22 preserves projected Key identity and stored user currency.
 
 type apiKeyAuthCacheConfig struct {
 	l1Size        int
@@ -336,22 +336,23 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 		return nil
 	}
 	snapshot := &APIKeyAuthSnapshot{
-		Version:     apiKeyAuthSnapshotVersion,
-		APIKeyID:    apiKey.ID,
-		UserID:      apiKey.UserID,
-		GroupID:     apiKey.GroupID,
-		RoutingMode: apiKey.RoutingMode,
-		ChannelIDs:  append([]int64(nil), apiKey.ChannelIDs...),
-		Name:        apiKey.Name,
-		Status:      apiKey.Status,
-		IPWhitelist: apiKey.IPWhitelist,
-		IPBlacklist: apiKey.IPBlacklist,
-		Quota:       apiKey.Quota,
-		QuotaUsed:   apiKey.QuotaUsed,
-		ExpiresAt:   apiKey.ExpiresAt,
-		RateLimit5h: apiKey.RateLimit5h,
-		RateLimit1d: apiKey.RateLimit1d,
-		RateLimit7d: apiKey.RateLimit7d,
+		Version:       apiKeyAuthSnapshotVersion,
+		APIKeyID:      apiKey.ID,
+		UserID:        apiKey.UserID,
+		PlatformKeyID: apiKey.PlatformKeyID,
+		GroupID:       apiKey.GroupID,
+		RoutingMode:   apiKey.RoutingMode,
+		ChannelIDs:    append([]int64(nil), apiKey.ChannelIDs...),
+		Name:          apiKey.Name,
+		Status:        apiKey.Status,
+		IPWhitelist:   apiKey.IPWhitelist,
+		IPBlacklist:   apiKey.IPBlacklist,
+		Quota:         apiKey.Quota,
+		QuotaUsed:     apiKey.QuotaUsed,
+		ExpiresAt:     apiKey.ExpiresAt,
+		RateLimit5h:   apiKey.RateLimit5h,
+		RateLimit1d:   apiKey.RateLimit1d,
+		RateLimit7d:   apiKey.RateLimit7d,
 		User: APIKeyAuthUserSnapshot{
 			ID:                         apiKey.User.ID,
 			PlatformUserID:             apiKey.User.PlatformUserID,
@@ -359,6 +360,7 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 			Role:                       apiKey.User.Role,
 			Balance:                    apiKey.User.Balance,
 			BillingCurrency:            NormalizeUserBillingCurrency(apiKey.User.BillingCurrency),
+			StoredBillingCurrency:      apiKey.User.StoredBillingCurrency,
 			Concurrency:                apiKey.User.Concurrency,
 			AllowedGroups:              apiKey.User.AllowedGroups,
 			Email:                      apiKey.User.Email,
@@ -434,22 +436,23 @@ func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapsho
 		return nil
 	}
 	apiKey := &APIKey{
-		ID:          snapshot.APIKeyID,
-		UserID:      snapshot.UserID,
-		GroupID:     snapshot.GroupID,
-		RoutingMode: snapshot.RoutingMode,
-		ChannelIDs:  append([]int64(nil), snapshot.ChannelIDs...),
-		Key:         key,
-		Name:        snapshot.Name,
-		Status:      snapshot.Status,
-		IPWhitelist: snapshot.IPWhitelist,
-		IPBlacklist: snapshot.IPBlacklist,
-		Quota:       snapshot.Quota,
-		QuotaUsed:   snapshot.QuotaUsed,
-		ExpiresAt:   snapshot.ExpiresAt,
-		RateLimit5h: snapshot.RateLimit5h,
-		RateLimit1d: snapshot.RateLimit1d,
-		RateLimit7d: snapshot.RateLimit7d,
+		ID:            snapshot.APIKeyID,
+		UserID:        snapshot.UserID,
+		PlatformKeyID: snapshot.PlatformKeyID,
+		GroupID:       snapshot.GroupID,
+		RoutingMode:   snapshot.RoutingMode,
+		ChannelIDs:    append([]int64(nil), snapshot.ChannelIDs...),
+		Key:           key,
+		Name:          snapshot.Name,
+		Status:        snapshot.Status,
+		IPWhitelist:   snapshot.IPWhitelist,
+		IPBlacklist:   snapshot.IPBlacklist,
+		Quota:         snapshot.Quota,
+		QuotaUsed:     snapshot.QuotaUsed,
+		ExpiresAt:     snapshot.ExpiresAt,
+		RateLimit5h:   snapshot.RateLimit5h,
+		RateLimit1d:   snapshot.RateLimit1d,
+		RateLimit7d:   snapshot.RateLimit7d,
 		User: &User{
 			ID:                         snapshot.User.ID,
 			PlatformUserID:             snapshot.User.PlatformUserID,
@@ -457,6 +460,7 @@ func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapsho
 			Role:                       snapshot.User.Role,
 			Balance:                    snapshot.User.Balance,
 			BillingCurrency:            NormalizeUserBillingCurrency(snapshot.User.BillingCurrency),
+			StoredBillingCurrency:      snapshot.User.StoredBillingCurrency,
 			Concurrency:                snapshot.User.Concurrency,
 			AllowedGroups:              snapshot.User.AllowedGroups,
 			Email:                      snapshot.User.Email,
