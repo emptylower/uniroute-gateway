@@ -552,6 +552,11 @@ func (b *CanonicalWalletBridge) observePoolSettlement(event CanonicalWalletSettl
 		}
 		segments[0].Remainder = &extra
 	}
+	if segments[0].Kind == "live" {
+		if err = captureAPIKeyBudgetIfPresentTx(ctx, tx, event.AuthorizationID, event.AmountUnits); err != nil {
+			return false
+		}
+	}
 	if err = tx.Commit(); err != nil {
 		return false
 	}

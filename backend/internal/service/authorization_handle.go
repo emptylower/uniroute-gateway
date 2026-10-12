@@ -41,14 +41,15 @@ type AuthorizationWrite struct {
 // convenience mirror in context; the settling code receives the token as an
 // explicit field on its input struct (spec §3.5).
 type AuthorizationHandle struct {
-	ID             string
-	MintedAt       time.Time
-	Mode           string // canonical_wallet.mode at mint time
-	SnapshotID     string
-	AttemptKind    string
-	Segments       []AuthorizationSegment
-	LeaseID        string
-	EstimatedUnits int64
+	ID                   string
+	MintedAt             time.Time
+	Mode                 string // canonical_wallet.mode at mint time
+	SnapshotID           string
+	AttemptKind          string
+	Segments             []AuthorizationSegment
+	LeaseID              string
+	EstimatedUnits       int64
+	APIKeyBudgetReserved bool
 	// HoldArmed/HeldUnits (Phase 3.4b, §10.4): set when Authorize armed this
 	// attempt's hold; false/0 when holds are off (3.4a byte-for-byte).
 	HoldArmed bool

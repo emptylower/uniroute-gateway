@@ -94,6 +94,7 @@ type TrendDataPoint struct {
 
 // ModelStat represents usage statistics for a single model
 type ModelStat struct {
+	MediaType           string  `json:"media_type"`
 	Model               string  `json:"model"`
 	Requests            int64   `json:"requests"`
 	InputTokens         int64   `json:"input_tokens"`

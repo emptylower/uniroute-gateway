@@ -1257,8 +1257,20 @@ func newCanonicalWalletBridge(cfg config.CanonicalWalletConfig, store CanonicalW
 			return newLiveProvisionalStore(outboxDB)
 		}(),
 	}
+	if cfg.USDWalletEnabled && cfg.Mode == config.CanonicalWalletModeEnforce && outboxDB != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		err := InitializeAPIKeyBudgetEpoch(ctx, outboxDB)
+		cancel()
+		if err != nil {
+			panic(fmt.Sprintf("API Key allowance epoch initialization: %v", err))
+		}
+	}
 	b.stop = make(chan struct{})
 	b.fundingCleanupWake = make(chan struct{}, 1)
+	if cfg.USDWalletEnabled && outboxDB != nil {
+		b.loops.Add(1)
+		go func() { defer b.loops.Done(); b.runAPIKeyBudgetRecovery() }()
+	}
 	b.loops.Add(1)
 	go func() {
 		defer b.loops.Done()

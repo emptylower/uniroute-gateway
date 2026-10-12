@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"log/slog"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -59,6 +60,10 @@ func mediaTaskView(r *mediaTaskRecord) MediaTaskView {
 		v.URLs = []MediaURL{}
 	}
 	switch r.Status {
+	case "queued":
+		v.Billing.State = "queued"
+	case "authorizing":
+		v.Billing.State = "authorizing"
 	case "submitting", "processing":
 		v.Status = "processing"
 	case "settling":
@@ -67,6 +72,9 @@ func mediaTaskView(r *mediaTaskRecord) MediaTaskView {
 	case "completed":
 		v.Status = "success"
 		v.Billing.State = "charged"
+		if r.PublicAPI {
+			v.Billing.HeldUSD = "0"
+		}
 		cost := mediaUSD(*r.ActualUnits)
 		v.Billing.ChargedUSD = &cost
 	case "releasing":
@@ -84,6 +92,9 @@ func mediaTaskView(r *mediaTaskRecord) MediaTaskView {
 	}
 	if r.FinancialState == "released_unknown" || r.FinancialState == "released_zero" {
 		v.Billing.State = "released"
+		if r.FinancialState == "released_unknown" && r.PublicAPI {
+			v.Billing.State = "released_unknown"
+		}
 		v.Billing.HeldUSD = "0"
 		released := mediaUSD(r.HeldUnits)
 		v.Billing.ReleasedUSD = &released
@@ -201,30 +212,107 @@ func (s *MediaTaskService) PlaygroundKey(ctx context.Context, userID int64) (*AP
 	return s.internalKey(ctx, user)
 }
 func (s *MediaTaskService) Create(ctx context.Context, userID int64, idempotency string, in MediaCreateInput) (MediaTaskView, error) {
-	if err := CheckModelAvailability(in.Model); err != nil {
+	// Internal Console callers retain the dependency-free suspension guard.
+	// Public callers use CreatePublicChecked and keep owned replay first.
+	if err := CheckModelAvailability(in.Model, mediaUpstreamModel(in.Model)); err != nil {
 		return MediaTaskView{}, err
 	}
-	if !s.Enabled() {
+	if s == nil || s.users == nil || s.keys == nil || s.keys.repo == nil || s.apiKeys == nil || s.apiKeys.apiKeyRepo == nil || s.store == nil || s.store.db == nil {
 		return MediaTaskView{}, ErrMediaUnavailable
-	}
-	if idempotency == "" || len(idempotency) > 128 || strings.ContainsAny(idempotency, "\r\n") {
-		return MediaTaskView{}, infraerrors.BadRequest("INVALID_IDEMPOTENCY_KEY", "Idempotency-Key is required (maximum 128 characters)")
-	}
-	in, _, units, input, err := normalizeMediaCreate(in)
-	if err != nil {
-		return MediaTaskView{}, err
 	}
 	user, err := s.users.GetByID(ctx, userID)
 	if err != nil {
 		return MediaTaskView{}, err
 	}
+	key, err := s.internalKey(ctx, user)
+	if err != nil {
+		return MediaTaskView{}, err
+	}
+	return s.createForKey(ctx, key, idempotency, in, false, nil)
+}
+func (s *MediaTaskService) CreatePublic(ctx context.Context, key *APIKey, idempotency string, in MediaCreateInput) (MediaTaskView, error) {
+	if err := validateMediaActor(key); err != nil {
+		return MediaTaskView{}, err
+	}
+	return s.CreatePublicChecked(ctx, key, idempotency, in, nil)
+}
+func (s *MediaTaskService) CreatePublicChecked(ctx context.Context, key *APIKey, idempotency string, in MediaCreateInput, check func(MediaCreateInput) error) (MediaTaskView, error) {
+	if err := validateMediaActor(key); err != nil {
+		return MediaTaskView{}, err
+	}
+	return s.createForKey(ctx, key, idempotency, in, true, check)
+}
+func (s *MediaTaskService) createForKey(ctx context.Context, key *APIKey, idempotency string, in MediaCreateInput, public bool, check func(MediaCreateInput) error) (MediaTaskView, error) {
+	if idempotency == "" || len(idempotency) > 128 || strings.ContainsAny(idempotency, "\r\n") {
+		return MediaTaskView{}, infraerrors.BadRequest("INVALID_IDEMPOTENCY_KEY", "Idempotency-Key is required (maximum 128 characters)")
+	}
+	in, _, units, input, err := normalizeMediaCreateUnchecked(in)
+	if err != nil {
+		return MediaTaskView{}, err
+	}
+	if in.MaxCostUSD != nil {
+		if *in.MaxCostUSD == "" {
+			return MediaTaskView{}, infraerrors.BadRequest("INVALID_COST_CAP", "max_cost_usd must be a decimal string")
+		}
+		_, normalized, e := normalizeMediaCostCap(*in.MaxCostUSD)
+		if e != nil {
+			return MediaTaskView{}, e
+		}
+		in.MaxCostUSD = &normalized
+	}
+	normalized, _ := json.Marshal(in)
+	hash := sha256.Sum256(normalized)
+	if s.store == nil || s.store.db == nil {
+		return MediaTaskView{}, ErrMediaUnavailable
+	}
+	if existing, e := s.store.idempotent(ctx, key.UserID, key.ID, idempotency); e == nil {
+		if existing.RequestHash != hex.EncodeToString(hash[:]) {
+			return MediaTaskView{}, ErrMediaIdempotencyConflict
+		}
+		return mediaTaskView(existing), nil
+	} else if e != sql.ErrNoRows {
+		return MediaTaskView{}, e
+	}
+	if public && strings.EqualFold(strings.TrimSpace(os.Getenv("USD_LEDGER_MAINTENANCE")), "true") {
+		return MediaTaskView{}, infraerrors.ServiceUnavailable("USD_LEDGER_MAINTENANCE", "USD wallet maintenance in progress")
+	}
+	if !s.Enabled() || (public && !s.PublicEnabled(key.ID)) {
+		return MediaTaskView{}, ErrMediaUnavailable
+	}
+	if err = CheckModelAvailability(in.Model, mediaUpstreamModel(in.Model)); err != nil {
+		return MediaTaskView{}, err
+	}
+	user, err := s.users.GetByID(ctx, key.UserID)
+	if err != nil {
+		return MediaTaskView{}, err
+	}
+	actorKey := *key
+	actorKey.User = user
+	key = &actorKey
+	if public {
+		if err = validatePublicMediaKey(key, s.cfg, true); err != nil {
+			return MediaTaskView{}, err
+		}
+	}
 	fx, enabled, err := canonicalUSDWalletSnapshot(user, s.cfg)
 	if err != nil || !enabled || user.Status != StatusActive {
 		return MediaTaskView{}, ErrMediaUnavailable
 	}
-	key, err := s.internalKey(ctx, user)
-	if err != nil {
-		return MediaTaskView{}, err
+	if in.MaxCostUSD != nil {
+		cap, _, _ := normalizeMediaCostCap(*in.MaxCostUSD)
+		if units > cap {
+			return MediaTaskView{}, infraerrors.BadRequest("MAX_COST_EXCEEDED", "quoted USD cost exceeds max_cost_usd")
+		}
+	}
+	if check != nil {
+		if err = check(in); err != nil {
+			return MediaTaskView{}, err
+		}
+	}
+	if public || s.cfg.MediaTasks.PublicAPIEnabled {
+		if err = s.screenMedia(ctx, user.PlatformUserID, in); err != nil {
+			return MediaTaskView{}, err
+		}
 	}
 	snapshotID, err := newBillingSnapshotID()
 	if err != nil {
@@ -236,11 +324,11 @@ func (s *MediaTaskService) Create(ctx context.Context, userID int64, idempotency
 	}
 	jobID := "media_" + strings.TrimPrefix(authID, "auth_")
 	snap := &BillingSnapshot{ID: snapshotID, Version: BillingSnapshotVersion, FrozenAt: time.Now().UTC(), Family: BillingFamily("media"), UserID: user.ID, APIKeyID: key.ID, AccountID: s.accountID, RequestedModel: in.Model, BillingModel: in.Model, Pricing: BillingSnapshotPricing{Mode: BillingModePerRequest, Source: mediaPricingVersion, DefaultPerRequestPrice: float64(units) / float64(mediaUnitsPerUSD)}, Multipliers: BillingSnapshotMultipliers{Base: 1, Text: 1, Image: 1, Video: 1, WebSearch: 1, Account: 1}, FX: fx, Flags: BillingSnapshotFlags{USDWalletPolicyVersion: config.CanonicalUSDWalletPolicyVersion, BillingCurrency: CurrencyUSD, MultiplierCurrency: CurrencyUSD}}
-	normalized, _ := json.Marshal(in)
+	normalized, _ = json.Marshal(in)
 	requestHash := sha256.Sum256(normalized)
-	r, err := s.store.create(ctx, &mediaTaskRecord{ID: jobID, UserID: userID, PlatformUserID: user.PlatformUserID, APIKeyID: key.ID, IdempotencyKey: idempotency, RequestHash: hex.EncodeToString(requestHash[:]), Model: in.Model, MediaType: in.MediaType, Option: in.Option, Prompt: in.Prompt, RequestPayload: input, SnapshotID: snapshotID, QuotedUnits: units, AuthorizationID: authID, EventID: CanonicalWalletSettlementEventID(jobID, user.PlatformUserID, CurrencyUSD), DeadlineAt: time.Now().UTC().Add(time.Duration(s.cfg.MediaTasks.DeadlineSeconds) * time.Second)}, snap, s.bridge)
+	r, err := s.store.create(ctx, &mediaTaskRecord{PublicAPI: public, ID: jobID, UserID: user.ID, PlatformUserID: user.PlatformUserID, APIKeyID: key.ID, IdempotencyKey: idempotency, RequestHash: hex.EncodeToString(requestHash[:]), Model: in.Model, MediaType: in.MediaType, Option: in.Option, Prompt: in.Prompt, RequestPayload: input, SnapshotID: snapshotID, QuotedUnits: units, AuthorizationID: authID, EventID: CanonicalWalletSettlementEventID(jobID, user.PlatformUserID, CurrencyUSD), DeadlineAt: time.Now().UTC().Add(time.Duration(s.cfg.MediaTasks.DeadlineSeconds) * time.Second)}, snap, s.bridge)
 	if err != nil {
-		return MediaTaskView{}, err
+		return MediaTaskView{}, publicMediaBudgetError(err)
 	}
 	return mediaTaskView(r), nil
 }
@@ -252,6 +340,9 @@ func (s *MediaTaskService) Get(ctx context.Context, userID int64, id string) (Me
 	return mediaTaskView(r), nil
 }
 func (s *MediaTaskService) List(ctx context.Context, userID int64, limit int, cursor string) (MediaTaskList, error) {
+	return s.listForKey(ctx, userID, 0, limit, cursor)
+}
+func (s *MediaTaskService) listForKey(ctx context.Context, userID, keyID int64, limit int, cursor string) (MediaTaskList, error) {
 	if limit < 1 {
 		limit = 20
 	}
@@ -260,6 +351,9 @@ func (s *MediaTaskService) List(ctx context.Context, userID int64, limit int, cu
 	}
 	var before time.Time
 	var id string
+	if len(cursor) > 4096 {
+		return MediaTaskList{}, infraerrors.BadRequest("INVALID_CURSOR", "invalid cursor")
+	}
 	if cursor != "" {
 		raw, err := base64.RawURLEncoding.DecodeString(cursor)
 		if err != nil {
@@ -275,7 +369,7 @@ func (s *MediaTaskService) List(ctx context.Context, userID int64, limit int, cu
 		}
 		id = parts[1]
 	}
-	rows, err := s.store.list(ctx, userID, limit+1, before, id)
+	rows, err := s.store.listForKey(ctx, userID, keyID, limit+1, before, id)
 	if err != nil {
 		return MediaTaskList{}, err
 	}
@@ -317,4 +411,15 @@ func (b *CanonicalWalletBridge) mediaLeasePinned(ctx context.Context, user, leas
 		return false, nil
 	}
 	return (&mediaTaskStore{b.outboxDB}).leasePinned(ctx, user, lease)
+}
+
+func (s *MediaTaskService) GetPublic(ctx context.Context, key *APIKey, id string) (MediaTaskView, error) {
+	r, err := s.store.getForKey(ctx, key.UserID, key.ID, id)
+	if err != nil {
+		return MediaTaskView{}, mediaStoreError(err)
+	}
+	return mediaTaskView(r), nil
+}
+func (s *MediaTaskService) ListPublic(ctx context.Context, key *APIKey, limit int, cursor string) (MediaTaskList, error) {
+	return s.listForKey(ctx, key.UserID, key.ID, limit, cursor)
 }

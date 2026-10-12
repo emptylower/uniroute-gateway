@@ -165,7 +165,8 @@ func validateLoadedAPIKey(c *gin.Context, apiKey *service.APIKey, apiKeyService 
 		AbortWithError(c, 401, "USER_INACTIVE", "User account is not active")
 		return
 	}
-	dynamicChannelRouting := cfg.Gateway.ChannelRoutingEnabled &&
+	mediaRequest := service.IsPublicMediaPath(c.Request.URL.Path)
+	dynamicChannelRouting := mediaRequest || cfg.Gateway.ChannelRoutingEnabled &&
 		service.IsChannelRoutingMode(apiKey.RoutingMode) &&
 		service.IsChannelRoutingEndpoint(c.Request.URL.Path)
 	if !dynamicChannelRouting {
@@ -183,7 +184,7 @@ func validateLoadedAPIKey(c *gin.Context, apiKey *service.APIKey, apiKeyService 
 	// Async image task polling only reads data that already belongs to the
 	// authenticated key and must remain available after the completed
 	// generation consumes the key's remaining balance.
-	skipBilling := authReadOnly || c.Request.URL.Path == "/v1/usage" || billingInfoRequest || isAsyncImageTaskRead(c.Request.Method, c.Request.URL.Path)
+	skipBilling := mediaRequest || authReadOnly || c.Request.URL.Path == "/v1/usage" || billingInfoRequest || isAsyncImageTaskRead(c.Request.Method, c.Request.URL.Path)
 
 	// ── 4. SimpleMode → early return ─────────────────────────────
 

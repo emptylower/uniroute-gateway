@@ -471,6 +471,7 @@ func (r *usageLogRepository) getModelStatsWithFiltersBySource(ctx context.Contex
 		standardCostExpr = "COALESCE(SUM(base_cost_usd), 0)"
 	}
 	modelExpr := resolveModelDimensionExpression(source)
+	mediaExpr := "COALESCE(NULLIF(media_type, ''), CASE WHEN video_count > 0 THEN 'video' WHEN image_count > 0 OR billing_mode = 'image' THEN 'image' ELSE 'text' END)"
 
 	query := fmt.Sprintf(`
 		SELECT
@@ -483,10 +484,11 @@ func (r *usageLogRepository) getModelStatsWithFiltersBySource(ctx context.Contex
 			COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0) as total_tokens,
 			%s as cost,
 			%s,
-			%s
+			%s,
+            %s AS media_type
 		FROM usage_logs
 		WHERE created_at >= $1 AND created_at < $2
-	`, modelExpr, standardCostExpr, actualCostExpr, accountCostExpr)
+	`, modelExpr, standardCostExpr, actualCostExpr, accountCostExpr, mediaExpr)
 
 	args := []any{startTime, endTime}
 	if userID > 0 {
@@ -515,7 +517,7 @@ func (r *usageLogRepository) getModelStatsWithFiltersBySource(ctx context.Contex
 		args = append(args, int16(*billingType))
 	}
 	query, args = appendUsageLogBillingModeQueryFilter(query, args, billingMode, "")
-	query += fmt.Sprintf(" GROUP BY %s ORDER BY total_tokens DESC", modelExpr)
+	query += fmt.Sprintf(" GROUP BY %s, %s ORDER BY total_tokens DESC", modelExpr, mediaExpr)
 
 	rows, err := r.sql.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -838,6 +840,7 @@ func scanModelStatsRows(rows *sql.Rows) ([]ModelStat, error) {
 			&row.Cost,
 			&row.ActualCost,
 			&row.AccountCost,
+			&row.MediaType,
 		); err != nil {
 			return nil, err
 		}

@@ -107,6 +107,20 @@ func (b *CanonicalWalletBridge) finishZeroPoolAttempt(ctx context.Context, paren
 	if !allAck {
 		return errors.New("wallet zero group acknowledgement incomplete")
 	}
+	budgetTx, beginErr := b.outboxDB.BeginTx(ctx, nil)
+	if beginErr != nil {
+		return beginErr
+	}
+	if _, err = lockWalletAttempt(ctx, budgetTx, parent); err == nil {
+		err = releaseAPIKeyBudgetIfPresentTx(ctx, budgetTx, parent)
+	}
+	if err == nil {
+		err = budgetTx.Commit()
+	}
+	_ = budgetTx.Rollback()
+	if err != nil {
+		return err
+	}
 	for _, segment := range segments {
 		_, err = b.store.ReleaseCanonicalWalletHold(ctx, user, segment.AuthorizationID, "released", "zero_cost")
 		if err != nil && !isHoldNotArmed(err) && !errors.Is(err, ErrCanonicalWalletHoldMissing) {

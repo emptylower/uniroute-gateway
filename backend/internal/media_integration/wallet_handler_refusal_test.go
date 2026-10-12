@@ -77,7 +77,9 @@ func TestExternalResponsesHandlerUnknown503HasOneAuthorizationAndPreservesStatus
 	user, err := f.users.GetByID(context.Background(), f.userID)
 	require.NoError(t, err)
 	groupID := int64(1)
-	c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{ID: 99, User: user, GroupID: &groupID, Group: &service.Group{ID: groupID, Platform: service.PlatformOpenAI, RateMultiplier: 1}, RoutingMode: service.APIKeyRoutingModeLegacyGroup})
+	var keyID int64
+	require.NoError(t, f.db.QueryRow(`INSERT INTO api_keys(user_id,key,name,status) VALUES($1,'handler-real-key','Handler fixture','active') RETURNING id`, f.userID).Scan(&keyID))
+	c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{ID: keyID, UserID: f.userID, User: user, GroupID: &groupID, Group: &service.Group{ID: groupID, Platform: service.PlatformOpenAI, RateMultiplier: 1}, RoutingMode: service.APIKeyRoutingModeLegacyGroup})
 	c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: f.userID})
 	h.Responses(c)
 	require.Equal(t, int64(1), calls.Load(), "status=%d body=%s", recorder.Code, recorder.Body.String())

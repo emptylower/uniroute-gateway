@@ -416,8 +416,18 @@ func TestExternalMediaV5SlowLaneDoesNotStarveOtherReadyLanes(t *testing.T) {
 			if lane == "fee" {
 				feeBacklog = append(feeBacklog, mediaV5PreparedTask(t, f, "vendor-ready-fee-2", time.Now().Add(-2*time.Minute), true))
 			}
-			finance := mediaV5PreparedTask(t, f, "", time.Now().Add(-2*time.Minute), true)
+			// The fee case requires four live task owners. Retain one legal
+			// pre-scope finance binding so fee1/fee2/query use the three fresh
+			// scoped slots under the real default cap, without changing price.
+			finance := mediaV5PreparedTask(t, f, "", time.Now().Add(-2*time.Minute), true, mediaV5TaskOptions{LegacySharedFunding: lane == "fee"})
 			query := mediaV5PreparedTask(t, f, "vendor-ready-query", time.Now().Add(-2*time.Minute), true)
+			if lane == "fee" {
+				var exact bool
+				var scope string
+				require.NoError(t, f.db.QueryRow(`SELECT held_units=quoted_units,lease_basis->>'funding_scope' FROM gateway_media_task WHERE id=$1`, finance.TaskID).Scan(&exact, &scope))
+				require.True(t, exact, "legacy finance hold retains the complete original e8 quote")
+				require.Equal(t, "legacy", scope)
+			}
 			var reads atomic.Int64
 			f.readHook = func(w http.ResponseWriter, r *http.Request) {
 				state := "success"

@@ -91,6 +91,8 @@ func mediaV5WireFixture(t *testing.T, mode string) (*mediaFixture, *atomic.Bool)
 type mediaV5TaskOptions struct {
 	HeldUnits      int64
 	LegacyNullKind bool
+	// Reuse a durable pre-scope binding, including a full exact-quote hold.
+	LegacySharedFunding bool
 }
 
 func mediaV5PreparedTask(t *testing.T, f *mediaFixture, providerID string, anchor time.Time, ended bool, options ...mediaV5TaskOptions) service.MediaTaskView {
@@ -107,10 +109,11 @@ func mediaV5PreparedTask(t *testing.T, f *mediaFixture, providerID string, ancho
 	if len(options) > 0 && options[0].HeldUnits > 0 {
 		holdUnits = options[0].HeldUnits
 	}
-	if holdUnits != quote {
-		// Reproduce a persisted pre-scope shared plan, whose original hold was
-		// smaller than the immutable provider quote. A fresh media issuance must
-		// still enforce the exact quote; recovery reuses this historical binding.
+	legacyShared := len(options) > 0 && options[0].LegacySharedFunding
+	if holdUnits != quote || legacyShared {
+		// Reproduce a durable pre-scope shared plan with its original bound
+		// amount. It can hold the full exact quote or a historical smaller
+		// share; a fresh scoped issuance still requires the exact quote.
 		legacy, e := repository.NewGatewayCache(f.rdb).(service.CanonicalWalletLeaseStore).GetCanonicalWalletLeaseByID(context.Background(), f.platformUserID, f.control.pool[0].id)
 		require.NoError(t, e)
 		raw, e := json.Marshal(legacy)
