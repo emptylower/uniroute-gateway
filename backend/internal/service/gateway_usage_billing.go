@@ -99,6 +99,7 @@ type postUsageBillingParams struct {
 	RequestPayloadHash          string
 	IsSubscriptionBill          bool
 	AccountRateMultiplier       float64
+	APIKeyQuotaRemainderUSD     *float64
 	APIKeyService               APIKeyQuotaUpdater
 	Platform                    string // 来自 APIKey 关联 Group 的平台标识
 }
@@ -303,14 +304,15 @@ func buildUsageBillingCommand(requestID string, usageLog *UsageLog, p *postUsage
 	}
 
 	cmd := &UsageBillingCommand{
-		RequestID:          requestID,
-		APIKeyID:           p.APIKey.ID,
-		UserID:             p.User.ID,
-		AccountID:          p.Account.ID,
-		AccountType:        p.Account.Type,
-		WalletCostUSD:      p.Cost.ActualCost,
-		SettlementCurrency: NormalizeUserBillingCurrency(p.User.BillingCurrency),
-		RequestPayloadHash: strings.TrimSpace(p.RequestPayloadHash),
+		RequestID:                   requestID,
+		APIKeyBudgetAuthorizationID: p.AuthorizationID,
+		APIKeyID:                    p.APIKey.ID,
+		UserID:                      p.User.ID,
+		AccountID:                   p.Account.ID,
+		AccountType:                 p.Account.Type,
+		WalletCostUSD:               p.Cost.ActualCost,
+		SettlementCurrency:          NormalizeUserBillingCurrency(p.User.BillingCurrency),
+		RequestPayloadHash:          strings.TrimSpace(p.RequestPayloadHash),
 	}
 	if usageLog != nil {
 		if strings.TrimSpace(usageLog.SettlementCurrency) != "" {
@@ -348,6 +350,14 @@ func buildUsageBillingCommand(requestID string, usageLog *UsageLog, p *postUsage
 	}
 	if p.shouldUpdateRateLimits() {
 		cmd.APIKeyRateLimitCost = p.Cost.ActualCost
+	}
+	if p.APIKeyQuotaRemainderUSD != nil {
+		if p.shouldDeductAPIKeyQuota() {
+			cmd.APIKeyQuotaCost = *p.APIKeyQuotaRemainderUSD
+		}
+		if p.shouldUpdateRateLimits() {
+			cmd.APIKeyRateLimitCost = *p.APIKeyQuotaRemainderUSD
+		}
 	}
 	if p.shouldUpdateAccountQuota() {
 		cmd.AccountQuotaCost = p.Cost.TotalCost * p.AccountRateMultiplier
@@ -544,8 +554,12 @@ func finalizePostUsageBilling(ctx context.Context, p *postUsageBillingParams, de
 		syncBalanceCacheAfterDeduction(ctx, p, deps, result)
 	}
 
-	if p.Cost.ActualCost > 0 && p.APIKey != nil && p.APIKey.HasRateLimits() {
-		deps.billingCacheService.QueueUpdateAPIKeyRateLimitUsage(p.APIKey.ID, p.Cost.ActualCost)
+	keyCost := p.Cost.ActualCost
+	if p.APIKeyQuotaRemainderUSD != nil {
+		keyCost = *p.APIKeyQuotaRemainderUSD
+	}
+	if keyCost > 0 && p.APIKey != nil && p.APIKey.HasRateLimits() && deps.billingCacheService != nil {
+		deps.billingCacheService.QueueUpdateAPIKeyRateLimitUsage(p.APIKey.ID, keyCost)
 	}
 
 	deps.deferredService.ScheduleLastUsedUpdate(p.Account.ID)

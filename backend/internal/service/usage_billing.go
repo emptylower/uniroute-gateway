@@ -17,14 +17,15 @@ var ErrBillingCurrencyChanged = errors.New("wallet billing currency changed duri
 type UsageBillingCommand struct {
 	// WalletBinding is frozen before the usage queue. It contains billing
 	// identity only, never API credentials or a request/response body.
-	WalletBinding          *WalletBillingBinding `json:"wallet_binding,omitempty"`
-	WalletUsageLog         *UsageLog             `json:"wallet_usage_log,omitempty"`
-	WalletBillingPlatform  string                `json:"wallet_billing_platform,omitempty"`
-	WalletSubscriptionBill bool                  `json:"wallet_subscription_bill,omitempty"`
-	RequestID              string
-	APIKeyID               int64
-	RequestFingerprint     string
-	RequestPayloadHash     string
+	APIKeyBudgetAuthorizationID string                `json:"api_key_budget_authorization_id,omitempty"`
+	WalletBinding               *WalletBillingBinding `json:"wallet_binding,omitempty"`
+	WalletUsageLog              *UsageLog             `json:"wallet_usage_log,omitempty"`
+	WalletBillingPlatform       string                `json:"wallet_billing_platform,omitempty"`
+	WalletSubscriptionBill      bool                  `json:"wallet_subscription_bill,omitempty"`
+	RequestID                   string
+	APIKeyID                    int64
+	RequestFingerprint          string
+	RequestPayloadHash          string
 
 	UserID              int64
 	SettlementCurrency  string
@@ -91,6 +92,9 @@ func buildUsageBillingFingerprint(c *UsageBillingCommand) string {
 		c.APIKeyRateLimitCost,
 		c.AccountQuotaCost,
 	)
+	if c.APIKeyBudgetAuthorizationID != "" {
+		raw += "|allowance:" + c.APIKeyBudgetAuthorizationID
+	}
 	if payloadHash := strings.TrimSpace(c.RequestPayloadHash); payloadHash != "" {
 		raw += "|" + payloadHash
 	}

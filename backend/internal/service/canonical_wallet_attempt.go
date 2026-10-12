@@ -73,6 +73,15 @@ func (b *CanonicalWalletBridge) preparePoolAttempt(ctx context.Context, h *Autho
 	if count, e := lockWalletAttempt(ctx, tx, h.ID); e != nil || count != len(h.Segments) {
 		return fmt.Errorf("wallet attempt group unavailable: %v", e)
 	}
+	if h.APIKeyBudgetReserved {
+		_, state, _, e := apiKeyBudgetIdentity(ctx, tx, h.ID)
+		if e != nil {
+			return e
+		}
+		if state != "reserved" && state != "prepared" {
+			return ErrAPIKeyBudgetConflict
+		}
+	}
 	result, err := tx.ExecContext(ctx, `UPDATE wallet_authorization_segment SET state='held',updated_at=now() WHERE parent_authorization_id=$1 AND state IN ('prepared','held')`, h.ID)
 	if err != nil {
 		return err
@@ -98,6 +107,11 @@ func (b *CanonicalWalletBridge) preparePoolAttempt(ctx context.Context, h *Autho
 		defer tx.Rollback()
 		if count, e := lockWalletAttempt(ctx, tx, h.ID); e != nil || count != len(h.Segments) {
 			return fmt.Errorf("wallet attempt group unavailable: %v", e)
+		}
+		if h.APIKeyBudgetReserved {
+			if err = MarkAPIKeyBudgetWrittenTx(ctx, tx, h.ID); err != nil {
+				return err
+			}
 		}
 		owner, host := "", ""
 		var normalization any
@@ -188,13 +202,17 @@ func (b *CanonicalWalletBridge) poolAttemptActive(ctx context.Context, auth stri
 
 // All operations are idempotent under their authorization/event IDs. This runs
 // regardless of the new-media feature flag and preserves unknown cost evidence.
-func (b *CanonicalWalletBridge) recoverPoolAttempts(ctx context.Context) {
+func (b *CanonicalWalletBridge) recoverPoolAttempts(ctx context.Context, onlyParent ...string) {
 	if b == nil || b.outboxDB == nil || !b.HoldsEnabled() {
 		return
 	}
 	b.recoverBillingEvidence(ctx)
 	_, _ = b.ObserveImmediateWalletRecovery(ctx)
-	rows, err := b.outboxDB.QueryContext(ctx, `SELECT parent_authorization_id,platform_user_id,billing_snapshot_id FROM wallet_authorization_segment WHERE kind<>'media' AND state<>'finished' AND (state<>'expired_unknown' OR expiry_cleanup_at IS NULL) GROUP BY parent_authorization_id,platform_user_id,billing_snapshot_id ORDER BY min(updated_at) LIMIT 32`)
+	parentFilter := ""
+	if len(onlyParent) > 0 {
+		parentFilter = onlyParent[0]
+	}
+	rows, err := b.outboxDB.QueryContext(ctx, `SELECT parent_authorization_id,platform_user_id,billing_snapshot_id FROM wallet_authorization_segment WHERE ($1='' OR parent_authorization_id=$1) AND kind<>'media' AND state<>'finished' AND (state<>'expired_unknown' OR expiry_cleanup_at IS NULL) GROUP BY parent_authorization_id,platform_user_id,billing_snapshot_id ORDER BY min(updated_at) LIMIT 32`, parentFilter)
 	if err != nil {
 		return
 	}
@@ -282,8 +300,15 @@ func (b *CanonicalWalletBridge) recoverPoolAttempts(ctx context.Context) {
 						break
 					}
 					if owned {
-						_ = b.finishZeroPoolAttempt(ctx, g.parent, g.user, segments, "")
-						break
+						// A ledger-fenced tokenless authorization never sent a
+						// provider write. Use the original pin-finish ACK path,
+						// not the written-attempt zero protocol requiring a token.
+						var fencedNoWrite bool
+						err = b.outboxDB.QueryRowContext(ctx, `SELECT NOT EXISTS(SELECT 1 FROM wallet_authorization_segment WHERE parent_authorization_id=$1 AND authorization_token IS NOT NULL) AND EXISTS(SELECT 1 FROM api_key_budget_authorization WHERE authorization_id=$1 AND state='released' AND written_at IS NULL)`, g.parent).Scan(&fencedNoWrite)
+						if err != nil || !fencedNoWrite {
+							_ = b.finishZeroPoolAttempt(ctx, g.parent, g.user, segments, "")
+							break
+						}
 					}
 				}
 				if _, e = b.store.ReleaseCanonicalWalletHold(ctx, g.user, segment.AuthorizationID, "released", "zero_cost"); e != nil && !isHoldNotArmed(e) && !errors.Is(e, ErrCanonicalWalletHoldMissing) {
@@ -403,6 +428,9 @@ func (b *CanonicalWalletBridge) releasePoolAttempt(ctx context.Context, parent, 
 	n, _ := result.RowsAffected()
 	if n != int64(count) {
 		return nil
+	}
+	if err = releaseAPIKeyBudgetIfPresentTx(ctx, tx, parent); err != nil {
+		return err
 	}
 	if err = tx.Commit(); err != nil {
 		return err

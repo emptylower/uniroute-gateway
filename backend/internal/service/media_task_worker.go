@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -131,6 +132,22 @@ func (s *MediaTaskService) process(ctx context.Context, r *mediaTaskRecord) erro
 		if user.Status != StatusActive || user.PlatformUserID != r.PlatformUserID {
 			return s.failUnsubmitted(ctx, r, "USER_UNAVAILABLE")
 		}
+		if s.apiKeys != nil {
+			key, keyErr := s.apiKeys.GetByID(ctx, r.APIKeyID)
+			if keyErr != nil || key == nil || key.UserID != r.UserID || !key.IsActive() || key.IsExpired() {
+				return s.failUnsubmitted(ctx, r, "API_KEY_UNAVAILABLE")
+			}
+			// Old console keys retain their internal routing behavior.
+			if key.PlatformKeyID != nil && !strings.HasPrefix(*key.PlatformKeyID, "playground:") {
+				actorKey := *key
+				actorKey.User = user
+				key = &actorKey
+				if validatePublicMediaKey(key, s.cfg, false) != nil {
+					return s.failUnsubmitted(ctx, r, "MEDIA_KEY_INELIGIBLE")
+				}
+			}
+		}
+
 		snap, err := s.snapshots.store.GetBillingSnapshot(ctx, r.SnapshotID)
 		if err != nil {
 			return err
@@ -391,7 +408,26 @@ func (s *MediaTaskService) failUnsubmitted(ctx context.Context, r *mediaTaskReco
 	} else {
 		r.Status = "failed"
 		r.PinState = "finished"
-		if _, e = s.db.ExecContext(ctx, `UPDATE gateway_media_task SET financial_state='released_zero' WHERE id=$1 AND held_units=0`, r.ID); e != nil {
+		tx, e := s.db.BeginTx(ctx, nil)
+		if e != nil {
+			return e
+		}
+		defer func() { _ = tx.Rollback() }()
+		res, e := tx.ExecContext(ctx, `UPDATE gateway_media_task SET financial_state='released_zero' WHERE id=$1 AND held_units=0 AND write_started_at IS NULL`, r.ID)
+		if e != nil {
+			return e
+		}
+		changed, e := res.RowsAffected()
+		if e != nil {
+			return e
+		}
+		if changed != 1 {
+			return errors.New("media no-write release fence refused")
+		}
+		if e = ReleaseAPIKeyBudgetTx(ctx, tx, r.AuthorizationID); e != nil {
+			return e
+		}
+		if e = tx.Commit(); e != nil {
 			return e
 		}
 	}
@@ -786,6 +822,9 @@ func (s *MediaTaskService) persistMediaFeePlan(ctx context.Context, r *mediaTask
 	_, err = tx.ExecContext(ctx, `INSERT INTO usage_logs(user_id,api_key_id,account_id,request_id,model,requested_model,billing_snapshot_id,billing_mode,media_type,total_cost,actual_cost,source_currency,settlement_currency,exchange_rate,exchange_rate_source,exchange_rate_as_of,source_cost,base_cost,rate_multiplier,image_count,video_count,video_duration_seconds,image_size,created_at)
  SELECT $1,$2,$3,$4::text,$5::text,$5::text,$6,'per_request',$7,$8::numeric,$8::numeric,'USD','USD',1,'usd-e8-v1',$9,$10::numeric,$8::numeric,1,$11,$12,$13,$14,$9 WHERE NOT EXISTS(SELECT 1 FROM usage_logs WHERE request_id=$4::text AND api_key_id=$2)`, r.UserID, r.APIKeyID, s.accountID, r.ID, r.Model, r.SnapshotID, r.MediaType, amountUSD, r.CreatedAt, usd, mediaImageCount(r), mediaVideoCount(r), mediaDuration(r), mediaImageSize(r))
 	if err != nil {
+		return err
+	}
+	if err = CaptureAPIKeyBudgetTx(ctx, tx, r.AuthorizationID, r.QuotedUnits); err != nil {
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE gateway_media_task SET fee_plan_at=COALESCE(fee_plan_at,now()) WHERE id=$1 AND financial_state='fee_pending' AND fee_evidence IS NOT NULL`, r.ID); err != nil {

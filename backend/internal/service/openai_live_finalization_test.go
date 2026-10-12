@@ -588,3 +588,22 @@ func TestLiveProvisionalStoreAndServiceHelpersCoverage(t *testing.T) {
 	provStore.releaseErr = errors.New("release error")
 	svc.releaseLiveProvisionalFinalizationClaim("tok") // release error branch logged
 }
+
+func TestTryFinalizeCanonicalLiveKeepsLegacyCountersWithoutBudgetBasis(t *testing.T) {
+	f, rec, mock := newLiveFinalizationWithOutboxFixture(t, config.CanonicalWalletModeEnforce)
+	f.svc.cfg.CanonicalWallet.USDWalletEnabled = true
+	rec.APIKeyQuota = 1
+	rec.RateLimit5h = 1
+	require.NoError(t, f.liveStore.SaveLiveCall(context.Background(), rec, time.Hour))
+	mock.ExpectQuery("SELECT to_regclass").WillReturnRows(sqlmock.NewRows([]string{"available"}).AddRow(false))
+	expectNoAuthorizationSegments(mock)
+	mock.ExpectBegin()
+	mock.ExpectCommit()
+	require.True(t, f.svc.tryFinalizeLiveCall(rec))
+	require.NoError(t, mock.ExpectationsWereMet())
+	repo := f.svc.usageBillingRepo.(*openAIRecordUsageBillingRepoStub)
+	require.NotNil(t, repo.lastCmd)
+	require.Greater(t, repo.lastCmd.APIKeyQuotaCost, float64(0))
+	require.Greater(t, repo.lastCmd.APIKeyRateLimitCost, float64(0))
+	require.Empty(t, repo.lastCmd.APIKeyBudgetAuthorizationID, "final session usage does not own another allowance")
+}

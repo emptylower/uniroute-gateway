@@ -261,7 +261,47 @@ func (r *usageBillingRepository) applyUsageBillingEffects(ctx context.Context, t
 		result.BalanceOverdrafted = !sufficient
 	}
 
-	if cmd.APIKeyQuotaCost > 0 {
+	budgetAuth := cmd.APIKeyBudgetAuthorizationID
+	if budgetAuth == "" && cmd.WalletBinding != nil {
+		budgetAuth = cmd.WalletBinding.ParentAuthorizationID
+	}
+	var budgetHandled bool
+	if budgetAuth != "" {
+		units, e := service.USDToUnits(cmd.WalletCostUSD)
+		if e != nil {
+			return e
+		}
+		if cmd.WalletBinding != nil {
+			units = cmd.WalletBinding.FeeUnits
+		}
+		// Non-v5 paths also acquire segment locks before the Key lock.
+		if cmd.WalletBinding == nil {
+			rows, e := tx.QueryContext(ctx, `SELECT authorization_id FROM wallet_authorization_segment WHERE parent_authorization_id=$1 ORDER BY ordinal FOR UPDATE`, budgetAuth)
+			if e != nil {
+				return e
+			}
+			for rows.Next() {
+				var id string
+				if e = rows.Scan(&id); e != nil {
+					break
+				}
+			}
+			if e == nil {
+				e = rows.Err()
+			}
+			if closeErr := rows.Close(); e == nil {
+				e = closeErr
+			}
+			if e != nil {
+				return e
+			}
+		}
+		budgetHandled, e = service.CaptureAPIKeyBudgetUsageTx(ctx, tx, budgetAuth, cmd.APIKeyID, units)
+		if e != nil {
+			return e
+		}
+	}
+	if !budgetHandled && cmd.APIKeyQuotaCost > 0 {
 		exhausted, err := incrementUsageBillingAPIKeyQuota(ctx, tx, cmd.APIKeyID, cmd.APIKeyQuotaCost)
 		if err != nil {
 			return err
@@ -269,7 +309,7 @@ func (r *usageBillingRepository) applyUsageBillingEffects(ctx context.Context, t
 		result.APIKeyQuotaExhausted = exhausted
 	}
 
-	if cmd.APIKeyRateLimitCost > 0 {
+	if !budgetHandled && cmd.APIKeyRateLimitCost > 0 {
 		if err := incrementUsageBillingAPIKeyRateLimit(ctx, tx, cmd.APIKeyID, cmd.APIKeyRateLimitCost); err != nil {
 			return err
 		}

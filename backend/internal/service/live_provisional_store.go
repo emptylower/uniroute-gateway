@@ -266,6 +266,9 @@ func (s *liveProvisionalStore) AdvanceLiveWindow(ctx context.Context, token stri
 		return err
 	}
 	if count > 0 {
+		if err = markAPIKeyBudgetWrittenIfPresentTx(ctx, tx, next.Token); err != nil {
+			return err
+		}
 		res, err := tx.ExecContext(ctx, `UPDATE wallet_authorization_segment SET state='indeterminate',authorization_token=$2,updated_at=now() WHERE parent_authorization_id=$1 AND kind='live' AND state='held' AND authorization_token IS NULL AND platform_user_id=(SELECT platform_user_id FROM wallet_live_provisional WHERE token=$3) AND billing_snapshot_id=(SELECT billing_snapshot_id FROM wallet_live_provisional WHERE token=$3)`, next.Token, next.Token+":live-window", token)
 		if err != nil {
 			return err

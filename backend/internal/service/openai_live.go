@@ -1540,13 +1540,26 @@ func (s *OpenAIGatewayService) tryFinalizeLiveCall(record *LiveCallRecord) bool 
 	}
 	cost := &CostBreakdown{InputCost: inputCost, OutputCost: outputCost, CacheReadCost: cacheReadCost, TotalCost: sourceCost, ActualCost: actualCost, BillingMode: string(BillingModeToken)}
 
+	var quotaRemainder *float64
+	if s.cfg != nil && s.cfg.CanonicalWallet.USDWalletEnabled && s.canonicalWalletMode() == config.CanonicalWalletModeEnforce {
+		units, err := liveUsageUnits(record)
+		if err != nil {
+			return false
+		}
+		quotaRemainder, err = s.liveAPIKeyQuotaRemainder(context.Background(), record, units)
+		if err != nil {
+			return false
+		}
+	}
+
 	applied, _, billingErr := applyUsageBillingDetailed(context.Background(), record.CallHash, usageLog, &postUsageBillingParams{ // billingResult was only consumed by the pre-3.7b per-session observer call; the last-window event carries the remainder directly (§13.2.3)
 		Cost: cost,
 		User: user, APIKey: apiKey, Account: account, Subscription: subscription,
-		IsSubscriptionBill:    record.SubscriptionBilling,
-		AccountRateMultiplier: record.AccountRateMultiplier,
-		APIKeyService:         liveAPIKeyQuotaUpdater{},
-		Platform:              PlatformOpenAI,
+		IsSubscriptionBill:      record.SubscriptionBilling,
+		AccountRateMultiplier:   record.AccountRateMultiplier,
+		APIKeyService:           liveAPIKeyQuotaUpdater{},
+		APIKeyQuotaRemainderUSD: quotaRemainder,
+		Platform:                PlatformOpenAI,
 	}, s.billingDeps(), s.usageBillingRepo)
 	if billingErr != nil {
 		logger.L().Error("openai.live_billing_failed", zap.String("call_hash", record.CallHash), zap.Error(billingErr))
@@ -1591,7 +1604,11 @@ func (s *OpenAIGatewayService) tryFinalizeLiveCall(record *LiveCallRecord) bool 
 			if provRec, provErr := s.liveProvisional.Get(context.Background(), record.AuthorizationID); provErr == nil && len(provRec.Windows) > 0 {
 				seq = len(provRec.Windows)
 				for _, w := range provRec.Windows[:seq-1] {
-					settledSum += w.SettledUnits
+					var sumErr error
+					settledSum, sumErr = AddUnits(settledSum, w.SettledUnits)
+					if sumErr != nil {
+						return false
+					}
 				}
 				if seq > 1 {
 					eventAuthorizationID = provRec.Windows[seq-1].Token
@@ -1613,6 +1630,15 @@ func (s *OpenAIGatewayService) tryFinalizeLiveCall(record *LiveCallRecord) bool 
 				// The idle-window rule at finalization: there is nothing to
 				// settle — no observer call, no not-enqueued count; the row
 				// completes with settledUnits = 0.
+				if quotaRemainder != nil && s.canonicalWallet != nil {
+					zeroCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					zeroErr := s.canonicalWallet.finalizeLiveWindowZero(zeroCtx, record, seq, units, settledSum, eventAuthorizationID)
+					cancel()
+					if zeroErr != nil {
+						logger.L().Error("openai.live_idle_zero_failed", zap.String("call_hash", record.CallHash), zap.Error(zeroErr))
+						return false
+					}
+				}
 				liveWindowMetrics.idleFinalized.Add(1)
 				if err := s.completeLiveProvisionalFinalization(record.AuthorizationID, "", 0, seq); err != nil {
 					logger.L().Error("openai.live_provisional_complete_failed", zap.String("call_hash", record.CallHash), zap.Error(err))

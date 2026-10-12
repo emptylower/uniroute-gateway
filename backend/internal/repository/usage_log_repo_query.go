@@ -19,7 +19,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/service"
 )
 
-const usageLogSelectColumns = "id, user_id, api_key_id, account_id, request_id, model, requested_model, upstream_model, governance_target_platform, group_id, subscription_id, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, cache_creation_5m_tokens, cache_creation_1h_tokens, image_output_tokens, image_output_cost, image_input_tokens, image_input_cost, input_cost, output_cost, cache_creation_cost, cache_read_cost, base_cost_usd AS total_cost, actual_cost_usd AS actual_cost, rate_multiplier, account_rate_multiplier, billing_type, request_type, stream, openai_ws_mode, duration_ms, first_token_ms, user_agent, ip_address, image_count, image_size, image_input_size, image_output_size, image_size_source, image_size_breakdown, video_count, video_resolution, video_duration_seconds, service_tier, reasoning_effort, inbound_endpoint, upstream_endpoint, cache_ttl_overridden, long_context_billing_applied, channel_id, model_mapping_chain, billing_tier, billing_mode, account_stats_cost, session_id, source_currency, settlement_currency, exchange_rate, exchange_rate_source, exchange_rate_as_of, source_cost, base_cost_usd AS base_cost, created_at, billing_snapshot_id"
+const usageLogSelectColumns = "id, user_id, api_key_id, account_id, request_id, model, requested_model, upstream_model, governance_target_platform, group_id, subscription_id, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, cache_creation_5m_tokens, cache_creation_1h_tokens, image_output_tokens, image_output_cost, image_input_tokens, image_input_cost, input_cost, output_cost, cache_creation_cost, cache_read_cost, base_cost_usd AS total_cost, actual_cost_usd AS actual_cost, rate_multiplier, account_rate_multiplier, billing_type, request_type, stream, openai_ws_mode, duration_ms, first_token_ms, user_agent, ip_address, image_count, image_size, image_input_size, image_output_size, image_size_source, image_size_breakdown, video_count, video_resolution, video_duration_seconds, service_tier, reasoning_effort, inbound_endpoint, upstream_endpoint, cache_ttl_overridden, long_context_billing_applied, channel_id, model_mapping_chain, billing_tier, billing_mode, account_stats_cost, session_id, source_currency, settlement_currency, exchange_rate, exchange_rate_source, exchange_rate_as_of, source_cost, base_cost_usd AS base_cost, created_at, billing_snapshot_id, media_type"
 
 func (r *usageLogRepository) GetByID(ctx context.Context, id int64) (log *service.UsageLog, err error) {
 	query := "SELECT " + usageLogSelectColumns + " FROM usage_logs WHERE id = $1"
@@ -496,6 +496,7 @@ func scanUsageLog(scanner interface{ Scan(...any) error }) (*service.UsageLog, e
 		baseCost                  float64
 		createdAt                 time.Time
 		billingSnapshotID         sql.NullString
+		mediaType                 sql.NullString
 	)
 
 	if err := scanner.Scan(
@@ -566,6 +567,7 @@ func scanUsageLog(scanner interface{ Scan(...any) error }) (*service.UsageLog, e
 		&baseCost,
 		&createdAt,
 		&billingSnapshotID,
+		&mediaType,
 	); err != nil {
 		return nil, err
 	}
@@ -699,6 +701,9 @@ func scanUsageLog(scanner interface{ Scan(...any) error }) (*service.UsageLog, e
 	}
 	if billingSnapshotID.Valid {
 		log.BillingSnapshotID = &billingSnapshotID.String
+	}
+	if mediaType.Valid {
+		log.MediaType = &mediaType.String
 	}
 	if exchangeRateAsOf.Valid {
 		log.ExchangeRateAsOf = &exchangeRateAsOf.Time

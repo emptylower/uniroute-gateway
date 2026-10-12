@@ -124,7 +124,7 @@ func TestMediaAuthorizationRefusalPreservesZeroFundsAndClassifiesOnlyBalance(t *
 			provider := &mediaRefusalProvider{}
 			service := &MediaTaskService{cfg: cfg, db: db, store: &mediaTaskStore{db: db}, bridge: bridge, snapshots: snapshots, authorizer: NewCanonicalWalletAuthorizer(cfg, bridge, snapshots), users: &mediaRefusalUsers{user: user}, provider: provider}
 			defer service.closeMediaJournalOwner()
-			r := &mediaTaskRecord{ID: "media_" + strings.Repeat("b", 32), UserID: user.ID, PlatformUserID: user.PlatformUserID, AuthorizationID: "auth_" + strings.Repeat("a", 32), SnapshotID: snapshot.ID, Model: "veo-3-1", Option: "4", Prompt: "PRIVATE_PROMPT", QuotedUnits: 100800000, Status: "queued", ClaimedBy: "claim"}
+			r := &mediaTaskRecord{ID: "media_" + strings.Repeat("b", 32), APIKeyID: 12, UserID: user.ID, PlatformUserID: user.PlatformUserID, AuthorizationID: "auth_" + strings.Repeat("a", 32), SnapshotID: snapshot.ID, Model: "veo-3-1", Option: "4", Prompt: "PRIVATE_PROMPT", QuotedUnits: 100800000, Status: "queued", ClaimedBy: "claim"}
 			r.FinancialPolicyVersion = WalletImmediateReleasePolicyVersion
 			expectNoSegments := func() {
 				mock.ExpectQuery("SELECT authorization_id,lease_id,held_units").WithArgs(r.AuthorizationID).WillReturnRows(sqlmock.NewRows([]string{"authorization_id", "lease_id", "held_units", "lease_basis", "event_id", "actual_units", "pin_state", "kind", "state", "settlement_payload", "remainder_payload"}))
@@ -145,7 +145,13 @@ func TestMediaAuthorizationRefusalPreservesZeroFundsAndClassifiesOnlyBalance(t *
 			expectNoSegments() // Zero completion verifies there are no debit shares.
 			mock.ExpectBegin()
 			mock.ExpectCommit()
+			mock.ExpectBegin()
 			mock.ExpectExec("UPDATE gateway_media_task SET financial_state='released_zero'").WithArgs(r.ID).WillReturnResult(sqlmock.NewResult(0, 1))
+			mock.ExpectQuery("SELECT api_key_id FROM api_key_budget_authorization").WithArgs(r.AuthorizationID).WillReturnRows(sqlmock.NewRows([]string{"api_key_id"}).AddRow(r.APIKeyID))
+			mock.ExpectQuery("SELECT id FROM api_keys").WithArgs(r.APIKeyID).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(r.APIKeyID))
+			mock.ExpectQuery("SELECT state,captured_units FROM api_key_budget_authorization").WithArgs(r.AuthorizationID).WillReturnRows(sqlmock.NewRows([]string{"state", "captured_units"}).AddRow("reserved", nil))
+			mock.ExpectExec("UPDATE api_key_budget_authorization SET state='released'").WithArgs(r.AuthorizationID).WillReturnResult(sqlmock.NewResult(0, 1))
+			mock.ExpectCommit()
 			mock.ExpectExec("UPDATE gateway_media_task SET lease_id").WillReturnResult(sqlmock.NewResult(0, 1))
 			mock.ExpectClose()
 			mock.ExpectClose() // Dedicated owner plus the normal query connection.

@@ -203,6 +203,7 @@ jobs:
           # The two injected-dependency-fault recoveries wait out the real 60 s stale
           # outbox reclaim, so the whole package needs more than the former 15 minutes.
           go test -tags=media_integration -p=1 -count=1 -timeout=25m ./internal/media_integration
+          go test -tags=integration,budget_integration -p=1 -count=1 -timeout=10m ./internal/service -run '^TestPublicMediaBudgetEnforceLive'
           go test -tags=media_integration -race -p=1 -count=3 -timeout=10m ./internal/media_integration -run '^(TestExternalCold|TestExternalPoolConcurrentPositiveAndZero|TestExternalPartialExpiryAck)'
       - name: Wallet owner and retry race regressions
         working-directory: backend
@@ -288,10 +289,42 @@ jobs:
           working-directory: backend
           only-new-issues: false
 
+  public-media-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      BUDGET_TEST_DSN: postgres://wallet_test:wallet_test@127.0.0.1:55432/uniroute_media_test_ci?sslmode=disable
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: wallet_test
+          POSTGRES_PASSWORD: wallet_test
+          POSTGRES_DB: uniroute_media_test_ci
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U wallet_test -d uniroute_media_test_ci"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          check-latest: false
+          cache: true
+          cache-dependency-path: backend/go.sum
+      - name: Verify Go version
+        run: go version | grep -q 'go1.26.5'
+      - name: Shared Key allowance integration
+        working-directory: backend
+        run: go test -tags=budget_integration -count=1 -timeout=10m ./internal/service -run '^TestPublicMediaBudget'
+      # Full media_integration runs in wallet-recovery with its verified real Worker wire fixture.
+
   gateway-release-artifact:
     # Deployment consumes only a main commit that passed every merge gate.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [shell, test, ws-race, wallet-recovery, frontend, golangci-lint]
+    needs: [shell, test, ws-race, wallet-recovery, public-media-integration, frontend, golangci-lint]
     runs-on: ubuntu-latest
     strategy:
       matrix:

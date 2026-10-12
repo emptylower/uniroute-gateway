@@ -10,7 +10,10 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-type PlatformInferenceHandler struct{ service *service.MediaTaskService }
+type PlatformInferenceHandler struct {
+	service     *service.MediaTaskService
+	publicAudit *OpenAIGatewayHandler
+}
 
 func NewPlatformInferenceHandler(s *service.MediaTaskService) *PlatformInferenceHandler {
 	return &PlatformInferenceHandler{service: s}

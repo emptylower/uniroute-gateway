@@ -1,6 +1,8 @@
 package service
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"math"
 	"strconv"
@@ -89,6 +91,9 @@ func PublicMediaTaskCatalog() []MediaModel {
 	available := make([]MediaModel, 0, len(catalog))
 	for _, model := range catalog {
 		if CheckModelAvailability(model.ModelID, model.Slug, model.upstream) == nil {
+			if model.MediaKind == "music" {
+				model.Unit = "per_request"
+			}
 			available = append(available, model)
 		}
 	}
@@ -177,11 +182,12 @@ func mediaSpecModel(id, slug, name, provider, kind, param string, fields []media
 }
 
 type MediaCreateInput struct {
-	Model     string         `json:"model"`
-	Prompt    string         `json:"prompt"`
-	Option    string         `json:"option"`
-	MediaType string         `json:"media_type,omitempty"`
-	Input     map[string]any `json:"input,omitempty"`
+	MaxCostUSD *string        `json:"max_cost_usd,omitempty"`
+	Model      string         `json:"model"`
+	Prompt     string         `json:"prompt"`
+	Option     string         `json:"option"`
+	MediaType  string         `json:"media_type,omitempty"`
+	Input      map[string]any `json:"input,omitempty"`
 }
 type MediaQuote struct {
 	Model         string `json:"model"`
@@ -192,9 +198,12 @@ type MediaQuote struct {
 }
 
 func resolveMediaQuote(model, option string) (MediaModel, string, int64, error) {
-	if err := CheckModelAvailability(model); err != nil {
+	if err := CheckModelAvailability(model, mediaUpstreamModel(model)); err != nil {
 		return MediaModel{}, "", 0, err
 	}
+	return resolveMediaQuoteUnchecked(model, option)
+}
+func resolveMediaQuoteUnchecked(model, option string) (MediaModel, string, int64, error) {
 	for _, m := range MediaTaskCatalog() {
 		if m.ModelID != strings.TrimSpace(model) {
 			continue
@@ -228,7 +237,13 @@ func mediaQuote(model, option string) (MediaQuote, error) {
 	return MediaQuote{m.ModelID, o, "USD", mediaUSD(units), "usd-wallet-v1"}, nil
 }
 func normalizeMediaCreate(in MediaCreateInput) (MediaCreateInput, MediaModel, int64, map[string]any, error) {
-	m, option, units, err := resolveMediaQuote(in.Model, in.Option)
+	if err := CheckModelAvailability(in.Model, mediaUpstreamModel(in.Model)); err != nil {
+		return in, MediaModel{}, 0, nil, err
+	}
+	return normalizeMediaCreateUnchecked(in)
+}
+func normalizeMediaCreateUnchecked(in MediaCreateInput) (MediaCreateInput, MediaModel, int64, map[string]any, error) {
+	m, option, units, err := resolveMediaQuoteUnchecked(in.Model, in.Option)
 	if err != nil {
 		return in, m, 0, nil, err
 	}
@@ -357,4 +372,28 @@ func mediaUpstreamModel(model string) string {
 		}
 	}
 	return model
+}
+
+// The optional cost cap is still a string when present; null and numeric JSON
+// must not silently disable the caller's spending guard.
+func (in *MediaCreateInput) UnmarshalJSON(raw []byte) error {
+	type inputAlias MediaCreateInput
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return err
+	}
+	if cap, ok := fields["max_cost_usd"]; ok {
+		var value string
+		if string(cap) == "null" || json.Unmarshal(cap, &value) != nil || value == "" {
+			return infraerrors.BadRequest("INVALID_COST_CAP", "max_cost_usd must be a non-empty decimal string")
+		}
+	}
+	var decoded inputAlias
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&decoded); err != nil {
+		return err
+	}
+	*in = MediaCreateInput(decoded)
+	return nil
 }

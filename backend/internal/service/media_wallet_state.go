@@ -115,6 +115,18 @@ func (s *MediaTaskService) bindMediaWriteOwner(r *mediaTaskRecord, handle *Autho
 			j.record.NotSent = true
 			return errors.New("media write funding segment identity conflict")
 		}
+		// Atomic Key lock / written transition prevents a revoked queued task
+		// from making a provider write while preserving already-written work.
+		if r.PublicAPI {
+			if err = validateMediaEligibilityTx(ctx, tx, r); err != nil {
+				j.record.NotSent = true
+				return err
+			}
+		}
+		if err = MarkAPIKeyBudgetWrittenTx(ctx, tx, r.AuthorizationID); err != nil {
+			j.record.NotSent = true
+			return err
+		}
 		if err = tx.Commit(); err != nil {
 			j.record.NotSent = true
 			return err
@@ -384,8 +396,22 @@ func (s *MediaTaskService) finishMediaZero(ctx context.Context, r *mediaTaskReco
 			return err
 		}
 	}
-	_, err = s.db.ExecContext(ctx, `UPDATE gateway_media_task SET financial_state='released_zero',financial_released_at=COALESCE(financial_released_at,(SELECT min(zero_released_at) FROM wallet_authorization_segment WHERE parent_authorization_id=$2)),actual_units=0,pin_state='finished',status='failed',settled_at=COALESCE(settled_at,now()),claimed_by=NULL,claim_until=NULL WHERE id=$1 AND financial_state='zero_pending'`, r.ID, r.AuthorizationID)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err = lockWalletAttempt(ctx, tx, r.AuthorizationID); err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE gateway_media_task SET financial_state='released_zero',financial_released_at=COALESCE(financial_released_at,(SELECT min(zero_released_at) FROM wallet_authorization_segment WHERE parent_authorization_id=$2)),actual_units=0,pin_state='finished',status='failed',settled_at=COALESCE(settled_at,now()),claimed_by=NULL,claim_until=NULL WHERE id=$1 AND financial_state='zero_pending'`, r.ID, r.AuthorizationID)
+	if err != nil {
+		return err
+	}
+	if err = ReleaseAPIKeyBudgetTx(ctx, tx, r.AuthorizationID); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
 		return err
 	}
 	return s.unprotect(ctx, r)

@@ -1652,11 +1652,13 @@ type CanonicalWalletConfig struct {
 // MediaTasks uses the canonical wallet exclusively. The provider credential is
 // supplied through the environment, never projected to browser API keys.
 type MediaTasksConfig struct {
-	Enabled         bool   `mapstructure:"enabled"`
-	KIEAPIKey       string `mapstructure:"kie_api_key"`
-	KIEBaseURL      string `mapstructure:"kie_base_url"`
-	PollSeconds     int    `mapstructure:"poll_seconds"`
-	DeadlineSeconds int    `mapstructure:"deadline_seconds"`
+	PublicAPIEnabled bool    `mapstructure:"public_api_enabled"`
+	CanaryKeyIDs     []int64 `mapstructure:"canary_key_ids"`
+	Enabled          bool    `mapstructure:"enabled"`
+	KIEAPIKey        string  `mapstructure:"kie_api_key"`
+	KIEBaseURL       string  `mapstructure:"kie_base_url"`
+	PollSeconds      int     `mapstructure:"poll_seconds"`
+	DeadlineSeconds  int     `mapstructure:"deadline_seconds"`
 }
 
 // TotpConfig TOTP 双因素认证配置
@@ -2120,6 +2122,8 @@ func setDefaults() {
 	viper.SetDefault("canonical_wallet.usd_wallet_enabled", false)
 	viper.SetDefault("canonical_wallet.usd_policy_version", "")
 	viper.SetDefault("media_tasks.enabled", false)
+	viper.SetDefault("media_tasks.public_api_enabled", false)
+	viper.SetDefault("media_tasks.canary_key_ids", []int64{})
 	viper.SetDefault("media_tasks.kie_api_key", "")
 	viper.SetDefault("media_tasks.kie_base_url", "https://api.kie.ai")
 	viper.SetDefault("media_tasks.poll_seconds", 5)

@@ -47,10 +47,12 @@ func TestMediaFeePlanReplaysSevenFieldPayloadWithLockedOriginalIdentity(t *testi
 		t.Run(tc.name, func(t *testing.T) {
 			db, mock, err := sqlmock.New()
 			require.NoError(t, err)
-			r := &mediaTaskRecord{ID: "task", AuthorizationID: "auth", AuthorizationToken: "auth.1", PlatformUserID: "user", SnapshotID: "original-snapshot", QuotedUnits: 150, CreatedAt: time.Unix(1700000000, 0).UTC(), Segments: []AuthorizationSegment{
-				{AuthorizationID: "auth", EventID: "event-0", LeaseID: "lease-0", HeldUnits: 100},
-				{AuthorizationID: "auth-share-1", EventID: "event-1", LeaseID: "lease-1", HeldUnits: 100},
-			}}
+			r := &mediaTaskRecord{ // Two delivered music tracks are still one frozen request fee;
+				// the second persistence pass also must not capture Key quota again.
+				APIKeyID: 12, MediaType: "music", Result: MediaProviderResult{URLs: []MediaURL{{URL: "https://example.test/track-1.mp3"}, {URL: "https://example.test/track-2.mp3"}}}, ID: "task", AuthorizationID: "auth", AuthorizationToken: "auth.1", PlatformUserID: "user", SnapshotID: "original-snapshot", QuotedUnits: 150, CreatedAt: time.Unix(1700000000, 0).UTC(), Segments: []AuthorizationSegment{
+					{AuthorizationID: "auth", EventID: "event-0", LeaseID: "lease-0", HeldUnits: 100},
+					{AuthorizationID: "auth-share-1", EventID: "event-1", LeaseID: "lease-1", HeldUnits: 100},
+				}}
 			s := &MediaTaskService{db: db}
 			replays := 1
 			if tc.wantErr == "" {
@@ -119,6 +121,15 @@ func TestMediaFeePlanReplaysSevenFieldPayloadWithLockedOriginalIdentity(t *testi
 				}
 				if tc.wantErr == "" {
 					mock.ExpectExec("INSERT INTO usage_logs").WillReturnResult(sqlmock.NewResult(0, 1))
+					mock.ExpectQuery("SELECT api_key_id FROM api_key_budget_authorization").WithArgs(r.AuthorizationID).WillReturnRows(sqlmock.NewRows([]string{"api_key_id"}).AddRow(r.APIKeyID))
+					mock.ExpectQuery("SELECT id FROM api_keys").WithArgs(r.APIKeyID).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(r.APIKeyID))
+					if replay == 0 {
+						mock.ExpectQuery("SELECT state,captured_units FROM api_key_budget_authorization").WithArgs(r.AuthorizationID).WillReturnRows(sqlmock.NewRows([]string{"state", "captured_units"}).AddRow("written", nil))
+						mock.ExpectExec("UPDATE api_keys SET quota_used").WithArgs(r.APIKeyID, r.QuotedUnits).WillReturnResult(sqlmock.NewResult(0, 1))
+						mock.ExpectExec("UPDATE api_key_budget_authorization SET state='captured'").WithArgs(r.AuthorizationID, r.QuotedUnits).WillReturnResult(sqlmock.NewResult(0, 1))
+					} else {
+						mock.ExpectQuery("SELECT state,captured_units FROM api_key_budget_authorization").WithArgs(r.AuthorizationID).WillReturnRows(sqlmock.NewRows([]string{"state", "captured_units"}).AddRow("captured", r.QuotedUnits))
+					}
 					mock.ExpectExec("UPDATE gateway_media_task SET fee_plan_at").WithArgs(r.ID).WillReturnResult(sqlmock.NewResult(0, 1))
 					mock.ExpectCommit()
 				}

@@ -78,7 +78,11 @@ func NewErrorResponse(code, message string) ErrorResponse {
 
 // AbortWithError 中断请求并返回JSON错误
 func AbortWithError(c *gin.Context, statusCode int, code, message string) {
-	c.JSON(statusCode, NewErrorResponse(code, message))
+	if strings.HasPrefix(c.Request.URL.Path, "/v1/media/") {
+		c.JSON(statusCode, gin.H{"code": statusCode, "message": message, "reason": code, "data": nil})
+	} else {
+		c.JSON(statusCode, NewErrorResponse(code, message))
+	}
 	c.Abort()
 }
 

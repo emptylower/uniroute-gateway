@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -93,6 +94,18 @@ func (a *CanonicalWalletAuthorizer) Authorize(ctx context.Context, in AuthorizeI
 		if enforce && a.bridge.outboxDB != nil && h.AttemptKind != "media" {
 			abortCtx, abortCancel := context.WithTimeout(context.Background(), a.requestTimeout())
 			_, _ = a.bridge.outboxDB.ExecContext(abortCtx, `UPDATE wallet_authorization_segment SET state='released',updated_at=now() WHERE parent_authorization_id=$1 AND state='prepared'`, h.ID)
+			if h.APIKeyBudgetReserved {
+				tx, e := a.bridge.outboxDB.BeginTx(abortCtx, nil)
+				if e == nil {
+					if e = ReleaseAPIKeyBudgetTx(abortCtx, tx, h.ID); e == nil {
+						e = tx.Commit()
+					}
+					_ = tx.Rollback()
+				}
+				if e != nil {
+					cause = errors.Join(cause, fmt.Errorf("allowance abort: %w", e))
+				}
+			}
 			abortCancel()
 		}
 		e := &AuthorizationRefusedError{Reason: reason, AuthorizationID: h.ID, Detail: detail, Cause: cause}
@@ -172,6 +185,26 @@ func (a *CanonicalWalletAuthorizer) Authorize(ctx context.Context, in AuthorizeI
 			authorizationMetrics.currencyUnsupported.Add(1)
 			return refuse(AuthorizationRefusalCurrency, "billing currency "+raw, err)
 		}
+	}
+	// Freeze ordinary attempts before any wallet network call. Media has already
+	// reserved its allowance in the acceptance transaction under its real Key.
+	if policyVersion != "" && enforce && a.bridge.outboxDB != nil && h.AttemptKind != "media" {
+		if err = a.snapshots.Persist(ctx, in.Snapshot); err != nil {
+			return refuse(AuthorizationRefusalLeaseUnavailable, "allowance snapshot persist", err)
+		}
+		tx, budgetErr := a.bridge.outboxDB.BeginTx(ctx, nil)
+		if budgetErr == nil {
+			budgetErr = ReserveAPIKeyBudgetTx(ctx, tx, APIKeyBudgetReservation{AuthorizationID: h.ID, APIKeyID: in.Snapshot.APIKeyID, UserID: in.Snapshot.UserID, SnapshotID: in.Snapshot.ID, ReservedUnits: units, Kind: h.AttemptKind})
+			if budgetErr == nil {
+				budgetErr = tx.Commit()
+			} else {
+				_ = tx.Rollback()
+			}
+		}
+		if budgetErr != nil {
+			return refuse(AuthorizationRefusalLeaseUnavailable, "API Key allowance", budgetErr)
+		}
+		h.APIKeyBudgetReserved = true
 	}
 	currency := CurrencyUSD
 	leaseCtx, cancel := context.WithTimeout(ctx, a.requestTimeout())
