@@ -212,6 +212,14 @@ func (s *MediaTaskService) PlaygroundKey(ctx context.Context, userID int64) (*AP
 	return s.internalKey(ctx, user)
 }
 func (s *MediaTaskService) Create(ctx context.Context, userID int64, idempotency string, in MediaCreateInput) (MediaTaskView, error) {
+	// Internal Console callers retain the dependency-free suspension guard.
+	// Public callers use CreatePublicChecked and keep owned replay first.
+	if err := CheckModelAvailability(in.Model, mediaUpstreamModel(in.Model)); err != nil {
+		return MediaTaskView{}, err
+	}
+	if s == nil || s.users == nil || s.keys == nil || s.keys.repo == nil || s.apiKeys == nil || s.apiKeys.apiKeyRepo == nil || s.store == nil || s.store.db == nil {
+		return MediaTaskView{}, ErrMediaUnavailable
+	}
 	user, err := s.users.GetByID(ctx, userID)
 	if err != nil {
 		return MediaTaskView{}, err

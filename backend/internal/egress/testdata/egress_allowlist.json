@@ -1491,6 +1491,13 @@
     "note": "egress-capable import; actual wallet classification hangs on the write site / client"
   },
   {
+    "file": "internal/server/middleware/public_media_rate_limit.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "HTTP method constants classify inbound public media requests for rate limiting; no outgoing request or client is created."
+  },
+  {
     "file": "internal/server/middleware/recovery.go",
     "kind": "import",
     "detail": "net",
@@ -2917,6 +2924,13 @@
     "detail": "net/url",
     "annotation": "non-billable",
     "note": "egress-capable import; actual wallet classification hangs on the write site / client"
+  },
+  {
+    "file": "internal/service/public_media.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "Fixed signed merchant moderation control-plane request through the existing canonical wallet HTTP client (copyClient.doJSON); not provider generation. Billable provider writes retain their existing authorizing HTTPUpstream classification."
   },
   {
     "file": "internal/service/ratelimit_service.go",

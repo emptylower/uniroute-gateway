@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strconv"
 	"testing"
 	"time"
@@ -91,6 +92,8 @@ func TestCanonicalWalletSignedPoolRefreshRetainsExpiredReceiptsWithoutExtendingA
 			db, mock, err := sqlmock.New()
 			require.NoError(t, err)
 			defer db.Close()
+			// This fixture has lease receipts but no historical API Key obligations.
+			mock.ExpectQuery(regexp.QuoteMeta("SELECT DISTINCT api_key_id FROM wallet_billing_snapshot WHERE api_key_id>0 ORDER BY api_key_id")).WillReturnRows(sqlmock.NewRows([]string{"api_key_id"}))
 			mock.ExpectQuery("SELECT receipt,funded_units,returned_units,return_revision,funding_scope,funding_owner_id,funding_issuance_key,pending_request FROM wallet_funding_freeze").WithArgs(user, leaseID).WillReturnRows(sqlmock.NewRows([]string{"receipt", "funded_units", "returned_units", "return_revision", "funding_scope", "funding_owner_id", "funding_issuance_key", "pending_request"}))
 			mock.ExpectQuery("SELECT returned_units,return_revision,funded_units,funding_scope,funding_owner_id,funding_issuance_key FROM wallet_funding_freeze").WithArgs(user, leaseID).WillReturnRows(sqlmock.NewRows([]string{"returned_units", "return_revision", "funded_units", "funding_scope", "funding_owner_id", "funding_issuance_key"}))
 			bridge := service.NewCanonicalWalletBridge(cfg, store, db, nil)
