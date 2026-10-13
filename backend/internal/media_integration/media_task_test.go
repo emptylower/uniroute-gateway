@@ -840,6 +840,19 @@ func TestExternalMediaDefiniteFailureReleasesOnce(t *testing.T) {
 	var outbox int
 	require.NoError(t, f.db.QueryRow(`SELECT count(*) FROM wallet_settlement_outbox`).Scan(&outbox))
 	require.Zero(t, outbox)
+	// The task's released state commits before unprotect closes its isolated
+	// funding lease. Wait for that separate financial operation rather than
+	// stopping the worker while the signed return is still in flight.
+	require.Eventually(t, func() bool {
+		f.control.mu.Lock()
+		defer f.control.mu.Unlock()
+		for _, l := range f.control.pool {
+			if l.scope == "media" {
+				return l.closed && l.returned == 2730000
+			}
+		}
+		return false
+	}, 10*time.Second, 50*time.Millisecond, "the isolated media lease returns exactly the quote and closes")
 	// The quote is funded by the task's own isolated media lease. A definite
 	// provider failure must return exactly the quote, once, and close that lease.
 	f.control.mu.Lock()
@@ -856,6 +869,14 @@ func TestExternalMediaDefiniteFailureReleasesOnce(t *testing.T) {
 	require.Equal(t, int64(2730000), returned)
 	require.True(t, closed)
 	require.Equal(t, f.control.budget-f.control.captured, unleased, "the whole quote went back to spendable credit")
+	// The signed Worker return must also reach durable PG ACK and Redis apply;
+	// observing its HTTP-side balance alone can still precede those commits.
+	require.Eventually(t, func() bool {
+		var closed bool
+		var returned, revision, applied int64
+		err := f.db.QueryRow(`SELECT closed,returned_units,return_revision,redis_applied_revision FROM wallet_funding_freeze WHERE platform_user_id=$1 AND lease_id=$2`, f.platformUserID, isolated.id).Scan(&closed, &returned, &revision, &applied)
+		return err == nil && closed && returned == 2730000 && revision == 1 && applied == revision
+	}, 10*time.Second, 50*time.Millisecond, "the quote's single signed return is durably acknowledged and applied")
 	f.create(t, "failure", "google/nano-banana", "1:1")
 	require.Equal(t, int64(1), f.creates.Load())
 }
