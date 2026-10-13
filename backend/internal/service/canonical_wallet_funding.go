@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -569,9 +570,11 @@ type walletFundingReturnRequest struct {
 	Holds                  []walletFundingReturnHold   `json:"holds"`
 }
 type walletFundingPendingRequest struct {
-	Protocol string                      `json:"protocol"`
-	Basis    CanonicalWalletFundingBasis `json:"basis"`
-	Request  walletFundingReturnRequest  `json:"request"`
+	// Nil predates dispatch tracking and may already have reached the Worker.
+	DispatchStarted *bool                       `json:"dispatch_started,omitempty"`
+	Protocol        string                      `json:"protocol"`
+	Basis           CanonicalWalletFundingBasis `json:"basis"`
+	Request         walletFundingReturnRequest  `json:"request"`
 }
 
 func (b *CanonicalWalletBridge) returnFrozenFunding(ctx context.Context, user string, lease CanonicalWalletLease, mode string) error {
@@ -672,7 +675,8 @@ func (b *CanonicalWalletBridge) prepareFundingReturn(ctx context.Context, user, 
 	for _, hold := range basis.Holds {
 		request.Holds = append(request.Holds, walletFundingReturnHold{AuthorizationID: hold.AuthorizationID, Held: newCanonicalWalletAmountObject(hold.HeldUnits)})
 	}
-	raw, err := json.Marshal(walletFundingPendingRequest{Protocol: "wallet-funding-request-v1", Basis: *basis, Request: request})
+	notDispatched := false
+	raw, err := json.Marshal(walletFundingPendingRequest{Protocol: "wallet-funding-request-v1", Basis: *basis, Request: request, DispatchStarted: &notDispatched})
 	if err != nil {
 		return err
 	}
@@ -694,6 +698,41 @@ func (b *CanonicalWalletBridge) prepareFundingReturn(ctx context.Context, user, 
 
 // The row lock serializes RPC/ACK and a definitive noncommit response. It is
 // acquired only after the exact request has committed in a separate write.
+// A session gate spans the durable dispatch commit and the RPC transaction.
+// It never acquires the user lifecycle gate, and all row transactions use conn.
+func (b *CanonicalWalletBridge) lockFundingReturnDispatch(ctx context.Context, user, leaseID string) (*sql.Conn, func() error, error) {
+	conn, err := b.outboxDB.Conn(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	discard := func() {
+		_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+		_ = conn.Close()
+	}
+	gate := "wallet-funding-return-dispatch-v1:" + user + ":" + leaseID
+	if _, err = conn.ExecContext(ctx, `SELECT pg_advisory_lock(hashtextextended($1,0))`, gate); err != nil {
+		// Cancellation may race successful acquisition. Never pool an uncertain lock.
+		discard()
+		return nil, nil, err
+	}
+	released := false
+	release := func() error {
+		if released {
+			return nil
+		}
+		released = true
+		unlockCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		var unlocked bool
+		if err := conn.QueryRowContext(unlockCtx, `SELECT pg_advisory_unlock(hashtextextended($1,0))`, gate).Scan(&unlocked); err != nil || !unlocked {
+			discard()
+			return nil
+		}
+		return conn.Close()
+	}
+	return conn, release, nil
+}
+
 func (b *CanonicalWalletBridge) replayPendingFundingReturn(ctx context.Context, user, leaseID string) error {
 	client, ok := b.control.(*canonicalWalletHTTPClient)
 	if !ok {
@@ -702,11 +741,20 @@ func (b *CanonicalWalletBridge) replayPendingFundingReturn(ctx context.Context, 
 	if _, ok := b.store.(CanonicalWalletFundingStore); !ok {
 		return errors.New("funding recovery store unavailable")
 	}
-	tx, err := b.outboxDB.BeginTx(ctx, nil)
+	conn, release, err := b.lockFundingReturnDispatch(ctx, user, leaseID)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() { _ = release() }()
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if tx != nil {
+			_ = tx.Rollback()
+		}
+	}()
 	var raw []byte
 	var funded, returned, revision int64
 	var scope, owner, key string
@@ -752,15 +800,58 @@ func (b *CanonicalWalletBridge) replayPendingFundingReturn(ctx context.Context, 
 		}
 		seen[hold.AuthorizationID] = true
 	}
+
+	// Commit dispatch before the RPC: cancellation can roll its ACK transaction
+	// back while the Worker still commits. A legacy missing marker is uncertain.
+	fresh := pending.DispatchStarted != nil && !*pending.DispatchStarted
+	if pending.DispatchStarted == nil || !*pending.DispatchStarted {
+		// Preserve unknown JSON fields too. PG230 forbids replacing a non-null
+		// pending object; clear/reinsert only this metadata in one row-locked
+		// transaction. SQL independently proves the entire financial object
+		// equals the old object with precisely this single field set to true.
+		var marked []byte
+		if err = tx.QueryRowContext(ctx, `SELECT jsonb_set($1::jsonb,'{dispatch_started}','true'::jsonb)`, string(raw)).Scan(&marked); err != nil {
+			return err
+		}
+		for _, statement := range []string{
+			`UPDATE wallet_funding_freeze SET pending_request=NULL WHERE platform_user_id=$1 AND lease_id=$2 AND return_revision=$4 AND pending_request=$5::jsonb AND $3::jsonb=jsonb_set($5::jsonb,'{dispatch_started}','true'::jsonb)`,
+			`UPDATE wallet_funding_freeze SET pending_request=$3::jsonb,updated_at=now() WHERE platform_user_id=$1 AND lease_id=$2 AND return_revision=$4 AND pending_request IS NULL AND $3::jsonb=jsonb_set($5::jsonb,'{dispatch_started}','true'::jsonb)`,
+		} {
+			result, markErr := tx.ExecContext(ctx, statement, user, leaseID, string(marked), revision, string(raw))
+			if markErr != nil {
+				return markErr
+			}
+			count, markErr := result.RowsAffected()
+			if markErr != nil {
+				return markErr
+			}
+			if count != 1 {
+				return errors.New("funding dispatch checkpoint conflict")
+			}
+		}
+		if err = tx.Commit(); err != nil {
+			return err
+		}
+		tx, err = conn.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		// Preserve the exact checkpoint across the committed handoff. A different
+		// pending request or financial revision cannot inherit this fresh claim.
+		err = tx.QueryRowContext(ctx, `SELECT pending_request FROM wallet_funding_freeze WHERE platform_user_id=$1 AND lease_id=$2 AND return_revision=$3 AND pending_request=$4::jsonb FOR UPDATE`, user, leaseID, revision, string(marked)).Scan(&raw)
+		if err != nil {
+			return fmt.Errorf("funding dispatch checkpoint changed: %w", err)
+		}
+	}
 	var response struct {
 		Receipt WalletFundingReturnReceipt `json:"receipt"`
 	}
 	err = client.doJSON(ctx, "POST", "/api/internal/v2/wallet/leases/return", "wallet:lease", "", request, &response)
 	if err != nil {
 		var status *canonicalWalletStatusError
-		if errors.As(err, &status) && status.Status == 409 && status.Reason == "funding_conflict" {
-			// No other RPC for this request can be in flight under the same primary
-			// lock. A signed route's atomic noncommit can safely require a new basis.
+		if errors.As(err, &status) && status.Status == 409 && status.Reason == "funding_conflict" && fresh {
+			// Only a first dispatch's definite refusal proves no earlier attempt
+			// committed. Replays retain their exact request even after 409.
 			if _, clearErr := tx.ExecContext(ctx, `UPDATE wallet_funding_freeze SET pending_request=NULL,updated_at=now() WHERE platform_user_id=$1 AND lease_id=$2 AND return_revision=$3 AND pending_request=$4::jsonb`, user, leaseID, revision, string(raw)); clearErr != nil {
 				return clearErr
 			}
@@ -789,6 +880,11 @@ func (b *CanonicalWalletBridge) replayPendingFundingReturn(ctx context.Context, 
 		return errors.New("funding ACK conflict")
 	}
 	if err = tx.Commit(); err != nil {
+		return err
+	}
+	// Release the dedicated connection before Redis apply's separate PG write;
+	// otherwise a small pool can wait on the connection held by this ACK.
+	if err = release(); err != nil {
 		return err
 	}
 	// ACK precedes local budget reduction; an interrupted apply retries from PG.

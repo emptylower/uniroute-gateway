@@ -125,6 +125,8 @@ func registerRoutes(
 	// 防止高频刷管理面接口打爆数据库（阈值可在系统设置中调整）。
 	panelRateLimiter := middleware2.NewPanelRateLimiter(redisClient, settingService)
 
+	routes.RegisterPublicModelPriceRoutes(v1, h, panelRateLimiter)
+
 	// Human identity and commercial writes belong to ShipAny in data-plane-only
 	// deployments. Omitting registration makes the legacy surface unreachable.
 	if !cfg.Server.DataPlaneOnly {
