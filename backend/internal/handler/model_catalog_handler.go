@@ -90,3 +90,31 @@ func (h *ModelCatalogHandler) ListChannelCosts(c *gin.Context) {
 	}
 	response.Success(c, quote)
 }
+
+// ListPublicPrices is an anonymous projection; incoming identity and currency
+// parameters never participate in default retail price selection.
+func (h *ModelCatalogHandler) ListPublicPrices(c *gin.Context) {
+	category := strings.TrimSpace(strings.ToLower(c.DefaultQuery("category", "text")))
+	if category != "text" {
+		response.BadRequest(c, "Only the text model category is supported")
+		return
+	}
+	now := time.Now()
+	if h.settingService == nil || !h.settingService.GetAvailableChannelsRuntime(c.Request.Context()).Enabled {
+		response.Success(c, service.NewPublicModelPriceSnapshot(nil, now))
+		return
+	}
+	public, ok := h.catalog.(interface {
+		PublicPrices(context.Context, time.Time) (service.PublicModelPriceSnapshot, error)
+	})
+	if !ok {
+		response.Success(c, service.NewPublicModelPriceSnapshot(nil, now))
+		return
+	}
+	snapshot, err := public.PublicPrices(c.Request.Context(), now)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, snapshot)
+}

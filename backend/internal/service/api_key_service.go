@@ -1027,6 +1027,26 @@ func (s *APIKeyService) GetAvailableGroups(ctx context.Context, userID int64) ([
 	return availableGroups, nil
 }
 
+// GetPublicCatalogGroups reads default retail groups without loading any user,
+// subscription or negotiated-rate information.
+func (s *APIKeyService) GetPublicCatalogGroups(ctx context.Context) ([]Group, error) {
+	groups, err := s.groupRepo.ListActive(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list public catalog groups: %w", err)
+	}
+	public := make([]Group, 0, len(groups))
+	for _, group := range groups {
+		if isPublicCatalogGroup(group) {
+			public = append(public, group)
+		}
+	}
+	return public, nil
+}
+
+func isPublicCatalogGroup(group Group) bool {
+	return group.Status == StatusActive && !group.IsExclusive && !group.IsSubscriptionType() && !group.ClaudeCodeOnly
+}
+
 // canUserBindGroupInternal 内部方法，检查用户是否可以绑定分组（使用预加载的订阅数据）
 func (s *APIKeyService) canUserBindGroupInternal(user *User, group *Group, subscribedGroupIDs map[int64]bool) bool {
 	// 订阅类型分组：需要有效订阅

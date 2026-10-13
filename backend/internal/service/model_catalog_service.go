@@ -53,6 +53,9 @@ type ChannelModelCostItem struct {
 	OfficialOutputPricePerMillion     *float64 `json:"official_output_price_per_million_usd,string"`
 	OfficialCacheReadPricePerMillion  *float64 `json:"official_cache_read_price_per_million_usd,string"`
 	OfficialCacheWritePricePerMillion *float64 `json:"official_cache_write_price_per_million_usd,string"`
+	publicPricing                     *ModelPricing
+	publicMaxContext                  *int
+	publicCacheReadKnown              bool
 }
 
 // RoutingGroupModelCosts keeps model availability and pricing scoped to the
@@ -490,6 +493,13 @@ func (s *ModelCatalogService) QuoteChannelCosts(ctx context.Context, userID int6
 		return ChannelCostQuote{}, err
 	}
 
+	return s.quoteChannelCostsForGroups(ctx, groups, rates, now, quote, false)
+}
+
+// quoteChannelCostsForGroups shares discovery, restrictions and resolver pricing
+// between the authenticated catalog and the anonymous retail projection.
+func (s *ModelCatalogService) quoteChannelCostsForGroups(ctx context.Context, groups []Group, rates map[int64]float64, now time.Time, quote ChannelCostQuote, public bool) (ChannelCostQuote, error) {
+	quoteCurrency := quote.QuoteCurrency
 	groupPlatform := make(map[int64]string, len(groups))
 	for i := range groups {
 		groupPlatform[groups[i].ID] = groups[i].Platform
@@ -529,7 +539,7 @@ func (s *ModelCatalogService) QuoteChannelCosts(ctx context.Context, userID int6
 	items := make([]RoutingGroupModelCosts, 0, len(groups))
 	for i := range groups {
 		group := groups[i]
-		if group.Status != StatusActive || group.ClaudeCodeOnly {
+		if group.Status != StatusActive || group.ClaudeCodeOnly || (public && !isPublicCatalogGroup(group)) {
 			continue
 		}
 		accounts, accountErr := s.accounts.ListSchedulableByGroupID(ctx, group.ID)
@@ -561,12 +571,33 @@ func (s *ModelCatalogService) QuoteChannelCosts(ctx context.Context, userID int6
 		effectiveMultiplier *= group.PeakMultiplierAt(now)
 		groupModels := make([]ChannelModelCostItem, 0, len(seeds))
 		for key, seed := range seeds {
+			if public && s.isEnforceMode() && s.publicationStore != nil {
+				eligible, eligibilityErr := s.publicationStore.IsCanonicalEligible(ctx, key)
+				if eligibilityErr != nil || !eligible {
+					continue
+				}
+			}
 			if s.channels != nil && s.channels.IsModelRestricted(ctx, group.ID, seed.name) {
 				continue
 			}
 			supported := false
 			for j := range accounts {
 				if catalogAccountSupportsModel(&accounts[j], seed.name) {
+					if public && (!accounts[j].IsSchedulable() || accounts[j].isModelRateLimitedWithContext(ctx, seed.name)) {
+						continue
+					}
+					if public && s.isEnforceMode() && s.publicationStore != nil && len(groupChannels[group.ID]) > 0 {
+						eligible := false
+						for _, channelID := range groupChannels[group.ID] {
+							if s.isModelEligibleForChannel(ctx, channelID, seed.name) && s.isModelEligibleForAccount(ctx, accounts[j].ID, channelID, seed.name) {
+								eligible = true
+								break
+							}
+						}
+						if !eligible {
+							continue
+						}
+					}
 					supported = true
 					break
 				}
@@ -604,11 +635,15 @@ func (s *ModelCatalogService) QuoteChannelCosts(ctx context.Context, userID int6
 			model.InputPricePerMillion,
 				model.OutputPricePerMillion,
 				model.CacheReadPricePerMillion,
-				model.CacheWritePricePerMillion = catalogPrices(routePricing, snapshot.Rate*effectiveMultiplier)
+				model.CacheWritePricePerMillion = catalogPrices(routePricing, quote.Rate*effectiveMultiplier)
 			model.OfficialInputPricePerMillion,
 				model.OfficialOutputPricePerMillion,
 				model.OfficialCacheReadPricePerMillion,
-				model.OfficialCacheWritePricePerMillion = catalogPrices(officialPricing, snapshot.Rate)
+				model.OfficialCacheWritePricePerMillion = catalogPrices(officialPricing, quote.Rate)
+			if public {
+				model.publicPricing, model.publicMaxContext = publicStandardPricing(routePricing)
+				model.publicCacheReadKnown = publicCacheReadKnown(routePricing)
+			}
 			groupModels = append(groupModels, model)
 		}
 		sort.SliceStable(groupModels, func(i, j int) bool {

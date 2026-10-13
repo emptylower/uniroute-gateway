@@ -223,6 +223,11 @@ func RegisterAuthRoutes(
 		settings.GET("/email-unsubscribe", h.Setting.UnsubscribeNotificationEmail)
 	}
 
+	// Anonymous retail projection follows the public settings IP rate limit.
+	if h.ModelCatalog != nil {
+		v1.GET("/models/public-prices", panelRateLimiter.PublicIP(), h.ModelCatalog.ListPublicPrices)
+	}
+
 	// 需要认证的当前用户信息
 	authenticated := v1.Group("")
 	authenticated.Use(gin.HandlerFunc(jwtAuth))
