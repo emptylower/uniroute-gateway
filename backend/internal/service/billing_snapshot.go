@@ -384,7 +384,16 @@ func clonePricing(p *ModelPricing) *ModelPricing {
 		return nil
 	}
 	c := *p
+	c.PreservedPriorityPricing = clonePriorityPricingPolicy(p.PreservedPriorityPricing)
 	return &c
+}
+
+func clonePriorityPricingPolicy(p *PriorityPricingPolicy) *PriorityPricingPolicy {
+	if p == nil {
+		return nil
+	}
+	cloned := *p
+	return &cloned
 }
 
 func cloneFloatPtr(p *float64) *float64 {
