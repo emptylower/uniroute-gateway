@@ -193,6 +193,11 @@ func estimateTokenUpperBound(billing *BillingService, snap *BillingSnapshot, in 
 		worst.InputPricePerTokenPriority, worst.CacheReadPricePerTokenPriority, worst.CacheCreationPricePerTokenPriority} {
 		dearest = math.Max(dearest, p)
 	}
+	if preserved := worst.PreservedPriorityPricing; preserved != nil {
+		for _, price := range []float64{preserved.InputPricePerToken, preserved.CacheReadPricePerToken, preserved.CacheCreationPricePerToken, preserved.CacheCreation5mPrice, preserved.CacheCreation1hPrice} {
+			dearest = math.Max(dearest, price)
+		}
+	}
 	worst.InputPricePerToken = dearest
 	worst.ImageInputPricePerToken = 0 // folded into the dearest input price
 	// Output: image-output tokens are priced at ImageOutputPricePerToken when set
@@ -203,6 +208,11 @@ func estimateTokenUpperBound(billing *BillingService, snap *BillingSnapshot, in 
 	if usePriorityServiceTierPricing(in.ServiceTier, &worst) {
 		worst.InputPricePerTokenPriority = dearest
 		worst.OutputPricePerTokenPriority = math.Max(worst.OutputPricePerTokenPriority, worst.OutputPricePerToken)
+		if preserved := clonePriorityPricingPolicy(worst.PreservedPriorityPricing); preserved != nil {
+			preserved.InputPricePerToken = dearest
+			preserved.OutputPricePerToken = math.Max(preserved.OutputPricePerToken, worst.OutputPricePerTokenPriority)
+			worst.PreservedPriorityPricing = preserved
+		}
 	}
 	applyLongCtx := len(resolved.Intervals) == 0 && (snap.Family != BillingFamilyOpenAI || snap.Flags.LongContextBillingEnabled)
 	tokens := UsageTokens{InputTokens: inputBound, OutputTokens: outputBound}

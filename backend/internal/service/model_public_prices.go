@@ -32,11 +32,14 @@ type PublicModelPrice struct {
 }
 
 type PublicModelPriceSnapshot struct {
-	Items           []PublicModelPrice `json:"items"`
-	GeneratedAt     time.Time          `json:"generated_at"`
-	EffectiveAt     *time.Time         `json:"effective_at"`
-	SnapshotVersion string             `json:"snapshot_version"`
-	PriceScope      string             `json:"price_scope"`
+	Items                   []PublicModelPrice `json:"items"`
+	GeneratedAt             time.Time          `json:"generated_at"`
+	EffectiveAt             *time.Time         `json:"effective_at"`
+	SnapshotVersion         string             `json:"snapshot_version"`
+	PriceScope              string             `json:"price_scope"`
+	OfficialSource          string             `json:"official_source"`
+	OfficialVerifiedAt      time.Time          `json:"official_verified_at"`
+	OfficialSnapshotVersion string             `json:"official_snapshot_version"`
 }
 
 // NewPublicModelPriceSnapshot hashes only the sorted public prices and their
@@ -51,7 +54,7 @@ func NewPublicModelPriceSnapshot(items []PublicModelPrice, now time.Time) Public
 		}
 		return items[i].Channel < items[j].Channel
 	})
-	snapshot := PublicModelPriceSnapshot{Items: items, GeneratedAt: now.UTC(), PriceScope: "default_retail_standard_tokens"}
+	snapshot := PublicModelPriceSnapshot{Items: items, GeneratedAt: now.UTC(), PriceScope: "default_retail_standard_tokens", OfficialSource: anthropicOfficialPrices.Source, OfficialVerifiedAt: anthropicOfficialPrices.VerifiedAt, OfficialSnapshotVersion: anthropicOfficialPrices.version}
 	content, _ := json.Marshal(struct {
 		Items      []PublicModelPrice `json:"items"`
 		PriceScope string             `json:"price_scope"`

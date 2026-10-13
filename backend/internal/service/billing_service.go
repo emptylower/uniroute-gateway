@@ -103,13 +103,31 @@ type ModelPricing struct {
 	CacheCreation5mPrice               float64 // 5分钟缓存创建每token价格 (USD)
 	CacheCreation1hPrice               float64 // 1小时缓存创建每token价格 (USD)
 	SupportsCacheBreakdown             bool    // 是否支持详细的缓存分类
-	LongContextInputThreshold          int     // 超过阈值后按整次会话提升输入价格
-	LongContextInputMultiplier         float64 // 长上下文整次会话输入倍率
-	LongContextOutputMultiplier        float64 // 长上下文整次会话输出倍率
-	ImageOutputPricePerToken           float64 // 图片输出 token 价格 (USD)
-	ImageOutputPriceExplicit           bool    // 是否由渠道定价显式设定（为 true 时即使 == 0 也不回退）
-	MaxInputTokens                     int     // 上下文窗口（输入侧），0 = 未知；来自 LiteLLM max_input_tokens
-	MaxOutputTokens                    int     // 单次最大输出，0 = 未知；来自 LiteLLM max_output_tokens
+	// Only official baseline overlays pin an existing explicit priority policy.
+	// Exported data survives immutable billing snapshot JSON.
+	PreservedPriorityPricing    *PriorityPricingPolicy `json:",omitempty"`
+	LongContextInputThreshold   int                    // 超过阈值后按整次会话提升输入价格
+	LongContextInputMultiplier  float64                // 长上下文整次会话输入倍率
+	LongContextOutputMultiplier float64                // 长上下文整次会话输出倍率
+	ImageOutputPricePerToken    float64                // 图片输出 token 价格 (USD)
+	ImageOutputPriceExplicit    bool                   // 是否由渠道定价显式设定（为 true 时即使 == 0 也不回退）
+	MaxInputTokens              int                    // 上下文窗口（输入侧），0 = 未知；来自 LiteLLM max_input_tokens
+	MaxOutputTokens             int                    // 单次最大输出，0 = 未知；来自 LiteLLM max_output_tokens
+}
+
+// PriorityPricingPolicy captures the effective pre-overlay priority rates,
+// including legacy scalar fallbacks and context/cache behavior.
+type PriorityPricingPolicy struct {
+	InputPricePerToken          float64
+	OutputPricePerToken         float64
+	CacheReadPricePerToken      float64
+	CacheCreationPricePerToken  float64
+	CacheCreation5mPrice        float64
+	CacheCreation1hPrice        float64
+	SupportsCacheBreakdown      bool
+	LongContextInputThreshold   int
+	LongContextInputMultiplier  float64
+	LongContextOutputMultiplier float64
 }
 
 const (
@@ -827,7 +845,7 @@ func (s *BillingService) GetModelPricing(model string) (*ModelPricing, error) {
 			price5m := litellmPricing.CacheCreationInputTokenCost
 			price1h := litellmPricing.CacheCreationInputTokenCostAbove1hr
 			enableBreakdown := price1h > 0 && price1h > price5m
-			return s.applyModelSpecificPricingPolicy(model, &ModelPricing{
+			pricing := &ModelPricing{
 				InputPricePerToken:                 litellmPricing.InputCostPerToken,
 				InputPricePerTokenPriority:         litellmPricing.InputCostPerTokenPriority,
 				OutputPricePerToken:                litellmPricing.OutputCostPerToken,
@@ -846,8 +864,21 @@ func (s *BillingService) GetModelPricing(model string) (*ModelPricing, error) {
 				ImageOutputPricePerToken:           litellmPricing.OutputCostPerImageToken,
 				MaxInputTokens:                     litellmPricing.MaxInputTokens,
 				MaxOutputTokens:                    litellmPricing.MaxOutputTokens,
-			}), nil
+			}
+			pricing, _ = officialAnthropicBasePricing(model, pricing)
+			return s.applyModelSpecificPricingPolicy(model, pricing), nil
 		}
+	}
+
+	// Verified official rows also work when a newly released model has not
+	// reached the dynamic mirror or the legacy fallback table.
+	if official, ok := anthropicOfficialPrices.byID[modelCatalogKey(model)]; ok {
+		fallback := s.fallbackPrices[modelCatalogKey(model)]
+		if official.ContextPolicy == "preserve_existing" {
+			fallback = s.getFallbackPricing(model)
+		}
+		pricing, _ := officialAnthropicBasePricing(model, fallback)
+		return pricing, nil
 	}
 
 	// 2. 使用硬编码回退价格
@@ -875,17 +906,28 @@ func (s *BillingService) GetModelPricingWithChannel(model string, channelPricing
 		return pricing, nil
 	}
 	// 防止修改 fallbackPrices 中的共享指针
-	cloned := *pricing
-	pricing = &cloned
+	pricing = clonePricing(pricing)
 	if channelPricing.InputPrice != nil {
+		if pricing.PreservedPriorityPricing != nil {
+			pricing.PreservedPriorityPricing.InputPricePerToken = *channelPricing.InputPrice
+		}
 		pricing.InputPricePerToken = *channelPricing.InputPrice
 		pricing.InputPricePerTokenPriority = *channelPricing.InputPrice
 	}
 	if channelPricing.OutputPrice != nil {
+		if pricing.PreservedPriorityPricing != nil {
+			pricing.PreservedPriorityPricing.OutputPricePerToken = *channelPricing.OutputPrice
+		}
 		pricing.OutputPricePerToken = *channelPricing.OutputPrice
 		pricing.OutputPricePerTokenPriority = *channelPricing.OutputPrice
 	}
 	if channelPricing.CacheWritePrice != nil {
+		if preserved := pricing.PreservedPriorityPricing; preserved != nil {
+			preserved.CacheCreationPricePerToken = *channelPricing.CacheWritePrice
+			preserved.CacheCreation5mPrice = *channelPricing.CacheWritePrice
+			preserved.CacheCreation1hPrice = *channelPricing.CacheWritePrice
+			preserved.SupportsCacheBreakdown = pricing.SupportsCacheBreakdown
+		}
 		pricing.CacheCreationPricePerToken = *channelPricing.CacheWritePrice
 		pricing.CacheCreationPricePerTokenPriority = *channelPricing.CacheWritePrice
 		pricing.CacheCreationPriceExplicit = true
@@ -893,6 +935,9 @@ func (s *BillingService) GetModelPricingWithChannel(model string, channelPricing
 		pricing.CacheCreation1hPrice = *channelPricing.CacheWritePrice
 	}
 	if channelPricing.CacheReadPrice != nil {
+		if pricing.PreservedPriorityPricing != nil {
+			pricing.PreservedPriorityPricing.CacheReadPricePerToken = *channelPricing.CacheReadPrice
+		}
 		pricing.CacheReadPricePerToken = *channelPricing.CacheReadPrice
 		pricing.CacheReadPricePerTokenPriority = *channelPricing.CacheReadPrice
 	}
@@ -1024,6 +1069,20 @@ func (s *BillingService) computeTokenBreakdown(
 		}
 		if pricing.CacheCreationPricePerTokenPriority > 0 {
 			cacheCreationPrice = pricing.CacheCreationPricePerTokenPriority
+		}
+		if preserved := pricing.PreservedPriorityPricing; preserved != nil {
+			cloned := *pricing
+			cloned.SupportsCacheBreakdown = preserved.SupportsCacheBreakdown
+			cloned.CacheCreation5mPrice = preserved.CacheCreation5mPrice
+			cloned.CacheCreation1hPrice = preserved.CacheCreation1hPrice
+			cloned.LongContextInputThreshold = preserved.LongContextInputThreshold
+			cloned.LongContextInputMultiplier = preserved.LongContextInputMultiplier
+			cloned.LongContextOutputMultiplier = preserved.LongContextOutputMultiplier
+			pricing = &cloned
+			inputPrice = preserved.InputPricePerToken
+			outputPrice = preserved.OutputPricePerToken
+			cacheReadPrice = preserved.CacheReadPricePerToken
+			cacheCreationPrice = preserved.CacheCreationPricePerToken
 		}
 	} else {
 		tierMultiplier = serviceTierCostMultiplier(serviceTier)

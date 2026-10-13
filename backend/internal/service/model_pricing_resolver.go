@@ -3,11 +3,13 @@ package service
 import (
 	"context"
 	"log/slog"
+	"strings"
 )
 
 // PricingSource 定价来源标识
 const (
 	PricingSourceChannel  = "channel"
+	PricingSourceOfficial = "official"
 	PricingSourceLiteLLM  = "litellm"
 	PricingSourceFallback = "fallback"
 )
@@ -17,7 +19,7 @@ type ResolvedPricing struct {
 	// Mode 计费模式
 	Mode BillingMode
 
-	// Token 模式：基础定价（来自 LiteLLM 或 fallback）
+	// Token 模式：基础定价（来自官方固定快照、LiteLLM 或 fallback）
 	BasePricing *ModelPricing
 
 	// Token 模式：区间定价列表（如有，覆盖 BasePricing 中的对应字段）
@@ -30,7 +32,7 @@ type ResolvedPricing struct {
 	DefaultPerRequestPrice float64
 
 	// 来源标识
-	Source string // "channel", "litellm", "fallback"
+	Source string // "channel", "official", "litellm", "fallback"
 
 	// 是否支持缓存细分
 	SupportsCacheBreakdown bool
@@ -40,7 +42,7 @@ type ResolvedPricing struct {
 }
 
 // ModelPricingResolver 统一模型定价解析器。
-// 解析链：Channel → LiteLLM → Fallback。
+// 解析链：Channel → 官方固定快照 → LiteLLM → Fallback。
 type ModelPricingResolver struct {
 	channelService *ChannelService
 	billingService *BillingService
@@ -61,7 +63,7 @@ type PricingInput struct {
 }
 
 // Resolve 解析模型定价。
-// 1. 获取基础定价（LiteLLM → Fallback）
+// 1. 获取基础定价（官方固定快照 → LiteLLM → Fallback）
 // 2. 如果指定了 GroupID，查找渠道定价并覆盖
 func (r *ModelPricingResolver) Resolve(ctx context.Context, input PricingInput) *ResolvedPricing {
 	var chPricing *ChannelModelPricing
@@ -106,13 +108,16 @@ func (r *ModelPricingResolver) Resolve(ctx context.Context, input PricingInput) 
 	return resolved
 }
 
-// resolveBasePricing 从 LiteLLM 或 Fallback 获取基础定价
+// resolveBasePricing 从官方固定快照、LiteLLM 或 Fallback 获取基础定价
 func (r *ModelPricingResolver) resolveBasePricing(model string) (*ModelPricing, string) {
 	pricing, err := r.billingService.GetModelPricing(model)
 	if err != nil {
 		slog.Debug("failed to get model pricing from LiteLLM, using fallback",
 			"model", model, "error", err)
 		return nil, PricingSourceFallback
+	}
+	if _, ok := anthropicOfficialPrices.byID[strings.ToLower(strings.TrimSpace(model))]; ok {
+		return pricing, PricingSourceOfficial
 	}
 	return pricing, PricingSourceLiteLLM
 }
@@ -152,8 +157,7 @@ func (r *ModelPricingResolver) applyTokenOverrides(chPricing *ChannelModelPricin
 			resolved.BasePricing = &ModelPricing{}
 		} else {
 			// 防止修改 fallbackPrices 中的共享指针
-			cloned := *resolved.BasePricing
-			resolved.BasePricing = &cloned
+			resolved.BasePricing = clonePricing(resolved.BasePricing)
 		}
 		if chPricing.ImageOutputPrice != nil {
 			resolved.BasePricing.ImageOutputPricePerToken = *chPricing.ImageOutputPrice
@@ -170,19 +174,30 @@ func (r *ModelPricingResolver) applyTokenOverrides(chPricing *ChannelModelPricin
 		resolved.BasePricing = &ModelPricing{}
 	} else {
 		// 防止修改 fallbackPrices 中的共享指针
-		cloned := *resolved.BasePricing
-		resolved.BasePricing = &cloned
+		resolved.BasePricing = clonePricing(resolved.BasePricing)
 	}
 
 	if chPricing.InputPrice != nil {
+		if preserved := resolved.BasePricing.PreservedPriorityPricing; preserved != nil {
+			preserved.InputPricePerToken = *chPricing.InputPrice
+		}
 		resolved.BasePricing.InputPricePerToken = *chPricing.InputPrice
 		resolved.BasePricing.InputPricePerTokenPriority = *chPricing.InputPrice
 	}
 	if chPricing.OutputPrice != nil {
+		if preserved := resolved.BasePricing.PreservedPriorityPricing; preserved != nil {
+			preserved.OutputPricePerToken = *chPricing.OutputPrice
+		}
 		resolved.BasePricing.OutputPricePerToken = *chPricing.OutputPrice
 		resolved.BasePricing.OutputPricePerTokenPriority = *chPricing.OutputPrice
 	}
 	if chPricing.CacheWritePrice != nil {
+		if preserved := resolved.BasePricing.PreservedPriorityPricing; preserved != nil {
+			preserved.CacheCreationPricePerToken = *chPricing.CacheWritePrice
+			preserved.CacheCreation5mPrice = *chPricing.CacheWritePrice
+			preserved.CacheCreation1hPrice = *chPricing.CacheWritePrice
+			preserved.SupportsCacheBreakdown = resolved.BasePricing.SupportsCacheBreakdown
+		}
 		resolved.BasePricing.CacheCreationPricePerToken = *chPricing.CacheWritePrice
 		resolved.BasePricing.CacheCreationPricePerTokenPriority = *chPricing.CacheWritePrice
 		resolved.BasePricing.CacheCreationPriceExplicit = true
@@ -190,6 +205,9 @@ func (r *ModelPricingResolver) applyTokenOverrides(chPricing *ChannelModelPricin
 		resolved.BasePricing.CacheCreation1hPrice = *chPricing.CacheWritePrice
 	}
 	if chPricing.CacheReadPrice != nil {
+		if preserved := resolved.BasePricing.PreservedPriorityPricing; preserved != nil {
+			preserved.CacheReadPricePerToken = *chPricing.CacheReadPrice
+		}
 		resolved.BasePricing.CacheReadPricePerToken = *chPricing.CacheReadPrice
 		resolved.BasePricing.CacheReadPricePerTokenPriority = *chPricing.CacheReadPrice
 	}
