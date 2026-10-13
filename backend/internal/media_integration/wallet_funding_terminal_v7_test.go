@@ -410,8 +410,8 @@ func TestExternalFundingV7MoreThanSixteenFailedSourcesDoNotStarveReadyClose(t *t
 	require.Equal(t, 17, unchanged)
 }
 
-func TestExternalFundingV7MoreThan128OriginalSignedTerminalsResumeCleanupWithoutLosingSource(t *testing.T) {
-	x := newFundingV7Fixture(t)
+func fundingV7OriginalSignedTerminals(t *testing.T, x fundingV7Fixture) {
+	t.Helper()
 	// Suppress only the newly introduced scheduling receipt, to represent old
 	// fully signed terminals that predate PG233. Original PG/D1 financial ACKs
 	// and actual Redis release/Unprotect are untouched and verified per call.
@@ -428,12 +428,18 @@ func TestExternalFundingV7MoreThan128OriginalSignedTerminalsResumeCleanupWithout
 	require.NoError(t, x.f.db.QueryRow(`SELECT count(*),count(*) FILTER(WHERE funding_terminal_cleanup_at IS NULL) FROM wallet_authorization_segment WHERE platform_user_id=$1 AND lease_id=$2 AND state='finished' AND zero_ack_at IS NOT NULL`, x.f.platformUserID, x.source).Scan(&originals, &withoutCleanup))
 	require.Equal(t, 129, originals)
 	require.Equal(t, 129, withoutCleanup)
+}
+
+func TestExternalFundingV7MoreThan128OriginalSignedTerminalsResumeCleanupWithoutLosingSource(t *testing.T) {
+	x := newFundingV7Fixture(t)
+	fundingV7OriginalSignedTerminals(t, x)
 	// A failed genuinely unfundable media quote freezes/returns this old free
 	// source. Its insertion discovers all129 signed original acknowledgements.
-	_, err = x.mediaFunding(t, 1100000000)
+	_, err := x.mediaFunding(t, 1100000000)
 	require.Error(t, err)
 	var closed bool
 	var generation, applied int64
+	var withoutCleanup int
 	require.Eventually(t, func() bool {
 		return x.f.db.QueryRow(`SELECT f.closed,w.generation,w.applied_generation FROM wallet_funding_freeze f JOIN wallet_funding_terminal_work w USING(platform_user_id,lease_id) WHERE f.platform_user_id=$1 AND f.lease_id=$2`, x.f.platformUserID, x.source).Scan(&closed, &generation, &applied) == nil && closed && generation == applied
 	}, 12*time.Second, 20*time.Millisecond, "a per-lease lifetime history is not a permanent 128-row cleanup barrier")

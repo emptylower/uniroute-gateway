@@ -7,10 +7,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -142,9 +144,11 @@ func TestWalletFundingPendingReplayRejectsChangedBasisBeforeRPC(t *testing.T) {
 			db, mock, err := sqlmock.New()
 			require.NoError(t, err)
 			defer func() { _ = db.Close() }()
+			mock.ExpectExec("SELECT pg_advisory_lock").WithArgs("wallet-funding-return-dispatch-v1:funding-user:funding-lease").WillReturnResult(sqlmock.NewResult(0, 1))
 			mock.ExpectBegin()
 			mock.ExpectQuery("SELECT pending_request,funded_units,returned_units,return_revision,funding_scope,funding_owner_id,funding_issuance_key").WithArgs("funding-user", "funding-lease").WillReturnRows(sqlmock.NewRows([]string{"pending", "funded", "returned", "revision", "scope", "owner", "key"}).AddRow(raw, int64(1000), int64(0), int64(0), "legacy", "", ""))
 			mock.ExpectRollback()
+			mock.ExpectQuery("SELECT pg_advisory_unlock").WithArgs("wallet-funding-return-dispatch-v1:funding-user:funding-lease").WillReturnRows(sqlmock.NewRows([]string{"unlocked"}).AddRow(true))
 			store := &fundingRecoveryStore{}
 			bridge := &CanonicalWalletBridge{store: store, outboxDB: db, control: newCanonicalWalletHTTPClient(config.CanonicalWalletConfig{Secret: secret, ControlPlaneURL: "http://127.0.0.1:9", RequestTimeoutMS: 10}, nil)}
 			err = bridge.replayPendingFundingReturn(context.Background(), "funding-user", "funding-lease")
@@ -291,4 +295,149 @@ func TestWalletFundingHTTPControlHasExplicitEightMiBReceiptBoundary(t *testing.T
 			}
 		})
 	}
+}
+
+func TestWalletFundingDispatch409DistinguishesFreshPriorAndLegacy(t *testing.T) {
+	for _, scenario := range []string{"fresh", "prior", "legacy"} {
+		t.Run(scenario, func(t *testing.T) {
+			secret, _, basis := fundingReceiptFixture(t)
+			basis.Lease.FundingFrozen = true
+			request := walletFundingReturnRequest{PlatformUserID: "funding-user", LeaseID: "funding-lease", Mode: "partial", SourceFreezeID: "funding-lease.source-freeze.v1", ExpectedFunded: newCanonicalWalletAmountObject(1000), ExpectedBudgetRevision: 2, GatewayConsumed: newCanonicalWalletAmountObject(100), GatewayReleased: newCanonicalWalletAmountObject(0), Holds: []walletFundingReturnHold{{AuthorizationID: "held-1", Held: newCanonicalWalletAmountObject(100)}}}
+			pending := walletFundingPendingRequest{Protocol: "wallet-funding-request-v1", Basis: basis, Request: request}
+			marker := scenario == "prior"
+			if scenario != "legacy" {
+				pending.DispatchStarted = &marker
+			}
+			raw, err := json.Marshal(pending)
+			require.NoError(t, err)
+			dispatched := true
+			pending.DispatchStarted = &dispatched
+			marked := markedFundingDispatchFixture(t, raw)
+			err = nil
+			require.NoError(t, err)
+			requests := make(chan []byte, 1)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				requests <- body
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusConflict)
+				_, _ = w.Write([]byte(`{"code":-1,"data":{"reason":"funding_conflict"}}`))
+			}))
+			defer server.Close()
+			db, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			defer func() { _ = db.Close() }()
+			mock.ExpectExec("SELECT pg_advisory_lock").WithArgs("wallet-funding-return-dispatch-v1:funding-user:funding-lease").WillReturnResult(sqlmock.NewResult(0, 1))
+			mock.ExpectBegin()
+			mock.ExpectQuery("SELECT pending_request,funded_units").WithArgs("funding-user", "funding-lease").WillReturnRows(sqlmock.NewRows([]string{"pending", "funded", "returned", "revision", "scope", "owner", "key"}).AddRow(raw, int64(1000), int64(0), int64(0), "legacy", "", ""))
+			if scenario != "prior" {
+				mock.ExpectQuery("SELECT jsonb_set").WithArgs(string(raw)).WillReturnRows(sqlmock.NewRows([]string{"marked"}).AddRow(marked))
+				mock.ExpectExec("UPDATE wallet_funding_freeze SET pending_request=NULL WHERE").WithArgs("funding-user", "funding-lease", string(marked), int64(0), string(raw)).WillReturnResult(sqlmock.NewResult(0, 1))
+				mock.ExpectExec("UPDATE wallet_funding_freeze SET pending_request").WithArgs("funding-user", "funding-lease", string(marked), int64(0), string(raw)).WillReturnResult(sqlmock.NewResult(0, 1))
+				mock.ExpectCommit()
+				mock.ExpectBegin()
+				mock.ExpectQuery("SELECT pending_request FROM wallet_funding_freeze").WithArgs("funding-user", "funding-lease", int64(0), string(marked)).WillReturnRows(sqlmock.NewRows([]string{"pending"}).AddRow(marked))
+			}
+			if scenario == "fresh" {
+				mock.ExpectExec("UPDATE wallet_funding_freeze SET pending_request=NULL").WithArgs("funding-user", "funding-lease", int64(0), string(marked)).WillReturnResult(sqlmock.NewResult(0, 1))
+				mock.ExpectCommit()
+			} else {
+				mock.ExpectRollback()
+			}
+			mock.ExpectQuery("SELECT pg_advisory_unlock").WillReturnRows(sqlmock.NewRows([]string{"unlocked"}).AddRow(true))
+			store := &fundingRecoveryStore{}
+			bridge := &CanonicalWalletBridge{store: store, outboxDB: db, control: newCanonicalWalletHTTPClient(config.CanonicalWalletConfig{Secret: secret, ControlPlaneURL: server.URL, RequestTimeoutMS: 1000}, server.Client())}
+			require.ErrorContains(t, bridge.replayPendingFundingReturn(context.Background(), "funding-user", "funding-lease"), "funding_conflict")
+			expected, err := json.Marshal(request)
+			require.NoError(t, err)
+			require.JSONEq(t, string(expected), string(<-requests), "dispatch metadata never changes the signed Worker request")
+			require.Zero(t, store.applied)
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
+func TestWalletFundingDispatchDiscardsUncertainSessionLocks(t *testing.T) {
+	for _, scenario := range []string{"acquire-error", "unlock-error", "unlock-false"} {
+		t.Run(scenario, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			defer func() { _ = db.Close() }()
+			if scenario == "acquire-error" {
+				mock.ExpectExec("SELECT pg_advisory_lock").WillReturnError(context.Canceled)
+			} else {
+				mock.ExpectExec("SELECT pg_advisory_lock").WillReturnResult(sqlmock.NewResult(0, 1))
+			}
+			if scenario == "unlock-error" {
+				mock.ExpectQuery("SELECT pg_advisory_unlock").WillReturnError(context.Canceled)
+			}
+			if scenario == "unlock-false" {
+				mock.ExpectQuery("SELECT pg_advisory_unlock").WillReturnRows(sqlmock.NewRows([]string{"unlocked"}).AddRow(false))
+			}
+			mock.ExpectClose()
+			bridge := &CanonicalWalletBridge{outboxDB: db}
+			_, release, err := bridge.lockFundingReturnDispatch(context.Background(), "user", "lease")
+			if scenario == "acquire-error" {
+				require.ErrorIs(t, err, context.Canceled)
+				require.Nil(t, release)
+			} else {
+				require.NoError(t, err)
+				require.NoError(t, release())
+				require.NoError(t, release())
+			}
+			require.Zero(t, db.Stats().InUse)
+			require.Zero(t, db.Stats().OpenConnections, "an uncertain locked connection cannot return to the pool")
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
+func TestWalletFundingCommittedDispatchThenBeginFailureKeepsMarkerWithoutRPC(t *testing.T) {
+	secret, _, basis := fundingReceiptFixture(t)
+	basis.Lease.FundingFrozen = true
+	request := walletFundingReturnRequest{PlatformUserID: "funding-user", LeaseID: "funding-lease", Mode: "partial", SourceFreezeID: "funding-lease.source-freeze.v1", ExpectedFunded: newCanonicalWalletAmountObject(1000), ExpectedBudgetRevision: 2, GatewayConsumed: newCanonicalWalletAmountObject(100), GatewayReleased: newCanonicalWalletAmountObject(0), Holds: []walletFundingReturnHold{{AuthorizationID: "held-1", Held: newCanonicalWalletAmountObject(100)}}}
+	marker := false
+	pending := walletFundingPendingRequest{Protocol: "wallet-funding-request-v1", Basis: basis, Request: request, DispatchStarted: &marker}
+	raw, err := json.Marshal(pending)
+	require.NoError(t, err)
+	dispatched := true
+	pending.DispatchStarted = &dispatched
+	marked := markedFundingDispatchFixture(t, raw)
+	err = nil
+	require.NoError(t, err)
+	calls := &atomic.Int64{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+	mock.ExpectExec("SELECT pg_advisory_lock").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT pending_request,funded_units").WithArgs("funding-user", "funding-lease").WillReturnRows(sqlmock.NewRows([]string{"pending", "funded", "returned", "revision", "scope", "owner", "key"}).AddRow(raw, int64(1000), int64(0), int64(0), "legacy", "", ""))
+	mock.ExpectQuery("SELECT jsonb_set").WithArgs(string(raw)).WillReturnRows(sqlmock.NewRows([]string{"marked"}).AddRow(marked))
+	mock.ExpectExec("UPDATE wallet_funding_freeze SET pending_request=NULL WHERE").WithArgs("funding-user", "funding-lease", string(marked), int64(0), string(raw)).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("UPDATE wallet_funding_freeze SET pending_request").WithArgs("funding-user", "funding-lease", string(marked), int64(0), string(raw)).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	mock.ExpectBegin().WillReturnError(context.Canceled)
+	mock.ExpectQuery("SELECT pg_advisory_unlock").WillReturnRows(sqlmock.NewRows([]string{"unlocked"}).AddRow(true))
+	bridge := &CanonicalWalletBridge{store: &fundingRecoveryStore{}, outboxDB: db, control: newCanonicalWalletHTTPClient(config.CanonicalWalletConfig{Secret: secret, ControlPlaneURL: server.URL}, server.Client())}
+	require.NotPanics(t, func() {
+		require.ErrorIs(t, bridge.replayPendingFundingReturn(context.Background(), "funding-user", "funding-lease"), context.Canceled)
+	})
+	require.Zero(t, calls.Load(), "a failed second transaction cannot dispatch to the Worker")
+	require.Zero(t, db.Stats().InUse)
+	require.NoError(t, mock.ExpectationsWereMet(), "true dispatch marker committed independently, without rollback or pending clear")
+}
+
+func markedFundingDispatchFixture(t *testing.T, raw []byte) []byte {
+	t.Helper()
+	var fields map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(raw, &fields))
+	fields["dispatch_started"] = json.RawMessage("true")
+	marked, err := json.Marshal(fields)
+	require.NoError(t, err)
+	return marked
 }

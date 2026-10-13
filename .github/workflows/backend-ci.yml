@@ -176,7 +176,7 @@ jobs:
           DATABASE_PROVIDER: d1
         run: |
           cp src/config/db/schema.sqlite.ts src/config/db/schema.ts
-          pnpm exec node --import tsx/esm --experimental-loader=./src/modules/payment/usd-test-loader.mjs --no-warnings scripts/wallet-wire-fixture.ts > "$RUNNER_TEMP/wallet-wire-fixture.log" 2>&1 &
+          pnpm exec node --import tsx/esm --import ../.github/fixtures/wallet-return-race.mjs --experimental-loader=./src/modules/payment/usd-test-loader.mjs --no-warnings scripts/wallet-wire-fixture.ts > "$RUNNER_TEMP/wallet-wire-fixture.log" 2>&1 &
           fixture_pid=$!
           echo "$fixture_pid" > "$RUNNER_TEMP/wallet-wire-fixture.pid"
           for _ in $(seq 1 60); do
