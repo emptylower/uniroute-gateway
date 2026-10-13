@@ -116,7 +116,7 @@ func (r *ModelPricingResolver) resolveBasePricing(model string) (*ModelPricing, 
 			"model", model, "error", err)
 		return nil, PricingSourceFallback
 	}
-	if _, ok := anthropicOfficialPrices.byID[strings.ToLower(strings.TrimSpace(model))]; ok {
+	if _, ok := anthropicOfficialPrices.byID[strings.ToLower(strings.TrimSpace(model))]; ok && anthropicOfficialBaselineEnabled() {
 		return pricing, PricingSourceOfficial
 	}
 	return pricing, PricingSourceLiteLLM

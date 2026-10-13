@@ -33,6 +33,15 @@ type anthropicOfficialPriceSnapshot struct {
 
 var anthropicOfficialPrices = loadAnthropicOfficialPrices()
 
+// anthropicOfficialBaselineMode is fixed at link time in the emergency
+// reader-compatible rollback artifact. It does not affect frozen snapshots.
+// A missing/unknown mode fails closed to the prior dynamic/fallback producer.
+var anthropicOfficialBaselineMode = "enabled"
+
+func anthropicOfficialBaselineEnabled() bool {
+	return anthropicOfficialBaselineMode == "enabled"
+}
+
 func loadAnthropicOfficialPrices() anthropicOfficialPriceSnapshot {
 	raw := modelpricing.AnthropicOfficialSnapshot()
 	var snapshot anthropicOfficialPriceSnapshot

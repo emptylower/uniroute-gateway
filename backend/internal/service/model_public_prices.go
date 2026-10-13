@@ -54,7 +54,12 @@ func NewPublicModelPriceSnapshot(items []PublicModelPrice, now time.Time) Public
 		}
 		return items[i].Channel < items[j].Channel
 	})
-	snapshot := PublicModelPriceSnapshot{Items: items, GeneratedAt: now.UTC(), PriceScope: "default_retail_standard_tokens", OfficialSource: anthropicOfficialPrices.Source, OfficialVerifiedAt: anthropicOfficialPrices.VerifiedAt, OfficialSnapshotVersion: anthropicOfficialPrices.version}
+	snapshot := PublicModelPriceSnapshot{Items: items, GeneratedAt: now.UTC(), PriceScope: "default_retail_standard_tokens"}
+	if anthropicOfficialBaselineEnabled() {
+		snapshot.OfficialSource = anthropicOfficialPrices.Source
+		snapshot.OfficialVerifiedAt = anthropicOfficialPrices.VerifiedAt
+		snapshot.OfficialSnapshotVersion = anthropicOfficialPrices.version
+	}
 	content, _ := json.Marshal(struct {
 		Items      []PublicModelPrice `json:"items"`
 		PriceScope string             `json:"price_scope"`

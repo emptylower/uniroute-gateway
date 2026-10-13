@@ -865,14 +865,16 @@ func (s *BillingService) GetModelPricing(model string) (*ModelPricing, error) {
 				MaxInputTokens:                     litellmPricing.MaxInputTokens,
 				MaxOutputTokens:                    litellmPricing.MaxOutputTokens,
 			}
-			pricing, _ = officialAnthropicBasePricing(model, pricing)
+			if anthropicOfficialBaselineEnabled() {
+				pricing, _ = officialAnthropicBasePricing(model, pricing)
+			}
 			return s.applyModelSpecificPricingPolicy(model, pricing), nil
 		}
 	}
 
 	// Verified official rows also work when a newly released model has not
 	// reached the dynamic mirror or the legacy fallback table.
-	if official, ok := anthropicOfficialPrices.byID[modelCatalogKey(model)]; ok {
+	if official, ok := anthropicOfficialPrices.byID[modelCatalogKey(model)]; ok && anthropicOfficialBaselineEnabled() {
 		fallback := s.fallbackPrices[modelCatalogKey(model)]
 		if official.ContextPolicy == "preserve_existing" {
 			fallback = s.getFallbackPricing(model)
