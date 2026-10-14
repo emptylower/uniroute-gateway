@@ -273,8 +273,12 @@ func TestPublicImageTokenPricesUsesSeparateImageRatesAndExplicitZero(t *testing.
 	group := publicGroup(1, 0.5)
 	group.Platform = PlatformOpenAI
 	svc := publicCatalogFixture([]Group{group})
-	svc.accounts.(*modelCatalogAccountFake).byGroup[1][0].Credentials = map[string]any{"model_mapping": map[string]any{"gpt-image-2": "gpt-image-2"}}
-	svc.pricing.(*modelCatalogPricingFake).byGroup[1].BasePricing = &ModelPricing{InputPricePerToken: 5e-6, OutputPricePerToken: 30e-6, ImageInputPricePerToken: 8e-6, ImageOutputPricePerToken: 0, ImageOutputPriceExplicit: true}
+	accounts, ok := svc.accounts.(*modelCatalogAccountFake)
+	require.True(t, ok)
+	pricing, ok := svc.pricing.(*modelCatalogPricingFake)
+	require.True(t, ok)
+	accounts.byGroup[1][0].Credentials = map[string]any{"model_mapping": map[string]any{"gpt-image-2": "gpt-image-2"}}
+	pricing.byGroup[1].BasePricing = &ModelPricing{InputPricePerToken: 5e-6, OutputPricePerToken: 30e-6, ImageInputPricePerToken: 8e-6, ImageOutputPricePerToken: 0, ImageOutputPriceExplicit: true}
 	image, err := svc.PublicImageTokenPrices(context.Background(), time.Now())
 	require.NoError(t, err)
 	require.Len(t, image.Items, 1)
@@ -288,14 +292,14 @@ func TestPublicImageTokenPricesUsesSeparateImageRatesAndExplicitZero(t *testing.
 	require.NoError(t, err)
 	require.Empty(t, text.Items)
 	// A request/image-priced route must not be mislabeled as a token rate.
-	svc.pricing.(*modelCatalogPricingFake).byGroup[1].Mode = BillingModeImage
-	svc.pricing.(*modelCatalogPricingFake).byGroup[1].DefaultPerRequestPrice = 0.2
+	pricing.byGroup[1].Mode = BillingModeImage
+	pricing.byGroup[1].DefaultPerRequestPrice = 0.2
 	image, err = svc.PublicImageTokenPrices(context.Background(), time.Now())
 	require.NoError(t, err)
 	require.Empty(t, image.Items)
 	// Unsynced accounts cannot synthesize the four private supplier aliases.
-	svc.pricing.(*modelCatalogPricingFake).byGroup[1].Mode = BillingModeToken
-	svc.accounts.(*modelCatalogAccountFake).byGroup[1][0].Credentials = map[string]any{}
+	pricing.byGroup[1].Mode = BillingModeToken
+	accounts.byGroup[1][0].Credentials = map[string]any{}
 	image, err = svc.PublicImageTokenPrices(context.Background(), time.Now())
 	require.NoError(t, err)
 	require.Empty(t, image.Items)
