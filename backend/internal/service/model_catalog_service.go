@@ -498,7 +498,18 @@ func (s *ModelCatalogService) QuoteChannelCosts(ctx context.Context, userID int6
 
 // quoteChannelCostsForGroups shares discovery, restrictions and resolver pricing
 // between the authenticated catalog and the anonymous retail projection.
-func (s *ModelCatalogService) quoteChannelCostsForGroups(ctx context.Context, groups []Group, rates map[int64]float64, now time.Time, quote ChannelCostQuote, public bool) (ChannelCostQuote, error) {
+func (s *ModelCatalogService) quoteChannelCostsForGroups(ctx context.Context, groups []Group, rates map[int64]float64, now time.Time, quote ChannelCostQuote, public bool, includeImageTokens ...bool) (ChannelCostQuote, error) {
+	includeImages := public && len(includeImageTokens) > 0 && includeImageTokens[0]
+	addSeed := func(seeds map[string]catalogModelSeed, model, platform string) {
+		if includeImages && isPublicImageTokenModel(model) && CheckModelAvailability(model) == nil {
+			key := modelCatalogKey(model)
+			if _, ok := seeds[key]; !ok {
+				seeds[key] = catalogModelSeed{name: model, platform: platform}
+			}
+			return
+		}
+		addCatalogModelSeed(seeds, model, platform)
+	}
 	quoteCurrency := quote.QuoteCurrency
 	groupPlatform := make(map[int64]string, len(groups))
 	for i := range groups {
@@ -530,7 +541,7 @@ func (s *ModelCatalogService) quoteChannelCostsForGroups(ctx context.Context, gr
 					if model.Platform != "" && platform != "" && ChannelRoutingFamilyForPlatform(model.Platform) != ChannelRoutingFamilyForPlatform(platform) {
 						continue
 					}
-					addCatalogModelSeed(seeds, model.Name, model.Platform)
+					addSeed(seeds, model.Name, model.Platform)
 				}
 			}
 		}
@@ -551,8 +562,8 @@ func (s *ModelCatalogService) quoteChannelCostsForGroups(ctx context.Context, gr
 			seeds[key] = seed
 		}
 		for j := range accounts {
-			for _, seed := range catalogAccountModels(&accounts[j]) {
-				addCatalogModelSeed(seeds, seed.name, seed.platform)
+			for _, seed := range catalogAccountModelsForPublicScope(&accounts[j], includeImages) {
+				addSeed(seeds, seed.name, seed.platform)
 			}
 		}
 		// Family isolation: a group publishes only models its platform can

@@ -15,7 +15,7 @@ func TestGeminiMarketReferencesPreserveAuthoritativeQuote(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(`{"model":"google/gemini-omni-flash-1-1","option":"720p:8","prompt":"A dog enters the scene","input":{"image_urls":["https://example.com/reference.png"],"aspect_ratio":"9:16","seed":23}}`), &in))
 	_, model, units, input, err := normalizeMediaCreate(in)
 	require.NoError(t, err)
-	require.Equal(t, int64(63040000), units)
+	require.Equal(t, int64(46875000), units)
 	require.Equal(t, "720p", input["resolution"])
 	require.Equal(t, "8", input["duration"])
 	require.Equal(t, "9:16", input["aspect_ratio"])
@@ -52,7 +52,7 @@ func TestGeminiMarketFramesAndLongPrompt(t *testing.T) {
 	in := MediaCreateInput{Model: "google/gemini-omni-flash-1-1", Option: "1080p:4", Prompt: strings.Repeat("x", 20000), Input: map[string]any{"first_frame_url": "https://example.com/first.png", "last_frame_url": "https://example.com/last.png"}}
 	_, _, units, provider, err := normalizeMediaCreate(in)
 	require.NoError(t, err)
-	require.Equal(t, int64(31520000), units)
+	require.Equal(t, int64(28125000), units)
 	require.Equal(t, in.Input["last_frame_url"], provider["last_frame_url"])
 	in.Prompt += "x"
 	_, _, _, _, err = normalizeMediaCreate(in)

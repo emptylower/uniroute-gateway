@@ -218,12 +218,12 @@ func TestExternalMediaV5ReleasedTaskContinuesQueryAndLateOriginalFeeOnce(t *test
 	_, err := f.db.Exec(`UPDATE gateway_media_task SET next_poll_at=now() WHERE id=$1`, task.TaskID)
 	require.NoError(t, err)
 	charged := f.wait(t, task.TaskID, "charged")
-	require.Equal(t, "0.0273", *charged.Billing.ChargedUSD)
+	require.Equal(t, "0.01875", *charged.Billing.ChargedUSD)
 	require.Empty(t, charged.URLs, "empty delivery URL remains billable")
 	var amount int64
 	var payloadLease, state string
 	require.NoError(t, f.db.QueryRow(`SELECT actual_units,COALESCE(settlement_payload->>'lease_id',''),state FROM wallet_authorization_segment`).Scan(&amount, &payloadLease, &state))
-	require.Equal(t, int64(2730000), amount)
+	require.Equal(t, int64(1875000), amount)
 	var originalLease, capturedLease, auth string
 	require.NoError(t, f.db.QueryRow(`SELECT lease_id,authorization_id FROM gateway_media_task WHERE id=$1`, task.TaskID).Scan(&originalLease, &auth))
 	require.NoError(t, f.db.QueryRow(`SELECT lease_id FROM wallet_settlement_outbox WHERE gateway_request_id=$1 AND authorization_id=$2`, task.TaskID, auth).Scan(&capturedLease))
@@ -340,7 +340,7 @@ func TestExternalMediaV5SuccessEvidenceCommitsBeforeRedisAndSurvivesDeadlineRest
 	var auth string
 	require.NoError(t, f.db.QueryRow(`SELECT fee_evidence IS NOT NULL AND fee_pending_at IS NOT NULL,actual_units,authorization_id FROM gateway_media_task WHERE id=$1`, task.TaskID).Scan(&evidence, &actual, &auth))
 	require.True(t, evidence)
-	require.Equal(t, int64(2730000), actual)
+	require.Equal(t, int64(1875000), actual)
 	hold, err := repository.NewGatewayCache(f.rdb).(service.CanonicalWalletLeaseStore).GetCanonicalWalletHold(context.Background(), f.platformUserID, auth)
 	require.NoError(t, err)
 	require.Equal(t, "armed", hold.State)
@@ -358,7 +358,7 @@ func TestExternalMediaV5SuccessEvidenceCommitsBeforeRedisAndSurvivesDeadlineRest
 	require.NoError(t, err)
 	f.svc = f.newService(t)
 	charged := f.wait(t, task.TaskID, "charged")
-	require.Equal(t, "0.0273", *charged.Billing.ChargedUSD)
+	require.Equal(t, "0.01875", *charged.Billing.ChargedUSD)
 	var usages int
 	require.NoError(t, f.db.QueryRow(`SELECT count(*) FROM usage_logs WHERE request_id=$1`, task.TaskID).Scan(&usages))
 	require.Equal(t, 1, usages)
@@ -423,12 +423,12 @@ func TestExternalMediaV5OriginalFeeOverrunIsNotTruncated(t *testing.T) {
 	task := mediaV5PreparedTask(t, f, "vendor-overrun", time.Now().Add(-2*time.Minute), true, mediaV5TaskOptions{HeldUnits: 1000000})
 	f.svc = f.newService(t)
 	charged := f.wait(t, task.TaskID, "charged")
-	require.Equal(t, "0.0273", *charged.Billing.ChargedUSD)
+	require.Equal(t, "0.01875", *charged.Billing.ChargedUSD)
 	var sum int64
 	var events int
 	require.NoError(t, f.db.QueryRow(`SELECT count(*),sum(amount_units) FROM wallet_settlement_outbox WHERE gateway_request_id=$1`, task.TaskID).Scan(&events, &sum))
 	require.Equal(t, 2, events)
-	require.Equal(t, int64(2730000), sum)
+	require.Equal(t, int64(1875000), sum)
 	var actual, held int64
 	require.NoError(t, f.db.QueryRow(`SELECT actual_units,held_units FROM gateway_media_task WHERE id=$1`, task.TaskID).Scan(&actual, &held))
 	require.Greater(t, actual, held)
@@ -498,7 +498,7 @@ func TestExternalMediaV5CleanupFailureDoesNotStarveQueryOrPositiveEvidence(t *te
 	var fee int64
 	var evidence bool
 	require.NoError(t, f.db.QueryRow(`SELECT actual_units,fee_evidence IS NOT NULL FROM gateway_media_task WHERE id=$1`, task.TaskID).Scan(&fee, &evidence))
-	require.Equal(t, int64(2730000), fee)
+	require.Equal(t, int64(1875000), fee)
 	require.True(t, evidence)
 	missingFinance.Store(false)
 	_, err := f.db.Exec(`UPDATE gateway_media_task SET next_fee_recovery_at=now(),claimed_by=NULL,claim_until=NULL WHERE id=$1`, task.TaskID)

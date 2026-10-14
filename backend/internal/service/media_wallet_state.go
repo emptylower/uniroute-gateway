@@ -188,6 +188,15 @@ func (s *mediaTaskStore) queryConfirmed(ctx context.Context, r *mediaTaskRecord)
 func (s *MediaTaskService) prepareMediaFinancialTerminal(ctx context.Context, r *mediaTaskRecord, zero bool, notWritten ...bool) (bool, error) {
 	provenNotWritten := len(notWritten) > 0 && notWritten[0]
 	durableZero := zero && r.journal != nil && r.journal.record.Joined && r.journal.record.Failure != nil && mediaTrustedResult(r, *r.journal.record.Failure)
+	freeSuccess := false
+	if zero && r.journal != nil && r.journal.record.Joined && r.journal.record.Success != nil && r.journal.record.SupplierCredits != nil {
+		actual, _, policy, err := s.mediaSuccessAmount(ctx, r, r.Result)
+		if err != nil {
+			return false, err
+		}
+		freeSuccess = policy != nil && actual == 0 && r.Result.Status == "success"
+		durableZero = durableZero || freeSuccess
+	}
 	journalOwner := ""
 	if durableZero {
 		journalOwner = r.journal.record.Owner
@@ -208,6 +217,9 @@ func (s *MediaTaskService) prepareMediaFinancialTerminal(ctx context.Context, r 
 	}
 	deadline := time.Now().UTC().Truncate(time.Millisecond)
 	reason := "provider_confirmed_zero"
+	if freeSuccess {
+		reason = "supplier_confirmed_zero"
+	}
 	if provenNotWritten {
 		reason = "confirmed_not_written"
 	}
@@ -273,6 +285,15 @@ func (s *MediaTaskService) prepareMediaFinancialTerminal(ctx context.Context, r 
 	}
 	if err != nil {
 		return false, err
+	}
+	if freeSuccess {
+		raw, e := json.Marshal(r.Result)
+		if e != nil {
+			return false, e
+		}
+		if _, e = tx.ExecContext(ctx, `UPDATE gateway_media_task SET result=$2::jsonb WHERE id=$1 AND financial_state='zero_pending' AND fee_evidence IS NULL`, r.ID, string(raw)); e != nil {
+			return false, e
+		}
 	}
 	if err = tx.Commit(); err != nil {
 		return false, err
@@ -396,6 +417,13 @@ func (s *MediaTaskService) finishMediaZero(ctx context.Context, r *mediaTaskReco
 			return err
 		}
 	}
+	freeSuccess := r.Result.Status == "success"
+	if freeSuccess {
+		actual, _, policy, e := s.mediaSuccessAmount(ctx, r, r.Result)
+		if e != nil || policy == nil || actual != 0 {
+			return errors.Join(e, errors.New("media signed free release usage conflict"))
+		}
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -404,7 +432,7 @@ func (s *MediaTaskService) finishMediaZero(ctx context.Context, r *mediaTaskReco
 	if _, err = lockWalletAttempt(ctx, tx, r.AuthorizationID); err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `UPDATE gateway_media_task SET financial_state='released_zero',financial_released_at=COALESCE(financial_released_at,(SELECT min(zero_released_at) FROM wallet_authorization_segment WHERE parent_authorization_id=$2)),actual_units=0,pin_state='finished',status='failed',settled_at=COALESCE(settled_at,now()),claimed_by=NULL,claim_until=NULL WHERE id=$1 AND financial_state='zero_pending'`, r.ID, r.AuthorizationID)
+	_, err = tx.ExecContext(ctx, `UPDATE gateway_media_task SET financial_state='released_zero',financial_released_at=COALESCE(financial_released_at,(SELECT min(zero_released_at) FROM wallet_authorization_segment WHERE parent_authorization_id=$2)),actual_units=0,pin_state='finished',status=CASE WHEN $3 THEN status ELSE 'failed' END,media_journal_pending=$3,next_journal_recovery_at=now(),settled_at=COALESCE(settled_at,now()),claimed_by=NULL,claim_until=NULL WHERE id=$1 AND financial_state='zero_pending'`, r.ID, r.AuthorizationID, freeSuccess)
 	if err != nil {
 		return err
 	}
@@ -413,6 +441,9 @@ func (s *MediaTaskService) finishMediaZero(ctx context.Context, r *mediaTaskReco
 	}
 	if err = tx.Commit(); err != nil {
 		return err
+	}
+	if freeSuccess {
+		return s.finishMediaFreeSuccess(ctx, r)
 	}
 	return s.unprotect(ctx, r)
 }

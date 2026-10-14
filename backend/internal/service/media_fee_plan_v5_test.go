@@ -53,6 +53,8 @@ func TestMediaFeePlanReplaysSevenFieldPayloadWithLockedOriginalIdentity(t *testi
 					{AuthorizationID: "auth", EventID: "event-0", LeaseID: "lease-0", HeldUnits: 100},
 					{AuthorizationID: "auth-share-1", EventID: "event-1", LeaseID: "lease-1", HeldUnits: 100},
 				}}
+			actualUnits := r.QuotedUnits
+			r.ActualUnits = &actualUnits
 			s := &MediaTaskService{db: db}
 			replays := 1
 			if tc.wantErr == "" {
@@ -73,7 +75,7 @@ func TestMediaFeePlanReplaysSevenFieldPayloadWithLockedOriginalIdentity(t *testi
 				if tc.taskToken != "" {
 					token = tc.taskToken
 				}
-				mock.ExpectQuery("SELECT authorization_id,authorization_token,billing_snapshot_id,platform_user_id,quoted_units,created_at FROM gateway_media_task").WithArgs(r.ID).WillReturnRows(sqlmock.NewRows([]string{"authorization_id", "authorization_token", "billing_snapshot_id", "platform_user_id", "quoted_units", "created_at"}).AddRow(r.AuthorizationID, token, r.SnapshotID, r.PlatformUserID, r.QuotedUnits, r.CreatedAt))
+				mock.ExpectQuery("SELECT authorization_id,authorization_token,billing_snapshot_id,platform_user_id,quoted_units,created_at,actual_units FROM gateway_media_task").WithArgs(r.ID).WillReturnRows(sqlmock.NewRows([]string{"authorization_id", "authorization_token", "billing_snapshot_id", "platform_user_id", "quoted_units", "created_at", "actual_units"}).AddRow(r.AuthorizationID, token, r.SnapshotID, r.PlatformUserID, r.QuotedUnits, r.CreatedAt, r.QuotedUnits))
 				if tc.taskToken != "" {
 					mock.ExpectRollback()
 					continue

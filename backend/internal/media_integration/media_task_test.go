@@ -659,6 +659,7 @@ type mediaFixture struct {
 	apiKeys          *service.APIKeyService
 	snapshots        *service.BillingSnapshotService
 	readHook         func(http.ResponseWriter, *http.Request)
+	providerModels   sync.Map
 	readerJournalDir string
 }
 
@@ -677,6 +678,11 @@ func newMediaFixtureForUser(t *testing.T, platformUserID string, configure ...fu
 	f.upstream = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/v1/jobs/createTask" {
 			n := f.creates.Add(1)
+			var input struct {
+				Model string `json:"model"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&input)
+			f.providerModels.Store(fmt.Sprintf("vendor-%d", n), input.Model)
 			if f.mode.Load() == 1 {
 				w.WriteHeader(500)
 				return
@@ -695,7 +701,8 @@ func newMediaFixtureForUser(t *testing.T, platformUserID string, configure ...fu
 		if f.mode.Load() == 3 {
 			state = "generating"
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"code": 200, "data": map[string]any{"taskId": r.URL.Query().Get("taskId"), "state": state, "resultJson": `{"resultUrls":["https://example.com/result"]}`}})
+		model, _ := f.providerModels.Load(r.URL.Query().Get("taskId"))
+		_ = json.NewEncoder(w).Encode(map[string]any{"code": 200, "data": map[string]any{"taskId": r.URL.Query().Get("taskId"), "model": model, "creditsConsumed": 8, "state": state, "resultJson": `{"resultUrls":["https://example.com/result"]}`}})
 	}))
 	t.Cleanup(f.upstream.Close)
 	f.cfg = &config.Config{}
@@ -726,7 +733,15 @@ func (f *mediaFixture) newService(t *testing.T) *service.MediaTaskService {
 	return svc
 }
 func (f *mediaFixture) create(t *testing.T, key, model, option string) service.MediaTaskView {
-	v, err := f.svc.Create(context.Background(), f.userID, key, service.MediaCreateInput{Model: model, Option: option, Prompt: "A colorful garden"})
+	input := service.MediaCreateInput{Model: model, Option: option, Prompt: "A colorful garden"}
+	for _, m := range service.MediaTaskCatalog() {
+		if m.ModelID == model && m.BillingBasis == "budget_cap" {
+			quote, e := f.svc.Quote(model, option)
+			require.NoError(t, e)
+			input.MaxCostUSD = &quote.QuotedUSD
+		}
+	}
+	v, err := f.svc.Create(context.Background(), f.userID, key, input)
 	require.NoError(t, err)
 	return v
 }
@@ -835,8 +850,10 @@ func TestExternalMediaDefiniteFailureReleasesOnce(t *testing.T) {
 	f := newMediaFixture(t)
 	f.mode.Store(2)
 	task := f.create(t, "failure", "google/nano-banana", "1:1")
+	var quotedUnits int64
+	require.NoError(t, f.db.QueryRow(`SELECT quoted_units FROM gateway_media_task WHERE id=$1`, task.TaskID).Scan(&quotedUnits))
 	v := f.wait(t, task.TaskID, "released")
-	require.Equal(t, "0.0273", *v.Billing.ReleasedUSD)
+	require.Equal(t, task.Billing.QuotedUSD, *v.Billing.ReleasedUSD)
 	var outbox int
 	require.NoError(t, f.db.QueryRow(`SELECT count(*) FROM wallet_settlement_outbox`).Scan(&outbox))
 	require.Zero(t, outbox)
@@ -848,7 +865,7 @@ func TestExternalMediaDefiniteFailureReleasesOnce(t *testing.T) {
 		defer f.control.mu.Unlock()
 		for _, l := range f.control.pool {
 			if l.scope == "media" {
-				return l.closed && l.returned == 2730000
+				return l.closed && l.returned == quotedUnits
 			}
 		}
 		return false
@@ -866,7 +883,7 @@ func TestExternalMediaDefiniteFailureReleasesOnce(t *testing.T) {
 	require.NotNil(t, isolated)
 	returned, closed, unleased := isolated.returned, isolated.closed, f.control.unleased
 	f.control.mu.Unlock()
-	require.Equal(t, int64(2730000), returned)
+	require.Equal(t, quotedUnits, returned)
 	require.True(t, closed)
 	require.Equal(t, f.control.budget-f.control.captured, unleased, "the whole quote went back to spendable credit")
 	// The signed Worker return must also reach durable PG ACK and Redis apply;
@@ -875,7 +892,7 @@ func TestExternalMediaDefiniteFailureReleasesOnce(t *testing.T) {
 		var closed bool
 		var returned, revision, applied int64
 		err := f.db.QueryRow(`SELECT closed,returned_units,return_revision,redis_applied_revision FROM wallet_funding_freeze WHERE platform_user_id=$1 AND lease_id=$2`, f.platformUserID, isolated.id).Scan(&closed, &returned, &revision, &applied)
-		return err == nil && closed && returned == 2730000 && revision == 1 && applied == revision
+		return err == nil && closed && returned == quotedUnits && revision == 1 && applied == revision
 	}, 10*time.Second, 50*time.Millisecond, "the quote's single signed return is durably acknowledged and applied")
 	f.create(t, "failure", "google/nano-banana", "1:1")
 	require.Equal(t, int64(1), f.creates.Load())
@@ -1028,12 +1045,14 @@ func TestExternalPoolMixedLeasesAndDirectFundsReallySpend(t *testing.T) {
 }
 func TestExternalMediaSegmentsSingleProviderSingleUsageAndAtomicOutbox(t *testing.T) {
 	f := newMediaFixture(t)
-	// v5 funds media with isolated leases. Two shared free tails would both be
-	// reclaimed at once and fund the 2.73M quote with ONE lease, so keep two
-	// funding segments this way: the first isolated grant is clamped to 2M of
-	// unleased credit, the 0.73M rest is issued after reclaiming lease-a.
-	f.poolFunds(t, 2000000, 0, 2000000)
+	f.svc.Stop()
 	task := f.create(t, "segmented", "google/nano-banana", "1:1")
+	var quotedUnits int64
+	require.NoError(t, f.db.QueryRow(`SELECT quoted_units FROM gateway_media_task WHERE id=$1`, task.TaskID).Scan(&quotedUnits))
+	// Clamp direct credit to half the frozen quote; the remaining half is funded
+	// after reclaiming the shared lease, preserving exactly two isolated shares.
+	f.poolFunds(t, quotedUnits/2, 0, quotedUnits/2+quotedUnits%2)
+	f.svc = f.newService(t)
 	f.wait(t, task.TaskID, "charged")
 	require.Equal(t, int64(1), f.creates.Load())
 	var usage, outbox, pins int
@@ -1100,12 +1119,16 @@ func TestExternalPoolUnknownRetainsEverySegmentAcrossExpiryFlushAndRestart(t *te
 
 func TestExternalMediaTerminalTransactionRollsBackEverySegment(t *testing.T) {
 	f := newMediaFixture(t)
-	// Two isolated funding segments (2M + 0.73M), as in the segmented test. The
-	// fault targets the second segment's lease, whose id is issued at runtime.
-	f.poolFunds(t, 2000000, 0, 2000000)
+	f.svc.Stop()
+	task := f.create(t, "tx-rollback", "google/nano-banana", "1:1")
+	var quotedUnits int64
+	require.NoError(t, f.db.QueryRow(`SELECT quoted_units FROM gateway_media_task WHERE id=$1`, task.TaskID).Scan(&quotedUnits))
+	// Keep two isolated halves of the exact frozen quote. The fault still
+	// targets the second segment's lease, whose id is issued at runtime.
+	f.poolFunds(t, quotedUnits/2, 0, quotedUnits/2+quotedUnits%2)
 	_, err := f.db.Exec(`CREATE FUNCTION reject_media_second() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.lease_id IN (SELECT lease_id FROM wallet_authorization_segment WHERE ordinal=1) THEN RAISE EXCEPTION 'isolated terminal transaction fault'; END IF; RETURN NEW; END $$; CREATE TRIGGER reject_media_second BEFORE INSERT ON wallet_settlement_outbox FOR EACH ROW EXECUTE FUNCTION reject_media_second()`)
 	require.NoError(t, err)
-	task := f.create(t, "tx-rollback", "google/nano-banana", "1:1")
+	f.svc = f.newService(t)
 	require.Eventually(t, func() bool {
 		var n int
 		_ = f.db.QueryRow(`SELECT count(*) FROM wallet_authorization_segment WHERE actual_units>0`).Scan(&n)

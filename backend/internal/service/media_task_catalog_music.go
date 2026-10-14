@@ -12,8 +12,9 @@ package service
 //
 // Prices are ten-thousandths of USD per track. Suno is flat per request at KIE
 // (12 credits). Speech is billed by KIE per token, so retail is flat per
-// request and the prompt is capped to bound cost: 1000 characters is about a
-// minute of audio, roughly 1.6k output tokens.
+// request in legacy snapshots. New supplier policies expose a recommended
+// budget and settle from authoritative usage under the confirmed cap. The
+// prompt limit reduces exposure; it is not an upstream hard cost limit.
 func musicMediaModels() []MediaModel {
 	suno := func(id, slug, name, version string) MediaModel {
 		m := mediaSpecModel(id, slug, name, "Suno", "music", "tags",

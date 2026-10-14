@@ -95,8 +95,34 @@ func (h *ModelCatalogHandler) ListChannelCosts(c *gin.Context) {
 // parameters never participate in default retail price selection.
 func (h *ModelCatalogHandler) ListPublicPrices(c *gin.Context) {
 	category := strings.TrimSpace(strings.ToLower(c.DefaultQuery("category", "text")))
+	if category == "media" {
+		response.Success(c, service.NewPublicMediaPriceSnapshot(time.Now()))
+		return
+	}
+	if category == "image_tokens" {
+		public, ok := h.catalog.(interface {
+			PublicImageTokenPrices(context.Context, time.Time) (service.PublicModelPriceSnapshot, error)
+		})
+		if !ok || h.settingService == nil || !h.settingService.GetAvailableChannelsRuntime(c.Request.Context()).Enabled {
+			response.Success(c, service.NewPublicModelPriceSnapshot(nil, time.Now()))
+			return
+		}
+		snapshot, err := public.PublicImageTokenPrices(c.Request.Context(), time.Now())
+		if err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+		response.Success(c, snapshot)
+		return
+	}
+
 	if category != "text" {
 		response.BadRequest(c, "Only the text model category is supported")
+		return
+	}
+	scope := strings.TrimSpace(c.DefaultQuery("scope", "claude"))
+	if scope != "claude" && scope != "all_text" {
+		response.BadRequest(c, "Unsupported public price scope")
 		return
 	}
 	now := time.Now()
@@ -111,7 +137,20 @@ func (h *ModelCatalogHandler) ListPublicPrices(c *gin.Context) {
 		response.Success(c, service.NewPublicModelPriceSnapshot(nil, now))
 		return
 	}
-	snapshot, err := public.PublicPrices(c.Request.Context(), now)
+	var snapshot service.PublicModelPriceSnapshot
+	var err error
+	if scope == "all_text" {
+		all, ok := h.catalog.(interface {
+			PublicTextPrices(context.Context, time.Time) (service.PublicModelPriceSnapshot, error)
+		})
+		if !ok {
+			response.Success(c, service.NewPublicModelPriceSnapshot(nil, now))
+			return
+		}
+		snapshot, err = all.PublicTextPrices(c.Request.Context(), now)
+	} else {
+		snapshot, err = public.PublicPrices(c.Request.Context(), now)
+	}
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return

@@ -25,17 +25,21 @@ type MediaParam struct {
 	OptionTiers map[string]string  `json:"optionTiers,omitempty"`
 }
 type MediaModel struct {
-	Slug           string            `json:"slug"`
-	ModelID        string            `json:"modelId"`
-	Name           string            `json:"name"`
-	Provider       string            `json:"provider"`
-	MediaKind      string            `json:"mediaKind"`
-	Unit           string            `json:"unit"`
-	PriceUSD       string            `json:"price_usd"`
-	OptionPriceUSD map[string]string `json:"option_price_usd"`
-	Param          MediaParam        `json:"param"`
-	InputFields    []string          `json:"input_fields,omitempty"`
-	prices         map[string]int64
+	Slug               string            `json:"slug"`
+	ModelID            string            `json:"modelId"`
+	Name               string            `json:"name"`
+	Provider           string            `json:"provider"`
+	MediaKind          string            `json:"mediaKind"`
+	Unit               string            `json:"unit"`
+	PriceUSD           string            `json:"price_usd"`
+	OptionPriceUSD     map[string]string `json:"option_price_usd"`
+	OptionQuoteUSD     map[string]string `json:"option_quote_usd,omitempty"`
+	OptionReferenceSKU map[string]string `json:"option_reference_sku,omitempty"`
+	BillingBasis       string            `json:"billing_basis,omitempty"`
+	Param              MediaParam        `json:"param"`
+	InputFields        []string          `json:"input_fields,omitempty"`
+	requestPrices      map[string]int64
+	prices             map[string]int64
 	// fields maps the colon-separated segments of an option value onto
 	// provider input fields; fixed holds provider inputs the browser cannot
 	// choose. A nil fields keeps the legacy single-parameter mapping.
@@ -94,6 +98,12 @@ func PublicMediaTaskCatalog() []MediaModel {
 			if model.MediaKind == "music" {
 				model.Unit = "per_request"
 			}
+			model.OptionQuoteUSD = make(map[string]string, len(model.Param.Options))
+			for _, option := range model.Param.Options {
+				if units, err := mediaModelQuoteUnits(model, option.Value); err == nil {
+					model.OptionQuoteUSD[option.Value] = mediaUSD(units)
+				}
+			}
 			available = append(available, model)
 		}
 	}
@@ -120,11 +130,23 @@ func MediaTaskCatalog() []MediaModel {
 		}
 	}
 
+	if mediaCostPlusPricingEnabled() {
+		models[9].fixed = map[string]any{"model": "veo3_fast", "resolution": "720p", "generation_type": "TEXT_2_VIDEO", "aspect_ratio": "16:9"}
+	}
 	models[5].prices["2K:1:1"] = 1200
 	models[5].OptionPriceUSD["2K:1:1"] = "0.12"
 	models = append(models, musicMediaModels()...)
 	models = append(models, extendedMediaModels()...)
 	for i := range models {
+		applyMediaFixedCostPlusPricing(&models[i])
+		if budget, ok := mediaSupplierRecommendedBudgetUnits(models[i].ModelID); ok {
+			models[i].PriceUSD = mediaUSD(budget)
+			models[i].BillingBasis = "budget_cap"
+			models[i].Unit = "per_request"
+			for option := range models[i].OptionPriceUSD {
+				models[i].OptionPriceUSD[option] = mediaUSD(budget)
+			}
+		}
 		if models[i].ModelID == "google/gemini-omni-flash-1-1" {
 			models[i].InputFields = []string{"first_frame_url", "last_frame_url", "image_urls", "aspect_ratio", "seed"}
 		}
@@ -195,6 +217,7 @@ type MediaQuote struct {
 	Currency      string `json:"currency"`
 	QuotedUSD     string `json:"quoted_usd"`
 	PolicyVersion string `json:"policy_version"`
+	BillingBasis  string `json:"billing_basis,omitempty"`
 }
 
 func resolveMediaQuote(model, option string) (MediaModel, string, int64, error) {
@@ -211,20 +234,36 @@ func resolveMediaQuoteUnchecked(model, option string) (MediaModel, string, int64
 		if option == "" {
 			option = m.Param.Options[0].Value
 		}
-		price, ok := m.prices[option]
-		if !ok {
-			return MediaModel{}, "", 0, infraerrors.BadRequest("INVALID_OPTION", "invalid media option")
-		}
-		quantity := int64(1)
-		if m.MediaKind == "video" {
-			quantity = mediaOptionSeconds(option)
-			if quantity <= 0 {
-				return MediaModel{}, "", 0, infraerrors.BadRequest("INVALID_OPTION", "invalid media option")
-			}
-		}
-		return m, option, price * quantity * (mediaUnitsPerUSD / 10000), nil
+		units, err := mediaModelQuoteUnits(m, option)
+		return m, option, units, err
 	}
 	return MediaModel{}, "", 0, infraerrors.BadRequest("UNKNOWN_MODEL", "unknown media model")
+}
+
+// One amount calculation serves quote, normalization and public discovery.
+func mediaModelQuoteUnits(m MediaModel, option string) (int64, error) {
+	price, ok := m.prices[option]
+	if !ok {
+		return 0, infraerrors.BadRequest("INVALID_OPTION", "invalid media option")
+	}
+	if budget, ok := mediaSupplierRecommendedBudgetUnits(m.ModelID); ok {
+		return budget, nil
+	}
+	if m.requestPrices != nil {
+		units, exists := m.requestPrices[option]
+		if !exists || units <= 0 {
+			return 0, infraerrors.BadRequest("PRICE_UNAVAILABLE", "verified media price unavailable")
+		}
+		return units, nil
+	}
+	quantity := int64(1)
+	if m.MediaKind == "video" {
+		quantity = mediaOptionSeconds(option)
+		if quantity <= 0 {
+			return 0, infraerrors.BadRequest("INVALID_OPTION", "invalid media option")
+		}
+	}
+	return price * quantity * (mediaUnitsPerUSD / 10000), nil
 }
 func mediaUSD(units int64) string {
 	return strings.TrimRight(strings.TrimRight(fmt.Sprintf("%d.%08d", units/mediaUnitsPerUSD, units%mediaUnitsPerUSD), "0"), ".")
@@ -234,7 +273,7 @@ func mediaQuote(model, option string) (MediaQuote, error) {
 	if err != nil {
 		return MediaQuote{}, err
 	}
-	return MediaQuote{m.ModelID, o, "USD", mediaUSD(units), "usd-wallet-v1"}, nil
+	return MediaQuote{Model: m.ModelID, Option: o, Currency: "USD", QuotedUSD: mediaUSD(units), PolicyVersion: "usd-wallet-v1", BillingBasis: m.BillingBasis}, nil
 }
 func normalizeMediaCreate(in MediaCreateInput) (MediaCreateInput, MediaModel, int64, map[string]any, error) {
 	if err := CheckModelAvailability(in.Model, mediaUpstreamModel(in.Model)); err != nil {

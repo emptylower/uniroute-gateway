@@ -29,6 +29,8 @@ type PublicModelPrice struct {
 	CacheWrite1hPricePerMillionUSD *string `json:"cache_write_1h_price_per_million_usd"`
 	ContextScope                   string  `json:"context_scope"`
 	MaxContextTokens               *int    `json:"max_context_tokens"`
+	ImageInputPricePerMillionUSD   *string `json:"image_input_price_per_million_usd,omitempty"`
+	ImageOutputPricePerMillionUSD  *string `json:"image_output_price_per_million_usd,omitempty"`
 }
 
 type PublicModelPriceSnapshot struct {
@@ -72,6 +74,21 @@ func NewPublicModelPriceSnapshot(items []PublicModelPrice, now time.Time) Public
 // PublicPrices projects one coherent lowest-price vector per Claude model and
 // generic price band, using only currently schedulable default retail routes.
 func (s *ModelCatalogService) PublicPrices(ctx context.Context, now time.Time) (PublicModelPriceSnapshot, error) {
+	return s.publicPricesForScope(ctx, now, "claude")
+}
+
+// PublicTextPrices uses the same default-retail projection for all text model
+// families. It retains the legacy Claude-only endpoint's default behavior.
+func (s *ModelCatalogService) PublicTextPrices(ctx context.Context, now time.Time) (PublicModelPriceSnapshot, error) {
+	snapshot, err := s.publicPricesForScope(ctx, now, "all_text")
+	// The pinned Anthropic source describes Claude only, not other manufacturers.
+	snapshot.OfficialSource = ""
+	snapshot.OfficialVerifiedAt = time.Time{}
+	snapshot.OfficialSnapshotVersion = ""
+	return snapshot, err
+}
+
+func (s *ModelCatalogService) publicPricesForScope(ctx context.Context, now time.Time, scope string) (PublicModelPriceSnapshot, error) {
 	empty := NewPublicModelPriceSnapshot(nil, now)
 	if s == nil || s.selector == nil || s.accounts == nil || s.pricing == nil {
 		return empty, nil
@@ -84,7 +101,7 @@ func (s *ModelCatalogService) PublicPrices(ctx context.Context, now time.Time) (
 	if err != nil {
 		return empty, err
 	}
-	quote, err := s.quoteChannelCostsForGroups(ctx, groups, nil, now, ChannelCostQuote{BaseCurrency: CurrencyUSD, QuoteCurrency: CurrencyUSD, Rate: 1, ExchangeRate: 1}, true)
+	quote, err := s.quoteChannelCostsForGroups(ctx, groups, nil, now, ChannelCostQuote{BaseCurrency: CurrencyUSD, QuoteCurrency: CurrencyUSD, Rate: 1, ExchangeRate: 1}, true, scope == "image_tokens")
 	if err != nil {
 		return empty, err
 	}
@@ -104,7 +121,7 @@ func (s *ModelCatalogService) PublicPrices(ctx context.Context, now time.Time) (
 			band = "discounted"
 		}
 		for _, model := range group.Models {
-			if !strings.HasPrefix(model.ID, "claude-") || model.publicPricing == nil {
+			if (scope == "claude" && !strings.HasPrefix(model.ID, "claude-")) || (scope != "image_tokens" && !isCatalogTextModel(model.ID)) || (scope == "image_tokens" && !isPublicImageTokenModel(model.ID)) || model.publicPricing == nil {
 				continue
 			}
 			pricing := model.publicPricing
@@ -143,7 +160,24 @@ func (s *ModelCatalogService) PublicPrices(ctx context.Context, now time.Time) (
 				CacheWrite1hPricePerMillionUSD: optional(write1h, writeKnown),
 				ContextScope:                   "standard", MaxContextTokens: model.publicMaxContext,
 			}
-			total := (pricing.InputPricePerToken + pricing.OutputPricePerToken + pricing.CacheReadPricePerToken + write5m + write1h) * multiplier
+			imageTotal := 0.0
+			if scope == "image_tokens" {
+				input, output := pricing.ImageInputPricePerToken, pricing.ImageOutputPricePerToken
+				if input == 0 {
+					input = pricing.InputPricePerToken
+				}
+				if output == 0 && !pricing.ImageOutputPriceExplicit {
+					output = pricing.OutputPricePerToken
+				}
+				if input < 0 || output < 0 || math.IsNaN(input) || math.IsNaN(output) || math.IsInf((input+output)*multiplier, 0) {
+					continue
+				}
+				imageInput, imageOutput := scaled(input), scaled(output)
+				item.ImageInputPricePerMillionUSD = &imageInput
+				item.ImageOutputPricePerMillionUSD = &imageOutput
+				imageTotal = input + output
+			}
+			total := (pricing.InputPricePerToken + pricing.OutputPricePerToken + pricing.CacheReadPricePerToken + write5m + write1h + imageTotal) * multiplier
 			encoded, _ := json.Marshal(item)
 			key := model.ID + "\x00" + band
 			next := candidate{item, total, string(encoded)}
@@ -206,4 +240,43 @@ func publicCacheReadKnown(resolved *ResolvedPricing) bool {
 		return true
 	}
 	return false
+}
+
+// Only the four separately supplied token-image catalog IDs are projected.
+func isPublicImageTokenModel(model string) bool {
+	switch modelCatalogKey(model) {
+	case "gpt-image-2", "gpt-image-2-beta", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst":
+		return true
+	default:
+		return false
+	}
+}
+func catalogAccountModelsForPublicScope(account *Account, includeImages bool) []catalogModelSeed {
+	if !includeImages {
+		return catalogAccountModels(account)
+	}
+	if account == nil || len(rawDiscoveredModelMapping(account)) == 0 {
+		return nil
+	}
+	seeds := catalogAccountModels(account)
+	for _, model := range []string{"gpt-image-2", "gpt-image-2-beta", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst"} {
+		if account.IsModelSupported(model) && checkMappedModelAvailability(account, model) == nil {
+			seeds = append(seeds, catalogModelSeed{name: model, platform: account.Platform})
+		}
+	}
+	return seeds
+}
+func (s *ModelCatalogService) PublicImageTokenPrices(ctx context.Context, now time.Time) (PublicModelPriceSnapshot, error) {
+	snapshot, err := s.publicPricesForScope(ctx, now, "image_tokens")
+	snapshot.OfficialSource = ""
+	snapshot.OfficialVerifiedAt = time.Time{}
+	snapshot.OfficialSnapshotVersion = ""
+	snapshot.PriceScope = "default_retail_image_tokens"
+	content, _ := json.Marshal(struct {
+		Items []PublicModelPrice `json:"items"`
+		Scope string             `json:"price_scope"`
+	}{snapshot.Items, snapshot.PriceScope})
+	hash := sha256.Sum256(content)
+	snapshot.SnapshotVersion = "sha256:" + hex.EncodeToString(hash[:])
+	return snapshot, err
 }

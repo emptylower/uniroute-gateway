@@ -51,9 +51,9 @@ func publicMediaKey(t *testing.T, f *mediaFixture, name string, quota float64) *
 func TestExternalPublicMediaRealKeyIsolationCapReplayAndAccounting(t *testing.T) {
 	f := newPublicMediaFixture(t)
 	ctx := context.Background()
-	a := publicMediaKey(t, f, "a", 0.0273)
+	a := publicMediaKey(t, f, "a", 0.025)
 	b := publicMediaKey(t, f, "b", 0)
-	cap := "0.02730000"
+	cap := "0.02500000"
 	input := service.MediaCreateInput{Model: "nano-banana-2-lite", Option: "1:1", Prompt: "A colorful garden", MaxCostUSD: &cap}
 	task, err := f.svc.CreatePublic(ctx, a, "same-id", input)
 	require.NoError(t, err)
@@ -71,11 +71,11 @@ func TestExternalPublicMediaRealKeyIsolationCapReplayAndAccounting(t *testing.T)
 	require.NoError(t, f.db.QueryRow(`SELECT s.api_key_id FROM wallet_billing_snapshot s JOIN gateway_media_task t ON t.billing_snapshot_id=s.id WHERE t.id=$1`, task.TaskID).Scan(&snapshotKey))
 	require.Equal(t, a.ID, snapshotKey)
 	require.NoError(t, f.db.QueryRow(`SELECT quota_used::text FROM api_keys WHERE id=$1`, a.ID).Scan(&spent))
-	require.Equal(t, "0.02730000", spent)
+	require.Equal(t, "0.02500000", spent)
 	a.Status = service.StatusAPIKeyQuotaExhausted
-	a.QuotaUsed = 0.0273
+	a.QuotaUsed = 0.025
 	f.cfg.MediaTasks.PublicAPIEnabled = false
-	cap = "0.0273"
+	cap = "0.025"
 	replay, err := f.svc.CreatePublic(ctx, a, "same-id", input)
 	require.NoError(t, err)
 	require.Equal(t, task.TaskID, replay.TaskID)
@@ -97,7 +97,7 @@ func TestExternalPublicMediaRealKeyIsolationCapReplayAndAccounting(t *testing.T)
 	var count int
 	require.NoError(t, f.db.QueryRow(`SELECT count(*) FROM gateway_media_task WHERE api_key_id=$1`, b.ID).Scan(&count))
 	require.Zero(t, count)
-	cap = "0.0273"
+	cap = "0.025"
 	bTask, err := f.svc.CreatePublic(ctx, b, "same-id", input)
 	require.NoError(t, err)
 	require.NotEqual(t, task.TaskID, bTask.TaskID)
@@ -109,7 +109,7 @@ func TestExternalPublicMediaAdmissionReservesConcurrentAllowance(t *testing.T) {
 	f := newPublicMediaFixture(t)
 	f.mode.Store(3)
 	ctx := context.Background()
-	key := publicMediaKey(t, f, "limited", 0.0273)
+	key := publicMediaKey(t, f, "limited", 0.025)
 	var wg sync.WaitGroup
 	accepted := make(chan string, 2)
 	errors := make(chan error, 2)
@@ -130,7 +130,7 @@ func TestExternalPublicMediaAdmissionReservesConcurrentAllowance(t *testing.T) {
 	require.Len(t, errors, 1)
 	var pending int64
 	require.NoError(t, f.db.QueryRow(`SELECT sum(reserved_units)::bigint FROM api_key_budget_authorization WHERE api_key_id=$1`, key.ID).Scan(&pending))
-	require.Equal(t, int64(2730000), pending)
+	require.Equal(t, int64(2500000), pending)
 }
 func TestExternalPublicMediaRevocationBeforeWriteReleasesAllowance(t *testing.T) {
 	f := newPublicMediaFixture(t)
@@ -176,7 +176,7 @@ func TestExternalPublicMediaWrittenRevokedSoftDeletedKeyStillCaptures(t *testing
 	var status string
 	var deleted bool
 	require.NoError(t, f.db.QueryRow(`SELECT b.captured_units,k.status,k.deleted_at IS NOT NULL FROM api_key_budget_authorization b JOIN api_keys k ON k.id=b.api_key_id WHERE b.api_key_id=$1`, key.ID).Scan(&captured, &status, &deleted))
-	require.Equal(t, int64(2730000), captured)
+	require.Equal(t, int64(2500000), captured)
 	require.Equal(t, "disabled", status)
 	require.True(t, deleted)
 	require.Equal(t, int64(1), f.creates.Load())
@@ -204,7 +204,7 @@ func TestExternalPublicMediaUnknownWalletReleaseRetainsAllowance(t *testing.T) {
 	f.svc.Stop()
 	f.mode.Store(3)
 	ctx := context.Background()
-	key := publicMediaKey(t, f, "unknown", 0.0273)
+	key := publicMediaKey(t, f, "unknown", 0.025)
 	task, err := f.svc.CreatePublic(ctx, key, "unknown", service.MediaCreateInput{Model: "nano-banana-2-lite", Prompt: "a flower"})
 	require.NoError(t, err)
 	preparePublicMediaHistoricalWrite(t, f, task, key, time.Now().Add(-31*time.Minute))
@@ -217,7 +217,7 @@ func TestExternalPublicMediaUnknownWalletReleaseRetainsAllowance(t *testing.T) {
 	var units int64
 	require.NoError(t, f.db.QueryRow(`SELECT state,reserved_units FROM api_key_budget_authorization WHERE api_key_id=$1`, key.ID).Scan(&state, &units))
 	require.Contains(t, []string{"written", "unknown"}, state)
-	require.Equal(t, int64(2730000), units)
+	require.Equal(t, int64(2500000), units)
 	_, err = f.svc.CreatePublic(ctx, key, "new-after-unknown", service.MediaCreateInput{Model: "nano-banana-2-lite", Prompt: "a flower"})
 	require.Error(t, err)
 	require.Equal(t, int64(1), f.creates.Load())
@@ -225,13 +225,13 @@ func TestExternalPublicMediaUnknownWalletReleaseRetainsAllowance(t *testing.T) {
 	_, err = f.db.Exec(`UPDATE gateway_media_task SET next_poll_at=now() WHERE id=$1`, task.TaskID)
 	require.NoError(t, err)
 	charged := f.wait(t, task.TaskID, "charged")
-	require.Equal(t, "0.0273", *charged.Billing.ChargedUSD)
+	require.Equal(t, "0.025", *charged.Billing.ChargedUSD)
 	require.Equal(t, "0", charged.Billing.HeldUSD)
 	var captured int64
 	var count int
 	require.NoError(t, f.db.QueryRow(`SELECT state,captured_units FROM api_key_budget_authorization WHERE api_key_id=$1`, key.ID).Scan(&state, &captured))
 	require.Equal(t, "captured", state)
-	require.Equal(t, int64(2730000), captured)
+	require.Equal(t, int64(2500000), captured)
 	require.NoError(t, f.db.QueryRow(`SELECT count(*) FROM usage_logs WHERE api_key_id=$1`, key.ID).Scan(&count))
 	require.Equal(t, 1, count)
 	replay, err := f.svc.CreatePublic(ctx, key, "unknown", service.MediaCreateInput{Model: "nano-banana-2-lite", Prompt: "a flower"})

@@ -191,6 +191,11 @@ func (s *MediaTaskService) mediaSettled(ctx context.Context, r *mediaTaskRecord)
 	all := true
 	dead := false
 	for _, segment := range segments {
+		// A refunded zero share has no charging outbox event. Its durable zero
+		// allocation and pin-finish protocol are verified by the recovery caller.
+		if segment.ActualUnits == 0 {
+			continue
+		}
 		var status, lease, auth, snapshot string
 		var amount int64
 		err := s.db.QueryRowContext(ctx, `SELECT status,amount_units,COALESCE(lease_id,''),COALESCE(authorization_id,''),COALESCE(billing_snapshot_id,'') FROM wallet_settlement_outbox WHERE event_id=$1`, segment.EventID).Scan(&status, &amount, &lease, &auth, &snapshot)
