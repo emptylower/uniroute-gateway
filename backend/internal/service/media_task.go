@@ -77,6 +77,10 @@ func mediaTaskView(r *mediaTaskRecord) MediaTaskView {
 		}
 		cost := mediaUSD(*r.ActualUnits)
 		v.Billing.ChargedUSD = &cost
+		if r.HeldUnits > *r.ActualUnits {
+			released := mediaUSD(r.HeldUnits - *r.ActualUnits)
+			v.Billing.ReleasedUSD = &released
+		}
 	case "releasing":
 		v.Status = "failed"
 		v.Billing.State = "settling"
@@ -90,7 +94,7 @@ func mediaTaskView(r *mediaTaskRecord) MediaTaskView {
 		v.Status = "indeterminate"
 		v.Billing.State = "indeterminate"
 	}
-	if r.FinancialState == "released_unknown" || r.FinancialState == "released_zero" {
+	if r.FinancialState == "released_unknown" || r.FinancialState == "released_zero" && r.Status != "completed" {
 		v.Billing.State = "released"
 		if r.FinancialState == "released_unknown" && r.PublicAPI {
 			v.Billing.State = "released_unknown"
@@ -98,6 +102,9 @@ func mediaTaskView(r *mediaTaskRecord) MediaTaskView {
 		v.Billing.HeldUSD = "0"
 		released := mediaUSD(r.HeldUnits)
 		v.Billing.ReleasedUSD = &released
+	}
+	if r.Status == "completed" && r.FinancialState == "released_zero" {
+		v.Billing.HeldUSD = "0"
 	}
 
 	return v
@@ -298,7 +305,20 @@ func (s *MediaTaskService) createForKey(ctx context.Context, key *APIKey, idempo
 	if err != nil || !enabled || user.Status != StatusActive {
 		return MediaTaskView{}, ErrMediaUnavailable
 	}
-	if in.MaxCostUSD != nil {
+	if mediaCostPlusPricingEnabled() && mediaVariableSupplierModel(in.Model) {
+		if in.MaxCostUSD == nil {
+			return MediaTaskView{}, infraerrors.BadRequest("COST_CAP_REQUIRED", "max_cost_usd is required for usage-priced media")
+		}
+		cap, _, e := normalizeMediaCostCap(*in.MaxCostUSD)
+		err = e
+		if err != nil {
+			return MediaTaskView{}, err
+		}
+		if units > cap {
+			return MediaTaskView{}, infraerrors.BadRequest("MAX_COST_EXCEEDED", "quoted USD cost exceeds max_cost_usd")
+		}
+		units = cap
+	} else if in.MaxCostUSD != nil {
 		cap, _, _ := normalizeMediaCostCap(*in.MaxCostUSD)
 		if units > cap {
 			return MediaTaskView{}, infraerrors.BadRequest("MAX_COST_EXCEEDED", "quoted USD cost exceeds max_cost_usd")
@@ -324,6 +344,7 @@ func (s *MediaTaskService) createForKey(ctx context.Context, key *APIKey, idempo
 	}
 	jobID := "media_" + strings.TrimPrefix(authID, "auth_")
 	snap := &BillingSnapshot{ID: snapshotID, Version: BillingSnapshotVersion, FrozenAt: time.Now().UTC(), Family: BillingFamily("media"), UserID: user.ID, APIKeyID: key.ID, AccountID: s.accountID, RequestedModel: in.Model, BillingModel: in.Model, Pricing: BillingSnapshotPricing{Mode: BillingModePerRequest, Source: mediaPricingVersion, DefaultPerRequestPrice: float64(units) / float64(mediaUnitsPerUSD)}, Multipliers: BillingSnapshotMultipliers{Base: 1, Text: 1, Image: 1, Video: 1, WebSearch: 1, Account: 1}, FX: fx, Flags: BillingSnapshotFlags{USDWalletPolicyVersion: config.CanonicalUSDWalletPolicyVersion, BillingCurrency: CurrencyUSD, MultiplierCurrency: CurrencyUSD}}
+	snap.Pricing.MediaSupplierPricing = newMediaSupplierPricing(in.Model, units)
 	normalized, _ = json.Marshal(in)
 	requestHash := sha256.Sum256(normalized)
 	r, err := s.store.create(ctx, &mediaTaskRecord{PublicAPI: public, ID: jobID, UserID: user.ID, PlatformUserID: user.PlatformUserID, APIKeyID: key.ID, IdempotencyKey: idempotency, RequestHash: hex.EncodeToString(requestHash[:]), Model: in.Model, MediaType: in.MediaType, Option: in.Option, Prompt: in.Prompt, RequestPayload: input, SnapshotID: snapshotID, QuotedUnits: units, AuthorizationID: authID, EventID: CanonicalWalletSettlementEventID(jobID, user.PlatformUserID, CurrencyUSD), DeadlineAt: time.Now().UTC().Add(time.Duration(s.cfg.MediaTasks.DeadlineSeconds) * time.Second)}, snap, s.bridge)
@@ -393,7 +414,9 @@ func (s *MediaTaskService) LegacyRead(ctx context.Context, taskID, model, kind s
 	if err != nil || m.MediaKind != kind || strings.TrimSpace(taskID) == "" || len(taskID) > 256 {
 		return MediaProviderResult{}, infraerrors.BadRequest("INVALID_LEGACY_TASK", "invalid legacy task")
 	}
-	return s.provider.Read(ctx, taskID, kind)
+	result, err := s.provider.Read(ctx, taskID, kind)
+	result.ProviderModel, result.CreditsConsumed = "", nil
+	return result, err
 }
 func (b *CanonicalWalletBridge) mediaTaskActive(ctx context.Context, auth string) bool {
 	if b == nil || b.outboxDB == nil {

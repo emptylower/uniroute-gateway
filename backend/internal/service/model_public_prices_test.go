@@ -238,3 +238,69 @@ func TestPublicModelPricesIgnoresFlatCacheReadWhenIntervalsAreConfigured(t *test
 	require.Len(t, snapshot.Items, 1)
 	require.Nil(t, snapshot.Items[0].CacheReadPricePerMillionUSD)
 }
+
+func TestPublicTextPricesAllFamiliesUsesDefaultRoutesAndExplicitZero(t *testing.T) {
+	groups := []Group{publicGroup(1, 1), publicGroup(2, 0)}
+	groups[1].Platform = PlatformOpenAI
+	svc := publicCatalogFixture(groups)
+	now := time.Now()
+	legacy, err := svc.PublicPrices(context.Background(), now)
+	require.NoError(t, err)
+	require.Len(t, legacy.Items, 1)
+	all, err := svc.PublicTextPrices(context.Background(), now)
+	require.NoError(t, err)
+	require.Len(t, all.Items, 2)
+	require.Empty(t, all.OfficialSource)
+	require.True(t, all.OfficialVerifiedAt.IsZero())
+	found := false
+	for _, price := range all.Items {
+		if price.ID == "gpt-5.4" {
+			found = true
+			require.Equal(t, "0", price.InputPricePerMillionUSD)
+			require.Equal(t, "0", price.OutputPricePerMillionUSD)
+			require.Equal(t, "discounted", price.Channel)
+		}
+	}
+	require.True(t, found, "actual OpenAI row must be present")
+	bytes, err := json.Marshal(all)
+	require.NoError(t, err)
+	for _, private := range []string{"user_id", "group_id", "account_id", "private-supplier", "supplier"} {
+		require.NotContains(t, string(bytes), private)
+	}
+}
+
+func TestPublicImageTokenPricesUsesSeparateImageRatesAndExplicitZero(t *testing.T) {
+	group := publicGroup(1, 0.5)
+	group.Platform = PlatformOpenAI
+	svc := publicCatalogFixture([]Group{group})
+	accounts, ok := svc.accounts.(*modelCatalogAccountFake)
+	require.True(t, ok)
+	pricing, ok := svc.pricing.(*modelCatalogPricingFake)
+	require.True(t, ok)
+	accounts.byGroup[1][0].Credentials = map[string]any{"model_mapping": map[string]any{"gpt-image-2": "gpt-image-2"}}
+	pricing.byGroup[1].BasePricing = &ModelPricing{InputPricePerToken: 5e-6, OutputPricePerToken: 30e-6, ImageInputPricePerToken: 8e-6, ImageOutputPricePerToken: 0, ImageOutputPriceExplicit: true}
+	image, err := svc.PublicImageTokenPrices(context.Background(), time.Now())
+	require.NoError(t, err)
+	require.Len(t, image.Items, 1)
+	require.Equal(t, "gpt-image-2", image.Items[0].ID)
+	require.Equal(t, "default_retail_image_tokens", image.PriceScope)
+	require.Equal(t, "2.5", image.Items[0].InputPricePerMillionUSD)
+	require.Equal(t, "15", image.Items[0].OutputPricePerMillionUSD)
+	require.Equal(t, "4", *image.Items[0].ImageInputPricePerMillionUSD)
+	require.Equal(t, "0", *image.Items[0].ImageOutputPricePerMillionUSD)
+	text, err := svc.PublicTextPrices(context.Background(), time.Now())
+	require.NoError(t, err)
+	require.Empty(t, text.Items)
+	// A request/image-priced route must not be mislabeled as a token rate.
+	pricing.byGroup[1].Mode = BillingModeImage
+	pricing.byGroup[1].DefaultPerRequestPrice = 0.2
+	image, err = svc.PublicImageTokenPrices(context.Background(), time.Now())
+	require.NoError(t, err)
+	require.Empty(t, image.Items)
+	// Unsynced accounts cannot synthesize the four private supplier aliases.
+	pricing.byGroup[1].Mode = BillingModeToken
+	accounts.byGroup[1][0].Credentials = map[string]any{}
+	image, err = svc.PublicImageTokenPrices(context.Background(), time.Now())
+	require.NoError(t, err)
+	require.Empty(t, image.Items)
+}

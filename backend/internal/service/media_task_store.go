@@ -11,6 +11,9 @@ import (
 )
 
 type mediaTaskRecord struct {
+	supplierUsagePending      bool
+	supplierPricing           *FrozenMediaSupplierPricing
+	supplierPricingLoaded     bool
 	PublicAPI                 bool
 	journal                   *mediaDurableJournal
 	ClaimLane                 string

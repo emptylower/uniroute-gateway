@@ -17,13 +17,15 @@ type MediaURL struct {
 	URL  string `json:"url"`
 }
 type MediaProviderResult struct {
-	ProviderTaskID string     `json:"provider_task_id,omitempty"`
-	Status         string     `json:"status"`
-	URLs           []MediaURL `json:"urls"`
-	Title          string     `json:"title,omitempty"`
-	CoverURL       string     `json:"cover_url,omitempty"`
-	ErrorCode      string     `json:"error_code,omitempty"`
-	ErrorMessage   string     `json:"error_message,omitempty"`
+	ProviderTaskID  string     `json:"provider_task_id,omitempty"`
+	ProviderModel   string     `json:"provider_model,omitempty"`
+	CreditsConsumed *string    `json:"credits_consumed,omitempty"`
+	Status          string     `json:"status"`
+	URLs            []MediaURL `json:"urls"`
+	Title           string     `json:"title,omitempty"`
+	CoverURL        string     `json:"cover_url,omitempty"`
+	ErrorCode       string     `json:"error_code,omitempty"`
+	ErrorMessage    string     `json:"error_message,omitempty"`
 }
 type mediaProvider interface {
 	Create(context.Context, string, map[string]any, *AuthorizationHandle) (string, bool, error)
@@ -103,12 +105,14 @@ func (p *kieMediaProvider) Read(ctx context.Context, taskID, kind string) (Media
 		return MediaProviderResult{}, fmt.Errorf("provider query failed (%d)", envelope.Code)
 	}
 	var record struct {
-		TaskID      string          `json:"taskId"`
-		State       string          `json:"state"`
-		ResultJSON  json.RawMessage `json:"resultJson"`
-		FailCode    json.RawMessage `json:"failCode"`
-		FailMessage string          `json:"failMsg"`
-		Response    struct {
+		TaskID          string          `json:"taskId"`
+		Model           string          `json:"model"`
+		CreditsConsumed json.RawMessage `json:"creditsConsumed"`
+		State           string          `json:"state"`
+		ResultJSON      json.RawMessage `json:"resultJson"`
+		FailCode        json.RawMessage `json:"failCode"`
+		FailMessage     string          `json:"failMsg"`
+		Response        struct {
 			Data []struct {
 				AudioURL       string `json:"audio_url"`
 				StreamAudioURL string `json:"stream_audio_url"`
@@ -120,7 +124,12 @@ func (p *kieMediaProvider) Read(ctx context.Context, taskID, kind string) (Media
 	if err := json.Unmarshal(envelope.Data, &record); err != nil || record.State == "" || record.TaskID != taskID {
 		return MediaProviderResult{}, errors.New("provider query identity or state invalid")
 	}
-	r := MediaProviderResult{ProviderTaskID: taskID, URLs: []MediaURL{}}
+	r := MediaProviderResult{ProviderTaskID: taskID, ProviderModel: record.Model, URLs: []MediaURL{}}
+	// Keep decimal usage exact, including a legitimate zero. Invalid or absent
+	// usage remains unknown and cannot authorize a supplier-priced charge.
+	if raw := string(record.CreditsConsumed); exactMediaDecimal.MatchString(raw) {
+		r.CreditsConsumed = &raw
+	}
 	switch record.State {
 	case "waiting", "queuing":
 		r.Status = "pending"

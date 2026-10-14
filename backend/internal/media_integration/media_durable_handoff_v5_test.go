@@ -347,14 +347,14 @@ func TestExternalMediaV5FirstSuccessSurvivesFirstFeePGFaultAndLater404Deadline(t
 	require.NoError(t, err)
 	f.svc = f.newService(t)
 	charged := f.wait(t, task.TaskID, "charged")
-	require.Equal(t, "0.0273", *charged.Billing.ChargedUSD)
+	require.Equal(t, "0.01875", *charged.Billing.ChargedUSD)
 	var usage, outbox int
 	var units int64
 	require.NoError(t, f.db.QueryRow(`SELECT count(*) FROM usage_logs WHERE request_id=$1`, task.TaskID).Scan(&usage))
 	require.NoError(t, f.db.QueryRow(`SELECT count(*),COALESCE(sum(amount_units),0) FROM wallet_settlement_outbox WHERE gateway_request_id=$1`, task.TaskID).Scan(&outbox, &units))
 	require.Equal(t, 1, usage)
 	require.Equal(t, 1, outbox)
-	require.Equal(t, int64(2730000), units)
+	require.Equal(t, int64(1875000), units)
 	require.NoError(t, f.db.QueryRow(`SELECT count(*) FROM wallet_unknown_release_counter`).Scan(&counter))
 	require.Zero(t, counter)
 	require.Zero(t, reads404.Load(), "recovery adopts the first success before any later provider read")

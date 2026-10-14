@@ -20,27 +20,29 @@ import (
 // Only normalized identity and the first authoritative success are persisted;
 // prompts, credentials and provider response bodies never enter this journal.
 type mediaDurableJournalRecord struct {
-	Version       int                  `json:"version"`
-	Volume        string               `json:"volume"`
-	Owner         string               `json:"owner"`
-	Task          string               `json:"task"`
-	Authorization string               `json:"authorization"`
-	Token         string               `json:"token"`
-	User          string               `json:"user"`
-	Provider      string               `json:"provider"`
-	Snapshot      string               `json:"snapshot"`
-	Quote         int64                `json:"quote"`
-	WriteOwner    string               `json:"write_owner,omitempty"`
-	Operation     string               `json:"operation"`
-	Joined        bool                 `json:"joined"`
-	NotSent       bool                 `json:"not_sent,omitempty"`
-	Rejected      bool                 `json:"rejected,omitempty"`
-	WriteEndedAt  *time.Time           `json:"write_ended_at,omitempty"`
-	ProviderID    string               `json:"provider_id,omitempty"`
-	Success       *MediaProviderResult `json:"success,omitempty"`
-	SuccessAt     *time.Time           `json:"success_at,omitempty"`
-	Failure       *MediaProviderResult `json:"failure,omitempty"`
-	UpdatedAt     time.Time            `json:"updated_at"`
+	Version         int                  `json:"version"`
+	Volume          string               `json:"volume"`
+	Owner           string               `json:"owner"`
+	Task            string               `json:"task"`
+	Authorization   string               `json:"authorization"`
+	Token           string               `json:"token"`
+	User            string               `json:"user"`
+	Provider        string               `json:"provider"`
+	Model           string               `json:"model,omitempty"`
+	Snapshot        string               `json:"snapshot"`
+	Quote           int64                `json:"quote"`
+	WriteOwner      string               `json:"write_owner,omitempty"`
+	Operation       string               `json:"operation"`
+	Joined          bool                 `json:"joined"`
+	NotSent         bool                 `json:"not_sent,omitempty"`
+	Rejected        bool                 `json:"rejected,omitempty"`
+	WriteEndedAt    *time.Time           `json:"write_ended_at,omitempty"`
+	ProviderID      string               `json:"provider_id,omitempty"`
+	Success         *MediaProviderResult `json:"success,omitempty"`
+	SuccessAt       *time.Time           `json:"success_at,omitempty"`
+	SupplierCredits *string              `json:"supplier_credits,omitempty"`
+	Failure         *MediaProviderResult `json:"failure,omitempty"`
+	UpdatedAt       time.Time            `json:"updated_at"`
 }
 
 type mediaDurableJournal struct {
@@ -128,7 +130,7 @@ func openMediaJournal(owner *walletReaderJournalOwner, r *mediaTaskRecord, nonbl
 		_ = j.lock.Close()
 		return nil, err
 	}
-	j.record = mediaDurableJournalRecord{Version: 1, Volume: owner.host, Owner: owner.id, Task: r.ID, Authorization: r.AuthorizationID, Token: r.AuthorizationToken, User: r.PlatformUserID, Provider: "kie", Snapshot: r.SnapshotID, Quote: r.QuotedUnits, ProviderID: r.ProviderTaskID, WriteOwner: r.WriteOwner, WriteEndedAt: r.WriteEndedAt}
+	j.record = mediaDurableJournalRecord{Version: 1, Volume: owner.host, Owner: owner.id, Task: r.ID, Authorization: r.AuthorizationID, Token: r.AuthorizationToken, User: r.PlatformUserID, Provider: "kie", Model: r.Model, Snapshot: r.SnapshotID, Quote: r.QuotedUnits, ProviderID: r.ProviderTaskID, WriteOwner: r.WriteOwner, WriteEndedAt: r.WriteEndedAt}
 	file, err := os.Open(j.path)
 	if errors.Is(err, os.ErrNotExist) {
 		return j, nil
@@ -157,6 +159,14 @@ func openMediaJournal(owner *walletReaderJournalOwner, r *mediaTaskRecord, nonbl
 		j.close()
 		return nil, errors.New("media durable journal identity conflict")
 	}
+	if record.SupplierCredits != nil && (record.Success == nil || record.Success.CreditsConsumed != nil && *record.Success.CreditsConsumed != *record.SupplierCredits) {
+		j.close()
+		return nil, errors.New("media durable supplier usage conflict")
+	}
+	if record.Model != "" && record.Model != r.Model {
+		j.close()
+		return nil, errors.New("media durable model identity conflict")
+	}
 	j.record = record
 	return j, nil
 }
@@ -182,7 +192,16 @@ func (s *MediaTaskService) beginMediaJournal(ctx context.Context, r *mediaTaskRe
 	if err != nil {
 		return err
 	}
-	if j.record.Success != nil || j.record.Failure != nil || j.record.Operation != "" && !j.record.Joined {
+	awaitingUsage := false
+	if operation == "query" && j.record.Success != nil && j.record.SupplierCredits == nil {
+		policy, e := s.mediaSupplierPolicy(ctx, r)
+		if e != nil {
+			j.close()
+			return e
+		}
+		awaitingUsage = policy != nil && j.record.Success.ProviderModel == mediaUpstreamModel(r.Model)
+	}
+	if j.record.Success != nil && !awaitingUsage || j.record.Failure != nil || j.record.Operation != "" && !j.record.Joined {
 		j.close()
 		return errors.New("media durable owner handoff must recover before another provider operation")
 	}
@@ -201,6 +220,13 @@ func (s *MediaTaskService) beginMediaJournal(ctx context.Context, r *mediaTaskRe
 // Mark the durable operation before reading an authoritative result. A failed
 // first fee transaction leaves this PG barrier in place until journal recovery.
 func (s *MediaTaskService) beginMediaQuery(ctx context.Context, r *mediaTaskRecord) error {
+	// Resolve the immutable policy before the read. Once the provider returns,
+	// fsync its first success and usage before any further database dependency.
+	policy, err := s.mediaSupplierPolicy(ctx, r)
+	if err != nil {
+		return err
+	}
+	r.supplierPricing, r.supplierPricingLoaded = policy, true
 	if err := s.beginMediaJournal(ctx, r, "query"); err != nil {
 		return err
 	}
@@ -224,7 +250,14 @@ func (s *MediaTaskService) beginMediaQuery(ctx context.Context, r *mediaTaskReco
 
 func normalizedMediaSuccess(result MediaProviderResult) MediaProviderResult {
 	// Delivery metadata is bounded independently from the immutable fee facts.
-	out := MediaProviderResult{ProviderTaskID: result.ProviderTaskID, Status: "success", URLs: []MediaURL{}}
+	out := MediaProviderResult{ProviderTaskID: result.ProviderTaskID, ProviderModel: result.ProviderModel, Status: "success", URLs: []MediaURL{}}
+	if len(out.ProviderModel) > 256 {
+		out.ProviderModel = ""
+	}
+	if result.CreditsConsumed != nil {
+		credits := *result.CreditsConsumed
+		out.CreditsConsumed = &credits
+	}
 	for _, u := range result.URLs {
 		if len(out.URLs) < 8 && len(u.Kind) <= 16 && len(u.URL) <= 2048 && validMediaURL(u.URL) {
 			out.URLs = append(out.URLs, u)
@@ -257,13 +290,31 @@ func (s *MediaTaskService) completeMediaQuery(ctx context.Context, r *mediaTaskR
 		return errors.New("media query has no durable owner")
 	}
 	j.record.Joined = true
-	if mediaTrustedResult(r, result) && result.Status == "success" && j.record.Success == nil {
+	if !r.supplierPricingLoaded {
+		return errors.New("media query frozen supplier policy unavailable")
+	}
+	policy := r.supplierPricing
+	trustedOutcome := mediaTrustedResult(r, result) && (policy == nil || result.ProviderModel == mediaUpstreamModel(r.Model))
+	trustedSuccess := trustedOutcome && result.Status == "success"
+	if policy != nil && !trustedOutcome {
+		r.supplierUsagePending = true
+	}
+	if trustedSuccess && j.record.Success == nil {
 		first := normalizedMediaSuccess(result)
 		at := time.Now().UTC()
 		j.record.Success, j.record.SuccessAt = &first, &at
 	}
-	if mediaTrustedResult(r, result) && result.Status == "failed" && j.record.Success == nil && j.record.Failure == nil {
-		failed := MediaProviderResult{ProviderTaskID: r.ProviderTaskID, Status: "failed", URLs: []MediaURL{}}
+	if trustedSuccess && policy != nil && j.record.SupplierCredits == nil {
+		if _, _, e := mediaSupplierActualUnits(policy, result.CreditsConsumed, r.QuotedUnits); e == nil {
+			credits := *result.CreditsConsumed
+			j.record.SupplierCredits = &credits
+		}
+	}
+	if trustedOutcome && result.Status == "failed" && j.record.Success == nil && j.record.Failure == nil {
+		failed := MediaProviderResult{ProviderTaskID: r.ProviderTaskID, ProviderModel: result.ProviderModel, Status: "failed", URLs: []MediaURL{}}
+		if len(failed.ProviderModel) > 256 {
+			failed.ProviderModel = ""
+		}
 		if len(result.ErrorCode) <= 128 {
 			failed.ErrorCode = result.ErrorCode
 		}
@@ -277,7 +328,13 @@ func (s *MediaTaskService) completeMediaQuery(ctx context.Context, r *mediaTaskR
 	}
 	if j.record.Success != nil {
 		r.Result = *j.record.Success
-		return s.persistMediaSuccess(ctx, r)
+		if policy == nil || j.record.SupplierCredits != nil {
+			if policy != nil {
+				r.Result.CreditsConsumed = j.record.SupplierCredits
+			}
+			return s.persistMediaSuccess(ctx, r)
+		}
+		r.supplierUsagePending = true
 	}
 	if j.record.Failure != nil {
 		r.Result = *j.record.Failure
@@ -402,6 +459,17 @@ func (s *MediaTaskService) recoverMediaJournal(ctx context.Context, r *mediaTask
 	if j.record.Success != nil {
 		r.ProviderTaskID = j.record.ProviderID
 		r.Result = *j.record.Success
+		policy, e := s.mediaSupplierPolicy(ctx, r)
+		if e != nil {
+			return e
+		}
+		if policy != nil && j.record.SupplierCredits == nil {
+			_, e = s.db.ExecContext(ctx, `UPDATE gateway_media_task SET media_journal_pending=false,claimed_by=NULL,claim_until=NULL,next_poll_at=now(),query_episode_first_failed_at=COALESCE(query_episode_first_failed_at,now()),query_uncertainty_deadline=COALESCE(query_uncertainty_deadline,now()+interval '15 minutes') WHERE id=$1 AND media_journal_volume=$2 AND media_journal_owner=$3 AND media_journal_pending`, r.ID, j.record.Volume, j.record.Owner)
+			return e
+		}
+		if policy != nil {
+			r.Result.CreditsConsumed = j.record.SupplierCredits
+		}
 		return s.persistMediaSuccess(ctx, r)
 	}
 	if j.record.Failure != nil {

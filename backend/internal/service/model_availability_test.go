@@ -61,7 +61,7 @@ func TestModelSuspensionNamedIDsSlugsAndAliases(t *testing.T) {
 	}
 	quote, err := mediaQuote("google/nano-banana", "1:1")
 	require.NoError(t, err)
-	require.Equal(t, "0.0273", quote.QuotedUSD)
+	require.Equal(t, "0.01875", quote.QuotedUSD)
 }
 
 func TestModelSuspensionAccountAliasesBeforeBillingOrSend(t *testing.T) {

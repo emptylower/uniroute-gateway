@@ -53,16 +53,17 @@ const (
 )
 
 type BillingSnapshotPricing struct {
-	Mode                   BillingMode          `json:"mode"`
-	Source                 string               `json:"source"`
-	Base                   *ModelPricing        `json:"base,omitempty"`
-	Intervals              []PricingInterval    `json:"intervals,omitempty"`
-	RequestTiers           []PricingInterval    `json:"request_tiers,omitempty"`
-	DefaultPerRequestPrice float64              `json:"default_per_request_price"`
-	SupportsCacheBreakdown bool                 `json:"supports_cache_breakdown"`
-	Channel                *ChannelModelPricing `json:"channel,omitempty"`
-	MaxInputTokens         int                  `json:"max_input_tokens"`
-	MaxOutputTokens        int                  `json:"max_output_tokens"`
+	Mode                   BillingMode                 `json:"mode"`
+	Source                 string                      `json:"source"`
+	Base                   *ModelPricing               `json:"base,omitempty"`
+	Intervals              []PricingInterval           `json:"intervals,omitempty"`
+	RequestTiers           []PricingInterval           `json:"request_tiers,omitempty"`
+	DefaultPerRequestPrice float64                     `json:"default_per_request_price"`
+	SupportsCacheBreakdown bool                        `json:"supports_cache_breakdown"`
+	Channel                *ChannelModelPricing        `json:"channel,omitempty"`
+	MaxInputTokens         int                         `json:"max_input_tokens"`
+	MaxOutputTokens        int                         `json:"max_output_tokens"`
+	MediaSupplierPricing   *FrozenMediaSupplierPricing `json:"media_supplier_pricing,omitempty"`
 }
 
 type BillingSnapshotMultipliers struct {

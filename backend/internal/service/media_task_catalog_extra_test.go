@@ -62,7 +62,8 @@ var mediaKIECostTenThousandths = map[string]map[string]int64{
 	"wan/3-0-video-prime":                  {"480P:5": 612, "480P:10": 612, "720P:5": 1260, "720P:10": 1260, "1080P:5": 2520, "1080P:10": 2520},
 }
 
-func TestExtendedMediaCatalogShape(t *testing.T) {
+func TestExtendedMediaLegacyCatalogShape(t *testing.T) {
+	useLegacyMediaPriceProducer(t)
 	extended := extendedMediaModels()
 	require.Len(t, extended, len(mediaKIECostTenThousandths))
 	ids, slugs := map[string]bool{}, map[string]bool{}
@@ -119,7 +120,8 @@ func TestExtendedMediaCatalogShape(t *testing.T) {
 	}
 }
 
-func TestExtendedMediaCatalogProviderInputs(t *testing.T) {
+func TestExtendedMediaLegacyCatalogProviderInputs(t *testing.T) {
+	useLegacyMediaPriceProducer(t)
 	cases := []struct {
 		model, option string
 		price         string

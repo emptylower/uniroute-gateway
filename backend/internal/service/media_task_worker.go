@@ -10,7 +10,6 @@ import (
 	"github.com/google/uuid"
 	"log/slog"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -292,10 +291,10 @@ func (s *MediaTaskService) process(ctx context.Context, r *mediaTaskRecord) erro
 		if err := s.completeMediaQuery(ctx, r, result); err != nil {
 			return err
 		}
-		if mediaTrustedResult(r, result) && (result.Status == "success" || result.Status == "failed") {
+		if !r.supplierUsagePending && mediaTrustedResult(r, result) && (result.Status == "success" || result.Status == "failed") {
 			return nil
 		}
-		if readErr != nil || !mediaTrustedResult(r, result) {
+		if readErr != nil || !mediaTrustedResult(r, result) || r.supplierUsagePending {
 			if err := s.store.queryFailed(ctx, r); err != nil {
 				return err
 			}
@@ -614,6 +613,40 @@ func (s *MediaTaskService) persistMediaSuccess(ctx context.Context, r *mediaTask
 	if r.journal == nil || r.journal.record.Success == nil || !r.journal.record.Joined {
 		return errors.New("media first success requires its fsynced owner handoff")
 	}
+	actual, loss, policy, err := s.mediaSuccessAmount(ctx, r, r.Result)
+	if err != nil {
+		return err
+	}
+	if policy != nil && actual == 0 {
+		// A proven free success uses the signed zero-release protocol. Do not
+		// publish fee_evidence until its first actual zero is finalized with ACKs.
+		if r.FinancialState == "unknown_pending" {
+			if err = s.recoverMediaFinancial(ctx, r); err != nil {
+				return err
+			}
+			refreshed, e := s.store.get(ctx, r.UserID, r.ID)
+			if e != nil {
+				return e
+			}
+			refreshed.journal, refreshed.Result = r.journal, r.Result
+			if refreshed.FinancialState != "released_unknown" {
+				return errors.New("media original unknown ACK remains pending")
+			}
+			return s.persistMediaSuccess(ctx, refreshed)
+		}
+		if r.FinancialState == "released_unknown" {
+			return s.finishMediaFreeSuccess(ctx, r)
+		}
+		if r.FinancialState == "released_zero" {
+			return s.finishMediaFreeSuccess(ctx, r)
+		}
+		claimed, e := s.prepareMediaFinancialTerminal(ctx, r, true)
+		if e != nil || !claimed {
+			return errors.Join(e, errors.New("media durable free success deferred"))
+		}
+		_, e = s.db.ExecContext(ctx, `UPDATE gateway_media_task SET claimed_by=NULL,claim_until=NULL,next_financial_recovery_at=now() WHERE id=$1 AND financial_state='zero_pending'`, r.ID)
+		return e
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -650,11 +683,11 @@ func (s *MediaTaskService) persistMediaSuccess(ctx context.Context, r *mediaTask
 	if err != nil {
 		return err
 	}
-	evidence, err := json.Marshal(map[string]any{"source": "kie_authoritative_get", "provider_task_id": r.ProviderTaskID, "snapshot_id": r.SnapshotID, "quoted_units": r.QuotedUnits, "result": r.Result})
+	evidence, err := mediaFeeEvidence(r, actual, loss, policy)
 	if err != nil {
 		return err
 	}
-	res, err := tx.ExecContext(ctx, `UPDATE gateway_media_task SET status='settling',financial_state='fee_pending',actual_units=quoted_units,result=$4::jsonb,fee_evidence=COALESCE(fee_evidence,$5::jsonb),fee_pending_at=COALESCE(fee_pending_at,now()),next_fee_recovery_at=now(),media_journal_pending=false,updated_at=now(),claim_until=NULL,claimed_by=NULL WHERE id=$1 AND provider_task_id=$2 AND billing_snapshot_id=$3 AND financial_state IN ('held','unknown_pending','released_unknown','fee_pending') AND (fee_evidence IS NULL OR fee_evidence=$5::jsonb)`, r.ID, r.ProviderTaskID, r.SnapshotID, string(result), string(evidence))
+	res, err := tx.ExecContext(ctx, `UPDATE gateway_media_task SET status='settling',financial_state='fee_pending',actual_units=$6,result=$4::jsonb,fee_evidence=COALESCE(fee_evidence,$5::jsonb),fee_pending_at=COALESCE(fee_pending_at,now()),next_fee_recovery_at=now(),media_journal_pending=false,updated_at=now(),claim_until=NULL,claimed_by=NULL WHERE id=$1 AND provider_task_id=$2 AND billing_snapshot_id=$3 AND financial_state IN ('held','unknown_pending','released_unknown','fee_pending') AND (fee_evidence IS NULL OR fee_evidence=$5::jsonb)`, r.ID, r.ProviderTaskID, r.SnapshotID, string(result), string(evidence), actual)
 	if err != nil {
 		return err
 	}
@@ -662,15 +695,34 @@ func (s *MediaTaskService) persistMediaSuccess(ctx context.Context, r *mediaTask
 	if n != 1 {
 		return errors.New("media original fee evidence conflict")
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE wallet_authorization_segment SET fee_pending=true,known_fee_units=$2 WHERE parent_authorization_id=$1 AND kind='media' AND zero_intent_at IS NULL`, r.AuthorizationID, r.QuotedUnits); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE wallet_authorization_segment SET fee_pending=true,known_fee_units=$2 WHERE parent_authorization_id=$1 AND kind='media' AND zero_intent_at IS NULL`, r.AuthorizationID, actual); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
 func (s *MediaTaskService) recoverMediaFee(ctx context.Context, r *mediaTaskRecord) error {
-	if r.ActualUnits == nil || *r.ActualUnits != r.QuotedUnits {
+	actual, _, policy, err := s.mediaSuccessAmount(ctx, r, r.Result)
+	if err != nil {
+		return err
+	}
+	if r.ActualUnits == nil || *r.ActualUnits != actual || actual <= 0 {
 		return errors.New("media durable fee mismatch")
+	}
+	if policy != nil {
+		var held int64
+		for _, segment := range r.Segments {
+			held, err = AddUnits(held, segment.HeldUnits)
+			if err != nil {
+				return err
+			}
+			if segment.Remainder != nil {
+				return errors.New("media supplier fee cannot create a remainder charge")
+			}
+		}
+		if held != r.QuotedUnits || actual > held {
+			return errors.New("media supplier fee exceeds frozen funding cap")
+		}
 	}
 	// A success raced an already committed expiry intent. Complete its signed
 	// ACK first; never convert the released hold when the first fee arrives late.
@@ -718,10 +770,19 @@ func (s *MediaTaskService) recoverMediaFee(ctx context.Context, r *mediaTaskReco
 	if err = s.pin(ctx, r, true); err != nil {
 		return err
 	}
-	if _, err = s.db.ExecContext(ctx, `UPDATE wallet_authorization_segment SET state='finished',pin_state='finished',fee_pending=false WHERE parent_authorization_id=$1 AND actual_units>0`, r.AuthorizationID); err != nil {
+	if policy != nil {
+		for _, segment := range r.Segments {
+			if segment.ActualUnits == 0 && segment.State != "finished" {
+				if err = s.bridge.finishPoolSegment(ctx, r.PlatformUserID, segment); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	if _, err = s.db.ExecContext(ctx, `UPDATE wallet_authorization_segment SET state='finished',pin_state='finished',fee_pending=false WHERE parent_authorization_id=$1 AND (actual_units>0 OR $2 AND actual_units=0)`, r.AuthorizationID, policy != nil); err != nil {
 		return err
 	}
-	if _, err = s.db.ExecContext(ctx, `UPDATE gateway_media_task SET status='completed',financial_state='charged',pin_state='finished',settled_at=COALESCE(settled_at,now()),claimed_by=NULL,claim_until=NULL,updated_at=now() WHERE id=$1 AND financial_state='fee_pending' AND actual_units=quoted_units`, r.ID); err != nil {
+	if _, err = s.db.ExecContext(ctx, `UPDATE gateway_media_task SET status='completed',financial_state='charged',pin_state='finished',settled_at=COALESCE(settled_at,now()),claimed_by=NULL,claim_until=NULL,updated_at=now() WHERE id=$1 AND financial_state='fee_pending' AND actual_units=$2`, r.ID, actual); err != nil {
 		return err
 	}
 	return s.unprotect(ctx, r)
@@ -742,14 +803,18 @@ func (s *MediaTaskService) persistMediaFeePlan(ctx context.Context, r *mediaTask
 	}
 	var taskParent, taskToken, taskSnapshot, taskUser string
 	var taskQuote int64
+	var taskActual *int64
 	var taskCreated time.Time
-	if err = tx.QueryRowContext(ctx, `SELECT authorization_id,authorization_token,billing_snapshot_id,platform_user_id,quoted_units,created_at FROM gateway_media_task WHERE id=$1 AND financial_state='fee_pending' AND fee_evidence IS NOT NULL FOR UPDATE`, r.ID).Scan(&taskParent, &taskToken, &taskSnapshot, &taskUser, &taskQuote, &taskCreated); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT authorization_id,authorization_token,billing_snapshot_id,platform_user_id,quoted_units,created_at,actual_units FROM gateway_media_task WHERE id=$1 AND financial_state='fee_pending' AND fee_evidence IS NOT NULL FOR UPDATE`, r.ID).Scan(&taskParent, &taskToken, &taskSnapshot, &taskUser, &taskQuote, &taskCreated, &taskActual); err != nil {
 		return err
 	}
 	if taskParent != r.AuthorizationID || taskToken != r.AuthorizationToken || taskSnapshot != r.SnapshotID || taskUser != r.PlatformUserID || taskQuote != r.QuotedUnits || !taskCreated.Equal(r.CreatedAt) {
 		return errors.New("media fee plan task identity conflict")
 	}
-	remaining := r.QuotedUnits
+	if taskActual == nil || r.ActualUnits == nil || *taskActual != *r.ActualUnits {
+		return errors.New("media fee plan actual identity conflict")
+	}
+	remaining := *taskActual
 	for ordinal, segment := range r.Segments {
 		var version int
 		var originalOrdinal int
@@ -817,14 +882,11 @@ func (s *MediaTaskService) persistMediaFeePlan(ctx context.Context, r *mediaTask
 			return err
 		}
 	}
-	usd := mediaUSD(r.QuotedUnits)
-	amountUSD := strconv.FormatFloat(float64(r.QuotedUnits)/100000000, 'f', 8, 64)
-	_, err = tx.ExecContext(ctx, `INSERT INTO usage_logs(user_id,api_key_id,account_id,request_id,model,requested_model,billing_snapshot_id,billing_mode,media_type,total_cost,actual_cost,source_currency,settlement_currency,exchange_rate,exchange_rate_source,exchange_rate_as_of,source_cost,base_cost,rate_multiplier,image_count,video_count,video_duration_seconds,image_size,created_at)
- SELECT $1,$2,$3,$4::text,$5::text,$5::text,$6,'per_request',$7,$8::numeric,$8::numeric,'USD','USD',1,'usd-e8-v1',$9,$10::numeric,$8::numeric,1,$11,$12,$13,$14,$9 WHERE NOT EXISTS(SELECT 1 FROM usage_logs WHERE request_id=$4::text AND api_key_id=$2)`, r.UserID, r.APIKeyID, s.accountID, r.ID, r.Model, r.SnapshotID, r.MediaType, amountUSD, r.CreatedAt, usd, mediaImageCount(r), mediaVideoCount(r), mediaDuration(r), mediaImageSize(r))
+	err = s.recordMediaUsageTx(ctx, tx, r, *taskActual)
 	if err != nil {
 		return err
 	}
-	if err = CaptureAPIKeyBudgetTx(ctx, tx, r.AuthorizationID, r.QuotedUnits); err != nil {
+	if err = CaptureAPIKeyBudgetTx(ctx, tx, r.AuthorizationID, *taskActual); err != nil {
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE gateway_media_task SET fee_plan_at=COALESCE(fee_plan_at,now()) WHERE id=$1 AND financial_state='fee_pending' AND fee_evidence IS NOT NULL`, r.ID); err != nil {

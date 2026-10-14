@@ -16,7 +16,7 @@ func TestMusicCatalogListsSunoVersionsAndSpeech(t *testing.T) {
 		if m.MediaKind == "music" {
 			require.False(t, slugs[m.Slug], "duplicate slug %s", m.Slug)
 			slugs[m.Slug] = true
-			require.Equal(t, "per_track", m.Unit)
+			require.Equal(t, "per_request", m.Unit)
 			require.NotEmpty(t, m.Param.Options)
 		}
 	}
@@ -39,7 +39,7 @@ func TestSunoVersionsSendCurrentProviderInput(t *testing.T) {
 		require.Equal(t, map[string]any{"prompt": "a rainy afternoon", "style": "lofi, chill, mellow", "custom_mode": false, "instrumental": false, "model": version}, input, id)
 		quote, err := mediaQuote(id, "lofi, chill, mellow")
 		require.NoError(t, err)
-		require.Equal(t, "0.084", quote.QuotedUSD)
+		require.Equal(t, "0.075", quote.QuotedUSD)
 	}
 	// All three versions run on one provider model; the version is an input.
 	require.Equal(t, "ai-music-api/generate", mediaUpstreamModel("ai-music-api/generate-v6-mini"))
