@@ -113,7 +113,7 @@ func TestMediaSupplierFrozenReaderRemainsEnabledAfterProducerRollback(t *testing
 func TestMediaSupplierZeroShareDoesNotRequireNonexistentChargingOutbox(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	r := &mediaTaskRecord{SnapshotID: "snapshot", Segments: []AuthorizationSegment{
 		{AuthorizationID: "positive", EventID: "positive-event", LeaseID: "positive-lease", ActualUnits: 2500000},
 		{AuthorizationID: "zero", EventID: "zero-event", LeaseID: "zero-lease", ActualUnits: 0},

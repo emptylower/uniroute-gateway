@@ -68,14 +68,16 @@ func TestExternalMediaSupplierCompatibleReaderReload(t *testing.T) {
 		}
 		db, err := sql.Open("postgres", input.DSN)
 		require.NoError(t, err)
-		defer db.Close()
+		defer func() { _ = db.Close() }()
 		rdb := redis.NewClient(&redis.Options{Addr: input.RedisAddr, DB: input.RedisDB})
-		defer rdb.Close()
+		defer func() { _ = rdb.Close() }()
 		users := &mediaUsers{db: db}
 		apiKeys := service.NewAPIKeyService(&mediaKeys{db: db}, users, nil, nil, nil, nil, input.Config)
 		keys := service.NewPlatformAPIKeyService(&mediaProjection{db}, apiKeys)
 		snapshots := service.NewBillingSnapshotService(input.Config, nil, nil, nil, repository.ProvideBillingSnapshotStore(db))
-		bridge := service.NewCanonicalWalletBridge(input.Config, repository.NewGatewayCache(rdb).(service.CanonicalWalletLeaseStore), db, repository.ProvideWalletOutboxStore(db))
+		leaseStore, ok := repository.NewGatewayCache(rdb).(service.CanonicalWalletLeaseStore)
+		require.True(t, ok, "fixture cache must implement canonical lease storage")
+		bridge := service.NewCanonicalWalletBridge(input.Config, leaseStore, db, repository.ProvideWalletOutboxStore(db))
 		defer bridge.Close()
 		svc, err := service.NewMediaTaskService(input.Config, db, bridge, snapshots, keys, apiKeys, users, service.NewAuthorizingHTTPUpstream(&mediaHTTP{client: http.DefaultClient}, input.Config))
 		require.NoError(t, err)
@@ -302,9 +304,11 @@ func TestExternalMediaSupplierFreeSuccessWaitsForSignedACKAndCompletesAtZero(t *
 			for _, field := range []string{"id", "authorization_id", "provider_task_id", "settlement_event_id", "idempotency_key"} {
 				row[field] = id
 			}
-			result := row["result"].(map[string]any)
+			result, ok := row["result"].(map[string]any)
+			require.True(t, ok, "fixture result must remain a JSON object")
 			result["provider_task_id"] = id
-			evidence := row["fee_evidence"].(map[string]any)
+			evidence, ok := row["fee_evidence"].(map[string]any)
+			require.True(t, ok, "fixture fee evidence must remain a JSON object")
 			evidence["provider_task_id"] = id
 			evidence["result"] = result
 			switch mutation {
