@@ -5,6 +5,7 @@ package server_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"math"
@@ -607,6 +608,7 @@ func TestAPIContracts(t *testing.T) {
         "duration_ms": 100,
         "first_token_ms": 50,
         "image_count": 0,
+        "video_count": 0,
         "image_size": null,
         "image_input_size": null,
         "image_output_size": null,
@@ -1506,6 +1508,75 @@ func TestAPIContracts(t *testing.T) {
 			status, body := doRequest(t, deps.router, tt.method, tt.path, tt.body, tt.headers)
 			require.Equal(t, tt.wantStatus, status)
 			require.JSONEq(t, tt.wantJSON, body)
+		})
+	}
+}
+
+func TestUsageDisplayAPIContractChannelsAndMediaMetadata(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, tc := range []struct {
+		name    string
+		baseURL string
+		channel string
+		media   bool
+	}{
+		{"official supplier", "https://api.anthropic.com", "official", false},
+		{"cloud supplier regardless of group name", "https://api.kie.ai", "cloud-vendor", false},
+		{"unknown proxy cannot be inferred from protocol or group", "https://unknown-proxy.example", "", false},
+		{"safe media display metadata", "https://api.kie.ai", "cloud-vendor", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			deps := newContractDeps(t)
+			log := service.UsageLog{
+				ID: 1, UserID: 1, APIKeyID: 100, AccountID: 200, Model: "claude-3", RequestID: "request-synthetic",
+				TotalCost: 0.375, ActualCost: 0.375, RateMultiplier: 1, CreatedAt: deps.now,
+				Account: &service.Account{Platform: service.PlatformAnthropic, Type: service.AccountTypeAPIKey, Name: "private-account-name", Credentials: map[string]any{"base_url": tc.baseURL, "api_key": "private-upstream-secret"}},
+				Group:   &service.Group{Name: "Official discount group", Platform: service.PlatformAnthropic},
+			}
+			if tc.media {
+				log.Model = "veo-3-1"
+				log.MediaType = ptr("video")
+				log.VideoCount = 1
+				log.VideoResolution = ptr("720p")
+				log.VideoDurationSeconds = ptr(8)
+				log.MediaPriceContext = &service.UsageMediaPriceContext{ModelID: "veo-3-1", Option: "8", ReferenceSKUVerified: true}
+			}
+			deps.usageRepo.SetUserLogs(1, []service.UsageLog{log})
+			status, body := doRequest(t, deps.router, http.MethodGet, "/api/v1/usage?page=1&page_size=10", "", nil)
+			require.Equal(t, http.StatusOK, status)
+			var envelope struct {
+				Data struct {
+					Items []map[string]any `json:"items"`
+				} `json:"data"`
+			}
+			require.NoError(t, json.Unmarshal([]byte(body), &envelope))
+			require.Len(t, envelope.Data.Items, 1)
+			item := envelope.Data.Items[0]
+			if tc.channel == "" {
+				require.NotContains(t, item, "channel_type")
+			} else {
+				require.Equal(t, tc.channel, item["channel_type"])
+			}
+			require.Equal(t, "0.375", item["actual_cost_usd"])
+			require.Equal(t, "0.375", item["total_cost_usd"])
+			require.Equal(t, 1.0, item["rate_multiplier"])
+			if tc.media {
+				require.Equal(t, 1.0, item["video_count"])
+				require.Equal(t, "720p", item["video_resolution"])
+				require.Equal(t, 8.0, item["video_duration_seconds"])
+				require.Equal(t, map[string]any{"model_id": "veo-3-1", "option": "8", "model_provider": "Google", "reference_sku_verified": true, "current_reference_sku": "veo-3-1:source-422"}, item["media_price_context"])
+			} else {
+				require.Equal(t, 0.0, item["video_count"])
+				for _, field := range []string{"video_resolution", "video_duration_seconds", "media_price_context"} {
+					require.NotContains(t, item, field)
+				}
+			}
+			for _, field := range []string{"account", "credentials", "account_rate_multiplier", "account_stats_cost_usd", "upstream_model", "model_mapping_chain", "billing_tier", "supplier_pricing", "request_payload", "provider_task_id"} {
+				require.NotContains(t, item, field)
+			}
+			for _, private := range []string{"private-account-name", "private-upstream-secret", tc.baseURL} {
+				require.NotContains(t, body, private)
+			}
 		})
 	}
 }

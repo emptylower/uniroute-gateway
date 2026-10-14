@@ -350,6 +350,13 @@
     "note": "egress-capable import; actual wallet classification hangs on the write site / client"
   },
   {
+    "file": "internal/handler/dto/usage_display.go",
+    "kind": "import",
+    "detail": "net/url",
+    "annotation": "non-billable",
+    "note": "Pure URL parsing for the read-only usage supplier label; no client construction, network request, or upstream write."
+  },
+  {
     "file": "internal/handler/failover_loop.go",
     "kind": "import",
     "detail": "net/http",
