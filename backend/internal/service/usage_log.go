@@ -199,6 +199,9 @@ type UsageLog struct {
 	ImageSizeSource    *string
 	ImageSizeBreakdown map[string]int
 	MediaType          *string
+	// MediaPriceContext is a read-only, owner-checked task projection for display.
+	// It is never used to calculate or change the recorded charge.
+	MediaPriceContext *UsageMediaPriceContext
 
 	// 视频生成字段（Grok 视频按秒计费；video_count>0 的行不要求 image_size）
 	VideoCount           int
@@ -212,6 +215,12 @@ type UsageLog struct {
 	Account      *Account
 	Group        *Group
 	Subscription *UserSubscription
+}
+
+type UsageMediaPriceContext struct {
+	ModelID              string `json:"model_id"`
+	Option               string `json:"option"`
+	ReferenceSKUVerified bool   `json:"reference_sku_verified"`
 }
 
 func (u *UsageLog) TotalTokens() int {

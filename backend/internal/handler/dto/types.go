@@ -480,6 +480,8 @@ type UsageLog struct {
 	Model     string `json:"model"`
 	// ChannelID identifies the user-selected channel that served the request.
 	ChannelID *int64 `json:"channel_id,omitempty"`
+	// ChannelType describes the actual supplier, independently of routing groups.
+	ChannelType string `json:"channel_type,omitempty"`
 	// ServiceTier records the OpenAI service tier used for billing, e.g. "priority" / "flex".
 	ServiceTier *string `json:"service_tier,omitempty"`
 	// ReasoningEffort is the request's reasoning effort level.
@@ -525,17 +527,21 @@ type UsageLog struct {
 	FirstTokenMs *int   `json:"first_token_ms"`
 
 	// 图片生成字段
-	ImageCount         int            `json:"image_count"`
-	ImageSize          *string        `json:"image_size"`
-	ImageInputSize     *string        `json:"image_input_size"`
-	ImageOutputSize    *string        `json:"image_output_size"`
-	ImageInputTokens   int            `json:"image_input_tokens"`
-	ImageInputCost     float64        `json:"image_input_cost_usd,string"`
-	ImageOutputTokens  int            `json:"image_output_tokens"`
-	ImageOutputCost    float64        `json:"image_output_cost_usd,string"`
-	ImageSizeSource    *string        `json:"image_size_source"`
-	ImageSizeBreakdown map[string]int `json:"image_size_breakdown"`
-	MediaType          *string        `json:"media_type"`
+	ImageCount           int                     `json:"image_count"`
+	ImageSize            *string                 `json:"image_size"`
+	ImageInputSize       *string                 `json:"image_input_size"`
+	ImageOutputSize      *string                 `json:"image_output_size"`
+	ImageInputTokens     int                     `json:"image_input_tokens"`
+	ImageInputCost       float64                 `json:"image_input_cost_usd,string"`
+	ImageOutputTokens    int                     `json:"image_output_tokens"`
+	ImageOutputCost      float64                 `json:"image_output_cost_usd,string"`
+	ImageSizeSource      *string                 `json:"image_size_source"`
+	ImageSizeBreakdown   map[string]int          `json:"image_size_breakdown"`
+	MediaType            *string                 `json:"media_type"`
+	MediaPriceContext    *UsageMediaPriceContext `json:"media_price_context,omitempty"`
+	VideoCount           int                     `json:"video_count"`
+	VideoResolution      *string                 `json:"video_resolution,omitempty"`
+	VideoDurationSeconds *int                    `json:"video_duration_seconds,omitempty"`
 
 	// User-Agent
 	UserAgent *string `json:"user_agent"`
@@ -557,6 +563,15 @@ type UsageLog struct {
 	APIKey       *APIKey           `json:"api_key,omitempty"`
 	Group        *Group            `json:"group,omitempty"`
 	Subscription *UserSubscription `json:"subscription,omitempty"`
+}
+
+type UsageMediaPriceContext struct {
+	ModelID              string `json:"model_id"`
+	Option               string `json:"option"`
+	ModelProvider        string `json:"model_provider,omitempty"`
+	ReferenceSKUVerified bool   `json:"reference_sku_verified"`
+	// This is a current public comparison SKU, not a historical billing snapshot.
+	CurrentReferenceSKU string `json:"current_reference_sku,omitempty"`
 }
 
 // AdminUsageLog 是管理员接口使用的 usage log DTO（包含管理员字段）。
