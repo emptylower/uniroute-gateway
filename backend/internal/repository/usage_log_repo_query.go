@@ -48,6 +48,18 @@ func (r *usageLogRepository) GetByID(ctx context.Context, id int64) (log *servic
 	if err = rows.Err(); err != nil {
 		return nil, err
 	}
+	// Release the cursor before association queries, including single-connection pools.
+	if err = rows.Close(); err != nil {
+		return nil, err
+	}
+	logs := []service.UsageLog{*log}
+	if err = r.hydrateUsageLogAssociations(ctx, logs); err != nil {
+		return nil, err
+	}
+	if err = r.hydrateUsageMediaPriceContext(ctx, logs); err != nil {
+		return nil, err
+	}
+	*log = logs[0]
 	return log, nil
 }
 
@@ -152,6 +164,9 @@ func (r *usageLogRepository) ListWithFilters(ctx context.Context, params paginat
 	}
 
 	if err := r.hydrateUsageLogAssociations(ctx, logs); err != nil {
+		return nil, nil, err
+	}
+	if err := r.hydrateUsageMediaPriceContext(ctx, logs); err != nil {
 		return nil, nil, err
 	}
 	return logs, page, nil
