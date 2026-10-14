@@ -1581,6 +1581,34 @@ func TestUsageDisplayAPIContractChannelsAndMediaMetadata(t *testing.T) {
 	}
 }
 
+func TestUsageManagedMediaHistoryAPIContract(t *testing.T) {
+	deps := newContractDeps(t)
+	deps.usageRepo.SetUserLogs(1, []service.UsageLog{{
+		ID: 1, UserID: 1, APIKeyID: 100, AccountID: 200, Model: "google/imagen4-fast", RequestID: "missing-historical-task", MediaType: ptr("image"), ActualCost: 0.025, TotalCost: 0.025, RateMultiplier: 1, CreatedAt: deps.now,
+		Account: &service.Account{ID: 200, Name: "private-managed-account", Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey, Status: service.StatusDisabled, Schedulable: false, Credentials: map[string]any{}, Extra: map[string]any{"gateway_media_provider": "kie"}},
+	}})
+	status, body := doRequest(t, deps.router, http.MethodGet, "/api/v1/usage?page=1&page_size=10", "", nil)
+	require.Equal(t, http.StatusOK, status)
+	var envelope struct {
+		Data struct {
+			Items []map[string]any `json:"items"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(body), &envelope))
+	require.Len(t, envelope.Data.Items, 1)
+	item := envelope.Data.Items[0]
+	require.Equal(t, "cloud-vendor", item["channel_type"])
+	require.Equal(t, "0.025", item["actual_cost_usd"])
+	require.Equal(t, 1.0, item["rate_multiplier"])
+	require.NotContains(t, item, "media_price_context", "missing historical SKU remains unknown")
+	for _, field := range []string{"account", "credentials", "extra", "gateway_media_provider", "supplier_pricing", "request_payload", "provider_task_id"} {
+		require.NotContains(t, item, field)
+	}
+	for _, private := range []string{"private-managed-account", "gateway_media_provider"} {
+		require.NotContains(t, body, private)
+	}
+}
+
 type contractDeps struct {
 	now         time.Time
 	router      http.Handler

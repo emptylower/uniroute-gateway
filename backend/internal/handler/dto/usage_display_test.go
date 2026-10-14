@@ -79,3 +79,73 @@ func TestUsageMediaAPICatalogProvidesExactManufacturerWithoutInferringFromSuppli
 		})
 	}
 }
+
+func TestUsageManagedKieHistoryRequiresCanonicalProviderEvidence(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*service.UsageLog, *service.Account)
+		want   string
+	}{
+		{"canonical historical account without task", nil, "cloud-vendor"},
+		{"canonical account with owned task", func(l *service.UsageLog, a *service.Account) {
+			l.MediaPriceContext = &service.UsageMediaPriceContext{ModelID: l.Model}
+		}, "cloud-vendor"},
+		{"owned task with missing account", func(l *service.UsageLog, a *service.Account) {
+			l.Account = nil
+			l.AccountID = 0
+			l.MediaPriceContext = &service.UsageMediaPriceContext{ModelID: l.Model}
+		}, "cloud-vendor"},
+		{"owned task with unavailable recorded account ID", func(l *service.UsageLog, a *service.Account) {
+			l.AccountID = 0
+			l.MediaPriceContext = &service.UsageMediaPriceContext{ModelID: l.Model}
+		}, "cloud-vendor"},
+		{"missing task and account", func(l *service.UsageLog, a *service.Account) { l.Account = nil }, ""},
+		{"missing marker", func(l *service.UsageLog, a *service.Account) { a.Extra = nil }, ""},
+		{"wrong marker", func(l *service.UsageLog, a *service.Account) { a.Extra["gateway_media_provider"] = "openai" }, ""},
+		{"nonstring marker", func(l *service.UsageLog, a *service.Account) { a.Extra["gateway_media_provider"] = true }, ""},
+		{"whitespace marker", func(l *service.UsageLog, a *service.Account) { a.Extra["gateway_media_provider"] = "kie " }, ""},
+		{"zero recorded account ID", func(l *service.UsageLog, a *service.Account) { l.AccountID = 0 }, ""},
+		{"missing loaded account ID", func(l *service.UsageLog, a *service.Account) { a.ID = 0 }, ""},
+		{"foreign loaded account ID", func(l *service.UsageLog, a *service.Account) { a.ID = 201 }, ""},
+		{"wrong platform", func(l *service.UsageLog, a *service.Account) { a.Platform = service.PlatformAnthropic }, ""},
+		{"wrong account type", func(l *service.UsageLog, a *service.Account) { a.Type = service.AccountTypeOAuth }, ""},
+		{"active account is not canonical managed", func(l *service.UsageLog, a *service.Account) { a.Status = service.StatusActive }, ""},
+		{"schedulable account is not canonical managed", func(l *service.UsageLog, a *service.Account) { a.Schedulable = true }, ""},
+		{"explicit official endpoint conflicts with marker", func(l *service.UsageLog, a *service.Account) {
+			a.Credentials = map[string]any{"base_url": "https://api.openai.com"}
+		}, ""},
+		{"unknown proxy conflicts with marker", func(l *service.UsageLog, a *service.Account) {
+			a.Credentials = map[string]any{"base_url": "https://proxy.example"}
+		}, ""},
+		{"nonempty credentials are not canonical managed", func(l *service.UsageLog, a *service.Account) {
+			a.Credentials = map[string]any{"api_key": "private-secret"}
+		}, ""},
+		{"owned task with explicit conflicting marker", func(l *service.UsageLog, a *service.Account) {
+			l.MediaPriceContext = &service.UsageMediaPriceContext{ModelID: l.Model}
+			a.Extra["gateway_media_provider"] = "openai"
+		}, ""},
+		{"owned task with conflicting endpoint", func(l *service.UsageLog, a *service.Account) {
+			l.MediaPriceContext = &service.UsageMediaPriceContext{ModelID: l.Model}
+			a.Credentials = map[string]any{"base_url": "https://api.openai.com"}
+		}, ""},
+		{"owned task with foreign loaded account ID", func(l *service.UsageLog, a *service.Account) {
+			l.MediaPriceContext = &service.UsageMediaPriceContext{ModelID: l.Model}
+			a.ID = 201
+		}, ""},
+		{"nonmedia record cannot use managed marker", func(l *service.UsageLog, a *service.Account) { l.MediaType = nil }, ""},
+		{"unmarked direct OpenAI text account stays official", func(l *service.UsageLog, a *service.Account) { l.MediaType = nil; a.Extra = nil }, "official"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			account := &service.Account{ID: 200, Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey, Status: service.StatusDisabled, Schedulable: false, Credentials: map[string]any{}, Extra: map[string]any{"gateway_media_provider": "kie"}}
+			kind := "image"
+			log := &service.UsageLog{AccountID: 200, Account: account, Model: "google/imagen4-fast", MediaType: &kind, ActualCost: 0.025, RateMultiplier: 1, Group: &service.Group{Name: "Official group", Platform: service.PlatformOpenAI}}
+			if tc.change != nil {
+				tc.change(log, account)
+			}
+			result := UsageLogFromService(log)
+			require.Equal(t, tc.want, result.ChannelType)
+			require.Equal(t, 0.025, result.ActualCost)
+			require.Equal(t, 1.0, result.RateMultiplier)
+		})
+	}
+}

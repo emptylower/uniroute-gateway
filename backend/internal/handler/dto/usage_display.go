@@ -27,11 +27,35 @@ func usageMediaPriceContext(context *service.UsageMediaPriceContext) *UsageMedia
 // Only trusted supplier endpoints or built-in direct providers determine a channel.
 // Protocol platform, route/group names and billing multipliers do not.
 func usageChannelType(log *service.UsageLog) string {
+	account := log.Account
+	if account != nil {
+		// Migration 217's reserved Kie account deliberately has no base URL:
+		// the media service uses its own provider configuration. Never mistake
+		// this account for OpenAI's default API when a historical task is missing.
+		managedTraits := account.Platform == service.PlatformOpenAI && account.Type == service.AccountTypeAPIKey && account.Status == service.StatusDisabled && !account.Schedulable && len(account.Credentials) == 0
+		media := log.MediaType != nil && (*log.MediaType == "image" || *log.MediaType == "video" || *log.MediaType == "music")
+		if marker, present := account.Extra["gateway_media_provider"]; present {
+			provider, valid := marker.(string)
+			if !valid || provider != "kie" || !managedTraits || (log.AccountID > 0 && account.ID > 0 && log.AccountID != account.ID) {
+				return ""
+			}
+			if log.MediaPriceContext != nil {
+				return "cloud-vendor"
+			}
+			if media && log.AccountID > 0 && account.ID == log.AccountID {
+				return "cloud-vendor"
+			}
+			return ""
+		}
+		if log.MediaPriceContext == nil && media && managedTraits {
+			// Without the provider marker there is insufficient supplier evidence.
+			return ""
+		}
+	}
 	if log.MediaPriceContext != nil {
 		// Owner-checked gateway_media_task rows are created by the Kie-only service.
 		return "cloud-vendor"
 	}
-	account := log.Account
 	if account == nil {
 		return ""
 	}
