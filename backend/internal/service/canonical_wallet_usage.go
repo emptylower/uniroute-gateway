@@ -20,7 +20,10 @@ import (
 	"github.com/google/uuid"
 )
 
-const canonicalWalletSummaryPath = "/api/internal/v2/wallet/summary"
+const (
+	canonicalWalletSummaryPath  = "/api/internal/v2/wallet/summary"
+	canonicalWalletUsageTimeout = 15 * time.Second
+)
 
 var canonicalWalletUSDDecimalPattern = regexp.MustCompile(`^(0|[1-9][0-9]*)(\.[0-9]{1,8})?$`)
 
@@ -46,7 +49,7 @@ func NewCanonicalWalletUsageReader(cfg *config.Config) *CanonicalWalletUsageRead
 		return nil
 	}
 	client := &http.Client{
-		Timeout:       time.Duration(cfg.CanonicalWallet.RequestTimeoutMS) * time.Millisecond,
+		Timeout:       canonicalWalletUsageTimeout,
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
 	}
 	return &CanonicalWalletUsageReader{control: newCanonicalWalletHTTPClient(cfg.CanonicalWallet, client)}
@@ -57,7 +60,7 @@ func (r *CanonicalWalletUsageReader) Summary(ctx context.Context, owner string, 
 		return nil, errors.New("canonical wallet summary reader unavailable")
 	}
 	c := r.control
-	if c.cfg.ControlPlaneURL == "" || c.cfg.Secret == "" || c.cfg.Issuer == "" || c.cfg.Audience == "" || c.cfg.Version == "" || c.cfg.RequestTimeoutMS <= 0 {
+	if c.cfg.ControlPlaneURL == "" || c.cfg.Secret == "" || c.cfg.Issuer == "" || c.cfg.Audience == "" || c.cfg.Version == "" {
 		return nil, errors.New("canonical wallet summary is not configured")
 	}
 	if normalized, err := NormalizePlatformUserID(owner); err != nil || normalized != owner {
