@@ -1895,7 +1895,10 @@ const executeCcsImport = (row: ApiKey, clientType: CcSwitchClientType) => {
     },
     extractor: function(response) {
       const remaining = response?.remaining ?? response?.quota?.remaining ?? response?.balance;
-      const unit = response?.unit === "USD" ? "CNY" : (response?.unit ?? response?.quota?.unit ?? "CNY");
+      if (response?.error || typeof remaining !== "number" || !Number.isFinite(remaining)) {
+        throw new Error("Balance is temporarily unavailable");
+      }
+      const unit = response?.unit ?? response?.quota?.unit ?? "USD";
       return {
         isValid: response?.is_active ?? response?.isValid ?? true,
         remaining,

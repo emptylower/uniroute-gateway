@@ -10,15 +10,16 @@ import (
 )
 
 const (
-	PlatformIdentityReadScope       = "identity:read"
-	PlatformIdentityWriteScope      = "identity:write"
-	PlatformDataReadScope           = "gateway:data:read"
-	PlatformPreferencesWriteScope   = "gateway:preferences:write"
-	PlatformGatewayAdminScope       = "gateway:admin"
-	PlatformKeysWriteScope          = "gateway:keys:write"
-	PlatformInferenceReadScope      = "gateway:inference:read"
-	PlatformInferenceCreateScope    = "gateway:inference:create"
-	PlatformWalletAvailabilityScope = "wallet:availability"
+	PlatformIdentityReadScope            = "identity:read"
+	PlatformIdentityWriteScope           = "identity:write"
+	PlatformDataReadScope                = "gateway:data:read"
+	PlatformPreferencesWriteScope        = "gateway:preferences:write"
+	PlatformGatewayAdminScope            = "gateway:admin"
+	PlatformKeysWriteScope               = "gateway:keys:write"
+	PlatformInferenceReadScope           = "gateway:inference:read"
+	PlatformInferenceCreateScope         = "gateway:inference:create"
+	PlatformWalletAvailabilityScope      = "wallet:availability"
+	PlatformWalletUsageAvailabilityScope = "wallet:usage-availability"
 )
 
 var platformUserIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)

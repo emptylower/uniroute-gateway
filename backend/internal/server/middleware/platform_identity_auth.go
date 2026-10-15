@@ -23,6 +23,7 @@ type PlatformAssertion struct {
 	JWTID   string
 	Scopes  map[string]struct{}
 	Expires time.Time
+	claims  jwt.MapClaims
 }
 
 func (a *PlatformAssertion) HasScope(scope string) bool {
@@ -40,6 +41,10 @@ func PlatformAssertionFromContext(c *gin.Context) (*PlatformAssertion, bool) {
 }
 
 func RequirePlatformAssertion(cfg config.PlatformIdentityConfig, requiredScope string, redisClient *redis.Client) gin.HandlerFunc {
+	return requirePlatformAssertion(cfg, requiredScope, redisClient, nil)
+}
+
+func requirePlatformAssertion(cfg config.PlatformIdentityConfig, requiredScope string, redisClient *redis.Client, beforeReplay func(*gin.Context, *PlatformAssertion) bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authorization := strings.TrimSpace(c.GetHeader("Authorization"))
 		parts := strings.Fields(authorization)
@@ -58,6 +63,9 @@ func RequirePlatformAssertion(cfg config.PlatformIdentityConfig, requiredScope s
 		if !assertion.HasScope(requiredScope) {
 			response.Forbidden(c, "internal assertion scope denied")
 			c.Abort()
+			return
+		}
+		if beforeReplay != nil && !beforeReplay(c, assertion) {
 			return
 		}
 		if redisClient == nil {
@@ -145,7 +153,7 @@ func ValidatePlatformAssertion(raw string, cfg config.PlatformIdentityConfig) (*
 	if err != nil || len(scopes) == 0 {
 		return nil, errors.New("assertion scope is required")
 	}
-	return &PlatformAssertion{Subject: subject, JWTID: jti, Scopes: scopes, Expires: expiresAt.Time}, nil
+	return &PlatformAssertion{Subject: subject, JWTID: jti, Scopes: scopes, Expires: expiresAt.Time, claims: claims}, nil
 }
 
 func assertionScopes(value any) (map[string]struct{}, error) {

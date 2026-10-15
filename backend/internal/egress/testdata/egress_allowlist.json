@@ -1498,6 +1498,13 @@
     "note": "egress-capable import; actual wallet classification hangs on the write site / client"
   },
   {
+    "file": "internal/server/middleware/platform_wallet_usage_auth.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "HTTP method/status constants and inbound signed callback body read deadlines only; no outgoing request or client is created."
+  },
+  {
     "file": "internal/server/middleware/public_media_rate_limit.go",
     "kind": "import",
     "detail": "net/http",
@@ -1958,6 +1965,20 @@
     "detail": "net/http",
     "annotation": "non-billable",
     "note": "HTTP status constants for wallet risk refusal; no client or request constructed"
+  },
+  {
+    "file": "internal/service/canonical_wallet_usage.go",
+    "kind": "construct",
+    "detail": "NewCanonicalWalletUsageReader: &http.Client{}",
+    "annotation": "non-billable",
+    "note": "read-only canonical wallet summary control-plane client; no model inference or financial mutation"
+  },
+  {
+    "file": "internal/service/canonical_wallet_usage.go",
+    "kind": "import",
+    "detail": "net/http",
+    "annotation": "non-billable",
+    "note": "read-only canonical wallet summary HTTP requests through the dedicated control-plane client"
   },
   {
     "file": "internal/service/catalog_http_client.go",
