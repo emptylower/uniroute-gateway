@@ -104,7 +104,8 @@ func (r *CanonicalWalletUsageReader) Summary(ctx context.Context, owner string, 
 	if err != nil {
 		return nil, fmt.Errorf("read canonical wallet summary: %w", err)
 	}
-	defer resp.Body.Close()
+	// Closing the read-only response is cleanup; read failures are handled below.
+	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, (1<<20)+1))
 	if err != nil || len(body) > 1<<20 {
 		return nil, errors.New("invalid canonical wallet summary body")
