@@ -60,6 +60,7 @@ type GatewayHandler struct {
 	cfg                       *config.Config
 	settingService            *service.SettingService
 	channelRoutingSelector    *service.ChannelRoutingSelector
+	walletUsageReader         *service.CanonicalWalletUsageReader
 }
 
 func (h *GatewayHandler) SetChannelRoutingSelector(selector *service.ChannelRoutingSelector) {
@@ -189,6 +190,7 @@ func NewGatewayHandler(
 		maxAccountSwitchesGemini:  maxAccountSwitchesGemini,
 		cfg:                       cfg,
 		settingService:            settingService,
+		walletUsageReader:         service.NewCanonicalWalletUsageReader(cfg),
 	}
 }
 
@@ -1627,6 +1629,7 @@ func cloneAPIKeyWithGroup(apiKey *service.APIKey, group *service.Group) *service
 //   - quota_limited: API Key has quota or rate limits configured. Returns key-level limits/usage.
 //   - unrestricted:  No key-level limits. Returns subscription or wallet balance info.
 func (h *GatewayHandler) Usage(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
 	apiKey, ok := middleware2.GetAPIKeyFromContext(c)
 	if !ok {
 		h.errorResponse(c, http.StatusUnauthorized, "authentication_error", "Invalid API key")
@@ -1874,9 +1877,47 @@ func (h *GatewayHandler) usageUnrestricted(c *gin.Context, ctx context.Context, 
 	}
 
 	// 余额模式
+	if apiKey.UserID <= 0 || apiKey.UserID != subject.UserID || apiKey.User == nil || apiKey.User.ID != subject.UserID {
+		h.errorResponse(c, http.StatusUnauthorized, "authentication_error", "Invalid API key owner")
+		return
+	}
 	latestUser, err := h.userService.GetByID(ctx, subject.UserID)
-	if err != nil {
-		h.errorResponse(c, http.StatusInternalServerError, "api_error", "Failed to get user info")
+	if err != nil || latestUser == nil || latestUser.ID != subject.UserID || !latestUser.IsActive() {
+		h.usageWalletUnavailable(c, nil, usageData, dailyUsage, modelStats)
+		return
+	}
+	// Only users with no platform projection retain the legacy local wallet read.
+	if latestUser.PlatformUserID != "" || apiKey.User.PlatformUserID != "" || apiKey.PlatformKeyID != nil {
+		if latestUser.PlatformUserID == "" || (apiKey.User.PlatformUserID != "" && apiKey.User.PlatformUserID != latestUser.PlatformUserID) {
+			h.usageWalletUnavailable(c, nil, usageData, dailyUsage, modelStats)
+			return
+		}
+		if _, err := service.RequireUSDBillingCurrency(latestUser.BillingCurrency); err != nil {
+			h.usageWalletUnavailable(c, nil, usageData, dailyUsage, modelStats)
+			return
+		}
+		summary, err := h.walletUsageReader.Summary(ctx, latestUser.PlatformUserID, apiKey.PlatformKeyID)
+		if err != nil || summary.Completeness != "complete" || summary.AvailableIsLowerBound || summary.AvailableUSD == nil {
+			h.usageWalletUnavailable(c, summary, usageData, dailyUsage, modelStats)
+			return
+		}
+		resp := gin.H{
+			"mode": "unrestricted", "isValid": true, "planName": "钱包余额", "unit": "USD",
+			"remaining": *summary.AvailableUSD, "balance": *summary.AvailableUSD,
+			"balance_source": "canonical_wallet_summary", "balance_status": "available", "as_of": summary.AsOf,
+			"completeness": summary.Completeness, "available_is_lower_bound": summary.AvailableIsLowerBound,
+			"unit_version": summary.UnitVersion, "usd_wallet_policy_version": summary.USDWalletPolicyVersion,
+		}
+		if usageData != nil {
+			resp["usage"] = usageData
+		}
+		if dailyUsage != nil {
+			resp["daily_usage"] = dailyUsage
+		}
+		if modelStats != nil {
+			resp["model_stats"] = modelStats
+		}
+		c.JSON(http.StatusOK, resp)
 		return
 	}
 
@@ -1898,6 +1939,30 @@ func (h *GatewayHandler) usageUnrestricted(c *gin.Context, ctx context.Context, 
 		resp["model_stats"] = modelStats
 	}
 	c.JSON(http.StatusOK, resp)
+}
+
+func (h *GatewayHandler) usageWalletUnavailable(c *gin.Context, summary *service.CanonicalWalletUsageSummary, usageData gin.H, dailyUsage any, modelStats any) {
+	resp := gin.H{
+		"mode": "unrestricted", "isValid": true, "planName": "钱包余额", "unit": "USD",
+		"remaining": nil, "balance": nil, "balance_source": "canonical_wallet_summary", "balance_status": "unavailable",
+		"completeness": "unknown", "available_is_lower_bound": false, "as_of": nil,
+		"error": gin.H{"type": "service_unavailable_error", "message": "Canonical wallet balance is unavailable"},
+	}
+	if summary != nil {
+		resp["completeness"] = summary.Completeness
+		resp["available_is_lower_bound"] = summary.AvailableIsLowerBound
+		resp["as_of"] = summary.AsOf
+	}
+	if usageData != nil {
+		resp["usage"] = usageData
+	}
+	if dailyUsage != nil {
+		resp["daily_usage"] = dailyUsage
+	}
+	if modelStats != nil {
+		resp["model_stats"] = modelStats
+	}
+	c.JSON(http.StatusServiceUnavailable, resp)
 }
 
 // calculateSubscriptionRemaining 计算订阅剩余可用额度

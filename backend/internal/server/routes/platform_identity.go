@@ -49,6 +49,9 @@ func RegisterPlatformIdentityRoutes(
 		availability := r.Group(base + "/wallet")
 		availability.Use(middleware.RequirePlatformAssertion(cfg, service.PlatformWalletAvailabilityScope, redisClient), resolveUser)
 		availability.POST("/availability", h.PlatformInference.Availability)
+		usageAvailability := r.Group(base + "/wallet")
+		usageAvailability.Use(middleware.RequirePlatformWalletUsageAvailability(cfg, redisClient), resolveUser)
+		usageAvailability.POST("/usage-availability", h.PlatformInference.Availability)
 	}
 
 	read := r.Group(base)
@@ -371,6 +374,12 @@ func resolveDelegatedPlatformUserWithOptions(identityService *service.PlatformId
 		user, err := userService.GetByID(c.Request.Context(), identity.GatewayUserID)
 		if err != nil {
 			response.ErrorFrom(c, err)
+			c.Abort()
+			return
+		}
+		if c.FullPath() == "/api/internal/v1/users/:platform_user_id/wallet/usage-availability" &&
+			(user == nil || user.PlatformUserID != platformUserID) {
+			response.Forbidden(c, "wallet usage owner mapping mismatch")
 			c.Abort()
 			return
 		}
